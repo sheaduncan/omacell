@@ -1,0 +1,16 @@
+[package]
+name = "grid-egui"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Throwaway WP-S2 spike: eframe/egui 1M-row grid on wgpu. Not a workspace member."
+
+[[bin]]
+name = "grid-egui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+eframe = "0.36.1"
+egui = "0.36.1"
