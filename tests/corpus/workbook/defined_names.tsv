@@ -1,0 +1,16 @@
+# name	ok	code	note
+Revenue	true		F-1.3 ordinary workbook-scoped name
+TaxRate	true		usable as an identifier in formulas
+_foo	true		leading underscore
+\bar	true		Excel allows a leading backslash
+Rate.1	true		period is allowed after the first character
+	false	name.defined	empty name
+A1	false	name.defined	looks like an A1 cell reference
+$A$1	false	name.defined	absolute A1 cell
+XFD1048576	false	name.defined	last-cell A1 address
+R1C1	false	name.defined	looks like an R1C1 cell
+R	false	name.defined	Excel reserves R as a row specifier
+C	false	name.defined	Excel reserves C as a column specifier
+1abc	false	name.defined	must start with a letter, underscore, or backslash
+has space	false	name.defined	spaces are not allowed in defined names
+has-dash	false	name.defined	hyphen is not allowed

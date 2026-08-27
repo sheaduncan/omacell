@@ -1,0 +1,18 @@
+# name	ok	code	note
+Sheet1	true		F-1.1 default first-sheet name
+Data	true		plain identifier
+My Sheet	true		spaces are allowed (not in the forbidden set)
+_underscore	true		leading underscore
+abcdefghijklmnopqrstuvwxyz12345	true		exactly 31 Unicode scalars (F-1.1 ≤31)
+	false	sheet.name	F-1.1 empty name
+abcdefghijklmnopqrstuvwxyz123456	false	sheet.name	F-1.1 longer than 31 characters
+Bad[name]	false	sheet.name	F-1.1 forbidden [
+Bad]name	false	sheet.name	F-1.1 forbidden ]
+Bad:name	false	sheet.name	F-1.1 forbidden colon
+Bad*name	false	sheet.name	F-1.1 forbidden *
+Bad?name	false	sheet.name	F-1.1 forbidden ?
+Bad/name	false	sheet.name	F-1.1 forbidden slash
+Bad\name	false	sheet.name	F-1.1 forbidden backslash
+'Leading	false	sheet.name	Excel rejects a leading apostrophe
+Trailing'	false	sheet.name	Excel rejects a trailing apostrophe
+'Quoted'	false	sheet.name	apostrophe-wrapped name is the quoting form, not the stored name
