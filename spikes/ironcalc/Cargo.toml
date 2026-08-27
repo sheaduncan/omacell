@@ -1,0 +1,20 @@
+[package]
+name = "omacell-spike-ironcalc"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "WP-S1 throwaway harness: measure IronCalc against ADR-002. Not a workspace member."
+
+# Own workspace so this crate is never a member of crates/*.
+[workspace]
+
+# Match the product workspace's release settings for a less misleading binary
+# size comparison.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[dependencies]
+anyhow = "1"
+ironcalc = "0.8.3"
