@@ -33,6 +33,8 @@ pub mod codes {
     pub const UNDO_EMPTY: &str = "undo.empty";
     /// Formula source exceeds [`crate::limits::MAX_FORMULA_LEN`].
     pub const FORMULA_LEN: &str = "formula.len";
+    /// Number format code is longer than 255 characters or otherwise invalid.
+    pub const NUMFMT_PARSE: &str = "numfmt.parse";
 }
 
 /// Excel cell error value.

@@ -1,0 +1,118 @@
+# value	format	locale	date_system	text	note
+0	General	en-US	1900	0	Excel General of 0 is 0
+0.0	General	en-US	1900	0	0.0 stores as 0; General prints 0
+-0	General	en-US	1900	0	IEEE -0.0 displays as 0 under General (Excel)
+1	General	en-US	1900	1	small integer
+-1	General	en-US	1900	-1	negative integer; sign excluded from the 11-char budget
+2	General	en-US	1900	2	integer
+10	General	en-US	1900	10	integer
+99	General	en-US	1900	99	integer
+100	General	en-US	1900	100	integer
+123	General	en-US	1900	123	integer
+1000	General	en-US	1900	1000	integer, no grouping in General
+1234	General	en-US	1900	1234	integer
+12345	General	en-US	1900	12345	integer
+123456	General	en-US	1900	123456	integer
+1234567	General	en-US	1900	1234567	integer
+12345678	General	en-US	1900	12345678	integer
+123456789	General	en-US	1900	123456789	integer
+1234567890	General	en-US	1900	1234567890	10-digit integer
+12345678901	General	en-US	1900	12345678901	11-digit integer still decimal (ECMA General 11-char)
+123456789012	General	en-US	1900	1.23457E+11	12-digit integer switches to scientific (Excel General)
+99999999999	General	en-US	1900	99999999999	11 nines stay decimal
+100000000000	General	en-US	1900	1E+11	1e11 is scientific
+1e12	General	en-US	1900	1E+12	1e12 scientific
+1e15	General	en-US	1900	1E+15	1e15 scientific
+1e20	General	en-US	1900	1E+20	1e20 scientific
+1e100	General	en-US	1900	1E+100	3-digit exponent still General scientific
+0.5	General	en-US	1900	0.5	one decimal, trailing zeros stripped
+0.25	General	en-US	1900	0.25	quarter
+0.125	General	en-US	1900	0.125	eighth
+0.1	General	en-US	1900	0.1	0.1 (15-digit rounding of IEEE 0.1)
+0.01	General	en-US	1900	0.01	two leading fractional zeros still decimal
+0.001	General	en-US	1900	0.001	General keeps 1e-3 as decimal
+0.0001	General	en-US	1900	0.0001	1e-4 stays decimal (Excel General threshold is < 1e-4)
+0.00001	General	en-US	1900	1E-05	1e-5 switches to scientific
+0.000001	General	en-US	1900	1E-06	1e-6 scientific
+1e-7	General	en-US	1900	1E-07	1e-7 scientific
+1e-10	General	en-US	1900	1E-10	1e-10 scientific
+-0.5	General	en-US	1900	-0.5	negative fraction
+-1234	General	en-US	1900	-1234	negative integer
+-123456789012	General	en-US	1900	-1.23457E+11	negative 12-digit scientific; minus not in 11-char budget
+3.14159265358979	General	en-US	1900	3.141592654	PI rounded to 11 chars including decimal (F-2.3 General)
+0.333333333333333	General	en-US	1900	0.333333333	1/3 rounded to 11 chars
+1.23456789012	General	en-US	1900	1.23456789	strip trailing zeros after 11-char round
+12.3456789012	General	en-US	1900	12.3456789	2 integer digits + decimal + 8 frac = 11
+123.456789012	General	en-US	1900	123.456789	3 integer digits
+1234.56789012	General	en-US	1900	1234.56789	4 integer digits
+12345.6789012	General	en-US	1900	12345.6789	5 integer digits
+123456.789012	General	en-US	1900	123456.789	6 integer digits
+1234567.89012	General	en-US	1900	1234567.89	7 integer digits
+12345678.9012	General	en-US	1900	12345678.9	8 integer digits
+123456789.012	General	en-US	1900	123456789	9 integer digits, frac rounds to .0 and strips
+1234567890.12	General	en-US	1900	1234567890	10 integer digits, 0.12 rounds off at 11-char budget
+9.9	General	en-US	1900	9.9	single decimal
+9.99	General	en-US	1900	9.99	two decimals
+1.5	General	en-US	1900	1.5	one and a half
+2.5	General	en-US	1900	2.5	two and a half
+100.1	General	en-US	1900	100.1	integer+frac
+0.0001234	General	en-US	1900	0.0001234	still >= 1e-4? 1.234e-4 > 1e-4 so decimal
+0.0000999	General	en-US	1900	9.99E-05	just under 1e-4 scientific
+1.23e-4	General	en-US	1900	0.000123	1.23e-4 displayed decimal
+9.99999999999	General	en-US	1900	10	11-char round can carry into the integer (Excel General)
+0.99999999999	General	en-US	1900	1	frac rounding to 1
+12345678901.4	General	en-US	1900	12345678901	11-digit integer with leftover frac rounded down
+12345678901.5	General	en-US	1900	12345678902	11-digit integer, half away from zero
+-0.00001	General	en-US	1900	-1E-05	negative small scientific
+TRUE	General	en-US	1900	TRUE	Boolean General is TRUE/FALSE not 1/0
+FALSE	General	en-US	1900	FALSE	Boolean General FALSE
+""	General	en-US	1900		empty text displays empty
+#DIV/0!	General	en-US	1900	#DIV/0!	errors ignore General and print the error string
+#N/A	General	en-US	1900	#N/A	error display exact
+#VALUE!	General	en-US	1900	#VALUE!	error display exact
+1.23456789012345	General	en-US	1900	1.23456789	F-2.6 15-sig-digit store, General still 11-char display
+123456789012345	General	en-US	1900	1.23457E+14	15-digit integer in General scientific
+-3.14159265358979	General	en-US	1900	-3.141592654	negative PI
+6.02214076e23	General	en-US	1900	6.02214E+23	Avogadro, 6 sig in scientific General
+2.99792458e8	General	en-US	1900	299792458	c as integer fits 11 digits? 299792458 is 9 digits decimal
+6.62607015e-34	General	en-US	1900	6.62607E-34	Planck constant scientific
+100.0	General	en-US	1900	100	trailing .0 stripped
+1.0	General	en-US	1900	1	1.0 strips to 1
+10.50	General	en-US	1900	10.5	trailing zero after decimal stripped
+0.10	General	en-US	1900	0.1	trailing zero stripped
+3	General	en-US	1900	3	General integer 3
+4	General	en-US	1900	4	General integer 4
+5	General	en-US	1900	5	General integer 5
+6	General	en-US	1900	6	General integer 6
+7	General	en-US	1900	7	General integer 7
+8	General	en-US	1900	8	General integer 8
+9	General	en-US	1900	9	General integer 9
+11	General	en-US	1900	11	General integer 11
+12	General	en-US	1900	12	General integer 12
+15	General	en-US	1900	15	General integer 15
+16	General	en-US	1900	16	General integer 16
+20	General	en-US	1900	20	General integer 20
+25	General	en-US	1900	25	General integer 25
+32	General	en-US	1900	32	General integer 32
+50	General	en-US	1900	50	General integer 50
+64	General	en-US	1900	64	General integer 64
+75	General	en-US	1900	75	General integer 75
+80	General	en-US	1900	80	General integer 80
+96	General	en-US	1900	96	General integer 96
+128	General	en-US	1900	128	General integer 128
+200	General	en-US	1900	200	General integer 200
+256	General	en-US	1900	256	General integer 256
+512	General	en-US	1900	512	General integer 512
+999	General	en-US	1900	999	General integer 999
+1024	General	en-US	1900	1024	General integer 1024
+2048	General	en-US	1900	2048	General integer 2048
+4096	General	en-US	1900	4096	General integer 4096
+8192	General	en-US	1900	8192	General integer 8192
+10000	General	en-US	1900	10000	General integer 10000
+50000	General	en-US	1900	50000	General integer 50000
+99999	General	en-US	1900	99999	General integer 99999
+100000	General	en-US	1900	100000	General integer 100000
+1000000	General	en-US	1900	1000000	General integer 1000000
+10000000	General	en-US	1900	10000000	General integer 10000000
+99999999	General	en-US	1900	99999999	General integer 99999999
+1000000000	General	en-US	1900	1000000000	General integer 1000000000

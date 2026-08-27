@@ -1,0 +1,45 @@
+# value	format	locale	date_system	text	note
+0	yyyy-mm-dd	en-US	1900	1900-01-00	Excel serial 0 = January 0, 1900
+0	m/d/yyyy	en-US	1900	1/0/1900	US display of Jan 0
+0	d	en-US	1900	0	day token 0
+0	m	en-US	1900	1	month of the zero serial is January
+0	yyyy	en-US	1900	1900	year 1900
+1	yyyy-mm-dd	en-US	1900	1900-01-01	serial 1 = 1 Jan 1900 (F-2.1)
+58	yyyy-mm-dd	en-US	1900	1900-02-27	two days before the Lotus day
+59	yyyy-mm-dd	en-US	1900	1900-02-28	serial 59 = 28 Feb 1900
+59	m/d/yy	en-US	1900	2/28/00	US
+59	dddd	en-US	1900	Tuesday	28 Feb 1900 Excel weekday Tuesday
+60	yyyy-mm-dd	en-US	1900	1900-02-29	Lotus 29 Feb 1900 (F-2.1)
+60	m/d/yyyy	en-US	1900	2/29/1900	US Lotus date
+60	d-mmm-yy	en-US	1900	29-Feb-00	Lotus with month name
+60	dddd	en-US	1900	Wednesday	Excel weekday of the fake leap day
+60	mmmm	en-US	1900	February	month name
+61	yyyy-mm-dd	en-US	1900	1900-03-01	serial 61 = 1 Mar 1900
+61	m/d/yyyy	en-US	1900	3/1/1900	US
+61	dddd	en-US	1900	Thursday	real 1 Mar 1900 was Thursday; Excel matches after the quirk
+61	d-mmm-yyyy	en-US	1900	1-Mar-1900	Mar
+2958465	yyyy-mm-dd	en-US	1900	9999-12-31	max Excel date
+2958465	m/d/yyyy	en-US	1900	12/31/9999	US max
+2958465	dddd	en-US	1900	Friday	31 Dec 9999 Friday
+2958465	mmm	en-US	1900	Dec	Dec
+2958466	yyyy-mm-dd	en-US	1900	##########	beyond Excel max → overflow hashes
+-1	yyyy-mm-dd	en-US	1900	##########	1900 system does not display negative serials as dates
+0.0	h:mm:ss	en-US	1900	0:00:00	zero serial time
+0.5	yyyy-mm-dd h:mm	en-US	1900	1900-01-00 12:00	noon on Jan 0
+59.5	yyyy-mm-dd hh:mm:ss	en-US	1900	1900-02-28 12:00:00	noon on 28 Feb
+60.0	hh:mm:ss	en-US	1900	00:00:00	Lotus day midnight
+60.5	yyyy-mm-dd h:mm AM/PM	en-US	1900	1900-02-29 12:00 PM	noon on Lotus day
+61.25	yyyy-mm-dd h:mm	en-US	1900	1900-03-01 6:00	6am 1 Mar
+2958465.999	yyyy-mm-dd	en-US	1900	9999-12-31	frac on max date still that day (time may round)
+0	yyyy-mm-dd	en-US	1904	1904-01-01	1904 epoch
+0	dddd	en-US	1904	Friday	1 Jan 1904 Friday
+59	yyyy-mm-dd	en-US	1904	1904-02-29	real leap day in 1904 system
+59	dddd	en-US	1904	Monday	29 Feb 1904 Monday
+60	yyyy-mm-dd	en-US	1904	1904-03-01	1904 serial 60 is 1 Mar 1904, not a fake date
+1462	yyyy-mm-dd	en-US	1904	1908-01-02	offset check
+2957003	yyyy-mm-dd	en-US	1904	9999-12-31	1904 max serial = 2958465-1462
+2957004	yyyy-mm-dd	en-US	1904	##########	beyond 1904 max
+-1	yyyy-mm-dd	en-US	1904	1903-12-31	1904 system allows dates before the epoch (Excel Mac)
+36526	yyyy-mm-dd	en-US	1904	2004-01-02	serial 36526 under 1904
+1462	yyyy-mm-dd	en-US	1900	1904-01-01	1900-system serial of 1 Jan 1904 is 1462 (1460 real days + Lotus + origin)
+1461	yyyy-mm-dd	en-US	1900	1903-12-31	day before 1904-01-01 in 1900 system

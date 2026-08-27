@@ -105,11 +105,35 @@ Wire format: internally tagged JSON, `snake_case` variant names.
 |---|---|
 | `LocaleId` (`EN_US` = `0x0409`) | [`locale.rs`](../crates/core/src/locale.rs) |
 | `LocaleSeparators` | same |
+| `LocaleInfo`, `DateOrder` | same (WP-06 tables; unknown LCIDs fall back to `en-US`) |
 
-Separator tables for LCIDs other than `en-US` are WP-06.
+WP-01 public fields of `LocaleId` / `LocaleSeparators` and the `EN_US` constants are unchanged.
+
+## Dates — `omacell_core::dates` (WP-06)
+
+| Type / fn | Source |
+|---|---|
+| `DateSystem` (`Excel1900`, `Excel1904`) | [`date_system.rs`](../crates/core/src/date_system.rs), re-exported by [`dates.rs`](../crates/core/src/dates.rs) |
+| `CivilDate`, `TimeOfDay` | same |
+| `serial_to_date` / `date_to_serial` / `weekday_sun0` | same |
+| `MAX_SERIAL_1900`, `MAX_SERIAL_1904` | same |
+
+Civil-to-serial conversion rejects impossible calendar dates and inconsistent `lotus_leap` flags.
+
+## Number formats — `omacell_core::numfmt` (WP-06)
+
+| Type / fn | Source |
+|---|---|
+| `format` / `format_with` / `parse` / `general` / `general_for_width` | [`numfmt.rs`](../crates/core/src/numfmt.rs) |
+| `FormatValue`, `Formatted`, `FormatOptions` | same |
+| `builtin_format` (`numFmtId` 0–49) | [`numfmt/builtin.rs`](../crates/core/src/numfmt/builtin.rs) |
+| `ColorHint`, `LayoutHints`, `MAX_FORMAT_LEN` | [`numfmt/token.rs`](../crates/core/src/numfmt/token.rs) |
+
+`format` does not take interned `Value::Text`; pass [`FormatValue::Text`]. Default date system is 1900.
 
 ## Corpora
 
 - [`tests/corpus/addr/a1.tsv`](../tests/corpus/addr/a1.tsv)
 - [`tests/corpus/addr/r1c1.tsv`](../tests/corpus/addr/r1c1.tsv)
 - [`tests/corpus/errors/error_type.tsv`](../tests/corpus/errors/error_type.tsv)
+- [`tests/corpus/numfmt/`](../tests/corpus/numfmt/) (WP-06)

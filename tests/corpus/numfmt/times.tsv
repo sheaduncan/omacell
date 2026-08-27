@@ -1,0 +1,49 @@
+# value	format	locale	date_system	text	note
+0	h:mm	en-US	1900	0:00	midnight unpadded
+0	hh:mm	en-US	1900	00:00	midnight padded
+0	h:mm AM/PM	en-US	1900	12:00 AM	12-hour midnight
+0	h:mm:ss AM/PM	en-US	1900	12:00:00 AM	midnight with seconds
+0.5	h:mm	en-US	1900	12:00	noon
+0.5	hh:mm:ss	en-US	1900	12:00:00	noon padded
+0.5	h:mm AM/PM	en-US	1900	12:00 PM	noon PM
+0.5	h:mm:ss AM/PM	en-US	1900	12:00:00 PM	noon PM seconds
+0.25	h:mm AM/PM	en-US	1900	6:00 AM	6 AM
+0.75	h:mm AM/PM	en-US	1900	6:00 PM	6 PM
+0.25	hh:mm:ss	en-US	1900	06:00:00	6 AM 24h
+0.75	hh:mm:ss	en-US	1900	18:00:00	6 PM 24h
+1.5	[h]:mm	en-US	1900	36:00	elapsed hours include whole days
+1.5	[h]:mm:ss	en-US	1900	36:00:00	elapsed h:mm:ss
+1	[h]:mm:ss	en-US	1900	24:00:00	exactly one day elapsed
+0.5	[h]:mm:ss	en-US	1900	12:00:00	half day elapsed
+1	[m]	en-US	1900	1440	elapsed minutes in a day
+1	[s]	en-US	1900	86400	elapsed seconds in a day
+0.5	[m]:ss	en-US	1900	720:00	elapsed minutes of 12h
+0.000011574074074074073	h:mm:ss	en-US	1900	0:00:01	1/86400 ≈ 1 second
+0.0006944444444444445	h:mm:ss	en-US	1900	0:01:00	1/1440 ≈ 1 minute
+0.041666666666666664	h:mm:ss	en-US	1900	1:00:00	1/24 = 1 hour
+0.5	h:mm:ss a/p	en-US	1900	12:00:00 p	lowercase a/p
+0.25	h:mm AM/PM	en-US	1900	6:00 AM	AM upper
+0.25	h:mm am/pm	en-US	1900	6:00 am	lowercase am/pm follows the case of the token
+0.25	h:mm A/P	en-US	1900	6:00 A	A/P single letter
+0.75	h:mm A/P	en-US	1900	6:00 P	P
+0.5	mm:ss	en-US	1900	00:00	builtin 45 on a whole-hour serial shows minutes:seconds of the time-of-day (0 at noon)
+0.5	[h]:mm:ss	en-US	1900	12:00:00	builtin 46 elapsed
+0.5023	mm:ss.0	en-US	1900	03:18.7	builtin 47 style tenths: 0.0023*86400=198.72s → 3:18.7
+1.006944444	[h]:mm	en-US	1900	24:10	1 day + 10 minutes
+0.99999999	h:mm:ss	en-US	1900	23:59:59	just under 1; rounding must not jump to 24:00:00 unless ≥ 0.5s past
+0.5	h	en-US	1900	12	hours only
+0.5	hh	en-US	1900	12	padded hours
+0	ss	en-US	1900	00	seconds only
+0.5	s	en-US	1900	0	unpadded seconds at noon
+1.25	h:mm AM/PM	en-US	1900	6:00 AM	time-of-day modulo 24h when not elapsed
+1.25	[h]:mm	en-US	1900	30:00	elapsed 30 hours
+2	[h]:mm:ss	en-US	1900	48:00:00	two days elapsed
+0.0104166666667	h:mm:ss	en-US	1900	0:15:00	15 minutes
+0.5	hh:mm:ss AM/PM	en-US	1900	12:00:00 PM	padded 12-hour
+0.00001	h:mm:ss.000	en-US	1900	0:00:00.864	0.00001 days = 0.864 s
+0.5	h:mm:ss.0	en-US	1900	12:00:00.0	tenths at noon
+59.5	yyyy-mm-dd hh:mm	en-US	1900	1900-02-28 12:00	date+time
+60.25	yyyy-mm-dd h:mm AM/PM	en-US	1900	1900-02-29 6:00 AM	Lotus date plus time
+0.5	h:mm AM/PM	en-US	1904	12:00 PM	1904 noon is the same fraction
+1.0	h:mm:ss	en-US	1900	0:00:00	integer serial, time 00:00:00
+0.0416666666667	h AM/PM	en-US	1900	1 AM	hour + AM

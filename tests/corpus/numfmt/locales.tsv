@@ -1,0 +1,36 @@
+# value	format	locale	date_system	text	note
+1234.56	#,##0.00	en-US	1900	1,234.56	en-US baseline
+1234.56	#,##0.00	de-DE	1900	1.234,56	de-DE
+1234.56	#,##0.00	fr-FR	1900	1 234,56	fr-FR space thousands
+1234.56	#,##0.00	es-ES	1900	1.234,56	es-ES
+1234.56	#,##0.00	it-IT	1900	1.234,56	it-IT
+1234.56	#,##0.00	nl-NL	1900	1.234,56	nl-NL
+1234.56	#,##0.00	pt-BR	1900	1.234,56	pt-BR
+1234.56	#,##0.00	sv-SE	1900	1 234,56	sv-SE space thousands
+1234.56	#,##0.00	pl-PL	1900	1 234,56	pl-PL space thousands
+1234.56	#,##0.00	ru-RU	1900	1 234,56	ru-RU space thousands
+1234.56	#,##0.00	ja-JP	1900	1,234.56	ja-JP uses US-like separators
+1234.56	#,##0.00	zh-CN	1900	1,234.56	zh-CN
+1234.56	#,##0.00	ko-KR	1900	1,234.56	ko-KR
+0.5	h:mm AM/PM	en-US	1900	12:00 PM	en-US PM
+0.5	h:mm AM/PM	de-DE	1900	12:00 PM	de-DE still renders AM/PM tokens (Excel)
+0.5	h:mm AM/PM	ja-JP	1900	12:00 午後	ja-JP PM string
+0.5	h:mm AM/PM	zh-CN	1900	12:00 下午	zh-CN PM
+0.5	h:mm AM/PM	ko-KR	1900	12:00 오후	ko-KR PM
+0	h:mm AM/PM	ja-JP	1900	12:00 午前	ja-JP AM
+36526	d-mmm-yyyy	en-GB	1900	1-Jan-2000	en-GB English month names
+36526	d-mmm-yyyy	de-DE	1900	1-Jan-2000	de-DE Jan abbr
+61	d-mmm	de-DE	1900	1-Mrz	de-DE March Mrz
+36526	d-mmm-yyyy	fr-FR	1900	1-janv.-2000	fr-FR janv.
+1	dddd	en-US	1900	Sunday	en-US Sunday
+1	dddd	en-GB	1900	Sunday	en-GB Sunday
+2	dddd	en-US	1900	Monday	serial 2 Monday in Excel 1900
+7	dddd	en-US	1900	Saturday	serial 7 Saturday
+7	dddd	de-DE	1900	Samstag	de-DE Saturday
+7	dddd	fr-FR	1900	samedi	fr-FR Saturday
+32	mmmm	fr-FR	1900	février	fr-FR February
+32	mmmm	de-DE	1900	Februar	de-DE February
+1234567.8	#,##0.0	de-DE	1900	1.234.567,8	de-DE grouping
+0.5	0%	de-DE	1900	50%	percent token is always %; number uses locale decimal
+0.5	0.00%	de-DE	1900	50,00%	de-DE percent decimals
+1234	0	de-DE	1900	1234	integer ignores separators
