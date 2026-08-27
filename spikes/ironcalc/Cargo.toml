@@ -1,0 +1,15 @@
+[package]
+name = "omacell-spike-ironcalc"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "WP-S1 throwaway harness: measure IronCalc against ADR-002. Not a workspace member."
+
+# Own workspace so the parent omacell [profile.release] LTO does not apply
+# and this crate is never a member of crates/*.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+ironcalc = "0.8.3"
