@@ -1,6 +1,7 @@
 /target
 /fuzz/artifacts
 /fuzz/corpus
+/fuzz/target
 **/*.rs.bk
 .idea/
 .vscode/
