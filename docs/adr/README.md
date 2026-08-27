@@ -5,7 +5,7 @@ decision, except where the spec already marked the ADR decided.
 
 | ADR | Title | Status |
 |---|---|---|
-| [0001](0001-gui-toolkit.md) | GUI toolkit | decided |
+| [0001](0001-gui-toolkit.md) | GUI toolkit | proposed (blocked on IME and Orca checks) |
 | [0002](0002-engine.md) | Engine: build or adopt | proposed |
 | [0003](0003-native-format.md) | Native format is `.xlsx` | decided |
 | [0004](0004-scripting-lua.md) | Scripting language is Lua | decided |

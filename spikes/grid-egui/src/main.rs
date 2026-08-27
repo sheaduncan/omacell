@@ -70,7 +70,7 @@ impl Args {
 struct SpikeApp {
     args: Args,
     started: Instant,
-    first_frame_at: Option<Duration>,
+    first_update_at: Option<Duration>,
     adapter: String,
     fonts: fonts::LoadedFonts,
     theme_dark: bool,
@@ -109,7 +109,7 @@ impl SpikeApp {
         Self {
             args,
             started,
-            first_frame_at: None,
+            first_update_at: None,
             adapter,
             fonts,
             theme_dark: true,
@@ -148,7 +148,7 @@ impl SpikeApp {
         self.reported = true;
         let rss_kib = rss_kib();
         let startup_ms = self
-            .first_frame_at
+            .first_update_at
             .unwrap_or_else(|| self.started.elapsed())
             .as_secs_f64()
             * 1000.0;
@@ -158,7 +158,7 @@ impl SpikeApp {
         println!("{{");
         println!("  \"adapter\": {},", json_str(&self.adapter));
         println!("  \"pixels_per_point\": {},", ctx.pixels_per_point());
-        println!("  \"startup_to_first_frame_ms\": {startup_ms:.3},");
+        println!("  \"startup_to_first_update_ms\": {startup_ms:.3},");
         println!("  \"scroll_frames\": {},", self.dts.len());
         println!("  \"frame_ms_median\": {:.3},", stats.median);
         println!("  \"frame_ms_p95\": {:.3},", stats.p95);
@@ -200,8 +200,10 @@ impl eframe::App for SpikeApp {
         let dt = self.last_update.elapsed().as_secs_f32() * 1000.0;
         self.last_update = Instant::now();
         self.frame_n += 1;
-        if self.first_frame_at.is_none() {
-            self.first_frame_at = Some(self.started.elapsed());
+        if self.first_update_at.is_none() {
+            // eframe calls this before tessellation, rendering, and present,
+            // so this is intentionally not labeled as first-frame latency.
+            self.first_update_at = Some(self.started.elapsed());
         }
         // Crisp 1-device-px gridlines (§11.4). Text stays hinted via the font.
         ctx.tessellation_options_mut(|t| {

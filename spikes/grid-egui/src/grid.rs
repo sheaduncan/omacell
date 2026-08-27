@@ -47,7 +47,10 @@ pub fn show(
     let ppp = ui.ctx().pixels_per_point();
 
     if response.dragged() {
-        state.scroll -= response.drag_delta();
+        // `Response::drag_delta` is cumulative for the whole gesture. Applying
+        // it every frame makes scrolling accelerate, so consume only this
+        // frame's pointer movement while the drag is active.
+        state.scroll -= ui.input(|i| i.pointer.delta());
     }
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta);

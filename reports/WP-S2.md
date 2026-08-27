@@ -42,7 +42,7 @@ cargo run --release --manifest-path spikes/grid-egui/Cargo.toml -- --measure
 
 ## Interfaces exposed (for dependents)
 
-None into the product. ADR-001 is **decided** (egui). WP-16 should treat this crate as a sketch of painter + cache + pixel snap, not as a type source.
+None into the product. ADR-001 remains **proposed**, with egui as the plan default, until the CJK IME and Orca exit criteria are run. WP-16 should treat this crate as a sketch of painter + cache + pixel snap, not as a type source.
 
 Spike CLI: `--measure`, `--frames N`.
 
@@ -51,7 +51,7 @@ Spike CLI: `--measure`, `--frames N`.
 - Spec §11.2 recommended Qt Quick *for the spike*. Plan D3 and the WP say default egui unless measurements kill it. Measurements did not; Qt is the documented fallback, not the implementation.
 - Frozen row-index column in addition to the required frozen header row — needed to verify virtualization; still throwaway.
 - Tessellation feathering disabled so hairlines can be 1 device pixel (§11.4). WP-16 should keep this for the grid layer only if product chrome needs AA.
-- CJK IME and Orca were not completed (environment). Not treated as outright toolkit failure; see Open questions. Qt was **not** tried inside this spike.
+- CJK IME and Orca were not completed (environment). They are not recorded as failures, but they remain blocking exit criteria; see Open questions. Qt was **not** tried inside this spike.
 - ADR is updated in this PR; it is not merged until a human merges. Same pattern as WP-00 vs CI-on-main.
 
 ## Measurements
@@ -63,7 +63,7 @@ Host: Omarchy 4.0.1, Hyprland 0.56.2, Wayland, Intel UHD 630 (Vulkan iGPU), `WGP
 ```
 adapter: Intel(R) UHD Graphics 630 (CFL GT2) backend=Vulkan type=IntegratedGpu
 pixels_per_point: 1.5
-startup_to_first_frame_ms: 143.309
+startup_to_first_update_ms: 143.309
 scroll_frames: 180
 frame_ms_median: 6.943
 frame_ms_p95: 7.039
@@ -77,7 +77,7 @@ monospace: JetBrainsMono Nerd Font via fc-match
 cjk_family: Noto Sans CJK SC
 ```
 
-An earlier 240-frame run on the same adapter: startup 196.9 ms, frame median 6.94 ms, theme swap 6.58 ms, RSS 317 MiB (before the CJK TTC).
+An earlier 240-frame run on the same adapter: startup to first update 196.9 ms, frame median 6.94 ms, theme swap 6.58 ms, RSS 317 MiB (before the CJK TTC). The startup measurement is taken at entry to the first eframe update, before tessellation, rendering, and presentation; it does not prove the GUI first-frame target.
 
 `just check` on the workspace: pass (spike excluded). `cargo clippy --release -- -D warnings` in the spike: pass.
 
@@ -93,10 +93,10 @@ An earlier 240-frame run on the same adapter: startup 196.9 ms, frame median 6.9
 
 ## Open questions / decisions needed
 
-1. **CJK IME on Wayland.** Re-test at G4 with a real engine (`fcitx5-chinese-addons` or mozc) focused in the formula bar. If composition never reaches egui, that is Qt-swap trigger 1 in ADR-001. Options: (a) wait for G4, (b) install an engine now and re-spike. Not chosen here.
-2. **Orca speech.** AT-SPI node exists; Orca was not installed. G4 should run Orca against WP-16. Missing speech despite a present node is an Orca/AT-SPI issue, not automatically a Qt trigger.
+1. **CJK IME on Wayland — blocks ADR-001.** Re-test with a real engine (`fcitx5-chinese-addons`, mozc, or rime) focused in the spike field. If composition never reaches egui, that is Qt-swap trigger 1 in ADR-001.
+2. **Orca speech — blocks ADR-001.** The AT-SPI node exists, but Orca was not installed. Run Orca against the focused spike cell and confirm that it reads the address and value. Failure is Qt-swap trigger 2.
 3. **1.5× hairline is 1–2 px.** Device-pixel snap + no feathering is close; WP-16 may need stroke centering tweaks so 1.5× is strictly 1 px like 1.25×.
-4. **Product cold start.** Spike first frame 143–197 ms < 300 ms. WP-16 chrome, fonts, and bus wiring will eat the remainder.
+4. **Product cold start.** Spike first update was 143–197 ms, but that excludes tessellation/render/present and therefore does not establish the < 300 ms first-frame budget. WP-16 needs a presentation-aware measurement.
 
 ## RFC (only if a frozen contract changed)
 
@@ -105,8 +105,8 @@ None. G0 has not happened; this package does not touch frozen contracts.
 ## Checklist
 
 - [x] `just check` green on the workspace (spike excluded; fmt, clippy `-D warnings`, `cargo test --workspace`, `cargo doc --workspace --no-deps`)
-- [x] Every acceptance criterion ticked with evidence
-  - [x] ADR updated with measurements (merge is the human's job; this PR does not merge)
+- [ ] Every acceptance criterion ticked with evidence — blocked on CJK IME and Orca exit checks
+  - [ ] ADR merged with measurements — ADR remains proposed until the two exit checks pass; merge is the human's job
   - [x] Spike lives under `spikes/` and is excluded from the workspace (`Cargo.toml` `exclude = ["spikes"]`) and CI (`just check` does not build it)
 - [x] Docs warning-free; public items documented (no product API)
 - [x] Baselines recorded (if the package has performance gates) — measurements in this report and ADR-001; not `just perf-baseline` (no criterion benches in the workspace)

@@ -1,7 +1,8 @@
 # grid-egui (WP-S2 throwaway)
 
-Not a workspace member. Confirms ADR-001: eframe/egui on wgpu can paint a
-synthetic 1,048,576 × 50 grid.
+Not a workspace member. Supplies evidence for proposed ADR-001: eframe/egui
+on wgpu can paint a synthetic 1,048,576 × 50 grid. The ADR remains blocked
+on its CJK IME and Orca exit checks.
 
 ```
 cargo run --release --manifest-path spikes/grid-egui/Cargo.toml
