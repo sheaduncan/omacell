@@ -47,20 +47,31 @@ pub struct Deps {
 #[must_use]
 pub fn collect_deps(expr: &Expr) -> Deps {
     let mut deps = Deps::default();
-    expr.walk(&mut |e| match &e.kind {
+    collect(expr, None, &mut deps);
+    deps.tables.sort();
+    deps
+}
+
+fn collect(expr: &Expr, inherited_sheet: Option<&SheetSpec>, deps: &mut Deps) {
+    match &expr.kind {
         ExprKind::Cell { sheet, cell } => {
-            deps.ranges
-                .push((sheet.clone(), RangeRef::from_corners(*cell, *cell)));
+            deps.ranges.push((
+                sheet.clone().or_else(|| inherited_sheet.cloned()),
+                RangeRef::from_corners(*cell, *cell),
+            ));
         }
         ExprKind::Range { sheet, range } => {
-            deps.ranges.push((sheet.clone(), *range));
+            deps.ranges
+                .push((sheet.clone().or_else(|| inherited_sheet.cloned()), *range));
         }
         ExprKind::ThreeD { sheets, inner } => {
-            // Inner walk already recorded the body with sheet None; attach 3-D names.
-            let _ = (sheets, inner);
+            collect(inner, Some(sheets), deps);
         }
         ExprKind::Name { sheet, name } => {
-            deps.names.push((sheet.clone(), name.clone()));
+            deps.names.push((
+                sheet.clone().or_else(|| inherited_sheet.cloned()),
+                name.clone(),
+            ));
         }
         ExprKind::Structured(sr) => {
             if let Some(t) = &sr.table {
@@ -71,7 +82,7 @@ pub fn collect_deps(expr: &Expr) -> Deps {
         }
         ExprKind::Call {
             callee: Callee::Name(n),
-            ..
+            args,
         } => {
             let u = n.to_ascii_uppercase();
             if VOLATILE_FUNCS.iter().any(|v| *v == u) {
@@ -80,9 +91,32 @@ pub fn collect_deps(expr: &Expr) -> Deps {
             if DYNAMIC_FUNCS.iter().any(|v| *v == u) {
                 deps.dynamic = true;
             }
+            for arg in args.iter().flatten() {
+                collect(arg, inherited_sheet, deps);
+            }
         }
-        _ => {}
-    });
-    deps.tables.sort();
-    deps
+        ExprKind::Call {
+            callee: Callee::Expr(callee),
+            args,
+        } => {
+            collect(callee, inherited_sheet, deps);
+            for arg in args.iter().flatten() {
+                collect(arg, inherited_sheet, deps);
+            }
+        }
+        ExprKind::Array(rows) => {
+            for cell in rows.iter().flatten() {
+                collect(cell, inherited_sheet, deps);
+            }
+        }
+        ExprKind::External { inner, .. }
+        | ExprKind::Prefix { expr: inner, .. }
+        | ExprKind::Postfix { expr: inner, .. }
+        | ExprKind::Paren(inner) => collect(inner, inherited_sheet, deps),
+        ExprKind::Binary { left, right, .. } => {
+            collect(left, inherited_sheet, deps);
+            collect(right, inherited_sheet, deps);
+        }
+        ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Bool(_) | ExprKind::Error(_) => {}
+    }
 }

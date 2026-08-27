@@ -6,6 +6,7 @@ use omacell_core::formula::{
     ParseOptions, RefStyle, RewriteOp, collect_deps, parse, parse_editor, parse_with, print,
     rewrite_print,
 };
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
 
@@ -255,6 +256,62 @@ fn deps_flags_volatile_and_dynamic() {
     assert!(d.volatile);
     assert!(d.dynamic);
     assert!(!d.ranges.is_empty());
+}
+
+#[test]
+fn three_d_dependencies_keep_the_sheet_span() {
+    let f = parse("=Sheet1:Sheet3!A1").unwrap();
+    let deps = collect_deps(&f.ast);
+    assert_eq!(deps.ranges.len(), 1);
+    let sheets = deps.ranges[0].0.as_ref().expect("3-D sheet span");
+    assert_eq!(sheets.start, "Sheet1");
+    assert_eq!(sheets.end.as_deref(), Some("Sheet3"));
+}
+
+#[test]
+fn parser_depth_limit_covers_array_prefixes() {
+    let src = format!("={{{}1}}", "-".repeat(70));
+    let err = parse(&src).unwrap_err();
+    assert_eq!(err.error.code, omacell_core::formula::codes::DEPTH);
+}
+
+#[test]
+fn r1c1_rejects_an_invalid_base_cell() {
+    let err = parse_with(
+        "=R",
+        ParseOptions {
+            style: RefStyle::R1C1,
+            base_row: MAX_ROWS,
+            base_col: MAX_COLS,
+            lenient: false,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.error.code, omacell_core::formula::codes::PARSE);
+}
+
+#[test]
+fn rewrite_rejects_lossy_or_out_of_grid_operations() {
+    assert!(
+        rewrite_print(
+            "=A1",
+            &RewriteOp::Move {
+                src: "Data!A1".into(),
+                dest: "B2".into(),
+            },
+        )
+        .is_err()
+    );
+    assert!(
+        rewrite_print(
+            "=A1",
+            &RewriteOp::InsertRows {
+                at: MAX_ROWS,
+                count: 2,
+            },
+        )
+        .is_err()
+    );
 }
 
 fn arb_cell() -> impl Strategy<Value = String> {

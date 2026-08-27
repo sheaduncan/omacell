@@ -96,27 +96,53 @@ pub fn apply(expr: &Expr, op: &RewriteOp) -> Result<Expr, ParseError> {
             let at0 = at
                 .checked_sub(1)
                 .ok_or_else(|| ParseError::parse("insert row must be 1-based", 0, Vec::new()))?;
+            validate_row_rewrite(at0, *count)?;
             Ok(adjust_rows(expr, at0, *count, false))
         }
         RewriteOp::DeleteRows { at, count } => {
             let at0 = at
                 .checked_sub(1)
                 .ok_or_else(|| ParseError::parse("delete row must be 1-based", 0, Vec::new()))?;
+            validate_row_rewrite(at0, *count)?;
             Ok(adjust_rows(expr, at0, *count, true))
         }
         RewriteOp::InsertCols { at, count } => {
             let col =
                 col_from_letters(at).map_err(|e| ParseError::parse(e.message, 0, Vec::new()))?;
+            validate_col_rewrite(col, *count)?;
             Ok(adjust_cols(expr, col, *count, false))
         }
         RewriteOp::DeleteCols { at, count } => {
             let col =
                 col_from_letters(at).map_err(|e| ParseError::parse(e.message, 0, Vec::new()))?;
+            validate_col_rewrite(col, *count)?;
             Ok(adjust_cols(expr, col, *count, true))
         }
         RewriteOp::SheetRename { old, new } => Ok(rename_sheet(expr, old, new)),
         RewriteOp::TableRename { old, new } => Ok(rename_table(expr, old, new)),
     }
+}
+
+fn validate_row_rewrite(at: u32, count: u32) -> Result<(), ParseError> {
+    if at >= MAX_ROWS || count > MAX_ROWS - at {
+        return Err(ParseError::parse(
+            "row rewrite is outside the worksheet grid",
+            0,
+            vec!["valid row range".into()],
+        ));
+    }
+    Ok(())
+}
+
+fn validate_col_rewrite(at: u16, count: u16) -> Result<(), ParseError> {
+    if u32::from(count) > u32::from(MAX_COLS - at) {
+        return Err(ParseError::parse(
+            "column rewrite is outside the worksheet grid",
+            0,
+            vec!["valid column range".into()],
+        ));
+    }
+    Ok(())
 }
 
 /// Copy/fill: relative row/col shift. Absolute axes stay. Out of grid → `#REF!`.
@@ -508,6 +534,11 @@ fn parse_cell_a1(s: &str) -> Result<CellRef, ParseError> {
 
 fn parse_range_a1(s: &str) -> Result<RangeRef, ParseError> {
     match crate::addr::parse_a1(s) {
+        Ok(p) if p.sheet.is_some() => Err(ParseError::parse(
+            "move source must be sheet-local",
+            0,
+            vec!["unqualified range".into()],
+        )),
         Ok(p) => match p.kind {
             crate::addr::RefKind::Cell(c) => Ok(RangeRef::from_corners(c, c)),
             crate::addr::RefKind::Range(r) => Ok(r),

@@ -6,7 +6,7 @@ use crate::limits::{MAX_COLS, MAX_FORMULA_LEN, MAX_ROWS};
 use super::ast::{BinOp, Callee, Expr, ExprKind, PostfixOp, PrefixOp, Span};
 use super::error::ParseError;
 use super::lexer::{Lexer, Token, TokenKind};
-use super::{Formula, MAX_FORMULA_DEPTH, ParseOptions, PartialParse};
+use super::{Formula, MAX_FORMULA_DEPTH, ParseOptions, PartialParse, RefStyle};
 
 /// Parse a formula in A1 style.
 ///
@@ -72,6 +72,15 @@ impl<'a> Parser<'a> {
                 "formula is {} bytes; max is {MAX_FORMULA_LEN}",
                 src.len()
             )));
+        }
+        if opts.style == RefStyle::R1C1
+            && (opts.base_row >= MAX_ROWS || u32::from(opts.base_col) >= u32::from(MAX_COLS))
+        {
+            return Err(ParseError::parse(
+                "R1C1 base cell is out of range",
+                0,
+                vec!["valid base cell".into()],
+            ));
         }
         let tokens = Lexer::new(src, opts.style, opts.base_row, opts.base_col).tokenize()?;
         Ok(Self {
@@ -567,7 +576,13 @@ impl<'a> Parser<'a> {
         Ok(Expr::new(ExprKind::Array(rows), span))
     }
 
-    fn parse_array_scalar(&mut self, _depth: u32) -> Result<Expr, ParseError> {
+    fn parse_array_scalar(&mut self, depth: u32) -> Result<Expr, ParseError> {
+        if depth >= MAX_FORMULA_DEPTH {
+            return Err(ParseError::depth(
+                "formula nesting exceeds 64",
+                self.peek_offset(),
+            ));
+        }
         let tok = self.peek().clone();
         match tok.kind {
             TokenKind::Plus | TokenKind::Minus => {
@@ -577,7 +592,7 @@ impl<'a> Parser<'a> {
                     PrefixOp::Minus
                 };
                 self.bump();
-                let expr = self.parse_array_scalar(_depth)?;
+                let expr = self.parse_array_scalar(depth + 1)?;
                 if !matches!(
                     expr.kind,
                     ExprKind::Number(_) | ExprKind::Postfix { .. } | ExprKind::Prefix { .. }
