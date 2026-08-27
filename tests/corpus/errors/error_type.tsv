@@ -1,0 +1,15 @@
+# kind	display	error_type	note
+null	#NULL!	1	Microsoft ERROR.TYPE: #NULL! → 1
+div0	#DIV/0!	2	Microsoft ERROR.TYPE: #DIV/0! → 2
+value	#VALUE!	3	Microsoft ERROR.TYPE: #VALUE! → 3
+ref	#REF!	4	Microsoft ERROR.TYPE: #REF! → 4
+name	#NAME?	5	Microsoft ERROR.TYPE: #NAME? → 5
+num	#NUM!	6	Microsoft ERROR.TYPE: #NUM! → 6
+na	#N/A	7	Microsoft ERROR.TYPE: #N/A → 7
+getting_data	#GETTING_DATA	8	Microsoft ERROR.TYPE: #GETTING_DATA → 8
+spill	#SPILL!		Microsoft ERROR.TYPE: anything else → #N/A
+calc	#CALC!		Microsoft ERROR.TYPE: anything else → #N/A
+field	#FIELD!		Microsoft ERROR.TYPE: anything else → #N/A
+connect	#CONNECT!		Microsoft ERROR.TYPE: anything else → #N/A
+blocked	#BLOCKED!		Microsoft ERROR.TYPE: anything else → #N/A
+unknown	#UNKNOWN!		Microsoft ERROR.TYPE: anything else → #N/A

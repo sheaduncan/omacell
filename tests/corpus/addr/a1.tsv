@@ -1,0 +1,31 @@
+# input	print	error	note
+A1	A1		F-1.2 origin cell A1 is (row 0, col 0)
+$A$1	$A$1		absolute row and column
+$A1	$A1		absolute column, relative row
+A$1	A$1		relative column, absolute row
+a1	A1		letters are case-insensitive; print is upper-case
+XFD1048576	XFD1048576		F-1.2 last cell XFD1048576
+Z1	Z1		column Z is index 25
+AA1	AA1		column AA is index 26
+XFE1		addr.ref	F-1.2 beyond XFD is #REF!
+A1048577		addr.ref	F-1.2 beyond last row is #REF!
+A0		addr.ref	rows are 1..=1048576 in A1
+AAAA1		addr.ref	four-letter column is beyond XFD
+A1:B2	A1:B2		rectangular range
+$A$1:$B$2	$A$1:$B$2		absolute range
+A:A	A:A		whole-column form
+A:C	A:C		whole-column span
+$A:$C	$A:$C		absolute whole columns
+1:1	1:1		whole-row form
+1:10	1:10		whole-row span
+$1:$10	$1:$10		absolute whole rows
+Sheet1!A1	Sheet1!A1		unquoted sheet prefix
+'My Sheet'!B2	'My Sheet'!B2		quoted sheet name with space
+Sheet1:Sheet3!A1	Sheet1:Sheet3!A1		3-D sheet span F-1 / WP-01 RangeRef
+'My Sheet:Other'!A1:B2	'My Sheet:Other'!A1:B2		quoted 3-D span
+'O''Brien'!A1	'O''Brien'!A1		doubled quote in sheet name
+		addr.parse	empty input is not an address
+!A1		addr.parse	empty sheet name
+Sheet1!		addr.parse	missing body after sheet bang
+A1:C		addr.parse	mixed cell and whole-column
+A:B2		addr.parse	mixed whole-column and cell
