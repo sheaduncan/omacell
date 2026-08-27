@@ -283,6 +283,8 @@ impl Sheet {
 
     /// Add a merge. Overlap is rejected.
     pub fn add_merge(&mut self, range: RangeRef) -> Result<(), CoreError> {
+        range.start.validate()?;
+        range.end.validate()?;
         for existing in &self.merges {
             if ranges_overlap(*existing, range) {
                 return Err(CoreError::new(

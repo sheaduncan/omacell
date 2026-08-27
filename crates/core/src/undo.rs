@@ -192,6 +192,8 @@ pub enum Delta {
         at: u32,
         /// Forward count (inverse uses `-count`).
         count: i32,
+        /// Cells removed by a delete, at their original coordinates.
+        removed: Vec<(u32, u16, CellSlot)>,
     },
     /// Column insert/delete.
     ShiftCols {
@@ -201,6 +203,8 @@ pub enum Delta {
         at: u16,
         /// Forward count.
         count: i32,
+        /// Cells removed by a delete, at their original coordinates.
+        removed: Vec<(u32, u16, CellSlot)>,
     },
 }
 
@@ -222,7 +226,9 @@ impl Delta {
                 128 + before.as_ref().map(|t| t.name.len()).unwrap_or(0)
                     + after.as_ref().map(|t| t.name.len()).unwrap_or(0)
             }
-            Self::ShiftRows { .. } | Self::ShiftCols { .. } => 24,
+            Self::ShiftRows { removed, .. } | Self::ShiftCols { removed, .. } => {
+                24 + removed.len() * std::mem::size_of::<(u32, u16, CellSlot)>()
+            }
         }
     }
 
@@ -321,6 +327,7 @@ impl Transaction {
 ///     sheet: SheetId::new(0),
 ///     at: 0,
 ///     count: 1,
+///     removed: vec![],
 /// });
 /// assert!(log.can_undo());
 /// ```
@@ -409,9 +416,9 @@ impl UndoLog {
             if tx.deltas.is_empty() {
                 return;
             }
+            self.clear_redo();
             self.used += tx.bytes;
             self.undo.push_back(tx);
-            self.redo.clear();
             self.evict();
         }
     }
@@ -486,6 +493,12 @@ impl UndoLog {
         self.used
     }
 
+    fn clear_redo(&mut self) {
+        for tx in self.redo.drain(..) {
+            self.used = self.used.saturating_sub(tx.bytes);
+        }
+    }
+
     fn evict(&mut self) {
         while self.used > self.budget && self.undo.len() > 1 {
             if let Some(old) = self.undo.pop_front() {
@@ -547,5 +560,25 @@ mod tests {
         }
         assert!(log.used_bytes() <= 80);
         assert!(log.undo.len() <= 2);
+    }
+
+    #[test]
+    fn new_edit_removes_redo_bytes_from_accounting() {
+        let mut log = UndoLog::new();
+        let delta = |row| Delta::Cell {
+            sheet: SheetId::new(0),
+            row,
+            col: 0,
+            before: None,
+            after: Some(CellSlot::number(f64::from(row))),
+        };
+        log.record(delta(0));
+        let tx = log.pop_undo().unwrap();
+        log.push_redo(tx);
+        assert_eq!(log.used_bytes(), 64);
+
+        log.record(delta(1));
+        assert_eq!(log.used_bytes(), 64);
+        assert!(!log.can_redo());
     }
 }

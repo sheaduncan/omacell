@@ -134,6 +134,66 @@ fn undo_redo_restores_numbers() {
 }
 
 #[test]
+fn undo_redo_restores_structurally_deleted_cells() {
+    let mut wb = Workbook::new();
+    let id = wb.active_sheet();
+    for (row, value) in [(0, 10.0), (1, 20.0), (2, 30.0), (3, 40.0)] {
+        wb.set_number(id, row, 0, value).unwrap();
+    }
+
+    wb.delete_rows(id, 1, 2).unwrap();
+    assert_eq!(
+        wb.get(id, 1, 0).unwrap().unwrap().value,
+        Value::Number(40.0)
+    );
+    wb.undo().unwrap();
+    for (row, value) in [(0, 10.0), (1, 20.0), (2, 30.0), (3, 40.0)] {
+        assert_eq!(
+            wb.get(id, row, 0).unwrap().unwrap().value,
+            Value::Number(value)
+        );
+    }
+    wb.redo().unwrap();
+    assert_eq!(
+        wb.get(id, 1, 0).unwrap().unwrap().value,
+        Value::Number(40.0)
+    );
+    assert!(wb.get(id, 2, 0).unwrap().is_none());
+
+    let mut wb = Workbook::new();
+    let id = wb.active_sheet();
+    for (col, value) in [(0, 10.0), (1, 20.0), (2, 30.0), (3, 40.0)] {
+        wb.set_number(id, 0, col, value).unwrap();
+    }
+    wb.delete_cols(id, 1, 2).unwrap();
+    wb.undo().unwrap();
+    for (col, value) in [(0, 10.0), (1, 20.0), (2, 30.0), (3, 40.0)] {
+        assert_eq!(
+            wb.get(id, 0, col).unwrap().unwrap().value,
+            Value::Number(value)
+        );
+    }
+}
+
+#[test]
+fn side_tables_reject_out_of_grid_cells() {
+    let mut wb = Workbook::new();
+    let id = wb.active_sheet();
+    assert!(
+        wb.set_note(
+            id,
+            omacell_core::limits::MAX_ROWS,
+            0,
+            Some(omacell_core::sheet::Note {
+                author: None,
+                text: "invalid".into(),
+            }),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn define_name_and_table() {
     let mut wb = Workbook::new();
     let id = wb.active_sheet();

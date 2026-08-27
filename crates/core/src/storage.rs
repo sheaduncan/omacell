@@ -528,9 +528,20 @@ impl SheetStore {
         if count == 0 {
             return Ok(());
         }
+        if at >= MAX_ROWS {
+            return Err(CoreError::addr_ref(format!(
+                "row shift anchor {at} is out of range"
+            )));
+        }
         let cells: Vec<(u32, u16, CellSlot)> = self.iter().collect();
+        let magnitude = count.unsigned_abs();
         if count > 0 {
-            let n = count as u32;
+            let n = magnitude;
+            if n > MAX_ROWS - at {
+                return Err(CoreError::addr_ref(format!(
+                    "inserting {n} rows at {at} exceeds the worksheet grid"
+                )));
+            }
             for (r, _, _) in &cells {
                 if *r >= at {
                     let nr = r
@@ -545,15 +556,16 @@ impl SheetStore {
             }
         }
         let mut next = SheetStore::new();
-        let n_del = if count < 0 { (-count) as u32 } else { 0 };
+        let delete_end = at.saturating_add(magnitude).min(MAX_ROWS);
+        let deleted = delete_end - at;
         for (r, c, slot) in cells {
             if count > 0 {
-                let nr = if r >= at { r + count as u32 } else { r };
+                let nr = if r >= at { r + magnitude } else { r };
                 next.set(nr, c, slot)?;
             } else if r < at {
                 next.set(r, c, slot)?;
-            } else if r >= at + n_del {
-                next.set(r - n_del, c, slot)?;
+            } else if r >= delete_end {
+                next.set(r - deleted, c, slot)?;
             }
         }
         *self = next;
@@ -565,15 +577,25 @@ impl SheetStore {
         if count == 0 {
             return Ok(());
         }
+        if u32::from(at) >= u32::from(MAX_COLS) {
+            return Err(CoreError::addr_ref(format!(
+                "column shift anchor {at} is out of range"
+            )));
+        }
         let cells: Vec<(u32, u16, CellSlot)> = self.iter().collect();
+        let magnitude = count.unsigned_abs();
+        let at_u32 = u32::from(at);
         if count > 0 {
-            let n = count as u16;
+            let n = magnitude;
+            if n > u32::from(MAX_COLS) - at_u32 {
+                return Err(CoreError::addr_ref(format!(
+                    "inserting {n} columns at {at} exceeds the worksheet grid"
+                )));
+            }
             for (_, c, _) in &cells {
                 if *c >= at {
-                    let nc = c
-                        .checked_add(n)
-                        .ok_or_else(|| CoreError::addr_ref("column insert overflows u16"))?;
-                    if u32::from(nc) >= u32::from(MAX_COLS) {
+                    let nc = u32::from(*c) + n;
+                    if nc >= u32::from(MAX_COLS) {
                         return Err(CoreError::addr_ref(format!(
                             "inserting {n} columns at {at} would push a cell past column {MAX_COLS}"
                         )));
@@ -582,15 +604,23 @@ impl SheetStore {
             }
         }
         let mut next = SheetStore::new();
-        let n_del = if count < 0 { (-count) as u16 } else { 0 };
+        let delete_end = at_u32.saturating_add(magnitude).min(u32::from(MAX_COLS));
+        let deleted = delete_end - at_u32;
         for (r, c, slot) in cells {
             if count > 0 {
-                let nc = if c >= at { c + count as u16 } else { c };
+                let nc = if c >= at {
+                    u16::try_from(u32::from(c) + magnitude)
+                        .map_err(|_| CoreError::addr_ref("column insert overflows u16"))?
+                } else {
+                    c
+                };
                 next.set(r, nc, slot)?;
             } else if c < at {
                 next.set(r, c, slot)?;
-            } else if c >= at + n_del {
-                next.set(r, c - n_del, slot)?;
+            } else if u32::from(c) >= delete_end {
+                let nc = u16::try_from(u32::from(c) - deleted)
+                    .map_err(|_| CoreError::addr_ref("column delete underflows u16"))?;
+                next.set(r, nc, slot)?;
             }
         }
         *self = next;
@@ -703,6 +733,17 @@ mod tests {
             crate::error::codes::ADDR_REF
         );
         assert!(s.get(MAX_ROWS - 1, 0).unwrap().is_some());
+    }
+
+    #[test]
+    fn shifts_reject_bad_anchors_and_extreme_insert_counts() {
+        let mut s = SheetStore::new();
+        assert!(s.shift_rows(MAX_ROWS, 1).is_err());
+        assert!(s.shift_cols(MAX_COLS, 1).is_err());
+        assert!(s.shift_rows(0, i32::MAX).is_err());
+        assert!(s.shift_cols(0, i32::MAX).is_err());
+        assert!(s.shift_rows(0, i32::MIN).is_ok());
+        assert!(s.shift_cols(0, i32::MIN).is_ok());
     }
 
     #[test]

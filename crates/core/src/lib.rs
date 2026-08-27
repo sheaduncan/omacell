@@ -13,6 +13,7 @@
 pub mod addr;
 pub mod changeset;
 pub mod command;
+pub mod date_system;
 pub mod error;
 pub mod event;
 pub mod geometry;

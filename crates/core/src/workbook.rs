@@ -9,7 +9,8 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::addr::{ParsedRef, RefKind, SheetId, SheetSpec};
+use crate::addr::{CellRef, ParsedRef, RefKind, SheetId, SheetSpec};
+pub use crate::date_system::DateSystem;
 use crate::error::CoreError;
 use crate::intern::{FormulaId, Interners};
 use crate::names::{DefinedName, NameRegistry};
@@ -22,22 +23,6 @@ use crate::style::{Color, Style, StyleId};
 use crate::tables::{Table, TableId, TableRegistry};
 use crate::undo::{AffectedRange, Delta, UndoLog, transaction_affected};
 use crate::value::{StrId, Value};
-
-/// 1900 (Lotus leap-year quirk, WP-06) or 1904 date system.
-///
-/// ```
-/// use omacell_core::workbook::DateSystem;
-/// assert_eq!(DateSystem::default(), DateSystem::Date1900);
-/// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DateSystem {
-    /// Excel Windows default (serial 1 = 1899-12-31, with 1900 leap-year quirk).
-    #[default]
-    Date1900,
-    /// Excel Mac 1904 system.
-    Date1904,
-}
 
 /// Calculation mode (F-1.6).
 ///
@@ -701,13 +686,37 @@ impl Workbook {
                 }
                 Ok(())
             }
-            Delta::ShiftRows { sheet, at, count } => {
+            Delta::ShiftRows {
+                sheet,
+                at,
+                count,
+                removed,
+            } => {
                 let n = if inverse { -count } else { *count };
-                self.sheet_mut(*sheet)?.store.shift_rows(*at, n)
+                let store = &mut self.sheet_mut(*sheet)?.store;
+                store.shift_rows(*at, n)?;
+                if inverse && *count < 0 {
+                    for (row, col, slot) in removed {
+                        store.set(*row, *col, *slot)?;
+                    }
+                }
+                Ok(())
             }
-            Delta::ShiftCols { sheet, at, count } => {
+            Delta::ShiftCols {
+                sheet,
+                at,
+                count,
+                removed,
+            } => {
                 let n = if inverse { -count } else { *count };
-                self.sheet_mut(*sheet)?.store.shift_cols(*at, n)
+                let store = &mut self.sheet_mut(*sheet)?.store;
+                store.shift_cols(*at, n)?;
+                if inverse && *count < 0 {
+                    for (row, col, slot) in removed {
+                        store.set(*row, *col, *slot)?;
+                    }
+                }
+                Ok(())
             }
         }
     }
@@ -925,6 +934,7 @@ impl Workbook {
             sheet: id,
             at,
             count: n,
+            removed: Vec::new(),
         });
         Ok(())
     }
@@ -934,12 +944,23 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
-        let n = i32::try_from(count).map_err(|_| CoreError::addr_ref("row count too large"))?;
+        if at >= crate::limits::MAX_ROWS {
+            return Err(CoreError::addr_ref("row delete anchor is out of range"));
+        }
+        let actual = count.min(crate::limits::MAX_ROWS - at);
+        let n = i32::try_from(actual).map_err(|_| CoreError::addr_ref("row count too large"))?;
+        let removed = self
+            .sheet(id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?
+            .store
+            .iter_region(at, 0, at + actual - 1, crate::limits::MAX_COLS - 1)
+            .collect();
         self.sheet_mut(id)?.store.shift_rows(at, -n)?;
         self.undo.record(Delta::ShiftRows {
             sheet: id,
             at,
             count: -n,
+            removed,
         });
         Ok(())
     }
@@ -955,6 +976,7 @@ impl Workbook {
             sheet: id,
             at,
             count: n,
+            removed: Vec::new(),
         });
         Ok(())
     }
@@ -964,12 +986,23 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
-        let n = i32::from(count);
+        if u32::from(at) >= u32::from(crate::limits::MAX_COLS) {
+            return Err(CoreError::addr_ref("column delete anchor is out of range"));
+        }
+        let actual = count.min(crate::limits::MAX_COLS - at);
+        let n = i32::from(actual);
+        let removed = self
+            .sheet(id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?
+            .store
+            .iter_region(0, at, crate::limits::MAX_ROWS - 1, at + actual - 1)
+            .collect();
         self.sheet_mut(id)?.store.shift_cols(at, -n)?;
         self.undo.record(Delta::ShiftCols {
             sheet: id,
             at,
             count: -n,
+            removed,
         });
         Ok(())
     }
@@ -982,6 +1015,7 @@ impl Workbook {
         col: u16,
         note: Option<Note>,
     ) -> Result<(), CoreError> {
+        CellRef::new(row, col)?;
         let sheet = self.sheet_mut(id)?;
         match note {
             Some(n) => {
@@ -1002,6 +1036,7 @@ impl Workbook {
         col: u16,
         comment: Option<Comment>,
     ) -> Result<(), CoreError> {
+        CellRef::new(row, col)?;
         let sheet = self.sheet_mut(id)?;
         match comment {
             Some(c) => {
@@ -1022,6 +1057,7 @@ impl Workbook {
         col: u16,
         link: Option<Hyperlink>,
     ) -> Result<(), CoreError> {
+        CellRef::new(row, col)?;
         let sheet = self.sheet_mut(id)?;
         match link {
             Some(h) => {
