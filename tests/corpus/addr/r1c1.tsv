@@ -1,0 +1,20 @@
+# input	base	print	error	note
+R1C1	A1	R1C1		R1C1 is absolute A1 regardless of base
+R1C1	B2	R1C1		absolute form ignores the base cell
+RC	A1	RC		RC is relative 0,0 (same cell)
+R[-1]C	B2	R[-1]C		relative row -1 from B2 is B1
+RC[1]	A1	RC[1]		relative column +1 from A1 is B1
+R[-1]C[-1]	B2	R[-1]C[-1]		relative both axes from B2 is A1
+R2C	A1	R2C		absolute row, relative column 0
+RC2	A1	RC2		relative row 0, absolute column
+R[-1]C	A1		addr.ref	relative offset above row 1 is #REF!
+RC[-1]	A1		addr.ref	relative offset left of column A is #REF!
+R[1]C	XFD1048576		addr.ref	relative offset past last row is #REF!
+RC[1]	XFD1048576		addr.ref	relative offset past XFD is #REF!
+R1	A1	R1		whole-row form (R1C1 notation)
+C1	A1	C1		whole-column form (R1C1 notation)
+R1:R10	A1	R1:R10		whole-row span
+C1:C3	A1	C1:C3		whole-column span
+R[-1]:R[1]	B2	R[-1]:R[1]		relative whole-row span
+r1c1	A1	R1C1		R1C1 letters are case-insensitive
+R[0]C[0]	A1	RC		R[0]C[0] canonicalizes to RC
