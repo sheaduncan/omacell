@@ -21,6 +21,11 @@ use super::{CellRef, ParsedRef, RangeRef, RefKind};
 /// }
 /// ```
 pub fn parse_r1c1(input: &str, base_row: u32, base_col: u16) -> Result<ParsedRef, CoreError> {
+    if base_row >= MAX_ROWS || u32::from(base_col) >= u32::from(MAX_COLS) {
+        return Err(CoreError::addr_ref(format!(
+            "R1C1 base r{base_row}c{base_col} is out of range"
+        )));
+    }
     let input = input.trim();
     if input.is_empty() {
         return Err(CoreError::addr_parse("empty address"));
@@ -39,6 +44,11 @@ pub fn parse_r1c1(input: &str, base_row: u32, base_col: u16) -> Result<ParsedRef
 /// ```
 pub fn parse_r1c1_cell(input: &str, base_row: u32, base_col: u16) -> Result<CellRef, CoreError> {
     let parsed = parse_r1c1(input, base_row, base_col)?;
+    if parsed.sheet.is_some() {
+        return Err(CoreError::addr_parse(
+            "cell-only parser does not accept a sheet qualifier; use parse_r1c1",
+        ));
+    }
     match parsed.kind {
         RefKind::Cell(cell) => Ok(cell),
         RefKind::Range(_) => Err(CoreError::addr_parse(
@@ -232,6 +242,12 @@ impl CellRef {
     /// R1C1 text without a sheet prefix, relative to `base_row` / `base_col`.
     #[must_use]
     pub fn to_r1c1(self, base_row: u32, base_col: u16) -> String {
+        if self.validate().is_err()
+            || base_row >= MAX_ROWS
+            || u32::from(base_col) >= u32::from(MAX_COLS)
+        {
+            return "#REF!".to_string();
+        }
         format!(
             "{}{}",
             print_axis('R', self.row, self.row_abs, base_row),

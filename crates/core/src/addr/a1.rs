@@ -34,6 +34,11 @@ pub fn parse_a1(input: &str) -> Result<ParsedRef, CoreError> {
 /// ```
 pub fn parse_a1_cell(input: &str) -> Result<CellRef, CoreError> {
     let parsed = parse_a1(input)?;
+    if parsed.sheet.is_some() {
+        return Err(CoreError::addr_parse(
+            "cell-only parser does not accept a sheet qualifier; use parse_a1",
+        ));
+    }
     match parsed.kind {
         RefKind::Cell(cell) => Ok(cell),
         RefKind::Range(_) => Err(CoreError::addr_parse(
@@ -279,6 +284,9 @@ pub(super) fn format_col(col: u16, abs: bool) -> String {
 }
 
 pub(super) fn format_row(row: u32, abs: bool) -> String {
+    if row >= MAX_ROWS {
+        return "#REF!".to_string();
+    }
     let n = row + 1;
     if abs { format!("${n}") } else { n.to_string() }
 }
@@ -287,6 +295,9 @@ impl CellRef {
     /// A1 text without a sheet prefix (`$A$1`).
     #[must_use]
     pub fn to_a1(self) -> String {
+        if self.validate().is_err() {
+            return "#REF!".to_string();
+        }
         let mut s = format_col(self.col, self.col_abs);
         if s == "#REF!" {
             return s;

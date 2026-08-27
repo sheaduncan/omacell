@@ -17,6 +17,8 @@ pub mod codes {
     pub const COMMAND_ID: &str = "command.id";
     /// Changeset id is empty.
     pub const CHANGESET_ID: &str = "changeset.id";
+    /// Changeset inverse commands do not match its lifecycle status.
+    pub const CHANGESET_INVERSE: &str = "changeset.inverse";
     /// Array shape is empty or overflows.
     pub const ARRAY_SHAPE: &str = "value.array_shape";
 }

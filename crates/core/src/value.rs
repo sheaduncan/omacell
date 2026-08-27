@@ -3,7 +3,7 @@
 use std::fmt;
 use std::mem::size_of;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{CoreError, ErrorKind, codes};
 
@@ -67,7 +67,7 @@ impl ArrayId {
 /// let shape = Array2D::new(2, 3).expect("shape");
 /// assert_eq!(shape.len(), 6);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct Array2D {
     /// Number of rows (at least 1).
     pub rows: u32,
@@ -78,15 +78,23 @@ pub struct Array2D {
 impl Array2D {
     /// Construct a non-empty shape whose `rows * cols` fits in `u32`.
     pub fn new(rows: u32, cols: u32) -> Result<Self, CoreError> {
-        if rows == 0 || cols == 0 {
+        let shape = Self { rows, cols };
+        shape.validate()?;
+        Ok(shape)
+    }
+
+    /// Validate that the shape is non-empty and its cell count fits in `u32`.
+    pub fn validate(self) -> Result<(), CoreError> {
+        if self.rows == 0 || self.cols == 0 {
             return Err(CoreError::new(
                 codes::ARRAY_SHAPE,
                 "array dimensions must be at least 1×1",
             ));
         }
-        rows.checked_mul(cols)
+        self.rows
+            .checked_mul(self.cols)
             .ok_or_else(|| CoreError::new(codes::ARRAY_SHAPE, "array rows * cols overflows u32"))?;
-        Ok(Self { rows, cols })
+        Ok(())
     }
 
     /// Total number of cells.
@@ -99,6 +107,19 @@ impl Array2D {
     #[must_use]
     pub fn is_empty(self) -> bool {
         self.rows == 0 || self.cols == 0
+    }
+}
+
+#[derive(Deserialize)]
+struct Array2DWire {
+    rows: u32,
+    cols: u32,
+}
+
+impl<'de> Deserialize<'de> for Array2D {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = Array2DWire::deserialize(deserializer)?;
+        Self::new(wire.rows, wire.cols).map_err(serde::de::Error::custom)
     }
 }
 

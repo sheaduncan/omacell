@@ -31,7 +31,7 @@ Indices are 0-based. Valid rows are `0..MAX_ROWS`; valid columns `0..MAX_COLS`.
 | `parse_a1` / `parse_a1_cell` / `quote_sheet_name` | [`addr/a1.rs`](../crates/core/src/addr/a1.rs) |
 | `parse_r1c1` / `parse_r1c1_cell` | [`addr/r1c1.rs`](../crates/core/src/addr/r1c1.rs) |
 
-`CellRef.sheet` is a resolved id. Parsers put names in `SheetSpec`; WP-02 maps names to ids. R1C1 relative offsets resolve against an explicit base cell into the same `CellRef` (grid index + abs flags).
+`CellRef.sheet` is a resolved id. Parsers put names in `SheetSpec`; WP-02 maps names to ids. The cell-only parsers reject sheet-qualified input so they cannot silently discard a name. R1C1 relative offsets resolve against a validated base cell into the same `CellRef` (grid index + abs flags). Invalid `CellRef` wire values are rejected; formatting a directly constructed out-of-grid value produces `#REF!` rather than panicking.
 
 ## Values — `omacell_core::value`
 
@@ -41,7 +41,7 @@ Indices are 0-based. Valid rows are `0..MAX_ROWS`; valid columns `0..MAX_COLS`.
 | `StrId`, `ArrayId` | same |
 | `Array2D` (shape only) | same |
 
-`size_of::<Value>() <= 16`. Text and array payloads are interned by WP-02.
+`size_of::<Value>() <= 16`. Text and array payloads are interned by WP-02. `Array2D` construction and deserialization require non-zero dimensions whose product fits in `u32`.
 
 JSON of `Value::Number` is a JSON number. That is not bit-exact for every IEEE value; `NaN` / `Inf` are valid in-memory and not JSON-portable.
 
@@ -51,7 +51,7 @@ JSON of `Value::Number` is a JSON number. That is not bit-exact for every IEEE v
 |---|---|
 | `ErrorKind` (Excel cell errors, exact display strings, `error_type()`) | [`error.rs`](../crates/core/src/error.rs) |
 | `CoreError` `{code, message, hint}` | same |
-| `codes::*` (`addr.ref`, `addr.parse`, `command.id`, `changeset.id`, `value.array_shape`) | same |
+| `codes::*` (`addr.ref`, `addr.parse`, `command.id`, `changeset.id`, `changeset.inverse`, `value.array_shape`) | same |
 
 `ERROR.TYPE` codes 1–8 follow Microsoft’s documentation; newer errors return `None` (`#N/A`).
 
@@ -88,6 +88,8 @@ No commands are registered here (WP-07).
 | `CommandCall` | same |
 | `ChangeSummary` | same |
 | `Changeset` | same |
+
+Proposed changesets carry no inverse commands. WP-07 computes inverses from trusted workbook state before moving a changeset to `Applied`; applied and reverted non-empty changesets must carry those inverses. Agent-supplied inverses are not trusted.
 
 ## Events — `omacell_core::event`
 

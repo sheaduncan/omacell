@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use omacell_core::addr::{
     CellRef, ParsedRef, RangeRef, RefKind, SheetId, SheetSpec, col_from_letters, col_to_letters,
-    parse_a1, parse_a1_cell, parse_r1c1,
+    parse_a1, parse_a1_cell, parse_r1c1, parse_r1c1_cell,
 };
 use omacell_core::changeset::{
     ChangeSummary, Changeset, ChangesetId, ChangesetStatus, CommandCall,
@@ -112,6 +112,68 @@ fn out_of_range_is_ref_class() {
     assert_eq!(
         col_from_letters("XFE").unwrap_err().excel_error(),
         Some(ErrorKind::Ref)
+    );
+}
+
+#[test]
+fn invalid_wire_values_are_rejected_and_formatting_is_panic_safe() {
+    let invalid_row = serde_json::json!({
+        "row": MAX_ROWS,
+        "col": 0,
+        "row_abs": false,
+        "col_abs": false,
+    });
+    assert!(serde_json::from_value::<CellRef>(invalid_row).is_err());
+
+    let invalid_col = serde_json::json!({
+        "row": 0,
+        "col": MAX_COLS,
+        "row_abs": false,
+        "col_abs": false,
+    });
+    assert!(serde_json::from_value::<CellRef>(invalid_col).is_err());
+
+    // Fields stay public for the frozen contract, so formatters also defend
+    // against callers constructing an invalid value directly.
+    let invalid_direct = CellRef {
+        sheet: None,
+        row: u32::MAX,
+        col: u16::MAX,
+        row_abs: false,
+        col_abs: false,
+    };
+    assert_eq!(invalid_direct.to_a1(), "#REF!");
+    assert_eq!(invalid_direct.to_r1c1(0, 0), "#REF!");
+
+    assert!(
+        serde_json::from_value::<Array2D>(serde_json::json!({
+            "rows": 0,
+            "cols": 3,
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<Array2D>(serde_json::json!({
+            "rows": u32::MAX,
+            "cols": 2,
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn cell_only_parsers_reject_sheet_qualifiers() {
+    assert_eq!(
+        parse_a1_cell("Data!A1").unwrap_err().code,
+        codes::ADDR_PARSE
+    );
+    assert_eq!(
+        parse_r1c1_cell("Data!R1C1", 0, 0).unwrap_err().code,
+        codes::ADDR_PARSE
+    );
+    assert_eq!(
+        parse_r1c1("R1C1", MAX_ROWS, 0).unwrap_err().code,
+        codes::ADDR_REF
     );
 }
 
@@ -257,6 +319,36 @@ fn sample_changeset() -> Changeset {
             text: "set A1".into(),
         },
     }
+}
+
+#[test]
+fn changeset_inverse_lifecycle_is_validated() {
+    let mut changeset = sample_changeset();
+    changeset.inverse = changeset.forward.clone();
+    assert_eq!(
+        changeset.validate().unwrap_err().code,
+        codes::CHANGESET_INVERSE
+    );
+    assert!(
+        serde_json::from_value::<Changeset>(serde_json::to_value(&changeset).unwrap()).is_err()
+    );
+
+    changeset.status = ChangesetStatus::Applied;
+    assert!(changeset.validate().is_ok());
+    json_roundtrip(&changeset);
+
+    changeset.inverse.clear();
+    assert_eq!(
+        changeset.validate().unwrap_err().code,
+        codes::CHANGESET_INVERSE
+    );
+    assert!(
+        serde_json::from_value::<Changeset>(serde_json::to_value(&changeset).unwrap()).is_err()
+    );
+
+    let mut proposed_json = serde_json::to_value(sample_changeset()).unwrap();
+    proposed_json.as_object_mut().unwrap().remove("inverse");
+    assert!(serde_json::from_value::<Changeset>(proposed_json).is_ok());
 }
 
 fn sample_style() -> Style {

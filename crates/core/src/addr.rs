@@ -12,7 +12,7 @@ pub use a1::{parse_a1, parse_a1_cell, quote_sheet_name};
 pub use letters::{col_from_letters, col_to_letters};
 pub use r1c1::{parse_r1c1, parse_r1c1_cell};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::CoreError;
 use crate::limits::{MAX_COLS, MAX_ROWS};
@@ -66,7 +66,7 @@ pub struct SheetSpec {
 /// let a1 = CellRef::new(0, 0).unwrap();
 /// assert_eq!(a1.to_a1(), "A1");
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct CellRef {
     /// Resolved sheet, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,18 +89,15 @@ impl CellRef {
 
     /// Cell with explicit absolute flags.
     pub fn with_abs(row: u32, col: u16, row_abs: bool, col_abs: bool) -> Result<Self, CoreError> {
-        if row >= MAX_ROWS || u32::from(col) >= u32::from(MAX_COLS) {
-            return Err(CoreError::addr_ref(format!(
-                "cell r{row}c{col} is out of range"
-            )));
-        }
-        Ok(Self {
+        let cell = Self {
             sheet: None,
             row,
             col,
             row_abs,
             col_abs,
-        })
+        };
+        cell.validate()?;
+        Ok(cell)
     }
 
     /// Attach a resolved sheet id.
@@ -108,6 +105,38 @@ impl CellRef {
     pub fn on_sheet(mut self, sheet: SheetId) -> Self {
         self.sheet = Some(sheet);
         self
+    }
+
+    /// Validate that the row and column are inside Excel's grid.
+    pub fn validate(self) -> Result<(), CoreError> {
+        if self.row >= MAX_ROWS || u32::from(self.col) >= u32::from(MAX_COLS) {
+            Err(CoreError::addr_ref(format!(
+                "cell r{}c{} is out of range",
+                self.row, self.col
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CellRefWire {
+    #[serde(default)]
+    sheet: Option<SheetId>,
+    row: u32,
+    col: u16,
+    row_abs: bool,
+    col_abs: bool,
+}
+
+impl<'de> Deserialize<'de> for CellRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = CellRefWire::deserialize(deserializer)?;
+        let mut cell = Self::with_abs(wire.row, wire.col, wire.row_abs, wire.col_abs)
+            .map_err(serde::de::Error::custom)?;
+        cell.sheet = wire.sheet;
+        Ok(cell)
     }
 }
 

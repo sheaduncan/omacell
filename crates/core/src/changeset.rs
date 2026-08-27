@@ -1,6 +1,6 @@
 //! Changesets: ordered, invertible command lists (spec §8.6, §11.3).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::command::{CommandId, Origin};
 use crate::error::{CoreError, codes};
@@ -131,7 +131,7 @@ pub struct ChangeSummary {
 /// };
 /// assert_eq!(cs.status, ChangesetStatus::Proposed);
 /// ```
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Changeset {
     /// Identity.
     pub id: ChangesetId,
@@ -141,8 +141,60 @@ pub struct Changeset {
     pub status: ChangesetStatus,
     /// Commands to apply.
     pub forward: Vec<CommandCall>,
-    /// Inverse commands (same length as `forward`, reverse order when executed).
+    /// Computed inverse commands, executed in listed order when reverting.
+    ///
+    /// This is empty while `status` is [`ChangesetStatus::Proposed`]. WP-07
+    /// computes it from trusted workbook state before marking the changeset
+    /// applied; agent-supplied inverse commands are never trusted.
     pub inverse: Vec<CommandCall>,
     /// Affected-structure summary.
     pub summary: ChangeSummary,
+}
+
+impl Changeset {
+    /// Validate inverse-command presence against the lifecycle status.
+    pub fn validate(&self) -> Result<(), CoreError> {
+        match self.status {
+            ChangesetStatus::Proposed if !self.inverse.is_empty() => Err(CoreError::new(
+                codes::CHANGESET_INVERSE,
+                "proposed changesets must not contain inverse commands",
+            )),
+            ChangesetStatus::Applied | ChangesetStatus::Reverted
+                if self.forward.is_empty() != self.inverse.is_empty() =>
+            {
+                Err(CoreError::new(
+                    codes::CHANGESET_INVERSE,
+                    "applied or reverted changesets must carry computed inverses",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ChangesetWire {
+    id: ChangesetId,
+    origin: Origin,
+    status: ChangesetStatus,
+    forward: Vec<CommandCall>,
+    #[serde(default)]
+    inverse: Vec<CommandCall>,
+    summary: ChangeSummary,
+}
+
+impl<'de> Deserialize<'de> for Changeset {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ChangesetWire::deserialize(deserializer)?;
+        let changeset = Self {
+            id: wire.id,
+            origin: wire.origin,
+            status: wire.status,
+            forward: wire.forward,
+            inverse: wire.inverse,
+            summary: wire.summary,
+        };
+        changeset.validate().map_err(serde::de::Error::custom)?;
+        Ok(changeset)
+    }
 }
