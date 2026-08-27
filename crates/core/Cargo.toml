@@ -31,3 +31,7 @@ harness = false
 [[bench]]
 name = "iteration"
 harness = false
+
+[[bench]]
+name = "parse_formula"
+harness = false

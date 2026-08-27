@@ -16,6 +16,7 @@ pub mod command;
 pub mod date_system;
 pub mod error;
 pub mod event;
+pub mod formula;
 pub mod geometry;
 pub mod intern;
 pub mod limits;
