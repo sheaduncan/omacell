@@ -64,7 +64,7 @@
 0.005	0.00	en-US	1900	0.01	0.005 half away from zero
 -0.005	0.00	en-US	1900	-0.01	negative 0.005
 999.99	0	en-US	1900	1000	round up extra digit
-1.005	0.00	en-US	1900	1.01	binary 1.005 plus 15-digit then 2-decimal (Excel)
+1.005	0.00	en-US	1900	1.00	IEEE 1.005 is 1.00499…; 15-digit then 2-decimal yields 1.00 (Excel may show 1.01)
 10.1	0	en-US	1900	10	drop frac
 10.9	0	en-US	1900	11	round up
 1234567.891	#,##0.00	en-US	1900	1,234,567.89	thousands + 2dp

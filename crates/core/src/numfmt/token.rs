@@ -203,6 +203,10 @@ pub enum Token {
     Year {
         /// Letter count.
         len: u8,
+        /// `e` is always a four-digit (ISO) year; `y` uses `len`.
+        iso: bool,
+        /// `g` era stand-in: emit nothing until era calendars land.
+        era: bool,
     },
     /// Month after minute disambiguation.
     Month {

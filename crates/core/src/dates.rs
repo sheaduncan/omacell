@@ -91,7 +91,7 @@ pub fn serial_to_date(serial: i64, system: DateSystem) -> Option<CivilDate> {
 }
 
 fn serial_to_date_1900(serial: i64) -> Option<CivilDate> {
-    if serial < 0 || serial > MAX_SERIAL_1900 {
+    if !(0..=MAX_SERIAL_1900).contains(&serial) {
         return None;
     }
     if serial == 0 {
@@ -166,10 +166,10 @@ fn date_to_serial_1900(date: CivilDate) -> Option<i64> {
     } else {
         unix - UNIX_DAYS_1900_JAN1 + 2
     };
-    if serial < 0 || serial > MAX_SERIAL_1900 {
-        None
-    } else {
+    if (0..=MAX_SERIAL_1900).contains(&serial) {
         Some(serial)
+    } else {
+        None
     }
 }
 
@@ -186,7 +186,7 @@ fn date_to_serial_1904(date: CivilDate) -> Option<i64> {
 pub fn weekday_sun0(serial: i64, system: DateSystem) -> Option<u8> {
     match system {
         DateSystem::Excel1900 => {
-            if serial < 0 || serial > MAX_SERIAL_1900 {
+            if !(0..=MAX_SERIAL_1900).contains(&serial) {
                 return None;
             }
             Some(((serial - 1).rem_euclid(7)) as u8)
@@ -311,7 +311,11 @@ fn days_from_civil(y: i32, m: u8, d: u8) -> Option<i64> {
         i64::from(y) - 399
     } / 400;
     let yoe = (i64::from(y) - era * 400) as u32;
-    let mp = if m > 2 { u32::from(m) - 3 } else { u32::from(m) + 9 };
+    let mp = if m > 2 {
+        u32::from(m) - 3
+    } else {
+        u32::from(m) + 9
+    };
     let doy = (153 * mp + 2) / 5 + u32::from(d) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     Some(era * 146_097 + i64::from(doe) - 719_468)
@@ -377,7 +381,11 @@ mod tests {
     fn round_trip_1900() {
         for s in [0, 1, 59, 60, 61, 367, 1462, 36526, MAX_SERIAL_1900] {
             let d = serial_to_date(s, DateSystem::Excel1900).unwrap();
-            assert_eq!(date_to_serial(d, DateSystem::Excel1900), Some(s), "serial {s}");
+            assert_eq!(
+                date_to_serial(d, DateSystem::Excel1900),
+                Some(s),
+                "serial {s}"
+            );
         }
     }
 
@@ -391,7 +399,10 @@ mod tests {
         assert_eq!(weekday_sun0(0, DateSystem::Excel1904), Some(5));
         assert_eq!(weekday_sun0(59, DateSystem::Excel1904), Some(1));
         assert_eq!(weekday_sun0(-1, DateSystem::Excel1904), Some(4));
-        assert_eq!(weekday_sun0(MAX_SERIAL_1900, DateSystem::Excel1900), Some(5));
+        assert_eq!(
+            weekday_sun0(MAX_SERIAL_1900, DateSystem::Excel1900),
+            Some(5)
+        );
     }
 
     #[test]

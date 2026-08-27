@@ -20,5 +20,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "parse_numfmt"
+path = "fuzz_targets/parse_numfmt.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

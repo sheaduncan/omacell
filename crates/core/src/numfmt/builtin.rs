@@ -35,7 +35,10 @@ pub fn builtin_format(id: u32, locale: LocaleId) -> Option<Cow<'static, str>> {
         19 => Some(Cow::Borrowed("h:mm:ss AM/PM")),
         20 => Some(Cow::Borrowed("h:mm")),
         21 => Some(Cow::Borrowed("h:mm:ss")),
-        22 => Some(Cow::Owned(format!("{} h:mm", short_date(info.date_order, locale)))),
+        22 => Some(Cow::Owned(format!(
+            "{} h:mm",
+            short_date(info.date_order, locale)
+        ))),
         23..=26 => Some(Cow::Borrowed("General")),
         27 => Some(Cow::Borrowed("[$-411]ge.m.d")),
         28 => Some(Cow::Borrowed("[$-411]ggge\"年\"m\"月\"d\"日\"")),
@@ -98,9 +101,18 @@ mod tests {
         for id in 0..=49 {
             assert!(builtin_format(id, LocaleId::EN_US).is_some(), "id {id}");
         }
-        assert_eq!(builtin_format(14, LocaleId::EN_US).as_deref(), Some("m/d/yy"));
-        assert_eq!(builtin_format(14, LocaleId::EN_GB).as_deref(), Some("dd/mm/yy"));
-        assert_eq!(builtin_format(14, LocaleId::DE_DE).as_deref(), Some("dd.mm.yy"));
+        assert_eq!(
+            builtin_format(14, LocaleId::EN_US).as_deref(),
+            Some("m/d/yy")
+        );
+        assert_eq!(
+            builtin_format(14, LocaleId::EN_GB).as_deref(),
+            Some("dd/mm/yy")
+        );
+        assert_eq!(
+            builtin_format(14, LocaleId::DE_DE).as_deref(),
+            Some("dd.mm.yy")
+        );
         assert_eq!(
             builtin_format(5, LocaleId::DE_DE).as_deref(),
             Some("€#,##0_);(€#,##0)")

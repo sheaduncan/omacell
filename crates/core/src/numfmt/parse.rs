@@ -1,10 +1,10 @@
 //! Format-code scanner. Never panics on input.
 
-use crate::error::{codes, CoreError};
+use crate::error::{CoreError, codes};
 use crate::locale::LocaleId;
 use crate::numfmt::token::{
-    AmPmStyle, ColorHint, CmpOp, Condition, DigitKind, NamedColor, ParsedFormat, Section, Token,
-    MAX_FORMAT_LEN,
+    AmPmStyle, CmpOp, ColorHint, Condition, DigitKind, MAX_FORMAT_LEN, NamedColor, ParsedFormat,
+    Section, Token,
 };
 
 /// Parse an Excel number format code.
@@ -24,6 +24,9 @@ pub fn parse(input: &str) -> Result<ParsedFormat, CoreError> {
         sections.push(parse_section(part)?);
     }
     resolve_minutes(&mut sections);
+    for section in &mut sections {
+        literalize_condition_text(section);
+    }
     Ok(ParsedFormat { sections })
 }
 
@@ -130,7 +133,12 @@ fn parse_section(src: &str) -> Result<Section, CoreError> {
             }
             Some('/') => {
                 s.bump();
-                tokens.push(Token::FractionBar);
+                let has_digit = tokens.iter().any(|t| matches!(t, Token::Digit(_)));
+                if has_digit {
+                    tokens.push(Token::FractionBar);
+                } else {
+                    tokens.push(Token::Literal("/".to_string()));
+                }
             }
             Some('0') => {
                 s.bump();
@@ -143,6 +151,13 @@ fn parse_section(src: &str) -> Result<Section, CoreError> {
             Some('?') => {
                 s.bump();
                 tokens.push(Token::Digit(DigitKind::Question));
+            }
+            Some(c) if c == 'e' || c == 'E' => {
+                if let Some(tok) = s.try_exp() {
+                    tokens.push(tok);
+                } else {
+                    tokens.extend(s.read_letter_run());
+                }
             }
             Some(c) if c.is_ascii_alphabetic() => {
                 if let Some(tok) = s.try_ampm() {
@@ -169,7 +184,10 @@ fn parse_section(src: &str) -> Result<Section, CoreError> {
 
 fn looks_like_subsec(tokens: &[Token], s: &Scanner) -> bool {
     let last = tokens.iter().rev().find(|t| {
-        matches!(t, Token::Second { .. } | Token::Hour { .. } | Token::Minute { .. })
+        matches!(
+            t,
+            Token::Second { .. } | Token::Hour { .. } | Token::Minute { .. }
+        )
     });
     matches!(last, Some(Token::Second { .. })) && s.after_dot_is_zeros()
 }
@@ -196,7 +214,10 @@ fn parse_bracket(s: &mut Scanner) -> Result<Bracket, CoreError> {
         inner.push(c);
         s.bump();
         if inner.len() > 64 {
-            return Err(CoreError::new(codes::NUMFMT_PARSE, "format bracket is too long"));
+            return Err(CoreError::new(
+                codes::NUMFMT_PARSE,
+                "format bracket is too long",
+            ));
         }
     }
     if let Some(color) = parse_color(&inner) {
@@ -209,7 +230,10 @@ fn parse_bracket(s: &mut Scanner) -> Result<Bracket, CoreError> {
         return Ok(Bracket::Elapsed(tok));
     }
     if let Some(loc) = parse_locale_bracket(&inner) {
-        return Ok(Bracket::Locale { id: loc.0, curr: loc.1 });
+        return Ok(Bracket::Locale {
+            id: loc.0,
+            curr: loc.1,
+        });
     }
     Ok(Bracket::Literal(inner))
 }
@@ -232,7 +256,11 @@ fn parse_color(inner: &str) -> Option<ColorHint> {
     }
     let lower = t.to_ascii_lowercase();
     lower.strip_prefix("color").and_then(|rest| {
-        rest.trim().parse::<u8>().ok().filter(|n| (1..=56).contains(n)).map(ColorHint::Indexed)
+        rest.trim()
+            .parse::<u8>()
+            .ok()
+            .filter(|n| (1..=56).contains(n))
+            .map(ColorHint::Indexed)
     })
 }
 
@@ -248,22 +276,42 @@ fn parse_condition(inner: &str) -> Option<Condition> {
         (CmpOp::Gt, r)
     } else if let Some(r) = t.strip_prefix('<') {
         (CmpOp::Lt, r)
-    } else if let Some(r) = t.strip_prefix('=') {
-        (CmpOp::Eq, r)
     } else {
-        return None;
+        let r = t.strip_prefix('=')?;
+        (CmpOp::Eq, r)
     };
-    rest.trim().parse().ok().map(|value| Condition { op, value })
+    rest.trim()
+        .parse()
+        .ok()
+        .map(|value| Condition { op, value })
 }
 
 fn parse_elapsed(inner: &str) -> Option<Token> {
     match inner.trim().to_ascii_lowercase().as_str() {
-        "h" => Some(Token::Hour { len: 1, elapsed: true }),
-        "hh" => Some(Token::Hour { len: 2, elapsed: true }),
-        "m" => Some(Token::Minute { len: 1, elapsed: true }),
-        "mm" => Some(Token::Minute { len: 2, elapsed: true }),
-        "s" => Some(Token::Second { len: 1, elapsed: true }),
-        "ss" => Some(Token::Second { len: 2, elapsed: true }),
+        "h" => Some(Token::Hour {
+            len: 1,
+            elapsed: true,
+        }),
+        "hh" => Some(Token::Hour {
+            len: 2,
+            elapsed: true,
+        }),
+        "m" => Some(Token::Minute {
+            len: 1,
+            elapsed: true,
+        }),
+        "mm" => Some(Token::Minute {
+            len: 2,
+            elapsed: true,
+        }),
+        "s" => Some(Token::Second {
+            len: 1,
+            elapsed: true,
+        }),
+        "ss" => Some(Token::Second {
+            len: 2,
+            elapsed: true,
+        }),
         _ => None,
     }
 }
@@ -278,7 +326,11 @@ fn parse_locale_bracket(inner: &str) -> Option<(Option<LocaleId>, Option<String>
         let curr = &rest[..dash];
         let loc = &rest[dash + 1..];
         let id = parse_locale_id(loc);
-        let currency = if curr.is_empty() { None } else { Some(curr.to_string()) };
+        let currency = if curr.is_empty() {
+            None
+        } else {
+            Some(curr.to_string())
+        };
         return Some((id, currency));
     }
     if rest.is_empty() {
@@ -297,29 +349,76 @@ fn parse_locale_id(s: &str) -> Option<LocaleId> {
     LocaleId::parse_tag(t)
 }
 
+fn literalize_condition_text(section: &mut Section) {
+    if section.condition.is_none() {
+        return;
+    }
+    let digits = section.tokens.iter().any(|t| matches!(t, Token::Digit(_)));
+    if digits {
+        return;
+    }
+    let date_n = section
+        .tokens
+        .iter()
+        .filter(|t| {
+            matches!(
+                t,
+                Token::Year { .. }
+                    | Token::Month { .. }
+                    | Token::Day { .. }
+                    | Token::Hour { .. }
+                    | Token::Minute { .. }
+                    | Token::Second { .. }
+                    | Token::Weekday { .. }
+            )
+        })
+        .count();
+    if date_n == 0 || date_n > 2 {
+        return;
+    }
+    for tok in &mut section.tokens {
+        *tok = match tok {
+            Token::Year { len, .. } => Token::Literal("Y".repeat(*len as usize)),
+            Token::Month { len } => Token::Literal("M".repeat(*len as usize)),
+            Token::Day { len } => Token::Literal("D".repeat(*len as usize)),
+            Token::Hour { len, .. } => Token::Literal("h".repeat(*len as usize)),
+            Token::Minute { len, .. } => Token::Literal("m".repeat(*len as usize)),
+            Token::Second { len, .. } => Token::Literal("s".repeat(*len as usize)),
+            Token::Weekday { len } => Token::Literal("d".repeat(*len as usize)),
+            _ => continue,
+        };
+    }
+}
+
+fn is_sep_token(tok: &Token) -> bool {
+    match tok {
+        Token::Literal(s) => s
+            .chars()
+            .all(|c| matches!(c, ':' | '-' | '/' | ' ' | '.' | 'T')),
+        Token::Skip(_) | Token::Fill(_) => true,
+        _ => false,
+    }
+}
+
 fn resolve_minutes(sections: &mut [Section]) {
     for section in sections {
         let n = section.tokens.len();
-        let mut is_time = vec![false; n];
-        for (i, tok) in section.tokens.iter().enumerate() {
-            is_time[i] = matches!(
-                tok,
-                Token::Hour { .. }
-                    | Token::Minute { .. }
-                    | Token::Second { .. }
-                    | Token::SubSecond { .. }
-                    | Token::AmPm { .. }
-            );
-        }
         for i in 0..n {
-            let Token::Month { len } = section.tokens[i] else { continue };
+            let Token::Month { len } = section.tokens[i] else {
+                continue;
+            };
             if len > 2 {
                 continue;
             }
-            let prev = (0..i).rev().any(|j| is_time[j]);
-            let next = ((i + 1)..n).any(|j| matches!(section.tokens[j], Token::Second { .. }));
-            if prev || next {
-                section.tokens[i] = Token::Minute { len, elapsed: false };
+            let prev = section.tokens[..i].iter().rev().find(|t| !is_sep_token(t));
+            let next = section.tokens[i + 1..].iter().find(|t| !is_sep_token(t));
+            let prev_h = matches!(prev, Some(Token::Hour { .. }));
+            let next_s = matches!(next, Some(Token::Second { .. } | Token::SubSecond { .. }));
+            if prev_h || next_s {
+                section.tokens[i] = Token::Minute {
+                    len,
+                    elapsed: false,
+                };
             }
         }
     }
@@ -332,13 +431,22 @@ struct Scanner {
 
 impl Scanner {
     fn new(src: &str) -> Self {
-        Self { chars: src.chars().collect(), i: 0 }
+        Self {
+            chars: src.chars().collect(),
+            i: 0,
+        }
     }
-    fn eof(&self) -> bool { self.i >= self.chars.len() }
-    fn peek(&self) -> Option<char> { self.chars.get(self.i).copied() }
+    fn eof(&self) -> bool {
+        self.i >= self.chars.len()
+    }
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.i).copied()
+    }
     fn bump(&mut self) -> Option<char> {
         let c = self.chars.get(self.i).copied();
-        if c.is_some() { self.i += 1; }
+        if c.is_some() {
+            self.i += 1;
+        }
         c
     }
     fn after_dot_is_zeros(&self) -> bool {
@@ -350,6 +458,25 @@ impl Scanner {
         }
         any
     }
+    fn try_exp(&mut self) -> Option<Token> {
+        let e = self.peek()?;
+        if e != 'e' && e != 'E' {
+            return None;
+        }
+        let next = self.chars.get(self.i + 1).copied();
+        match next {
+            Some('+') => {
+                self.i += 2;
+                Some(Token::Exp { plus: true })
+            }
+            Some('-') => {
+                self.i += 2;
+                Some(Token::Exp { plus: false })
+            }
+            _ => None,
+        }
+    }
+
     fn try_ampm(&mut self) -> Option<Token> {
         let rest: String = self.chars[self.i..].iter().collect();
         let lower = rest.to_ascii_lowercase();
@@ -405,6 +532,12 @@ fn tokenize_letters(run: &str) -> Vec<Token> {
         return vec![Token::General];
     }
     let lower = run.to_ascii_lowercase();
+    if lower
+        .chars()
+        .any(|c| !matches!(c, 'y' | 'm' | 'd' | 'h' | 's' | 'e' | 'g' | 'a' | 'p'))
+    {
+        return vec![Token::Literal(run.to_string())];
+    }
     let bytes = lower.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -416,13 +549,35 @@ fn tokenize_letters(run: &str) -> Vec<Token> {
         }
         let len = n.min(255) as u8;
         match c {
-            b'y' | b'e' | b'g' => out.push(Token::Year { len }),
+            b'y' => out.push(Token::Year {
+                len,
+                iso: len >= 3,
+                era: false,
+            }),
+            b'e' => out.push(Token::Year {
+                len,
+                iso: true,
+                era: false,
+            }),
+            b'g' => out.push(Token::Year {
+                len,
+                iso: false,
+                era: true,
+            }),
             b'm' => out.push(Token::Month { len: len.min(5) }),
             b'd' if len >= 3 => out.push(Token::Weekday { len: len.min(4) }),
             b'd' => out.push(Token::Day { len }),
-            b'h' => out.push(Token::Hour { len: len.min(2), elapsed: false }),
-            b's' => out.push(Token::Second { len: len.min(2), elapsed: false }),
-            b'a' if len >= 3 => out.push(Token::Weekday { len: if len >= 4 { 4 } else { 3 } }),
+            b'h' => out.push(Token::Hour {
+                len: len.min(2),
+                elapsed: false,
+            }),
+            b's' => out.push(Token::Second {
+                len: len.min(2),
+                elapsed: false,
+            }),
+            b'a' if len >= 3 => out.push(Token::Weekday {
+                len: if len >= 4 { 4 } else { 3 },
+            }),
             _ => out.push(Token::Literal(run.chars().skip(i).take(n).collect())),
         }
         i += n;
@@ -441,13 +596,19 @@ mod tests {
 
     #[test]
     fn rejects_too_long() {
-        assert_eq!(parse(&"0".repeat(256)).unwrap_err().code, codes::NUMFMT_PARSE);
+        assert_eq!(
+            parse(&"0".repeat(256)).unwrap_err().code,
+            codes::NUMFMT_PARSE
+        );
     }
 
     #[test]
     fn minute_vs_month() {
         let p = parse("h:mm").unwrap();
-        assert!(matches!(p.sections[0].tokens[2], Token::Minute { len: 2, .. }));
+        assert!(matches!(
+            p.sections[0].tokens[2],
+            Token::Minute { len: 2, .. }
+        ));
         let p = parse("mm-dd").unwrap();
         assert!(matches!(p.sections[0].tokens[0], Token::Month { len: 2 }));
     }

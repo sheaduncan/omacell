@@ -16,14 +16,14 @@ mod render;
 mod token;
 
 use crate::dates::DateSystem;
-use crate::error::{codes, ErrorKind};
+use crate::error::{ErrorKind, codes};
 use crate::locale::LocaleId;
 use crate::value::Value;
 
 pub use builtin::builtin_format;
 pub use general::{general, general_for_width};
 pub use parse::parse;
-pub use token::{ColorHint, LayoutHints, NamedColor, ParsedFormat, MAX_FORMAT_LEN};
+pub use token::{ColorHint, LayoutHints, MAX_FORMAT_LEN, NamedColor, ParsedFormat};
 
 /// A value the formatter can render without intern tables.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,7 +56,7 @@ impl FormatValue<'static> {
     }
 }
 
-/// Result of [`format`] / [`format_with`].
+/// Result of [`format()`] / [`format_with`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Formatted {
     /// Display text.
@@ -77,7 +77,7 @@ impl Formatted {
     }
 }
 
-/// Options beyond the three-arg [`format`] API.
+/// Options beyond the three-arg [`format()`] API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FormatOptions {
     /// Workbook / cell locale.

@@ -17,8 +17,8 @@ pub fn excel_precision_15(n: f64) -> f64 {
     if places > 20.0 {
         return n;
     }
-    if places < -20.0 {
-        return 0.0;
+    if places < -15.0 {
+        return n;
     }
     round_half_away(a, places as i32) * sign
 }
@@ -43,7 +43,11 @@ pub fn round_half_away(n: f64, places: i32) -> f64 {
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let ax = x.abs();
     let floor = ax.floor();
-    let r = if ax - floor >= 0.5 { floor + 1.0 } else { floor };
+    let r = if ax - floor >= 0.5 {
+        floor + 1.0
+    } else {
+        floor
+    };
     sign * r / p
 }
 
@@ -106,10 +110,14 @@ pub fn split_fixed(n: f64, frac_places: usize) -> (Vec<u8>, Vec<u8>) {
     } else {
         int_digits.push(0);
         let lead_zeros = (-exp - 1) as usize;
-        for i in 0..frac_places {
+        for (i, slot) in frac_digits.iter_mut().enumerate() {
             if i >= lead_zeros {
                 let di = i - lead_zeros;
-                frac_digits[i] = if di < digits.len() { digits[di] - b'0' } else { 0 };
+                *slot = if di < digits.len() {
+                    digits[di] - b'0'
+                } else {
+                    0
+                };
             }
         }
     }

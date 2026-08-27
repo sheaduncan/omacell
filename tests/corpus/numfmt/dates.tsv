@@ -11,7 +11,7 @@
 36526	yyyy-mm-dd	en-US	1900	2000-01-01	Excel DATE(2000,1,1) = 36526
 36527	yyyy-mm-dd	en-US	1900	2000-01-02	2 Jan 2000
 44927	yyyy-mm-dd	en-US	1900	2023-01-01	1 Jan 2023
-45381	yyyy-mm-dd	en-US	1900	2024-04-04	4 Apr 2024
+45386	yyyy-mm-dd	en-US	1900	2024-04-04	4 Apr 2024 (2024-01-01 serial 45292 + 94)
 2958465	yyyy-mm-dd	en-US	1900	9999-12-31	Excel maximum date serial
 1	m/d/yy	en-US	1900	1/1/00	US short date tokens
 1	mm/dd/yyyy	en-US	1900	01/01/1900	zero-padded

@@ -23,11 +23,7 @@ pub fn general_for_width(n: f64, width: usize) -> String {
         return "0".to_string();
     }
     let body = general_abs(a, width.max(1));
-    if neg {
-        format!("-{body}")
-    } else {
-        body
-    }
+    if neg { format!("-{body}") } else { body }
 }
 
 fn general_abs(a: f64, budget: usize) -> String {
@@ -66,7 +62,10 @@ fn integer_p(mant: u64, exp: i32) -> bool {
         return true;
     }
     let keep = exp as u32 + 1;
-    mant % 10u64.pow(14 - keep) == 0
+    if keep >= 15 {
+        return true;
+    }
+    mant % 10u64.pow(15 - keep) == 0
 }
 
 fn int_string(mant: u64, exp: i32) -> String {
@@ -143,7 +142,33 @@ fn general_sci(mant: u64, exp: i32, budget: usize) -> String {
     if mant_budget > 1 && rest.chars().any(|c| c != '0') {
         m.push('.');
         let take = mant_budget.saturating_sub(2).min(rest.len());
-        let mut frac = rest[..take].to_string();
+        let mut frac: Vec<u8> = rest.as_bytes()[..take].to_vec();
+        if take < rest.len() && rest.as_bytes()[take] >= b'5' {
+            let mut i = frac.len();
+            let mut carry = 1u8;
+            while i > 0 && carry > 0 {
+                i -= 1;
+                let d = frac[i] - b'0' + carry;
+                if d >= 10 {
+                    frac[i] = b'0';
+                    carry = 1;
+                } else {
+                    frac[i] = b'0' + d;
+                    carry = 0;
+                }
+            }
+            if carry > 0 {
+                m = "1".to_string();
+                let new_exp = exp + 1;
+                let exp_s = if new_exp.abs() >= 100 {
+                    format!("E{new_exp:+}")
+                } else {
+                    format!("E{new_exp:+03}")
+                };
+                return format!("{m}{exp_s}");
+            }
+        }
+        let mut frac = String::from_utf8(frac).unwrap_or_default();
         frac = frac.trim_end_matches('0').to_string();
         if !frac.is_empty() {
             m.push_str(&frac);

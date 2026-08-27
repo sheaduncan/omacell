@@ -33,11 +33,7 @@ pub fn best_rational(x: f64, max_den: u32) -> (u32, u32) {
     }
     let err_b = (f64::from(a) / f64::from(b) - x).abs();
     let err_d = (f64::from(c) / f64::from(d) - x).abs();
-    if err_b <= err_d {
-        (a, b)
-    } else {
-        (c, d)
-    }
+    if err_b <= err_d { (a, b) } else { (c, d) }
 }
 
 /// Format a mixed or improper fraction.
@@ -104,13 +100,8 @@ pub fn render_fraction(
     }
 }
 
-fn pad_num(n: u32, width: usize) -> String {
-    let s = n.to_string();
-    if width <= 1 || s.len() >= width {
-        s
-    } else {
-        format!("{n:width$}")
-    }
+fn pad_num(n: u32, _width: usize) -> String {
+    n.to_string()
 }
 
 #[cfg(test)]
