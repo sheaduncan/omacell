@@ -1,0 +1,12 @@
+[package]
+name = "omacell-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Graphical front-end for Omacell."
+
+[lints]
+workspace = true

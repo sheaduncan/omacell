@@ -1,0 +1,12 @@
+[package]
+name = "omacell-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Workbook file formats (xlsx, csv, omc, ods, …) for Omacell."
+
+[lints]
+workspace = true

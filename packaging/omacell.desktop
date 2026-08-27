@@ -1,0 +1,10 @@
+# TODO(WP-28): complete desktop entry (icons, mime, StartupWMClass).
+[Desktop Entry]
+Type=Application
+Name=Omacell
+Comment=A spreadsheet for Omarchy Linux
+Exec=omacell %F
+Icon=omacell
+Terminal=false
+Categories=Office;Spreadsheet;
+MimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;text/csv;application/x-omacell;

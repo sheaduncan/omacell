@@ -1,0 +1,42 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  nightly:
+    name: fuzz-and-ignored
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      - name: Ignored / large-file tests
+        run: cargo +nightly test --workspace -- --ignored
+
+      - name: Fuzz targets (10 minutes each)
+        run: |
+          if [[ -f fuzz/Cargo.toml ]]; then
+            for t in $(cargo fuzz list); do
+              cargo fuzz run "$t" -- -max_total_time=600
+            done
+          else
+            echo "No fuzz targets yet; skip."
+          fi
