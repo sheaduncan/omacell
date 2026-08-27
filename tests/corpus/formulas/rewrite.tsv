@@ -1,0 +1,144 @@
+# op	src	arg1	arg2	arg3	expected	note
+copy	=A1	0	1		=A2	Excel fill-down: relative row shifts by +1
+copy	=A1	1	0		=B1	Excel fill-right: relative column shifts by +1
+copy	=A1	1	1		=B2	Excel fill down-right: both relative axes shift
+copy	=$A$1	0	1		=$A$1	Excel $: absolute cell does not move on copy/fill
+copy	=$A$1	1	0		=$A$1	absolute cell does not move on fill-right
+copy	=$A1	0	1		=$A2	absolute column stays; relative row moves
+copy	=$A1	1	0		=$A1	absolute column does not move on fill-right
+copy	=A$1	0	1		=A$1	absolute row does not move on fill-down
+copy	=A$1	1	0		=B$1	absolute row stays; relative column moves
+copy	=A1:B2	0	1		=A2:B3	relative range corners both shift on fill-down
+copy	=$A$1:$B$2	0	1		=$A$1:$B$2	fully absolute range stays
+copy	=A$1:B$2	1	0		=B$1:C$2	relative columns of a range move on fill-right
+copy	=$A1:$B2	0	1		=$A2:$B3	relative rows of a range move on fill-down
+copy	=A:A	1	0		=B:B	whole-column A:A fill-right becomes B:B
+copy	=A:A	0	1		=A:A	whole-column has no relative row to shift
+copy	=1:1	0	1		=2:2	whole-row 1:1 fill-down becomes 2:2
+copy	=1:1	1	0		=1:1	whole-row has no relative column to shift
+copy	=$A:$A	1	0		=$A:$A	absolute whole column does not move
+copy	=$1:$1	0	1		=$1:$1	absolute whole row does not move
+copy	=Sheet1!A1	0	1		=Sheet1!A2	sheet qualifier is preserved on fill; relative body moves
+copy	=SUM(A1,B1)	0	1		=SUM(A2,B2)	copy rewrites refs inside calls
+copy	=A1+A$1+$A1+$A$1	1	1		=B2+B$1+$A2+$A$1	four abs combinations on fill down-right (Excel F4 mix)
+copy	=A1048576	0	1		=#REF!	relative row past last row becomes #REF! (Excel)
+copy	=XFD1	1	0		=#REF!	relative col past XFD becomes #REF!
+copy	=A1:A1048576	0	1		=#REF!	range end past last row → #REF!
+copy	=Revenue	0	1		=Revenue	defined names do not shift on fill
+copy	=Table1[Col]	0	1		=Table1[Col]	structured refs do not shift on fill
+copy	=A1#	0	1		=A2#	spill postfix follows the rewritten ref
+copy	=@A1:A10	1	0		=@B1:B10	@ follows the rewritten range
+copy	={1,2;3,4}	1	1		={1,2;3,4}	array constants have no refs
+copy	=NOW()	0	1		=NOW()	no-ref call unchanged
+copy	='My Sheet'!B2	0	1		='My Sheet'!B3	quoted sheet preserved on fill-down
+copy	=A1:B2:C3	0	1		=A2:B3:C4	each colon operand shifts
+copy	=(A1,C1)	0	1		=(A2,C2)	union members both shift
+copy	=A1:B2 C2	1	0		=B1:C2 D2	intersection operands shift
+copy	=INDEX(A1:C9,,2)	0	1		=INDEX(A2:C10,,2)	omitted args stay omitted; range shifts
+copy	=-A1	0	1		=-A2	unary minus of a shifting ref
+copy	=A1%	1	0		=B1%	percent of a shifting ref
+copy	=$B1:C$2	1	1		=$B2:D$2	mixed abs on both corners
+copy	=Z1	1	0		=AA1	column Z fill-right is AA
+copy	=AA1	-1	0		=Z1	copy left from AA to Z
+copy	=A2	0	-1		=A1	copy up
+copy	=A1	0	-1		=#REF!	relative row above row 1 is #REF!
+copy	=A1	-1	0		=#REF!	relative col left of A is #REF!
+move	=A1	A1	C1		=C1	Excel cut-paste: ref to the cut cell retargets (even if it was relative)
+move	=$A$1	A1	C1		=$C$1	Excel cut-paste updates absolute refs too (unlike copy)
+move	=$A1	A1	C1		=$C1	cut updates abs column flag-bearing ref that pointed at the cut cell
+move	=A$1	A1	C1		=C$1	cut updates abs row ref that pointed at the cut cell
+move	=B1	A1	C1		=B1	ref outside the cut range is unchanged
+move	=A1:B2	A1:B2	C1		=C1:D2	cut of a range retargets a formula that referred to the whole range
+move	=A1	A1:B2	C1		=C1	cell fully inside a cut range retargets
+move	=C1	A1:B2	E1		=C1	cell outside a cut range stays
+move	=A1:C1	A1:B1	E1		=A1:C1	partial overlap: leave unchanged (WP-03 decision)
+move	=SUM(A1,B1)	A1	D1		=SUM(D1,B1)	only the referent that was cut moves
+move	=Sheet1!A1	A1	C1		=Sheet1!C1	sheet-qualified cut retarget keeps the sheet
+move	=A1+A1	A1	B1		=B1+B1	every occurrence of the cut cell is rewritten
+move	=A2	A1:A3	C1		=C2	interior cell of a cut vertical range
+move	=B2	A1:C3	E5		=F6	cut block A1:C3 to E5: A1→E5 so B2→F6
+move	=Revenue	A1	C1		=Revenue	names are not retargeted by cut
+move	=Table1[Col]	A1	C1		=Table1[Col]	structured refs are not retargeted by range cut
+move	=A1#	A1	C1		=C1#	spill of a cut cell follows
+move	=$A$1:$A$5	A1:A5	B1		=$B$1:$B$5	absolute range fully inside cut retargets
+insert_rows	=A1	3	2		=A1	Excel insert rows: refs above the insert point stay
+insert_rows	=A5	3	2		=A7	refs at/below the insert point shift down
+insert_rows	=A3	3	2		=A5	ref on the insert row shifts down
+insert_rows	=A1:A5	3	2		=A1:A7	range spanning the insert grows (Excel insert in the middle)
+insert_rows	=A1:A2	3	2		=A1:A2	range entirely above insert unchanged
+insert_rows	=A5:A6	3	2		=A7:A8	range entirely below insert shifts
+insert_rows	=$A$5	3	1		=$A$6	insert updates absolute rows (structural)
+insert_rows	=A:A	3	2		=A:A	whole-column refs ignore row insert
+insert_rows	=5:5	3	2		=7:7	whole-row 5 shifts down
+insert_rows	=1:10	5	2		=1:12	whole-row span that covers the insert grows
+insert_rows	=1:2	5	2		=1:2	whole-row span above insert unchanged
+insert_rows	=SUM(A1:A10)	1	1		=SUM(A2:A11)	insert at row 1 shifts a range that started at A1
+insert_rows	=A1048576	1	1		=#REF!	shift past last row is #REF!
+insert_rows	=Sheet1!A10	5	3		=Sheet1!A13	sheet-qualified cell shifts
+insert_rows	=A1+A10	5	1		=A1+A11	only the below-insert ref moves
+insert_rows	=A$10	5	1		=A$11	abs row still shifts on insert
+insert_rows	=$A10	5	1		=$A11	abs col, rel row shifts
+delete_rows	=A1	3	2		=A1	refs above the deleted rows stay
+delete_rows	=A5	3	2		=A3	refs below the deleted rows shift up
+delete_rows	=A3	3	2		=#REF!	ref inside deleted rows becomes #REF! (Excel)
+delete_rows	=A4	3	2		=#REF!	second deleted row also #REF!
+delete_rows	=A1:A5	3	2		=A1:A3	range overlapping delete shrinks
+delete_rows	=A3:A4	3	2		=#REF!	range fully deleted → #REF!
+delete_rows	=A1:A2	3	2		=A1:A2	range fully above delete unchanged
+delete_rows	=A10:A12	3	2		=A8:A10	range fully below delete shifts up
+delete_rows	=5:5	5	1		=#REF!	deleted whole-row ref → #REF!
+delete_rows	=1:10	5	2		=1:8	whole-row span shrinks
+delete_rows	=A:A	5	2		=A:A	whole-column ignores row delete
+delete_rows	=SUM(A3)	3	1		=SUM(#REF!)	deleted cell inside a call becomes #REF!
+delete_rows	=$A$3	3	1		=#REF!	absolute deleted cell still #REF!
+delete_rows	=A3:A10	3	1		=A3:A9	delete first row of a range: start stays, end shrinks (Excel keeps the new A3 which was A4)
+delete_rows	=A1:A10	1	10		=#REF!	entire range rows deleted
+delete_rows	=A2	1	1		=A1	delete row 1 shifts A2 to A1
+insert_cols	=A1	C	2		=A1	refs left of insert stay
+insert_cols	=D1	C	2		=F1	refs at/right of insert shift right
+insert_cols	=C1	C	2		=E1	ref on the insert column shifts right
+insert_cols	=A1:D1	C	2		=A1:F1	range spanning the insert grows
+insert_cols	=A1:B1	C	2		=A1:B1	range entirely left unchanged
+insert_cols	=D1:E1	C	2		=F1:G1	range entirely right shifts
+insert_cols	=C:C	B	1		=D:D	whole-column C shifts after inserting B
+insert_cols	=A:C	B	1		=A:D	whole-column span covering insert grows
+insert_cols	=1:1	B	1		=1:1	whole-row ignores column insert
+insert_cols	=XFD1	A	1		=#REF!	shift past XFD is #REF!
+insert_cols	=$C$1	B	1		=$D$1	absolute column updates on insert
+insert_cols	=SUM(C1)	C	1		=SUM(D1)	call arg shifts
+insert_cols	=Z1	Z	1		=AA1	insert at Z pushes Z to AA
+delete_cols	=A1	C	2		=A1	refs left of delete stay
+delete_cols	=E1	C	2		=C1	refs right of delete shift left
+delete_cols	=C1	C	2		=#REF!	deleted column is #REF!
+delete_cols	=D1	C	2		=#REF!	second deleted column is #REF!
+delete_cols	=A1:E1	C	2		=A1:C1	range overlapping delete shrinks
+delete_cols	=C1:D1	C	2		=#REF!	range fully deleted → #REF!
+delete_cols	=C:C	C	1		=#REF!	deleted whole-column → #REF!
+delete_cols	=A:E	C	2		=A:C	whole-column span shrinks
+delete_cols	=1:1	C	1		=1:1	whole-row ignores column delete
+delete_cols	=SUM(C1,E1)	C	1		=SUM(#REF!,D1)	deleted arg #REF!, later arg shifts
+delete_cols	=$C$1	C	1		=#REF!	absolute deleted col is still #REF!
+delete_cols	=B1	A	1		=A1	delete A shifts B to A
+sheet_rename	=Sheet1!A1	Sheet1	Data		=Data!A1	F-1.1 / F-3.2 sheet rename rewrites the qualifier
+sheet_rename	=Sheet1!A1:B2	Sheet1	Data		=Data!A1:B2	sheet rename on a range
+sheet_rename	=Sheet1!MyName	Sheet1	Data		=Data!MyName	sheet-qualified name
+sheet_rename	=Sheet2!A1	Sheet1	Data		=Sheet2!A1	other sheets are not renamed
+sheet_rename	=A1	Sheet1	Data		=A1	unqualified refs are unchanged
+sheet_rename	=Sheet1!A1+Sheet1!B1	Sheet1	Data		=Data!A1+Data!B1	every matching qualifier is rewritten
+sheet_rename	=Sheet1:Sheet3!A1	Sheet1	Data		=Data:Sheet3!A1	3-D start sheet renamed
+sheet_rename	=Sheet1:Sheet3!A1	Sheet3	End		='Sheet1:End'!A1	3-D end sheet renamed (End looks like a column so WP-01 quoting applies)
+sheet_rename	='My Sheet'!A1	My Sheet	Cost Model		='Cost Model'!A1	quoted sheet rename; new name quoted if needed
+sheet_rename	=Sheet1!A1	Sheet1	My Sheet		='My Sheet'!A1	rename to a name that needs quotes
+sheet_rename	='My Sheet'!A1	My Sheet	Data		=Data!A1	rename to a name that drops quotes
+sheet_rename	=SUM(Sheet1!A:A)	Sheet1	Data		=SUM(Data!A:A)	rename inside a call
+sheet_rename	=[Book.xlsx]Sheet1!A1	Sheet1	Data		=[Book.xlsx]Data!A1	external sheet name rewritten; book preserved
+table_rename	=Table1[Col]	Table1	Sales		=Sales[Col]	F-1.4 table rename rewrites structured refs
+table_rename	=Table1[[#Headers],[Col]]	Table1	Sales		=Sales[[#Headers],[Col]]	table rename with specifier
+table_rename	=[@Col]	Table1	Sales		=[@Col]	unqualified structured ref has no table name to rewrite
+table_rename	=Other[Col]	Table1	Sales		=Other[Col]	other tables are not renamed
+table_rename	=SUM(Table1[Col],Table1[Qty])	Table1	Sales		=SUM(Sales[Col],Sales[Qty])	every matching table name
+table_rename	=Table1[Col]+A1	Table1	Sales		=Sales[Col]+A1	cell refs untouched by table rename
+table_rename	=Sales[@Amount]	Sales	Rev		=Rev[@Amount]	this-row shorthand table name
+table_rename	=Table1[#All]	Table1	T		=T[#All]	rename with #All specifier
+table_rename	=Table1[]	Table1	T		=T[]	Table[] data-body form
+table_rename	=MyTable[[#This Row],[Col]]	MyTable	Y		=Y[[#This Row],[Col]]	this-row long form
