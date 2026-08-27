@@ -1,0 +1,34 @@
+# value	format	locale	date_system	text	note
+TRUE	General	en-US	1900	TRUE	General boolean
+FALSE	General	en-US	1900	FALSE	General boolean
+TRUE	0	en-US	1900	1	boolean coerces to 1 in numeric formats
+FALSE	0	en-US	1900	0	boolean coerces to 0
+TRUE	yyyy-mm-dd	en-US	1900	1900-01-01	TRUE as serial 1
+FALSE	yyyy-mm-dd	en-US	1900	1900-01-00	FALSE → 0 → January 0, 1900
+TRUE	@	en-US	1900	TRUE	text format of boolean uses TRUE/FALSE
+FALSE	@	en-US	1900	FALSE	text format FALSE
+#DIV/0!	0.00	en-US	1900	#DIV/0!	errors always display their Excel string
+#N/A	@	en-US	1900	#N/A	errors ignore @
+#VALUE!	yyyy-mm-dd	en-US	1900	#VALUE!	errors ignore date formats
+#REF!	General	en-US	1900	#REF!	REF
+#NAME?	0	en-US	1900	#NAME?	NAME
+#NUM!	0.00%	en-US	1900	#NUM!	NUM
+#NULL!	#,##0	en-US	1900	#NULL!	NULL
+#GETTING_DATA	0	en-US	1900	#GETTING_DATA	GETTING_DATA
+#SPILL!	0	en-US	1900	#SPILL!	SPILL
+#CALC!	0	en-US	1900	#CALC!	CALC
+#FIELD!	0	en-US	1900	#FIELD!	FIELD
+#CONNECT!	0	en-US	1900	#CONNECT!	CONNECT
+#BLOCKED!	0	en-US	1900	#BLOCKED!	BLOCKED
+#UNKNOWN!	0	en-US	1900	#UNKNOWN!	UNKNOWN
+"abc"	@	en-US	1900	abc	plain text
+"abc"	@@@	en-US	1900	abcabcabc	repeated @
+"abc"	"["@"]"	en-US	1900	[abc]	quoted wrappers around @
+	0.00	en-US	1900		empty cell renders empty
+	General	en-US	1900		empty General
+"123"	0	en-US	1900	123	text is not parsed as a number even when numeric-looking
+"123"	@	en-US	1900	123	text @
+"hello"	0;0;0;"T"	en-US	1900	T	text section without @ emits the literals only
+TRUE	0%	en-US	1900	100%	TRUE=1 → 100%
+FALSE	0%	en-US	1900	0%	FALSE=0
+" "	@	en-US	1900	 	space text

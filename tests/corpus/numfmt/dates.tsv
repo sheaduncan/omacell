@@ -1,0 +1,79 @@
+# value	format	locale	date_system	text	note
+1	yyyy-mm-dd	en-US	1900	1900-01-01	F-2.1 serial 1 = 1 Jan 1900
+2	yyyy-mm-dd	en-US	1900	1900-01-02	serial 2
+31	yyyy-mm-dd	en-US	1900	1900-01-31	end of Jan 1900
+32	yyyy-mm-dd	en-US	1900	1900-02-01	1 Feb 1900
+59	yyyy-mm-dd	en-US	1900	1900-02-28	serial 59 = 28 Feb 1900
+60	yyyy-mm-dd	en-US	1900	1900-02-29	Lotus leap-year quirk: serial 60 = 29 Feb 1900 (not a real Gregorian date)
+61	yyyy-mm-dd	en-US	1900	1900-03-01	serial 61 = 1 Mar 1900 (matches real calendar again)
+62	yyyy-mm-dd	en-US	1900	1900-03-02	day after the quirk
+367	yyyy-mm-dd	en-US	1900	1901-01-01	1900 treated as leap (366 days) so 367 is 1 Jan 1901
+36526	yyyy-mm-dd	en-US	1900	2000-01-01	Excel DATE(2000,1,1) = 36526
+36527	yyyy-mm-dd	en-US	1900	2000-01-02	2 Jan 2000
+44927	yyyy-mm-dd	en-US	1900	2023-01-01	1 Jan 2023
+45381	yyyy-mm-dd	en-US	1900	2024-04-04	4 Apr 2024
+2958465	yyyy-mm-dd	en-US	1900	9999-12-31	Excel maximum date serial
+1	m/d/yy	en-US	1900	1/1/00	US short date tokens
+1	mm/dd/yyyy	en-US	1900	01/01/1900	zero-padded
+1	d-mmm-yy	en-US	1900	1-Jan-00	builtin-15 style
+1	d-mmm	en-US	1900	1-Jan	builtin 16
+1	mmm-yy	en-US	1900	Jan-00	builtin 17
+1	mmmm	en-US	1900	January	full month
+1	mmmmm	en-US	1900	J	first letter of month
+1	ddd	en-US	1900	Sun	Excel 1900-01-01 is Sunday (not historical Monday)
+1	dddd	en-US	1900	Sunday	full weekday
+60	d-mmm-yyyy	en-US	1900	29-Feb-1900	Lotus day with month name
+60	dddd	en-US	1900	Wednesday	1900-02-29 weekday in Excel's 1900 system
+61	dddd	en-US	1900	Thursday	1 Mar 1900 was Thursday historically and in Excel
+36526	yyyy	en-US	1900	2000	4-digit year
+36526	yy	en-US	1900	00	2-digit year
+36526	m	en-US	1900	1	unpadded month
+36526	mm	en-US	1900	01	padded month
+36526	mmm	en-US	1900	Jan	abbr month
+36526	d	en-US	1900	1	unpadded day
+36526	dd	en-US	1900	01	padded day
+60	mm	en-US	1900	02	Lotus month 02
+60	d	en-US	1900	29	Lotus day 29
+32	mmm	en-US	1900	Feb	Feb
+92	mmm	en-US	1900	Apr	serial 92 = 1 Apr 1900
+1	yyyy/m/d	en-US	1900	1900/1/1	ISO-ish
+44927	dd/mm/yyyy	en-US	1900	01/01/2023	day-first tokens
+1	mmm	en-GB	1900	Jan	en-GB month names are English
+1	mmmm	de-DE	1900	Januar	de-DE full January
+1	mmm	de-DE	1900	Jan	de-DE abbr January (Excel: Jan)
+61	mmm	de-DE	1900	Mrz	de-DE Excel March abbreviation is Mrz not Mär
+1	dddd	de-DE	1900	Sonntag	de-DE Sunday
+1	ddd	de-DE	1900	So	de-DE Sun
+1	mmmm	fr-FR	1900	janvier	fr-FR January
+1	dddd	fr-FR	1900	dimanche	fr-FR Sunday
+59	mmmm yyyy	en-US	1900	February 1900	Feb 1900 full
+0	m/d/yyyy	en-US	1900	1/0/1900	serial 0 is Excel January 0, 1900 (not OLE 1899-12-30)
+0	d-mmm-yy	en-US	1900	0-Jan-00	Jan 0, 1900
+0	yyyy	en-US	1900	1900	year of the zero serial
+0	dddd	en-US	1900	Saturday	day before Excel Sunday 1 Jan 1900
+0	yyyy-mm-dd	en-US	1904	1904-01-01	1904 system serial 0 = 1 Jan 1904
+1	yyyy-mm-dd	en-US	1904	1904-01-02	1904 serial 1
+0	dddd	en-US	1904	Friday	1 Jan 1904 was Friday
+59	yyyy-mm-dd	en-US	1904	1904-02-29	1904 is a real leap year
+60	yyyy-mm-dd	en-US	1904	1904-03-01	no Lotus quirk in 1904; serial 60 is 1 Mar 1904
+1462	yyyy-mm-dd	en-US	1904	1908-01-02	1904 + 1462 days
+2957003	yyyy-mm-dd	en-US	1904	9999-12-31	1904-system max date serial (2958465-1462)
+1461	yyyy-mm-dd	en-US	1904	1908-01-01	after 1904 leap day
+36526	yyyy-mm-dd	en-US	1904	2004-01-02	same number, different epoch (1904)
+36526	yy-mm-dd	en-US	1900	00-01-01	2-digit year 2000
+36161	yyyy-mm-dd	en-US	1900	1999-01-01	1 Jan 1999; DATE(1999,1,1)=36161
+1	m	en-US	1900	1	month 1
+31	d	en-US	1900	31	day 31
+32	d	en-US	1900	1	1 Feb
+44562	yyyy-mm-dd	en-US	1900	2022-01-01	1 Jan 2022 serial 44562
+43831	yyyy-mm-dd	en-US	1900	2020-01-01	1 Jan 2020
+43831	dddd	en-US	1900	Wednesday	1 Jan 2020 Wednesday
+44927	mmmm	en-US	1900	January	January 2023
+45047	mmmm	en-US	1900	May	1 May 2023 is serial 45047? Jan 1 = 44927, +120 = 45047 = May 1 (31+28+31+30=120)
+45047	mmmmm	en-US	1900	M	May first letter
+45292	mmmmm	en-US	1900	J	2024-01-01 first letter J
+45321	mmmmm	en-US	1900	J	2024-01-30 still J; 45292+31=45323 is Feb 1
+45323	mmmmm	en-US	1900	F	1 Feb 2024
+45352	mmmmm	en-US	1900	M	1 Mar 2024 = 45323+29=45352 (2024 leap)
+1	ge.m.d	en-US	1900	1900.1.1	g treated as year alias (e) until era calendars land; see Open questions
+36526	e	en-US	1900	2000	e is ISO year (yyyy)

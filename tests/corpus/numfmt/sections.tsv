@@ -1,0 +1,55 @@
+# value	format	locale	date_system	text	note
+5	0.00;(0.00)	en-US	1900	5.00	2-section positive uses first
+0	0.00;(0.00)	en-US	1900	0.00	2-section zero uses first (positive) section
+-5	0.00;(0.00)	en-US	1900	(5.00)	2-section negative uses second and abs
+-0	0.00;(0.00)	en-US	1900	0.00	−0 is not < 0 so first section
+5	0;(0);zero	en-US	1900	5	3-section positive
+-5	0;(0);zero	en-US	1900	(5)	3-section negative abs
+0	0;(0);zero	en-US	1900	zero	3-section zero
+-0	0;(0);zero	en-US	1900	zero	−0.0 uses the zero section (IEEE −0 is not < 0 and equals 0)
+1.4	0;(0);zero	en-US	1900	1	section chosen on raw value, then integer round
+0.4	0;(0);zero	en-US	1900	0	section selected before rounding: 0.4 > 0 uses pos, then rounds to 0
+0.5	0;(0);"zero"	en-US	1900	1	0.5 > 0, rounds to 1
+-0.4	0;(0);zero	en-US	1900	(0)	neg section, abs 0.4 rounds to 0, still wrapped because section is neg
+hello	0;0;0;@	en-US	1900	hello	4th section is text
+hello	0;0;0;"T:"@	en-US	1900	T:hello	text section with literal prefix
+hello	@	en-US	1900	hello	text placeholder
+hello	@@	en-US	1900	hellohello	each @ repeats the text (Excel)
+hello	"x"	en-US	1900	hello	numeric-only format still displays text as-is when no text section
+5	[Red]0	en-US	1900	5	named color [Red]; text is 5, color_hint Red
+-5	[Red]0.00;[Blue](0.00)	en-US	1900	(5.00)	neg section color Blue
+1000	[>=1000]#,##0.00;0.00	en-US	1900	1,000.00	condition [>=1000] first section
+999	[>=1000]#,##0.00;0.00	en-US	1900	999.00	fails condition, second section, sign kept
+1000	[>=1000]"big";[<0]"neg";"other"	en-US	1900	big	three conditions/sections
+-1	[>=1000]"big";[<0]"neg";"other"	en-US	1900	neg	second condition
+0	[>=1000]"big";[<0]"neg";"other"	en-US	1900	other	unconditional last section is the rest
+5	[>10]0;"nomatch"	en-US	1900	nomatch	condition miss uses next section
+50	[<0]"n";[>100]"h"	en-US	1900	##########	no section matches → Excel overflow hashes
+1234	"$"#,##0.00;"($"#,##0.00)	en-US	1900	$1,234.00	quoted pos currency
+-1234	"$"#,##0.00;"($"#,##0.00)	en-US	1900	($1,234.00)	quoted neg currency abs
+0	"$"#,##0.00;"($"#,##0.00);"-"	en-US	1900	-	3-section custom zero
+1	0.00+	en-US	1900	1.00+	trailing literal
+1	+0.00	en-US	1900	+1.00	leading literal plus
+1	\a0	en-US	1900	a1	backslash-escaped literal
+1	"hi"0	en-US	1900	hi1	quoted then digit
+5	[Color2]0	en-US	1900	5	indexed color [Color2]
+5	[Black]0	en-US	1900	5	named Black
+5	[Green]0	en-US	1900	5	named Green
+5	[White]0	en-US	1900	5	named White
+5	[Blue]0	en-US	1900	5	named Blue
+5	[Magenta]0	en-US	1900	5	named Magenta
+5	[Yellow]0	en-US	1900	5	named Yellow
+5	[Cyan]0	en-US	1900	5	named Cyan
+1234	_($* #,##0_)	en-US	1900	 $1,234 	accounting skip/fill: _ → space, * fill hint (one char without width)
+1234.5	[$€-407]#,##0.00	en-US	1900	€1,234.50	currency [$€-407] prefix euro; LCID 0x407 is de-DE names but separators follow the locale arg (en-US)
+36526	[$-409]d-mmm-yyyy	en-US	1900	1-Jan-2000	locale code [$-409] English month names
+1	General;-General;0	en-US	1900	1	General token inside a custom format
+-1	General;-General;0	en-US	1900	-1	neg section with leading minus already in pattern? -General of abs 1
+0	0.00;(0.00);0	en-US	1900	0	3-section explicit 0
+100	0.00E+00	en-US	1900	1.00E+02	scientific in a 1-section custom
+5	0;0;0;@	en-US	1900	5	4-section number still uses pos
+0	[>=1]"P";[=0]"Z";"N"	en-US	1900	Z	equality condition
+2	[<>1]"yes";"no"	en-US	1900	yes	not-equal condition
+1	[<>1]"yes";"no"	en-US	1900	no	not-equal miss
+-1000	[<=-1000]"lo";"hi"	en-US	1900	lo	<= condition
+1.5	[>1.5]"a";[>=1.5]"b";"c"	en-US	1900	b	first miss, second hit; order matters

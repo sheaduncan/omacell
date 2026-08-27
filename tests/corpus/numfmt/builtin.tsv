@@ -1,0 +1,56 @@
+# id	locale	format	note
+0	en-US	General	ECMA-376 18.8.30 id 0
+1	en-US	0	ECMA id 1
+2	en-US	0.00	ECMA id 2
+3	en-US	#,##0	ECMA id 3
+4	en-US	#,##0.00	ECMA id 4
+5	en-US	$#,##0_);($#,##0)	Excel en-US currency (locale-dependent; ECMA omits 5–8)
+6	en-US	$#,##0_);[Red]($#,##0)	Excel en-US currency red
+7	en-US	$#,##0.00_);($#,##0.00)	Excel en-US currency 2dp
+8	en-US	$#,##0.00_);[Red]($#,##0.00)	Excel en-US currency 2dp red
+9	en-US	0%	ECMA id 9
+10	en-US	0.00%	ECMA id 10
+11	en-US	0.00E+00	ECMA id 11
+12	en-US	# ?/?	ECMA id 12
+13	en-US	# ??/??	ECMA id 13
+14	en-US	m/d/yy	Excel en-US short date (ECMA writes mm-dd-yy; UI localizes id 14)
+15	en-US	d-mmm-yy	ECMA id 15
+16	en-US	d-mmm	ECMA id 16
+17	en-US	mmm-yy	ECMA id 17
+18	en-US	h:mm AM/PM	ECMA id 18
+19	en-US	h:mm:ss AM/PM	ECMA id 19
+20	en-US	h:mm	ECMA id 20
+21	en-US	h:mm:ss	ECMA id 21
+22	en-US	m/d/yy h:mm	ECMA id 22 (date part follows locale order)
+23	en-US	General	reserved 23–26 → General
+24	en-US	General	reserved → General
+25	en-US	General	reserved → General
+26	en-US	General	reserved → General
+27	en-US	[$-411]ge.m.d	ECMA JPN id 27 (CJK even in en-US files)
+28	en-US	[$-411]ggge"年"m"月"d"日"	ECMA JPN id 28
+29	en-US	[$-411]ggge"年"m"月"d"日"	ECMA JPN id 29
+30	en-US	m/d/yy	ECMA JPN id 30
+31	en-US	yyyy"年"m"月"d"日"	ECMA JPN id 31
+32	en-US	h"時"mm"分"	ECMA JPN id 32
+33	en-US	h"時"mm"分"ss"秒"	ECMA JPN id 33
+34	en-US	yyyy"年"m"月"	ECMA JPN id 34
+35	en-US	m"月"d"日"	ECMA JPN id 35
+36	en-US	[$-411]ge.m.d	ECMA JPN id 36
+37	en-US	#,##0 ;(#,##0)	ECMA id 37
+38	en-US	#,##0 ;[Red](#,##0)	ECMA id 38
+39	en-US	#,##0.00;(#,##0.00)	ECMA id 39
+40	en-US	#,##0.00;[Red](#,##0.00)	ECMA id 40
+41	en-US	_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)	Excel en-US accounting
+42	en-US	_(* #,##0_);_(* (#,##0);_(* "-"_);_(@_)	Excel en-US accounting no currency
+43	en-US	_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)	Excel en-US accounting 2dp
+44	en-US	_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)	Excel en-US accounting 2dp no currency
+45	en-US	mm:ss	ECMA id 45
+46	en-US	[h]:mm:ss	ECMA id 46
+47	en-US	mmss.0	ECMA id 47 (no colon)
+48	en-US	##0.0E+0	ECMA id 48
+49	en-US	@	ECMA id 49 text
+14	en-GB	dd/mm/yy	id 14 localizes to DMY in en-GB
+14	de-DE	dd.mm.yy	id 14 localizes to dotted DMY in de-DE
+14	fr-FR	dd/mm/yy	id 14 localizes to DMY in fr-FR
+14	ja-JP	yyyy/m/d	id 14 localizes to YMD in ja-JP
+5	de-DE	€#,##0_);(€#,##0)	id 5: en-US pattern with locale currency symbol substituted for $
