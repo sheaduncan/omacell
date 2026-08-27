@@ -1,0 +1,19 @@
+[package]
+name = "omacell-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Command-line entry point for Omacell."
+
+[lints]
+workspace = true
+
+[dependencies]
+omacell-core = { path = "../core", version = "0.0.0" }
+
+[[bin]]
+name = "omacell"
+path = "src/main.rs"

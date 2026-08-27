@@ -1,0 +1,10 @@
+# TODO(WP-28): Arch / AUR PKGBUILD.
+pkgname=omacell
+pkgver=0.0.0
+pkgrel=1
+pkgdesc='A spreadsheet for Omarchy Linux'
+arch=('x86_64' 'aarch64')
+url='https://github.com/sheaduncan/omacell'
+license=('MIT')
+# depends=()
+# source=()

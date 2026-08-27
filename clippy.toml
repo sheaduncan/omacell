@@ -1,0 +1,5 @@
+# Workspace Clippy configuration for Omacell.
+# Keep this file conservative; AGENTS.md is the source of coding rules.
+msrv = "1.85.0"
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

@@ -1,0 +1,12 @@
+[package]
+name = "omacell-bus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Command bus, changesets, IPC, and MCP server for Omacell."
+
+[lints]
+workspace = true

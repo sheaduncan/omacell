@@ -1,0 +1,8 @@
+# Workspace cargo configuration. Lints live in the root Cargo.toml
+# `[workspace.lints]` table and are inherited by every crate.
+
+[registries.crates-io]
+protocol = "sparse"
+
+[term]
+color = "auto"

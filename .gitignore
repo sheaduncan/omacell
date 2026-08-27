@@ -1,0 +1,12 @@
+/target
+/fuzz/artifacts
+/fuzz/corpus
+**/*.rs.bk
+.idea/
+.vscode/
+*.swp
+*.swo
+.direnv/
+.env
+*.profraw
+/benches/baseline-local
