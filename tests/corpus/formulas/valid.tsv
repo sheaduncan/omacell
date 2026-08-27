@@ -1,0 +1,1057 @@
+# input	print	mode	note
+=0	=0	a1	F-3.1 integer zero literal
+=1	=1	a1	F-3.1 integer literal
+=42	=42	a1	F-3.1 multi-digit integer
+=0.5	=0.5	a1	F-3.1 decimal fraction
+=.5	=0.5	a1	Excel allows leading-dot numbers; canonical has 0.
+=5.	=5	a1	Excel allows trailing-dot numbers; integer Display drops the dot
+=1.25	=1.25	a1	F-3.1 two-place decimal
+=1e3	=1000	a1	F-3.1 scientific 1e3 canonicalizes to 1000
+=1E3	=1000	a1	scientific exponent letter is case-insensitive
+=1e-3	=0.001	a1	F-3.1 negative scientific exponent
+=1.5e+2	=150	a1	F-3.1 scientific with explicit + exponent
+=2.5E-1	=0.25	a1	scientific mixed case and fraction
+=0007	=7	a1	leading zeros are a numeric value, not text
+=10.00	=10	a1	trailing decimal zeros drop in canonical Display
+=1234567	=1234567	a1	large integer still exact in f64
+=0.0001	=0.0001	a1	small decimal
+=1.2345	=1.2345	a1	four-place decimal
+=100	=100	a1	hundred
+=99.99	=99.99	a1	currency-like decimal
+=6.022e23	=602200000000000000000000	a1	large scientific; f64 Display is decimal not scientific
+="hi"	="hi"	a1	F-3.1 string literal
+=""	=""	a1	empty string
+="a""b"	="a""b"	a1	Excel escapes embedded quotes by doubling ""
+="A1"	="A1"	a1	string that looks like a reference stays a string
+="TRUE"	="TRUE"	a1	quoted TRUE is text, not boolean
+="="	="="	a1	equals character in a string
+="hello world"	="hello world"	a1	space inside string is preserved
+="line"	="line"	a1	single word string
+="""x"""	="""x"""	a1	quotes around x: input """x""" value "x"
+="café"	="café"	a1	non-ASCII UTF-8 in strings
+="100"	="100"	a1	numeric text is still a string at parse time
+="+"	="+"	a1	operator character as string
+=","	=","	a1	comma as string (list separator is not inside quotes)
+=";"	=";"	a1	semicolon as string
+="{1}"	="{1}"	a1	array-looking text is a string
+=TRUE	=TRUE	a1	F-3.1 boolean TRUE
+=FALSE	=FALSE	a1	F-3.1 boolean FALSE
+=true	=TRUE	a1	boolean TRUE is case-insensitive
+=False	=FALSE	a1	boolean FALSE mixed case
+=True	=TRUE	a1	boolean True title case
+=false	=FALSE	a1	boolean false lower case
+=#NULL!	=#NULL!	a1	Excel error literal #NULL! (intersection of disjoint ranges)
+=#DIV/0!	=#DIV/0!	a1	Excel error literal #DIV/0!
+=#VALUE!	=#VALUE!	a1	Excel error literal #VALUE!
+=#REF!	=#REF!	a1	Excel error literal #REF!
+=#NAME?	=#NAME?	a1	Excel error literal #NAME?
+=#NUM!	=#NUM!	a1	Excel error literal #NUM!
+=#N/A	=#N/A	a1	Excel error literal #N/A (no bang)
+=#GETTING_DATA	=#GETTING_DATA	a1	Excel error literal #GETTING_DATA
+=#SPILL!	=#SPILL!	a1	Excel error literal #SPILL! (dynamic array)
+=#CALC!	=#CALC!	a1	Excel error literal #CALC!
+=#FIELD!	=#FIELD!	a1	Excel error literal #FIELD!
+=#CONNECT!	=#CONNECT!	a1	Excel error literal #CONNECT!
+=#BLOCKED!	=#BLOCKED!	a1	Excel error literal #BLOCKED!
+=#UNKNOWN!	=#UNKNOWN!	a1	Excel error literal #UNKNOWN!
+=#div/0!	=#DIV/0!	a1	error literals are case-insensitive; print is Excel display
+=#n/a	=#N/A	a1	lowercase #n/a canonicalizes to #N/A
+=#name?	=#NAME?	a1	lowercase #name? canonicalizes to #NAME?
+=-1	=-1	a1	F-3.1 unary minus
+=+1	=+1	a1	Excel unary plus is stored/printed
+=--1	=--1	a1	double unary minus
+=+-1	=+-1	a1	unary plus then unary minus
+=-+1	=-+1	a1	unary minus then unary plus
+=5%	=5%	a1	F-3.1 postfix percent
+=5%%	=5%%	a1	stacked percent (5 * 0.01 * 0.01 at eval)
+=-5%	=-5%	a1	Microsoft precedence: unary minus then percent → (-5)%
+=2^3	=2^3	a1	F-3.1 exponentiation
+=2^3^2	=2^3^2	a1	Excel ^ is left-associative: (2^3)^2 = 64
+=-2^2	=-2^2	a1	unary minus vs power: Excel evaluates -(2^2) = -4
+=1+2*3	=1+2*3	a1	F-3.1 * binds tighter than + (1+2*3 = 7)
+=(1+2)*3	=(1+2)*3	a1	parentheses override precedence
+=1*2+3	=1*2+3	a1	left-to-right * then +
+=1+2+3	=1+2+3	a1	left-associative addition
+=8/2/2	=8/2/2	a1	left-associative division: (8/2)/2 = 2
+=8/2*2	=8/2*2	a1	* and / same precedence, left-assoc: (8/2)*2 = 8
+=1&2	=1&2	a1	F-3.1 concatenation
+=1&2&3	=1&2&3	a1	left-associative concatenation
+="a"&"b"	="a"&"b"	a1	string concatenation
+=1=1	=1=1	a1	F-3.1 equality comparison
+=1<>2	=1<>2	a1	F-3.1 not-equal
+=1<2	=1<2	a1	F-3.1 less-than
+=1<=2	=1<=2	a1	F-3.1 less-or-equal
+=1>0	=1>0	a1	F-3.1 greater-than
+=1>=1	=1>=1	a1	F-3.1 greater-or-equal
+=1=1=TRUE	=1=1=TRUE	a1	chained comparison is left-assoc
+=1+2=3	=1+2=3	a1	comparison binds looser than +
+=1*2=2	=1*2=2	a1	comparison binds looser than *
+="a"="A"	="a"="A"	a1	parse keeps both strings; eval case-fold is WP-04
+=5%-1	=5%-1	a1	percent binds tighter than binary minus
+=2^3%	=2^3%	a1	percent postfix on 3: Excel 2^(3%) (MS % > ^)
+=1+2-3	=1+2-3	a1	+ and - same precedence, left-assoc
+=4*5/2	=4*5/2	a1	* and / same precedence, left-assoc
+=10-3-2	=10-3-2	a1	left-associative subtraction
+=2*(3+4)	=2*(3+4)	a1	parenthesized sum as factor
+=-(1+2)	=-(1+2)	a1	unary minus of a parenthesized sum
+=+(1)	=+(1)	a1	unary plus of a parenthesized atom
+=1%	=1%	a1	1 percent
+=100%	=100%	a1	100 percent
+=(5%)	=(5%)	a1	parenthesized percent
+=2^0	=2^0	a1	exponent zero
+=2^-1	=2^-1	a1	power with unary-minus exponent
+=3%+2%	=3%+2%	a1	percent on both addends
+=A1	=A1	a1	F-3.2 origin cell
+=$A$1	=$A$1	a1	F-3.2 absolute row and column
+=$A1	=$A1	a1	F-3.2 absolute column, relative row
+=A$1	=A$1	a1	F-3.2 relative column, absolute row
+=a1	=A1	a1	A1 letters are case-insensitive; print is upper case
+=$a$1	=$A$1	a1	absolute mixed case
+=B2	=B2	a1	F-3.2 interior cell
+=Z1	=Z1	a1	column Z
+=AA1	=AA1	a1	column AA (index 26)
+=XFD1	=XFD1	a1	F-1.2 last column
+=A1048576	=A1048576	a1	F-1.2 last row
+=XFD1048576	=XFD1048576	a1	F-1.2 last cell
+=$XFD$1048576	=$XFD$1048576	a1	absolute last cell
+=C$10	=C$10	a1	mixed abs row
+=$C10	=$C10	a1	mixed abs col
+=IV1	=IV1	a1	legacy Excel 2003 last column IV
+=R1	=R1	a1	in A1 style R1 is a cell (row 1 col R), not R1C1
+=RC1	=RC1	a1	in A1 style RC1 is a cell (column RC)
+=A1:B2	=A1:B2	a1	F-3.1 range operator colon
+=$A$1:$B$2	=$A$1:$B$2	a1	absolute range
+=A1:$B$2	=A1:$B$2	a1	mixed abs range corners
+=$A1:B$2	=$A1:B$2	a1	per-axis abs flags on range
+=A:A	=A:A	a1	F-3.2 whole column A
+=A:C	=A:C	a1	F-3.2 whole-column span
+=$A:$C	=$A:$C	a1	absolute whole columns
+=1:1	=1:1	a1	F-3.2 whole row 1
+=1:10	=1:10	a1	F-3.2 whole-row span
+=$1:$10	=$1:$10	a1	absolute whole rows
+=B:B	=B:B	a1	whole column B
+=XFD:XFD	=XFD:XFD	a1	whole last column
+=1048576:1048576	=1048576:1048576	a1	whole last row
+=A1:A1	=A1:A1	a1	degenerate range (single cell as A1:A1)
+=A1:B2:C3	=A1:B2:C3	a1	colon is left-assoc; eval uses bounding box (Excel)
+=A1:XFD1048576	=A1:XFD1048576	a1	full-grid range written as cells
+=$A:$A	=$A:$A	a1	absolute whole column A
+=$5:$5	=$5:$5	a1	absolute whole row 5
+=Sheet1!A1	=Sheet1!A1	a1	F-3.2 unquoted sheet prefix
+=Sheet1!A1:B2	=Sheet1!A1:B2	a1	sheet-qualified range; prefix once
+='My Sheet'!B2	='My Sheet'!B2	a1	F-3.2 quoted sheet name with space
+='Cost Model'!B2	='Cost Model'!B2	a1	F-3.2 quoted sheet from spec
+=Sheet1:Sheet3!A1	=Sheet1:Sheet3!A1	a1	F-3.2 3-D sheet span
+=Sheet1:Sheet3!A1:B2	=Sheet1:Sheet3!A1:B2	a1	3-D range body
+='My Sheet:Other'!A1	='My Sheet:Other'!A1	a1	quoted 3-D span
+='O''Brien'!A1	='O''Brien'!A1	a1	doubled quote in sheet name
+=Data!A1	=Data!A1	a1	unquoted alphanumeric sheet
+=_Data!A1	=_Data!A1	a1	sheet name starting with underscore
+='123'!A1	='123'!A1	a1	numeric sheet names must be quoted
+='Sheet-1'!A1	='Sheet-1'!A1	a1	hyphen requires quoting
+=Sheet1!A:A	=Sheet1!A:A	a1	sheet-qualified whole column
+=Sheet1!1:1	=Sheet1!1:1	a1	sheet-qualified whole row
+='[Book.xlsx]Sheet1'!A1	='[Book.xlsx]Sheet1'!A1	a1	F-1.5 quoted external workbook + sheet (Excel)
+=[Book.xlsx]Sheet1!A1	=[Book.xlsx]Sheet1!A1	a1	F-1.5 unquoted external workbook prefix
+=Revenue	=Revenue	a1	F-1.3 defined name
+=TaxRate	=TaxRate	a1	F-1.3 defined name (spec example Revenue*TaxRate)
+=Revenue*TaxRate	=Revenue*TaxRate	a1	F-1.3 names in arithmetic
+=_foo	=_foo	a1	name starting with underscore
+=foo.bar	=foo.bar	a1	name with period
+=XFE1	=XFE1	a1	XFE1 is not a cell (beyond XFD); treated as a name
+=Qux	=Qux	a1	simple name
+=Sheet1!MyName	=Sheet1!MyName	a1	sheet-qualified defined name
+='My Sheet'!MyName	='My Sheet'!MyName	a1	quoted sheet-qualified name
+=\foo	=\foo	a1	Excel names may start with backslash
+=foo_bar	=foo_bar	a1	underscore inside name
+=A1A	=A1A	a1	A1A is a name, not a cell (trailing letter)
+=SUM()	=SUM()	a1	function call with zero args; name upper-cased
+=SUM(A1)	=SUM(A1)	a1	single-arg function
+=SUM(A1,B1)	=SUM(A1,B1)	a1	comma is argument separator inside a call
+=sum(a1)	=SUM(A1)	a1	function names are case-insensitive; print is upper case
+=INDEX(A1:C9,,2)	=INDEX(A1:C9,,2)	a1	F-3.1 omitted argument (empty between commas)
+=INDEX(A1:C9,2,)	=INDEX(A1:C9,2,)	a1	omitted trailing argument
+=INDEX(,2,2)	=INDEX(,2,2)	a1	omitted leading argument
+=IF(A1,1,0)	=IF(A1,1,0)	a1	IF with three args
+=IF(A1,1)	=IF(A1,1)	a1	IF with omitted else (allowed at parse)
+=NOW()	=NOW()	a1	F-3.6 volatile NOW
+=TODAY()	=TODAY()	a1	F-3.6 volatile TODAY
+=RAND()	=RAND()	a1	F-3.6 volatile RAND
+=RANDBETWEEN(1,10)	=RANDBETWEEN(1,10)	a1	F-3.6 volatile RANDBETWEEN
+=RANDARRAY(2,2)	=RANDARRAY(2,2)	a1	F-3.6 volatile RANDARRAY
+=OFFSET(A1,1,1)	=OFFSET(A1,1,1)	a1	F-3.6 volatile OFFSET (also dynamic)
+=INDIRECT("A1")	=INDIRECT("A1")	a1	F-3.6 volatile INDIRECT (also dynamic)
+=INFO("system")	=INFO("system")	a1	F-3.6 volatile INFO
+=CELL("address",A1)	=CELL("address",A1)	a1	F-3.6 volatile CELL
+=TRUE()	=TRUE()	a1	TRUE() is a function call, not the boolean literal
+=FALSE()	=FALSE()	a1	FALSE() is a function call
+=NOT(TRUE)	=NOT(TRUE)	a1	logical NOT
+=AND(TRUE,FALSE)	=AND(TRUE,FALSE)	a1	logical AND
+=OR(FALSE,TRUE)	=OR(FALSE,TRUE)	a1	logical OR
+=IFERROR(1,0)	=IFERROR(1,0)	a1	IFERROR
+=IFNA(#N/A,0)	=IFNA(#N/A,0)	a1	IFNA with error literal
+=LEN("ab")	=LEN("ab")	a1	text LEN
+=LEFT("abc",2)	=LEFT("abc",2)	a1	text LEFT
+=RIGHT("abc",1)	=RIGHT("abc",1)	a1	text RIGHT
+=MID("abc",2,1)	=MID("abc",2,1)	a1	text MID
+=TRIM(" a ")	=TRIM(" a ")	a1	text TRIM
+=UPPER("a")	=UPPER("a")	a1	text UPPER
+=LOWER("A")	=LOWER("A")	a1	text LOWER
+=VALUE("1")	=VALUE("1")	a1	VALUE
+=TEXT(1,"0")	=TEXT(1,"0")	a1	TEXT
+=DATE(2024,1,2)	=DATE(2024,1,2)	a1	DATE
+=YEAR(1)	=YEAR(1)	a1	YEAR
+=MONTH(1)	=MONTH(1)	a1	MONTH
+=DAY(1)	=DAY(1)	a1	DAY
+=ABS(-1)	=ABS(-1)	a1	ABS of unary minus
+=ROUND(1.23,1)	=ROUND(1.23,1)	a1	ROUND
+=INT(1.9)	=INT(1.9)	a1	INT
+=MOD(5,2)	=MOD(5,2)	a1	MOD
+=SQRT(4)	=SQRT(4)	a1	SQRT
+=PI()	=PI()	a1	PI no-arg
+=NA()	=NA()	a1	NA() function vs #N/A literal
+=ROW()	=ROW()	a1	ROW no-arg
+=COLUMN()	=COLUMN()	a1	COLUMN no-arg
+=ROW(A1)	=ROW(A1)	a1	ROW with ref
+=ROWS(A1:A10)	=ROWS(A1:A10)	a1	ROWS
+=COLUMNS(A1:C1)	=COLUMNS(A1:C1)	a1	COLUMNS
+=COUNT(A1:A10)	=COUNT(A1:A10)	a1	COUNT
+=COUNTA(A1:A10)	=COUNTA(A1:A10)	a1	COUNTA
+=AVERAGE(A1:A10)	=AVERAGE(A1:A10)	a1	AVERAGE
+=MIN(A1,A2)	=MIN(A1,A2)	a1	MIN
+=MAX(A1,A2)	=MAX(A1,A2)	a1	MAX
+=SUMIF(A:A,">0")	=SUMIF(A:A,">0")	a1	SUMIF
+=COUNTIF(A:A,1)	=COUNTIF(A:A,1)	a1	COUNTIF
+=VLOOKUP(1,A1:B10,2,FALSE)	=VLOOKUP(1,A1:B10,2,FALSE)	a1	VLOOKUP
+=HLOOKUP(1,A1:Z2,2,TRUE)	=HLOOKUP(1,A1:Z2,2,TRUE)	a1	HLOOKUP
+=INDEX(A1:C9,1,2)	=INDEX(A1:C9,1,2)	a1	INDEX fully specified
+=MATCH(1,A1:A10,0)	=MATCH(1,A1:A10,0)	a1	MATCH
+=XLOOKUP(1,A1:A10,B1:B10)	=XLOOKUP(1,A1:A10,B1:B10)	a1	XLOOKUP
+=FILTER(A1:A10,A1:A10>0)	=FILTER(A1:A10,A1:A10>0)	a1	FILTER
+=SORT(A1:A10)	=SORT(A1:A10)	a1	SORT
+=UNIQUE(A1:A10)	=UNIQUE(A1:A10)	a1	UNIQUE
+=SEQUENCE(3,2)	=SEQUENCE(3,2)	a1	SEQUENCE
+=LET(x,1,x+1)	=LET(x,1,x+1)	a1	F-3.4 LET is a Call at parse time
+=LAMBDA(x,x+1)	=LAMBDA(x,x+1)	a1	F-3.4 LAMBDA is a Call at parse time
+=MAP(A1:A3,LAMBDA(x,x*2))	=MAP(A1:A3,LAMBDA(x,x*2))	a1	F-3.4 MAP + LAMBDA
+=_xlfn.XLOOKUP(1,A1:A2,B1:B2)	=_XLFN.XLOOKUP(1,A1:A2,B1:B2)	a1	Excel future-function prefix _xlfn; print upper-cases the call name
+=MY.WEIBULL_B(A1)	=MY.WEIBULL_B(A1)	a1	extension namespace call (spec §6.4); parser accepts any ident(
+=SUM(SUM(A1))	=SUM(SUM(A1))	a1	nested calls
+=IF(A1,SUM(B1:B2),MAX(C1,C2))	=IF(A1,SUM(B1:B2),MAX(C1,C2))	a1	calls nested in IF
+=CHOOSE(1,A1,A2,A3)	=CHOOSE(1,A1,A2,A3)	a1	CHOOSE
+=IFS(A1>0,1,TRUE,0)	=IFS(A1>0,1,TRUE,0)	a1	IFS
+=SWITCH(A1,1,"a",2,"b")	=SWITCH(A1,1,"a",2,"b")	a1	SWITCH
+=SUMPRODUCT(A1:A10,B1:B10)	=SUMPRODUCT(A1:A10,B1:B10)	a1	SUMPRODUCT
+=PMT(0.05/12,360,-100000)	=PMT(0.05/12,360,-100000)	a1	PMT financial
+=NPER(0.01,100,-1000)	=NPER(0.01,100,-1000)	a1	NPER
+=FV(0.01,12,-100)	=FV(0.01,12,-100)	a1	FV
+=PV(0.01,12,100)	=PV(0.01,12,100)	a1	PV
+=ISBLANK(A1)	=ISBLANK(A1)	a1	ISBLANK
+=ISERROR(A1)	=ISERROR(A1)	a1	ISERROR
+=ISNUMBER(A1)	=ISNUMBER(A1)	a1	ISNUMBER
+=ISTEXT(A1)	=ISTEXT(A1)	a1	ISTEXT
+=TYPE(A1)	=TYPE(A1)	a1	TYPE
+=ERROR.TYPE(#REF!)	=ERROR.TYPE(#REF!)	a1	ERROR.TYPE of an error literal
+=INDIRECT(A1)	=INDIRECT(A1)	a1	INDIRECT with a ref
+=OFFSET(A1,0,0,2,2)	=OFFSET(A1,0,0,2,2)	a1	OFFSET with height/width
+=INDEX(A1:C9,,)	=INDEX(A1:C9,,)	a1	two omitted args
+=SUM(,)	=SUM(,)	a1	two omitted args in SUM
+=SUM(A1,)	=SUM(A1,)	a1	trailing omitted arg
+=SUM(,A1)	=SUM(,A1)	a1	leading omitted arg
+=FOO(1,2,3,4,5)	=FOO(1,2,3,4,5)	a1	unknown function accepted at parse (WP-05 validates)
+=LOG10(100)	=LOG10(100)	a1	LOG10 function (name would otherwise look like a cell+0)
+=LOG10	=LOG10	a1	LOG10 without paren is the cell at column LOG row 10, not the function
+=SUM(1,2,3)	=SUM(1,2,3)	a1	three numeric args
+=SUM(A1:A10,C1:C10)	=SUM(A1:A10,C1:C10)	a1	two range args
+=IF(TRUE,A1,B1)	=IF(TRUE,A1,B1)	a1	IF with boolean test
+=AND(A1,B1,C1)	=AND(A1,B1,C1)	a1	AND of three refs
+=OR(A1=1,B1=2)	=OR(A1=1,B1=2)	a1	OR of comparisons
+=NOT(A1=1)	=NOT(A1=1)	a1	NOT of comparison
+=ROUNDUP(1.1,0)	=ROUNDUP(1.1,0)	a1	ROUNDUP
+=ROUNDDOWN(1.9,0)	=ROUNDDOWN(1.9,0)	a1	ROUNDDOWN
+=CEILING(1.1,1)	=CEILING(1.1,1)	a1	CEILING
+=FLOOR(1.9,1)	=FLOOR(1.9,1)	a1	FLOOR
+=POWER(2,10)	=POWER(2,10)	a1	POWER function vs ^ operator
+=EXP(1)	=EXP(1)	a1	EXP
+=LN(1)	=LN(1)	a1	LN
+=LOG(100,10)	=LOG(100,10)	a1	LOG with base
+=SIN(0)	=SIN(0)	a1	SIN
+=COS(0)	=COS(0)	a1	COS
+=TAN(0)	=TAN(0)	a1	TAN
+=ASIN(0)	=ASIN(0)	a1	ASIN
+=ACOS(1)	=ACOS(1)	a1	ACOS
+=ATAN(1)	=ATAN(1)	a1	ATAN
+=ATAN2(1,1)	=ATAN2(1,1)	a1	ATAN2
+=RADIANS(180)	=RADIANS(180)	a1	RADIANS
+=DEGREES(1)	=DEGREES(1)	a1	DEGREES
+=SIGN(-2)	=SIGN(-2)	a1	SIGN
+=FACT(5)	=FACT(5)	a1	FACT
+=GCD(12,8)	=GCD(12,8)	a1	GCD
+=LCM(3,4)	=LCM(3,4)	a1	LCM
+=COMBIN(5,2)	=COMBIN(5,2)	a1	COMBIN
+=PERMUT(5,2)	=PERMUT(5,2)	a1	PERMUT
+=RANDBETWEEN(0,1)	=RANDBETWEEN(0,1)	a1	RANDBETWEEN bounds
+=TEXTJOIN(",",TRUE,A1:A3)	=TEXTJOIN(",",TRUE,A1:A3)	a1	TEXTJOIN
+=TEXTSPLIT(A1,",")	=TEXTSPLIT(A1,",")	a1	TEXTSPLIT
+=TEXTBEFORE(A1,",")	=TEXTBEFORE(A1,",")	a1	TEXTBEFORE
+=TEXTAFTER(A1,",")	=TEXTAFTER(A1,",")	a1	TEXTAFTER
+=SUBSTITUTE(A1,"a","b")	=SUBSTITUTE(A1,"a","b")	a1	SUBSTITUTE
+=REPLACE(A1,1,1,"X")	=REPLACE(A1,1,1,"X")	a1	REPLACE
+=FIND("a",A1)	=FIND("a",A1)	a1	FIND
+=SEARCH("a",A1)	=SEARCH("a",A1)	a1	SEARCH
+=EXACT(A1,B1)	=EXACT(A1,B1)	a1	EXACT
+=REPT("a",3)	=REPT("a",3)	a1	REPT
+=CHAR(65)	=CHAR(65)	a1	CHAR
+=CODE("A")	=CODE("A")	a1	CODE
+=CLEAN(A1)	=CLEAN(A1)	a1	CLEAN
+=PROPER("a b")	=PROPER("a b")	a1	PROPER
+=CONCAT(A1,B1)	=CONCAT(A1,B1)	a1	CONCAT
+=CONCATENATE(A1,B1)	=CONCATENATE(A1,B1)	a1	CONCATENATE
+=EDATE(1,1)	=EDATE(1,1)	a1	EDATE
+=EOMONTH(1,0)	=EOMONTH(1,0)	a1	EOMONTH
+=NETWORKDAYS(1,10)	=NETWORKDAYS(1,10)	a1	NETWORKDAYS
+=WORKDAY(1,1)	=WORKDAY(1,1)	a1	WORKDAY
+=DATEDIF(1,400,"Y")	=DATEDIF(1,400,"Y")	a1	DATEDIF
+=YEARFRAC(1,400)	=YEARFRAC(1,400)	a1	YEARFRAC
+=WEEKNUM(1)	=WEEKNUM(1)	a1	WEEKNUM
+=ISOWEEKNUM(1)	=ISOWEEKNUM(1)	a1	ISOWEEKNUM
+=WEEKDAY(1)	=WEEKDAY(1)	a1	WEEKDAY
+=HOUR(0.5)	=HOUR(0.5)	a1	HOUR
+=MINUTE(0.5)	=MINUTE(0.5)	a1	MINUTE
+=SECOND(0.5)	=SECOND(0.5)	a1	SECOND
+=TIME(1,2,3)	=TIME(1,2,3)	a1	TIME
+=NOW()+1	=NOW()+1	a1	volatile call in arithmetic
+=IRR(A1:A10)	=IRR(A1:A10)	a1	IRR
+=NPV(0.1,A1:A10)	=NPV(0.1,A1:A10)	a1	NPV
+=XIRR(A1:A10,B1:B10)	=XIRR(A1:A10,B1:B10)	a1	XIRR
+=XNPV(0.1,A1:A10,B1:B10)	=XNPV(0.1,A1:A10,B1:B10)	a1	XNPV
+=MIRR(A1:A10,0.1,0.1)	=MIRR(A1:A10,0.1,0.1)	a1	MIRR
+=RATE(12,-100,1000)	=RATE(12,-100,1000)	a1	RATE
+=IPMT(0.01,1,12,-1000)	=IPMT(0.01,1,12,-1000)	a1	IPMT
+=PPMT(0.01,1,12,-1000)	=PPMT(0.01,1,12,-1000)	a1	PPMT
+=SLN(1000,100,5)	=SLN(1000,100,5)	a1	SLN
+=DB(1000,100,5,1)	=DB(1000,100,5,1)	a1	DB
+=DDB(1000,100,5,1)	=DDB(1000,100,5,1)	a1	DDB
+=N(A1)	=N(A1)	a1	N() information
+=T(A1)	=T(A1)	a1	T() information
+=ISNA(A1)	=ISNA(A1)	a1	ISNA
+=ISERR(A1)	=ISERR(A1)	a1	ISERR
+=ISLOGICAL(A1)	=ISLOGICAL(A1)	a1	ISLOGICAL
+=ISNONTEXT(A1)	=ISNONTEXT(A1)	a1	ISNONTEXT
+=ISFORMULA(A1)	=ISFORMULA(A1)	a1	ISFORMULA
+=ISEVEN(2)	=ISEVEN(2)	a1	ISEVEN
+=ISODD(1)	=ISODD(1)	a1	ISODD
+=SHEET()	=SHEET()	a1	SHEET
+=SHEETS()	=SHEETS()	a1	SHEETS
+=FORMULATEXT(A1)	=FORMULATEXT(A1)	a1	FORMULATEXT
+=AREAS(A1)	=AREAS(A1)	a1	AREAS
+=TRANSPOSE(A1:B2)	=TRANSPOSE(A1:B2)	a1	TRANSPOSE
+=MMULT(A1:B2,C1:D2)	=MMULT(A1:B2,C1:D2)	a1	MMULT
+=MINVERSE(A1:B2)	=MINVERSE(A1:B2)	a1	MINVERSE
+=MDETERM(A1:B2)	=MDETERM(A1:B2)	a1	MDETERM
+=FREQUENCY(A1:A10,B1:B3)	=FREQUENCY(A1:A10,B1:B3)	a1	FREQUENCY
+=GROWTH(A1:A10)	=GROWTH(A1:A10)	a1	GROWTH
+=TREND(A1:A10)	=TREND(A1:A10)	a1	TREND
+=LINEST(A1:A10)	=LINEST(A1:A10)	a1	LINEST
+=FORECAST.LINEAR(1,A1:A10,B1:B10)	=FORECAST.LINEAR(1,A1:A10,B1:B10)	a1	FORECAST.LINEAR
+=RANK(A1,A1:A10)	=RANK(A1,A1:A10)	a1	RANK
+=PERCENTILE.INC(A1:A10,0.5)	=PERCENTILE.INC(A1:A10,0.5)	a1	PERCENTILE.INC
+=QUARTILE.INC(A1:A10,1)	=QUARTILE.INC(A1:A10,1)	a1	QUARTILE.INC
+=MODE.SNGL(A1:A10)	=MODE.SNGL(A1:A10)	a1	MODE.SNGL
+=STDEV.S(A1:A10)	=STDEV.S(A1:A10)	a1	STDEV.S
+=STDEV.P(A1:A10)	=STDEV.P(A1:A10)	a1	STDEV.P
+=VAR.S(A1:A10)	=VAR.S(A1:A10)	a1	VAR.S
+=VAR.P(A1:A10)	=VAR.P(A1:A10)	a1	VAR.P
+=MEDIAN(A1:A10)	=MEDIAN(A1:A10)	a1	MEDIAN
+=GEOMEAN(A1:A10)	=GEOMEAN(A1:A10)	a1	GEOMEAN
+=HARMEAN(A1:A10)	=HARMEAN(A1:A10)	a1	HARMEAN
+=AVEDEV(A1:A10)	=AVEDEV(A1:A10)	a1	AVEDEV
+=DEVSQ(A1:A10)	=DEVSQ(A1:A10)	a1	DEVSQ
+=SKEW(A1:A10)	=SKEW(A1:A10)	a1	SKEW
+=KURT(A1:A10)	=KURT(A1:A10)	a1	KURT
+=LARGE(A1:A10,1)	=LARGE(A1:A10,1)	a1	LARGE
+=SMALL(A1:A10,1)	=SMALL(A1:A10,1)	a1	SMALL
+=AGGREGATE(1,0,A1:A10)	=AGGREGATE(1,0,A1:A10)	a1	AGGREGATE
+=SUBTOTAL(9,A1:A10)	=SUBTOTAL(9,A1:A10)	a1	SUBTOTAL
+=SUMIFS(A:A,B:B,1)	=SUMIFS(A:A,B:B,1)	a1	SUMIFS
+=COUNTIFS(A:A,1,B:B,2)	=COUNTIFS(A:A,1,B:B,2)	a1	COUNTIFS
+=AVERAGEIFS(A:A,B:B,1)	=AVERAGEIFS(A:A,B:B,1)	a1	AVERAGEIFS
+=MAXIFS(A:A,B:B,1)	=MAXIFS(A:A,B:B,1)	a1	MAXIFS
+=MINIFS(A:A,B:B,1)	=MINIFS(A:A,B:B,1)	a1	MINIFS
+=XMATCH(1,A1:A10)	=XMATCH(1,A1:A10)	a1	XMATCH
+=TAKE(A1:C10,2,2)	=TAKE(A1:C10,2,2)	a1	TAKE
+=DROP(A1:C10,1,1)	=DROP(A1:C10,1,1)	a1	DROP
+=CHOOSEROWS(A1:C10,1)	=CHOOSEROWS(A1:C10,1)	a1	CHOOSEROWS
+=CHOOSECOLS(A1:C10,1)	=CHOOSECOLS(A1:C10,1)	a1	CHOOSECOLS
+=VSTACK(A1:A2,B1:B2)	=VSTACK(A1:A2,B1:B2)	a1	VSTACK
+=HSTACK(A1:B1,A2:B2)	=HSTACK(A1:B1,A2:B2)	a1	HSTACK
+=TOCOL(A1:B2)	=TOCOL(A1:B2)	a1	TOCOL
+=TOROW(A1:B2)	=TOROW(A1:B2)	a1	TOROW
+=WRAPROWS(A1:A4,2)	=WRAPROWS(A1:A4,2)	a1	WRAPROWS
+=WRAPCOLS(A1:A4,2)	=WRAPCOLS(A1:A4,2)	a1	WRAPCOLS
+=SORTBY(A1:A10,B1:B10)	=SORTBY(A1:A10,B1:B10)	a1	SORTBY
+=REDUCE(0,A1:A3,LAMBDA(a,b,a+b))	=REDUCE(0,A1:A3,LAMBDA(a,b,a+b))	a1	F-3.4 REDUCE
+=SCAN(0,A1:A3,LAMBDA(a,b,a+b))	=SCAN(0,A1:A3,LAMBDA(a,b,a+b))	a1	F-3.4 SCAN
+=BYROW(A1:B2,LAMBDA(r,SUM(r)))	=BYROW(A1:B2,LAMBDA(r,SUM(r)))	a1	F-3.4 BYROW
+=BYCOL(A1:B2,LAMBDA(c,SUM(c)))	=BYCOL(A1:B2,LAMBDA(c,SUM(c)))	a1	F-3.4 BYCOL
+=MAKEARRAY(2,2,LAMBDA(r,c,r*c))	=MAKEARRAY(2,2,LAMBDA(r,c,r*c))	a1	F-3.4 MAKEARRAY
+=ISOMITTED(x)	=ISOMITTED(x)	a1	F-3.4 ISOMITTED
+=LAMBDA(x,[y],x+y)	=LAMBDA(x,[y],x+y)	a1	optional LAMBDA param in brackets (Excel 365)
+=AI(A1)	=AI(A1)	a1	AI namespace is just a call at parse time (WP-22)
+=AI.EXTRACT(A1,"name")	=AI.EXTRACT(A1,"name")	a1	dotted AI function name
+={1,2;3,4}	={1,2;3,4}	a1	F-3.1 array constant {cols ; rows}
+={1}	={1}	a1	single-element array constant
+={1,2,3}	={1,2,3}	a1	one-row array
+={1;2;3}	={1;2;3}	a1	one-column array
+={"a","b"}	={"a","b"}	a1	string array constant
+={TRUE,FALSE}	={TRUE,FALSE}	a1	boolean array constant
+={#N/A,1}	={#N/A,1}	a1	error in array constant
+={-1,2}	={-1,2}	a1	unary minus inside array constant
+={1%,2}	={1%,2}	a1	percent inside array constant
+={1.5,2.5;3.5,4.5}	={1.5,2.5;3.5,4.5}	a1	decimal array
+={1,2,3;4,5,6}	={1,2,3;4,5,6}	a1	2x3 array
+=SUM({1,2,3})	=SUM({1,2,3})	a1	array constant as function arg
+={1,2}+1	={1,2}+1	a1	array constant in arithmetic
+={#DIV/0!,#REF!}	={#DIV/0!,#REF!}	a1	two error literals in an array
+={""}	={""}	a1	empty string in array
+={+1}	={+1}	a1	unary plus in array constant
+=A1:B2 B2:C3	=A1:B2 B2:C3	a1	F-3.1 whitespace is intersection
+=A:A 1:1	=A:A 1:1	a1	intersect whole column with whole row (Excel: the cell)
+=(A1,C3)	=(A1,C3)	a1	F-3.1 comma union; parens required as a single arg/value
+=A1,C3	=A1,C3	a1	top-level union operator
+=SUM(A1:B2 B2:C3)	=SUM(A1:B2 B2:C3)	a1	intersection as a single function argument
+=SUM((A1,C3))	=SUM((A1,C3))	a1	union passed to SUM via extra parens
+=A1:C3 B2	=A1:C3 B2	a1	range intersect cell
+=(A1:B1,A2:B2)	=(A1:B1,A2:B2)	a1	union of two ranges
+=A1:B2 C1:D2 E1	=A1:B2 C1:D2 E1	a1	chained intersection, left-assoc
+=(A1,B1,C1)	=(A1,B1,C1)	a1	n-ary union
+=Table1[Col]	=Table1[Col]	a1	F-1.4 structured Table[Column]
+=Table1[[#Headers],[Col]]	=Table1[[#Headers],[Col]]	a1	F-1.4 Table[[#Headers],[Col]]
+=[@Col]	=[@Col]	a1	F-1.4 [@Col] this-row unqualified
+=Sales[Amount]	=Sales[Amount]	a1	F-1.4 Sales[Amount]
+=Sales[@Amount]	=Sales[@Amount]	a1	F-1.4 Sales[@Amount]
+=Table1[[#All],[Col]]	=Table1[[#All],[Col]]	a1	structured #All + column
+=Table1[[#Data],[Col]]	=Table1[[#Data],[Col]]	a1	structured #Data + column
+=Table1[[#Totals],[Col]]	=Table1[[#Totals],[Col]]	a1	structured #Totals + column
+=Table1[[#This Row],[Col]]	=Table1[[#This Row],[Col]]	a1	structured #This Row + column
+=Table1[[Col1]:[Col2]]	=Table1[[Col1]:[Col2]]	a1	structured column span
+=Table1[[#Headers],[Col1]:[Col2]]	=Table1[[#Headers],[Col1]:[Col2]]	a1	headers over a column span
+=Table1[#All]	=Table1[#All]	a1	single-bracket #All specifier
+=Table1[[#All]]	=Table1[[#All]]	a1	double-bracket #All specifier
+=[Col]	=[Col]	a1	unqualified column (formula in the table)
+=Table1[]	=Table1[]	a1	Table[] means the data body
+=Sales[[#Headers],[Amount]]	=Sales[[#Headers],[Amount]]	a1	Sales headers Amount
+=Table1[[#Data],[Col1]:[Col2]]	=Table1[[#Data],[Col1]:[Col2]]	a1	data body column span
+=Table[['# of items']]	=Table[['# of items']]	a1	column name with # is quoted with '
+=SUM(Table1[Col])	=SUM(Table1[Col])	a1	structured ref as function arg
+=Table1[[#Totals]]	=Table1[[#Totals]]	a1	totals row
+=[@]	=[@]	a1	[@] this-row whole record
+=Table[@]	=Table[@]	a1	Table[@] this-row whole record
+=Table1[[Col]]	=Table1[[Col]]	a1	double-bracket single column
+=tbl[[#This Row]]	=tbl[[#This Row]]	a1	this-row specifier only
+=Table1[Col]*2	=Table1[Col]*2	a1	structured ref in arithmetic
+=A1#	=A1#	a1	F-3.2 spill operator postfix
+=A1:B2#	=A1:B2#	a1	spill of a range
+=@A1:A10	=@A1:A10	a1	F-3.2 implicit-intersection operator
+=@SUM(A1:B1)	=@SUM(A1:B1)	a1	@ of a function result
+=SUM(A1#)	=SUM(A1#)	a1	spill as function argument
+=A1#+1	=A1#+1	a1	spill then arithmetic
+=@A1	=@A1	a1	@ of a single cell
+=Sheet1!A1#	=Sheet1!A1#	a1	sheet-qualified spill
+=Table1[Col]#	=Table1[Col]#	a1	spill of a structured ref
+=@Table1[Col]	=@Table1[Col]	a1	implicit intersection of a structured ref
+=A1#*B1#	=A1#*B1#	a1	two spill refs
+=(A1:B2)#	=(A1:B2)#	a1	spill of a parenthesized range
+= 1 + 2	=1+2	a1	spaces around binary + are dropped in canonical print
+=SUM( A1 )	=SUM(A1)	a1	spaces inside call parens are dropped
+=SUM(A1, B1)	=SUM(A1,B1)	a1	space after argument comma is dropped
+= (1) 	=(1)	a1	outer whitespace dropped
+=A1 + B1 * C1	=A1+B1*C1	a1	spaces around mixed arithmetic dropped
+=1  +   2	=1+2	a1	runs of spaces around operators dropped
+=SUM(A1:B2)	=SUM(A1:B2)	a1	no space around colon
+=A1: B2	=A1:B2	a1	space after colon is not intersection and is dropped
+=A1 :B2	=A1:B2	a1	space before colon dropped
+=- 1	=-1	a1	space after unary minus dropped
+1+2	=1+2	a1	leading = is optional at parse; print always has =
+A1	=A1	a1	bare cell; print adds =
+SUM(A1)	=SUM(A1)	a1	bare call; print adds =
+=(A1)	=(A1)	a1	redundant parens are kept so the editor can round-trip grouping
+=((1))	=((1))	a1	nested redundant parens kept
+=(1+2)+(3+4)	=(1+2)+(3+4)	a1	parens around sums
+=((1+2)*3)	=((1+2)*3)	a1	nested grouping
+=(A1:B2)	=(A1:B2)	a1	parenthesized range
+=R1C1	=R1C1	r1c1	F-3.2 absolute R1C1 cell (base A1)
+=R[1]C[1]	=R[1]C[1]	r1c1	F-3.2 relative R1C1 offset from A1 → B2
+=RC	=RC	r1c1	relative 'this cell' in R1C1
+=R[1]C	=R[1]C	r1c1	relative row down, same column (from A1)
+=RC[1]	=RC[1]	r1c1	relative column right (from A1)
+=R1C	=R1C	r1c1	absolute row, relative column
+=RC1	=RC1	r1c1	relative row, absolute column
+=R1C1:R2C2	=R1C1:R2C2	r1c1	R1C1 range
+=RC:R[1]C[1]	=RC:R[1]C[1]	r1c1	relative R1C1 range from A1
+=C[1]	=C[1]	r1c1	R1C1 whole-column relative right
+=R[1]	=R[1]	r1c1	R1C1 whole-row relative
+=R1	=R1	r1c1	R1C1 whole absolute row 1
+=C1	=C1	r1c1	R1C1 whole absolute column 1
+=Sheet1!R1C1	=Sheet1!R1C1	r1c1	sheet-qualified R1C1
+=R1C1+R1C2	=R1C1+R1C2	r1c1	R1C1 arithmetic
+=SUM(R1C1:R10C1)	=SUM(R1C1:R10C1)	r1c1	R1C1 range in SUM
+=R[0]C[0]	=RC	r1c1	R[0]C[0] canonicalizes to RC
+=R[2]C[3]	=R[2]C[3]	r1c1	positive row and col offset from A1
+=A1+B1+C1	=A1+B1+C1	a1	sum via operators
+=$A$1+A1	=$A$1+A1	a1	mixed abs and relative
+=A1*2+B1/4	=A1*2+B1/4	a1	mixed * / +
+=IF(A1>0,A1,-A1)	=IF(A1>0,A1,-A1)	a1	ABS-like IF
+=IF(A1="",0,A1)	=IF(A1="",0,A1)	a1	blank-as-zero IF
+=SUM(A:A)/COUNT(A:A)	=SUM(A:A)/COUNT(A:A)	a1	whole-column aggregation
+=A1^2+B1^2	=A1^2+B1^2	a1	pythagorean-like
+=(A1+B1)/(C1-D1)	=(A1+B1)/(C1-D1)	a1	parenthesized division
+=A1&"-"&B1	=A1&"-"&B1	a1	concat with separator
+=LEFT(A1,FIND(" ",A1)-1)	=LEFT(A1,FIND(" ",A1)-1)	a1	nested text extract
+=IFERROR(A1/B1,0)	=IFERROR(A1/B1,0)	a1	guarded division
+=SUMIFS(C:C,A:A,E1,B:B,E2)	=SUMIFS(C:C,A:A,E1,B:B,E2)	a1	two-criterion SUMIFS
+=INDEX(A:A,MATCH(E1,B:B,0))	=INDEX(A:A,MATCH(E1,B:B,0))	a1	INDEX/MATCH
+=XLOOKUP(E1,A:A,B:B,"",0)	=XLOOKUP(E1,A:A,B:B,"",0)	a1	XLOOKUP with if-not-found
+=FILTER(A1:C10,A1:A10<>"")	=FILTER(A1:C10,A1:A10<>"")	a1	FILTER non-blank
+=SORT(UNIQUE(A1:A10))	=SORT(UNIQUE(A1:A10))	a1	SORT of UNIQUE
+=LET(x,A1,y,B1,x+y)	=LET(x,A1,y,B1,x+y)	a1	LET two bindings
+=A1+Sheet1!B1	=A1+Sheet1!B1	a1	local plus sheet-qualified
+=SUM(Sheet1:Sheet3!A1)	=SUM(Sheet1:Sheet3!A1)	a1	3-D SUM
+=Revenue*1.1	=Revenue*1.1	a1	name times literal
+=Table1[Col]+Table1[Other]	=Table1[Col]+Table1[Other]	a1	two structured cols
+=@A1:C1+@A2:C2	=@A1:C1+@A2:C2	a1	two implicit intersections
+=A1#+B1#	=A1#+B1#	a1	spill addition
+={1,2;3,4}*{5,6;7,8}	={1,2;3,4}*{5,6;7,8}	a1	array-constant product
+=SUM(A1:B2 C2:D3)	=SUM(A1:B2 C2:D3)	a1	intersection inside SUM
+=(A1,B1)+0	=(A1,B1)+0	a1	union in arithmetic (eval is WP-04)
+=IF(AND(A1>0,B1>0),A1+B1,0)	=IF(AND(A1>0,B1>0),A1+B1,0)	a1	AND inside IF
+=1+2+3+4+5+6+7+8+9+10	=1+2+3+4+5+6+7+8+9+10	a1	long additive chain
+=((((((1))))))	=((((((1))))))	a1	deep parens still under depth limit
+=SUM(1,2,3,4,5,6,7,8,9,10)	=SUM(1,2,3,4,5,6,7,8,9,10)	a1	ten-arg SUM
+=A1<=B1	=A1<=B1	a1	ref comparison <=
+=A1>=B1	=A1>=B1	a1	ref comparison >=
+=A1<>B1	=A1<>B1	a1	ref comparison <>
+="x"&A1&"y"	="x"&A1&"y"	a1	concat refs and strings
+= -A1	=-A1	a1	unary minus of a ref; space dropped
+=+$A$1	=+$A$1	a1	unary plus of an absolute ref
+=A1%	=A1%	a1	percent of a ref
+=N("1")+1	=N("1")+1	a1	N of numeric text plus 1
+=DATE(YEAR(A1),MONTH(A1),1)	=DATE(YEAR(A1),MONTH(A1),1)	a1	first of month
+=IF(A1,B1,IF(C1,D1,E1))	=IF(A1,B1,IF(C1,D1,E1))	a1	nested IF
+=SWITCH(TRUE,A1>0,"pos",A1<0,"neg","zero")	=SWITCH(TRUE,A1>0,"pos",A1<0,"neg","zero")	a1	SWITCH TRUE pattern
+=LET(a,1,b,2,c,3,a+b+c)	=LET(a,1,b,2,c,3,a+b+c)	a1	LET three bindings
+=LAMBDA(x,LAMBDA(y,x+y))	=LAMBDA(x,LAMBDA(y,x+y))	a1	nested LAMBDA
+=MAP(SEQUENCE(3),LAMBDA(x,x^2))	=MAP(SEQUENCE(3),LAMBDA(x,x^2))	a1	MAP SEQUENCE LAMBDA
+=A1:B2:C3:D4	=A1:B2:C3:D4	a1	chained colon
+='Cost Model'!$B$2	='Cost Model'!$B$2	a1	quoted sheet + absolute cell
+=Sheet1:Sheet3!$A$1:$B$2	=Sheet1:Sheet3!$A$1:$B$2	a1	3-D absolute range
+=[Book.xlsx]Data!A1:B2	=[Book.xlsx]Data!A1:B2	a1	external workbook range
+=SUM([Book.xlsx]Sheet1!A:A)	=SUM([Book.xlsx]Sheet1!A:A)	a1	external whole column in SUM
+=Table1[[#Headers]]	=Table1[[#Headers]]	a1	headers row only
+=Table1[Col]*[@Qty]	=Table1[Col]*[@Qty]	a1	column times this-row
+=IF([@Flag],[@Amt],0)	=IF([@Flag],[@Amt],0)	a1	this-row fields in IF
+=A1 #	=A1#	a1	space before spill # is dropped
+= @ A1:A10	=@A1:A10	a1	spaces around @ dropped
+=((((A1))))	=((((A1))))	a1	four-deep parens on a ref
+=1*(2*(3*(4)))	=1*(2*(3*(4)))	a1	nested multiply grouping
+=TRUE+FALSE	=TRUE+FALSE	a1	booleans in arithmetic (coerce is WP-04)
+=#N/A+1	=#N/A+1	a1	error literal in arithmetic (propagates at eval)
+=""&A1	=""&A1	a1	empty string concat
+=A1&""	=A1&""	a1	concat empty string on the right
+=0.0	=0	a1	0.0 Display is 0
+=1.0	=1	a1	1.0 Display is 1
+=.0	=0	a1	leading-dot zero
+=1e0	=1	a1	1e0 Display is 1
+=2.0e1	=20	a1	2.0e1 Display is 20
+=SUM(A1:B1 A1)	=SUM(A1:B1 A1)	a1	intersection of a range and a cell as arg
+=A:C 5:5	=A:C 5:5	a1	intersect columns A:C with row 5
+=Sheet1!A1:Sheet1!B2	=Sheet1!A1:B2	a1	repeated sheet on both corners canonicalizes to one prefix
+=$AA$10:$ZZ$20	=$AA$10:$ZZ$20	a1	two-letter absolute range
+=ABC123	=ABC123	a1	ABC123 is a valid cell (col ABC, row 123)
+=FOO	=FOO	a1	FOO is a name (not a complete A1 cell)
+=R	=R	a1	single letter R is a name in A1 (also column R if followed by :)
+=C	=C	a1	single letter C is a name in A1
+=R:R	=R:R	a1	whole column R
+=C:C	=C:C	a1	whole column C
+=AA:ZZ	=AA:ZZ	a1	whole-column span AA:ZZ
+=10:20	=10:20	a1	whole-row span 10:20
+=SUM(1:1,A:A)	=SUM(1:1,A:A)	a1	whole row and whole column as args
+=INDEX(A:C,5,2)	=INDEX(A:C,5,2)	a1	INDEX into whole columns
+=OFFSET($A$1,1,1,1,1)	=OFFSET($A$1,1,1,1,1)	a1	OFFSET from absolute origin
+=INDIRECT("R1C1",FALSE)	=INDIRECT("R1C1",FALSE)	a1	INDIRECT R1C1 style flag
+=CELL("contents",A1)	=CELL("contents",A1)	a1	CELL contents
+=INFO("numfile")	=INFO("numfile")	a1	INFO numfile
+=TODAY()+NOW()	=TODAY()+NOW()	a1	two volatiles
+=RAND()*RAND()	=RAND()*RAND()	a1	product of volatiles
+=IF(RAND()<0.5,1,0)	=IF(RAND()<0.5,1,0)	a1	RAND in a predicate
+=A1+A2+A3+A4+A5	=A1+A2+A3+A4+A5	a1	five-cell sum via +
+=B1*C1*D1	=B1*C1*D1	a1	three-way product
+=1<2<3	=1<2<3	a1	chained < is left-assoc (eval is WP-04)
+=1<>1<>FALSE	=1<>1<>FALSE	a1	chained <>
+="A"&1&TRUE	="A"&1&TRUE	a1	concat mixed types
+={1;2;3;4}	={1;2;3;4}	a1	4x1 array
+={1,2,3,4}	={1,2,3,4}	a1	1x4 array
+={TRUE;FALSE;TRUE}	={TRUE;FALSE;TRUE}	a1	boolean column array
+=SUM({1,2;3,4})	=SUM({1,2;3,4})	a1	SUM of 2x2 array constant
+=MMULT({1,2;3,4},{1;1})	=MMULT({1,2;3,4},{1;1})	a1	MMULT of array constants
+=A1  B1	=A1 B1	a1	multiple spaces collapse to one intersection space
+=( A1 )	=(A1)	a1	spaces inside parens dropped
+=SUM( A1 , B1 )	=SUM(A1,B1)	a1	spaces around args dropped
+=+'Cost Model'!B2	=+'Cost Model'!B2	a1	unary plus of a quoted-sheet ref
+=-Table1[Col]	=-Table1[Col]	a1	unary minus of a structured ref
+=Table1[Col]%	=Table1[Col]%	a1	percent of a structured ref
+=@A:A	=@A:A	a1	implicit intersection of a whole column
+=A:A#	=A:A#	a1	spill of a whole column (parse-valid; eval may #REF!)
+=Revenue#	=Revenue#	a1	spill of a defined name
+=@Revenue	=@Revenue	a1	@ of a defined name
+='O''Brien'!A1:B2	='O''Brien'!A1:B2	a1	apostrophe sheet range
+=Sheet1:Sheet2!A:A	=Sheet1:Sheet2!A:A	a1	3-D whole column
+=Sheet1:Sheet2!1:1	=Sheet1:Sheet2!1:1	a1	3-D whole row
+=[1]Sheet1!A1	=[1]Sheet1!A1	a1	indexed external workbook [1] as in OOXML
+=SUM(A1,B1,C1,D1,E1)	=SUM(A1,B1,C1,D1,E1)	a1	five-arg SUM
+=MAX(1,2,3,4,5,6)	=MAX(1,2,3,4,5,6)	a1	six-arg MAX
+=MIN(-1,-2,-3)	=MIN(-1,-2,-3)	a1	MIN of unary minuses
+=AND(TRUE,TRUE,TRUE)	=AND(TRUE,TRUE,TRUE)	a1	AND three TRUE
+=OR(FALSE,FALSE,TRUE)	=OR(FALSE,FALSE,TRUE)	a1	OR mix
+=XOR(TRUE,FALSE)	=XOR(TRUE,FALSE)	a1	XOR
+=NOT(NOT(TRUE))	=NOT(NOT(TRUE))	a1	double NOT
+=IF(1,IF(2,IF(3,4,5),6),7)	=IF(1,IF(2,IF(3,4,5),6),7)	a1	triple nested IF
+=1+2*3-4/5^6	=1+2*3-4/5^6	a1	full arithmetic precedence chain
+=(1+2)*(3+4)/(5+6)	=(1+2)*(3+4)/(5+6)	a1	grouped arithmetic
+=A$1+B$1+C$1	=A$1+B$1+C$1	a1	fill-right-stable rows
+=$A1+$A2+$A3	=$A1+$A2+$A3	a1	fill-down-stable column
+=$A$1+$B$2	=$A$1+$B$2	a1	two absolute cells
+=Z99	=Z99	a1	Z99
+=AA100	=AA100	a1	AA100
+=AB10	=AB10	a1	AB10
+=$Z$99	=$Z$99	a1	absolute Z99
+=A1:Z99	=A1:Z99	a1	A1:Z99 range
+=B:D	=B:D	a1	columns B:D
+=2:4	=2:4	a1	rows 2:4
+=$B:$D	=$B:$D	a1	absolute columns B:D
+=$2:$4	=$2:$4	a1	absolute rows 2:4
+=Sheet2!B2	=Sheet2!B2	a1	Sheet2!B2
+=Sheet2!B2:C3	=Sheet2!B2:C3	a1	Sheet2 range
+='A B'!A1	='A B'!A1	a1	space in sheet name
+='A-B'!A1	='A-B'!A1	a1	hyphen in sheet name
+='A,B'!A1	='A,B'!A1	a1	comma in sheet name
+='A+B'!A1	='A+B'!A1	a1	plus in sheet name
+=SUMIF(A1:A10,">="&B1)	=SUMIF(A1:A10,">="&B1)	a1	SUMIF criteria via concat
+=COUNTIF(A1:A10,"*")	=COUNTIF(A1:A10,"*")	a1	COUNTIF wildcard
+=AVERAGEIF(A1:A10,">0",B1:B10)	=AVERAGEIF(A1:A10,">0",B1:B10)	a1	AVERAGEIF
+=HSTACK(A1#,B1#)	=HSTACK(A1#,B1#)	a1	HSTACK of spills
+=VSTACK(A1#,B1#)	=VSTACK(A1#,B1#)	a1	VSTACK of spills
+=TAKE(A1#,3)	=TAKE(A1#,3)	a1	TAKE of a spill
+=DROP(A1#,-1)	=DROP(A1#,-1)	a1	DROP last row of a spill
+=CHOOSE(A1,B1,C1,D1)	=CHOOSE(A1,B1,C1,D1)	a1	CHOOSE index from a cell
+=IFS(A1<0,"n",A1=0,"z",TRUE,"p")	=IFS(A1<0,"n",A1=0,"z",TRUE,"p")	a1	IFS with TRUE catch-all
+=LET(x,A1#,SUM(x))	=LET(x,A1#,SUM(x))	a1	LET binding a spill
+=LAMBDA(x,y,x/y)(A1,B1)	=LAMBDA(x,y,x/y)(A1,B1)	a1	immediately-invoked LAMBDA
+=(LAMBDA(x,x+1))(2)	=(LAMBDA(x,x+1))(2)	a1	parenthesized LAMBDA then call
+=LET(f,LAMBDA(x,x+1),f(2))	=LET(f,LAMBDA(x,x+1),F(2))	a1	named LAMBDA invoked as f(2); call names are upper-cased in canonical print
+=A1+1	=A1+1	a1	cell A1 plus 1 (F-3.2 relative)
+=SUM(A:A)	=SUM(A:A)	a1	SUM whole column A
+=B1+1	=B1+1	a1	cell B1 plus 1 (F-3.2 relative)
+=$B$1	=$B$1	a1	absolute $B$1
+=SUM(B:B)	=SUM(B:B)	a1	SUM whole column B
+=C1+1	=C1+1	a1	cell C1 plus 1 (F-3.2 relative)
+=$C$1	=$C$1	a1	absolute $C$1
+=SUM(C:C)	=SUM(C:C)	a1	SUM whole column C
+=D1+1	=D1+1	a1	cell D1 plus 1 (F-3.2 relative)
+=$D$1	=$D$1	a1	absolute $D$1
+=SUM(D:D)	=SUM(D:D)	a1	SUM whole column D
+=E1+1	=E1+1	a1	cell E1 plus 1 (F-3.2 relative)
+=$E$1	=$E$1	a1	absolute $E$1
+=SUM(E:E)	=SUM(E:E)	a1	SUM whole column E
+=1+1	=1+1	a1	integer 1 plus itself
+=2+2	=2+2	a1	integer 2 plus itself
+=2%	=2%	a1	percent of 2
+=3+3	=3+3	a1	integer 3 plus itself
+=3%	=3%	a1	percent of 3
+=4+4	=4+4	a1	integer 4 plus itself
+=4%	=4%	a1	percent of 4
+=5+5	=5+5	a1	integer 5 plus itself
+=6+6	=6+6	a1	integer 6 plus itself
+=6%	=6%	a1	percent of 6
+=7+7	=7+7	a1	integer 7 plus itself
+=7%	=7%	a1	percent of 7
+=8+8	=8+8	a1	integer 8 plus itself
+=8%	=8%	a1	percent of 8
+=9+9	=9+9	a1	integer 9 plus itself
+=9%	=9%	a1	percent of 9
+=10+10	=10+10	a1	integer 10 plus itself
+=10%	=10%	a1	percent of 10
+=A2	=A2	a1	F-3.2 abs flags col_abs=False row_abs=False
+=$A2	=$A2	a1	F-3.2 abs flags col_abs=True row_abs=False
+=A$2	=A$2	a1	F-3.2 abs flags col_abs=False row_abs=True
+=$A$2	=$A$2	a1	F-3.2 abs flags col_abs=True row_abs=True
+=B3	=B3	a1	F-3.2 abs flags col_abs=False row_abs=False
+=$B3	=$B3	a1	F-3.2 abs flags col_abs=True row_abs=False
+=B$3	=B$3	a1	F-3.2 abs flags col_abs=False row_abs=True
+=$B$3	=$B$3	a1	F-3.2 abs flags col_abs=True row_abs=True
+=SUM(MAX(1,2),MIN(3,4))	=SUM(MAX(1,2),MIN(3,4))	a1	SUM of MAX and MIN
+=MAX(SUM(A1:A2),SUM(B1:B2))	=MAX(SUM(A1:A2),SUM(B1:B2))	a1	MAX of two SUMs
+=IF(SUM(A1:A10)>0,AVERAGE(A1:A10),NA())	=IF(SUM(A1:A10)>0,AVERAGE(A1:A10),NA())	a1	IF SUM AVERAGE NA
+=ROUND(SUM(A1:A10)/COUNT(A1:A10),2)	=ROUND(SUM(A1:A10)/COUNT(A1:A10),2)	a1	rounded mean
+=IFERROR(VLOOKUP(E1,A1:B10,2,FALSE),"")	=IFERROR(VLOOKUP(E1,A1:B10,2,FALSE),"")	a1	guarded VLOOKUP
+=INDEX(A1:C10,MATCH(1,A1:A10,0),MATCH("x",A1:C1,0))	=INDEX(A1:C10,MATCH(1,A1:A10,0),MATCH("x",A1:C1,0))	a1	two-way INDEX MATCH
+=SUMPRODUCT((A1:A10=E1)*(B1:B10))	=SUMPRODUCT((A1:A10=E1)*(B1:B10))	a1	SUMPRODUCT boolean mask
+=N(A1=B1)	=N(A1=B1)	a1	N of a comparison
+=--(A1=B1)	=--(A1=B1)	a1	double unary minus coerce (Excel idiom)
+=1/A1	=1/A1	a1	reciprocal
+=A1/(B1/C1)	=A1/(B1/C1)	a1	nested division
+=A1^B1^C1	=A1^B1^C1	a1	left-assoc power of refs
+="The value is "&A1	="The value is "&A1	a1	prefix concat
+=TEXT(A1,"yyyy-mm-dd")	=TEXT(A1,"yyyy-mm-dd")	a1	date format TEXT
+=VALUE(TEXT(A1,"0"))	=VALUE(TEXT(A1,"0"))	a1	VALUE of TEXT
+=DATE(2020,2,29)	=DATE(2020,2,29)	a1	leap-day DATE (eval is WP-06)
+=DATE(1900,2,29)	=DATE(1900,2,29)	a1	Excel leap-year quirk date at parse
+=TIME(23,59,59)	=TIME(23,59,59)	a1	TIME near midnight
+=NOW()-TODAY()	=NOW()-TODAY()	a1	time-of-day via volatiles
+=YEAR(TODAY())	=YEAR(TODAY())	a1	YEAR of TODAY
+=EOMONTH(TODAY(),-1)	=EOMONTH(TODAY(),-1)	a1	EOMONTH last month
+=WORKDAY.INTL(TODAY(),1)	=WORKDAY.INTL(TODAY(),1)	a1	WORKDAY.INTL
+=NETWORKDAYS.INTL(A1,B1)	=NETWORKDAYS.INTL(A1,B1)	a1	NETWORKDAYS.INTL
+=SEQUENCE(5)&""	=SEQUENCE(5)&""	a1	SEQUENCE concat empty (array eval WP-04)
+=UNIQUE(SORT(A1:A10))	=UNIQUE(SORT(A1:A10))	a1	UNIQUE of SORT
+=SORT(A1:B10,2,-1)	=SORT(A1:B10,2,-1)	a1	SORT by col 2 desc
+=FILTER(A1:B10,B1:B10>AVERAGE(B1:B10))	=FILTER(A1:B10,B1:B10>AVERAGE(B1:B10))	a1	FILTER above average
+=XLOOKUP(A1,B:B,C:C,,-1)	=XLOOKUP(A1,B:B,C:C,,-1)	a1	XLOOKUP omitted if-not-found
+=XMATCH(A1,B:B,0,-1)	=XMATCH(A1,B:B,0,-1)	a1	XMATCH exact last-to-first
+=TAKE(DROP(A1:C10,1),,1)	=TAKE(DROP(A1:C10,1),,1)	a1	TAKE/DROP omitted args
+=CHOOSEROWS(A1:C10,1,3,5)	=CHOOSEROWS(A1:C10,1,3,5)	a1	CHOOSEROWS several
+=WRAPROWS(TOCOL(A1:B2),2)	=WRAPROWS(TOCOL(A1:B2),2)	a1	WRAPROWS of TOCOL
+=HSTACK(VSTACK(A1),VSTACK(B1))	=HSTACK(VSTACK(A1),VSTACK(B1))	a1	HSTACK of VSTACKs
+=MAKEARRAY(2,2,LAMBDA(r,c,r+c))	=MAKEARRAY(2,2,LAMBDA(r,c,r+c))	a1	MAKEARRAY sum of indices
+=BYROW(A1:C3,LAMBDA(r,AVERAGE(r)))	=BYROW(A1:C3,LAMBDA(r,AVERAGE(r)))	a1	BYROW AVERAGE
+=BYCOL(A1:C3,LAMBDA(c,MAX(c)))	=BYCOL(A1:C3,LAMBDA(c,MAX(c)))	a1	BYCOL MAX
+=SCAN(0,A1:A5,LAMBDA(acc,x,acc+x))	=SCAN(0,A1:A5,LAMBDA(acc,x,acc+x))	a1	SCAN running sum
+=REDUCE(1,A1:A5,LAMBDA(acc,x,acc*x))	=REDUCE(1,A1:A5,LAMBDA(acc,x,acc*x))	a1	REDUCE product
+=MAP(A1:A3,B1:B3,LAMBDA(a,b,a+b))	=MAP(A1:A3,B1:B3,LAMBDA(a,b,a+b))	a1	MAP two arrays
+=ISOMITTED([y])	=ISOMITTED([y])	a1	ISOMITTED of optional param
+=LAMBDA([x],IF(ISOMITTED(x),0,x))	=LAMBDA([x],IF(ISOMITTED(x),0,x))	a1	optional LAMBDA param default 0
+=LET(_x,1,_x+_x)	=LET(_x,1,_x+_x)	a1	LET binding underscore name
+=SUM(Table1[[#Data],[Col]])	=SUM(Table1[[#Data],[Col]])	a1	SUM of table data column
+=COUNTA(Table1[#All])	=COUNTA(Table1[#All])	a1	COUNTA of #All
+=Sales[[#This Row],[Amount]]+Sales[[#This Row],[Tax]]	=Sales[[#This Row],[Amount]]+Sales[[#This Row],[Tax]]	a1	this-row amount plus tax
+=[@[Col Name]]	=[@[Col Name]]	a1	this-row column with space
+=Table1[[Col Name]]	=Table1[[Col Name]]	a1	column name with space needs double brackets
+=Table1[['#Qty']]	=Table1[['#Qty']]	a1	column name starting with #
+=Table1[['[Col]']]	=Table1[['[Col]']]	a1	column name with brackets quoted
+=R[1]C[0]	=R[1]C	r1c1	C[0] canonicalizes away
+=R[0]C[1]	=RC[1]	r1c1	R[0] canonicalizes away
+=R[1]C[1]	=R[1]C[1]	r1c1	diagonal relative from A1
+=SUM(RC:R[9]C)	=SUM(RC:R[9]C)	r1c1	this cell down 9 rows
+=R1C1:R[1]C	=R1C1:R[1]C	r1c1	mixed abs/rel range staying in grid
+='My Sheet'!R[1]C[1]	='My Sheet'!R[1]C[1]	r1c1	quoted sheet R1C1
+=IF(RC>0,R[1]C,0)	=IF(RC>0,R[1]C,0)	r1c1	R1C1 IF with in-grid relative
+=R1C1#	=R1C1#	r1c1	R1C1 spill
+=@R1C1:R10C1	=@R1C1:R10C1	r1c1	R1C1 implicit intersection
+=R1:R10	=R1:R10	r1c1	R1C1 whole-row span
+=C1:C3	=C1:C3	r1c1	R1C1 whole-column span
+=--5%	=--5%	a1	double unary then percent
+=+5%	=+5%	a1	unary plus percent
+=5%^2	=5%^2	a1	(5%)^2 because % > ^
+=-2^3	=-2^3	a1	Excel evaluates as -(2^3) = -8 (engine, not MS table)
+=2^-3	=2^-3	a1	2 to the power of -3
+=2^3^2^2	=2^3^2^2	a1	left-assoc tower (((((2^3)^2)^2))
+=(2^3)^2	=(2^3)^2	a1	explicit left-assoc power grouping
+=2^(3^2)	=2^(3^2)	a1	right-assoc power via parens
+=A1=B1=C1	=A1=B1=C1	a1	chained equality
+=A1<B1<=C1	=A1<B1<=C1	a1	mixed comparison chain
+=1+2=3*1	=1+2=3*1	a1	comparison vs + and *
+="a"&"b"="ab"	="a"&"b"="ab"	a1	& binds tighter than =
+=TRUE=1	=TRUE=1	a1	bool vs number comparison (coerce WP-04)
+=FALSE=0	=FALSE=0	a1	FALSE vs 0
+=""""	=""""	a1	string whose value is one quote
+="hello ""world"""	="hello ""world"""	a1	quoted word inside a string
+="tab is not a tab"	="tab is not a tab"	a1	the letters t-a-b inside a string
+="#REF!"	="#REF!"	a1	error-looking string
+="=A1"	="=A1"	a1	formula-looking string
+=Sheet10!A1	=Sheet10!A1	a1	sheet name with digits
+=Sheet_1!A1	=Sheet_1!A1	a1	sheet name with underscore
+='Sheet 10'!A1	='Sheet 10'!A1	a1	quoted sheet with space and digits
+='True'!A1	='True'!A1	a1	sheet named True is quoted
+='A1'!B2	='A1'!B2	a1	sheet name that looks like a cell must be quoted
+=Data!Revenue	=Data!Revenue	a1	sheet-qualified name
+=Data!A1+Data!B1	=Data!A1+Data!B1	a1	two sheet-qualified cells
+=SUM(Data!A1,Data!B1)	=SUM(Data!A1,Data!B1)	a1	sheet-qualified args
+=SUM(Sheet1:Sheet3!A1:B2)	=SUM(Sheet1:Sheet3!A1:B2)	a1	3-D range in SUM
+=Sheet1:Sheet3!A1+Sheet1:Sheet3!B1	=Sheet1:Sheet3!A1+Sheet1:Sheet3!B1	a1	two 3-D refs
+=A1:C3 B2:D4 C3	=A1:C3 B2:D4 C3	a1	three-way intersection
+=(A1:B2 A2:C3)	=(A1:B2 A2:C3)	a1	parenthesized intersection
+=SUM(A:A 1:1)	=SUM(A:A 1:1)	a1	intersect whole col and row as arg
+=A1,A2,A3	=A1,A2,A3	a1	top-level 3-area union
+=(A:A,1:1)	=(A:A,1:1)	a1	union of whole col and whole row
+=SUM((A1,A3,A5))	=SUM((A1,A3,A5))	a1	union of three cells in SUM
+=MyName	=MyName	a1	Pascal-case name
+=myName	=myName	a1	camelCase name preserved
+=MYNAME	=MYNAME	a1	upper-case name preserved
+=n	=n	a1	single-letter name n (not a cell)
+=zz	=zz	a1	two-letter name zz (column ZZ would need a row)
+=zzz	=zzz	a1	three-letter name
+=foo1bar	=foo1bar	a1	name with digits in the middle
+=_xlpm.x	=_xlpm.x	a1	Excel lambda-parameter prefix as a name
+=Hello.World	=Hello.World	a1	dotted name not a call
+=π	=π	a1	Unicode name (Excel allows letters beyond ASCII)
+=LOG(100)	=LOG(100)	a1	LOG function
+=INT(A1)	=INT(A1)	a1	INT of a ref
+=VALUE(A1)	=VALUE(A1)	a1	VALUE of a ref
+=T("x")	=T("x")	a1	T of a string
+=N(TRUE)	=N(TRUE)	a1	N of TRUE
+=TYPE(#N/A)	=TYPE(#N/A)	a1	TYPE of an error
+=ERROR.TYPE(#NULL!)	=ERROR.TYPE(#NULL!)	a1	ERROR.TYPE #NULL!
+=NA()+0	=NA()+0	a1	NA() in arithmetic
+=PI()*2	=PI()*2	a1	2π
+=SQRT(A1^2+B1^2)	=SQRT(A1^2+B1^2)	a1	hypot via SQRT
+=ABS(A1-B1)	=ABS(A1-B1)	a1	ABS of a difference
+=SIGN(A1)*ABS(A1)	=SIGN(A1)*ABS(A1)	a1	SIGN * ABS
+=MOD(A1,B1)	=MOD(A1,B1)	a1	MOD of refs
+=QUOTIENT(A1,B1)	=QUOTIENT(A1,B1)	a1	QUOTIENT
+=MROUND(A1,5)	=MROUND(A1,5)	a1	MROUND
+=CEILING.MATH(A1)	=CEILING.MATH(A1)	a1	CEILING.MATH
+=FLOOR.MATH(A1)	=FLOOR.MATH(A1)	a1	FLOOR.MATH
+=ISO.CEILING(A1,1)	=ISO.CEILING(A1,1)	a1	ISO.CEILING
+=EVEN(A1)	=EVEN(A1)	a1	EVEN
+=ODD(A1)	=ODD(A1)	a1	ODD
+=TRUNC(A1,2)	=TRUNC(A1,2)	a1	TRUNC
+=ROUND(A1,)	=ROUND(A1,)	a1	ROUND omitted num_digits
+=POWER(A1,)	=POWER(A1,)	a1	POWER omitted exponent
+=LOG(A1,)	=LOG(A1,)	a1	LOG omitted base
+=SUBSTITUTE(A1,"a","b",)	=SUBSTITUTE(A1,"a","b",)	a1	SUBSTITUTE omitted instance
+=FIND("a",A1,)	=FIND("a",A1,)	a1	FIND omitted start
+=LEFT(A1,)	=LEFT(A1,)	a1	LEFT omitted num_chars
+=RIGHT(A1,)	=RIGHT(A1,)	a1	RIGHT omitted num_chars
+=MID(A1,1,)	=MID(A1,1,)	a1	MID omitted num_chars
+=IF(A1,)	=IF(A1,)	a1	IF omitted both branches is still two args: test + omitted
+=IF(A1,,)	=IF(A1,,)	a1	IF with two omitted branches
+=INDEX(A1:C9,,,)	=INDEX(A1:C9,,,)	a1	INDEX three omitted after range? four args with three omitted
+=OFFSET(A1,,,,,)	=OFFSET(A1,,,,,)	a1	OFFSET with omitted rows/cols/height/width
+={#NULL!,#DIV/0!;#VALUE!,#REF!}	={#NULL!,#DIV/0!;#VALUE!,#REF!}	a1	error grid
+={-1%;2}	={-1%;2}	a1	unary minus percent in array
+={1,2,3;4,5,6;7,8,9}	={1,2,3;4,5,6;7,8,9}	a1	3x3 array
+={"a","b";"c","d"}	={"a","b";"c","d"}	a1	2x2 strings
+={TRUE,1;"x",#N/A}	={TRUE,1;"x",#N/A}	a1	mixed-type array constant
+=MyTable[MyCol]	=MyTable[MyCol]	a1	simple table column
+=MyTable[[#All]]	=MyTable[[#All]]	a1	MyTable all
+=MyTable[[#Data]]	=MyTable[[#Data]]	a1	MyTable data
+=MyTable[[#Headers]]	=MyTable[[#Headers]]	a1	MyTable headers
+=MyTable[[#Totals]]	=MyTable[[#Totals]]	a1	MyTable totals
+=MyTable[[#This Row]]	=MyTable[[#This Row]]	a1	MyTable this row
+=MyTable[[#All],[A]:[B]]	=MyTable[[#All],[A]:[B]]	a1	all, columns A to B
+=MyTable[@Col]	=MyTable[@Col]	a1	this-row shorthand
+=MyTable[@[Col Name]]	=MyTable[@[Col Name]]	a1	this-row spaced column
+=[@Col]+[@Other]	=[@Col]+[@Other]	a1	two this-row columns
+=SUM(MyTable[[Col1]:[Col2]])	=SUM(MyTable[[Col1]:[Col2]])	a1	SUM column span
+=t[[#Headers],[c]]	=t[[#Headers],[c]]	a1	short table and column names
+=[#All]	=[#All]	a1	unqualified #All
+=[#Data]	=[#Data]	a1	unqualified #Data
+=[#Headers]	=[#Headers]	a1	unqualified #Headers
+=[#Totals]	=[#Totals]	a1	unqualified #Totals
+=[#This Row]	=[#This Row]	a1	unqualified #This Row
+=[Book.xlsx]Sheet1!A1:B2	=[Book.xlsx]Sheet1!A1:B2	a1	external range
+=[Book.xlsx]Sheet1!A:A	=[Book.xlsx]Sheet1!A:A	a1	external whole column
+=[Book.xlsx]Sheet1:Sheet2!A1	=[Book.xlsx]Sheet1:Sheet2!A1	a1	external 3-D
+='[Book.xlsx]Cost Model'!A1	='[Book.xlsx]Cost Model'!A1	a1	external quoted sheet with space
+=[budget.xlsx]Sheet1!B2	=[budget.xlsx]Sheet1!B2	a1	external lowercase file
+=SUM([Book.xlsx]Sheet1!A1,[Book.xlsx]Sheet1!B1)	=SUM([Book.xlsx]Sheet1!A1,[Book.xlsx]Sheet1!B1)	a1	two external args
+=((A1,B1))	=((A1,B1))	a1	double parens around union
+=(A1 B1)	=(A1 B1)	a1	parens around intersection
+=(A1:B1 C1:D1)	=(A1:B1 C1:D1)	a1	parens around range intersection
+=SUM(Revenue,TaxRate)	=SUM(Revenue,TaxRate)	a1	SUM of two names
+=IF(Revenue>0,Revenue,0)	=IF(Revenue>0,Revenue,0)	a1	IF on a name
+=INDIRECT(MyName)	=INDIRECT(MyName)	a1	INDIRECT of a name
+=OFFSET(MyName,1,0)	=OFFSET(MyName,1,0)	a1	OFFSET of a name
+=A1+A$1+$A1+$A$1	=A1+A$1+$A1+$A$1	a1	all four abs combinations summed
+=A1:B2+C3:D4	=A1:B2+C3:D4	a1	range plus range (array eval WP-04)
+=A1:A10*B1:B10	=A1:A10*B1:B10	a1	range times range
+=A1:A10^2	=A1:A10^2	a1	range squared
+=(A1:A10=B1:B10)	=(A1:A10=B1:B10)	a1	parenthesized range equality
+=PMT(B1/12,C1,-D1)	=PMT(B1/12,C1,-D1)	a1	PMT from cells
+=FV(B1/12,C1,-D1,-E1,0)	=FV(B1/12,C1,-D1,-E1,0)	a1	FV five args
+=PV(B1/12,C1,-D1)	=PV(B1/12,C1,-D1)	a1	PV
+=NPER(B1/12,-C1,D1)	=NPER(B1/12,-C1,D1)	a1	NPER
+=RATE(C1,-D1,E1)	=RATE(C1,-D1,E1)	a1	RATE
+=NPV(B1,C1:C10)+A1	=NPV(B1,C1:C10)+A1	a1	NPV plus time-zero
+=IRR(A1:A10,0.1)	=IRR(A1:A10,0.1)	a1	IRR with guess
+=XNPV(B1,C1:C10,D1:D10)	=XNPV(B1,C1:C10,D1:D10)	a1	XNPV
+=XIRR(C1:C10,D1:D10)	=XIRR(C1:C10,D1:D10)	a1	XIRR
+=SLN(A1,B1,C1)	=SLN(A1,B1,C1)	a1	SLN from cells
+=DDB(A1,B1,C1,1,2)	=DDB(A1,B1,C1,1,2)	a1	DDB factor 2
+=CUMIPMT(B1/12,C1,D1,1,12,0)	=CUMIPMT(B1/12,C1,D1,1,12,0)	a1	CUMIPMT
+=CUMPRINC(B1/12,C1,D1,1,12,0)	=CUMPRINC(B1/12,C1,D1,1,12,0)	a1	CUMPRINC
+=EFFECT(0.12,12)	=EFFECT(0.12,12)	a1	EFFECT
+=NOMINAL(0.12,12)	=NOMINAL(0.12,12)	a1	NOMINAL
+=FORECAST.LINEAR(A1,B1:B10,C1:C10)	=FORECAST.LINEAR(A1,B1:B10,C1:C10)	a1	FORECAST.LINEAR cells
+=LINEST(B1:B10,A1:A10,TRUE,TRUE)	=LINEST(B1:B10,A1:A10,TRUE,TRUE)	a1	LINEST stats
+=TREND(B1:B10,A1:A10,C1:C3)	=TREND(B1:B10,A1:A10,C1:C3)	a1	TREND
+=GROWTH(B1:B10,A1:A10)	=GROWTH(B1:B10,A1:A10)	a1	GROWTH
+=PERCENTILE.EXC(A1:A10,0.5)	=PERCENTILE.EXC(A1:A10,0.5)	a1	PERCENTILE.EXC
+=QUARTILE.EXC(A1:A10,1)	=QUARTILE.EXC(A1:A10,1)	a1	QUARTILE.EXC
+=RANK.EQ(A1,A1:A10,0)	=RANK.EQ(A1,A1:A10,0)	a1	RANK.EQ
+=RANK.AVG(A1,A1:A10,1)	=RANK.AVG(A1,A1:A10,1)	a1	RANK.AVG
+=MODE.MULT(A1:A10)	=MODE.MULT(A1:A10)	a1	MODE.MULT
+=STDEVPA(A1:A10)	=STDEVPA(A1:A10)	a1	STDEVPA
+=VARA(A1:A10)	=VARA(A1:A10)	a1	VARA
+=AVERAGEA(A1:A10)	=AVERAGEA(A1:A10)	a1	AVERAGEA
+=MAXA(A1:A10)	=MAXA(A1:A10)	a1	MAXA
+=MINA(A1:A10)	=MINA(A1:A10)	a1	MINA
+=COUNTA(A1:A10,B1:B10)	=COUNTA(A1:A10,B1:B10)	a1	COUNTA two ranges
+=COUNTBLANK(A1:A10)	=COUNTBLANK(A1:A10)	a1	COUNTBLANK
+=COUNTUNIQUE(A1:A10)	=COUNTUNIQUE(A1:A10)	a1	non-Excel name still parses as a call
+=FOOBAR(1)	=FOOBAR(1)	a1	arbitrary ident( is a call
+=Z(1)	=Z(1)	a1	single-letter function Z
+=R(1)	=R(1)	a1	single-letter function R
+=C(1)	=C(1)	a1	single-letter function C
+=LAMBDA(x,x)(1)	=LAMBDA(x,x)(1)	a1	IIFE LAMBDA
+=LAMBDA(x,y,x+y)(1,2)	=LAMBDA(x,y,x+y)(1,2)	a1	IIFE LAMBDA two args
+=LAMBDA()( )	=LAMBDA()()	a1	zero-arg LAMBDA invoked; spaces dropped
+=4.2e2	=420	a1	4.2e2 Display 420
+=1e-1	=0.1	a1	1e-1 Display 0.1
+=2e-2	=0.02	a1	2e-2 Display 0.02
+=5e-1	=0.5	a1	5e-1 Display 0.5
+=10e-1	=1	a1	10e-1 Display 1
+=123.	=123	a1	trailing dot integer
+=.25	=0.25	a1	leading-dot 0.25
+=.125	=0.125	a1	leading-dot 0.125
+=A1="x"	=A1="x"	a1	cell equals string
+=A1<>""	=A1<>""	a1	cell not empty string
+=A1>"a"	=A1>"a"	a1	cell greater than string
+=$A:A	=$A:A	a1	abs start col, rel end col
+=A:$A	=A:$A	a1	rel start col, abs end col
+=$1:1	=$1:1	a1	abs start row, rel end row
+=1:$1	=1:$1	a1	rel start row, abs end row
+='Q4-2024'!A1	='Q4-2024'!A1	a1	hyphenated sheet
+='(hidden)'!A1	='(hidden)'!A1	a1	parens in sheet name
+='100%'!A1	='100%'!A1	a1	percent in sheet name
+='a''b'!A1	='a''b'!A1	a1	single quote in sheet name
+='Sheet(1)'!A1	='Sheet(1)'!A1	a1	sheet with parens
+=IF(ISBLANK(A1),"",A1)	=IF(ISBLANK(A1),"",A1)	a1	ISBLANK guard
+=IF(ISNUMBER(A1),A1,0)	=IF(ISNUMBER(A1),A1,0)	a1	ISNUMBER guard
+=IF(ISTEXT(A1),VALUE(A1),A1)	=IF(ISTEXT(A1),VALUE(A1),A1)	a1	ISTEXT then VALUE
+=IF(ISERROR(A1),0,A1)	=IF(ISERROR(A1),0,A1)	a1	legacy ISERROR guard
+=IFNA(XLOOKUP(A1,B:B,C:C),0)	=IFNA(XLOOKUP(A1,B:B,C:C),0)	a1	IFNA XLOOKUP
+=LET(x,XLOOKUP(A1,B:B,C:C),IF(x>0,x,0))	=LET(x,XLOOKUP(A1,B:B,C:C),IF(x>0,x,0))	a1	LET XLOOKUP IF
+=MAP(A1#,LAMBDA(x,x*2))	=MAP(A1#,LAMBDA(x,x*2))	a1	MAP over spill
+=A1#+SEQUENCE(1,1)	=A1#+SEQUENCE(1,1)	a1	spill plus SEQUENCE
+=@INDEX(A1:C10,0,1)	=@INDEX(A1:C10,0,1)	a1	@ INDEX whole-column-in-range
+=INDEX(A1:C10,0,1)#	=INDEX(A1:C10,0,1)#	a1	spill INDEX (legacy vs DA)
+=SUM(A1:INDEX(A:A,COUNTA(A:A)))	=SUM(A1:INDEX(A:A,COUNTA(A:A)))	a1	dynamic range via INDEX
+=A1:INDEX(B:B,10)	=A1:INDEX(B:B,10)	a1	colon between cell and INDEX call
+=OFFSET(A1,1,1):OFFSET(A1,5,1)	=OFFSET(A1,1,1):OFFSET(A1,5,1)	a1	colon between two OFFSETs
+=INDIRECT("A1:A"&B1)	=INDIRECT("A1:A"&B1)	a1	INDIRECT constructed address
+=SUM(INDIRECT("A"&ROW()&":A"&ROW()))	=SUM(INDIRECT("A"&ROW()&":A"&ROW()))	a1	INDIRECT + ROW
+=CELL("filename")	=CELL("filename")	a1	CELL filename (volatile)
+=INFO("osversion")	=INFO("osversion")	a1	INFO osversion
+=RANDARRAY(ROWS(A1#),1)	=RANDARRAY(ROWS(A1#),1)	a1	RANDARRAY sized from spill
+=SEQUENCE(COUNTA(A:A))	=SEQUENCE(COUNTA(A:A))	a1	SEQUENCE from COUNTA
+=UNIQUE(A:A,FALSE,TRUE)	=UNIQUE(A:A,FALSE,TRUE)	a1	UNIQUE exactly-once
+=SORTBY(A1:A10,B1:B10,-1,C1:C10,1)	=SORTBY(A1:A10,B1:B10,-1,C1:C10,1)	a1	SORTBY two keys
+=FILTER(A1:C10,(A1:A10>0)*(B1:B10<1))	=FILTER(A1:C10,(A1:A10>0)*(B1:B10<1))	a1	FILTER with product mask
+=CHOOSECOLS(A1:C10,3,1)	=CHOOSECOLS(A1:C10,3,1)	a1	CHOOSECOLS reorder
+=CHOOSEROWS(A1:C10,-1)	=CHOOSEROWS(A1:C10,-1)	a1	CHOOSEROWS last
+=DROP(A1:C10,1,-1)	=DROP(A1:C10,1,-1)	a1	DROP first row last col
+=TAKE(A1:C10,-3,2)	=TAKE(A1:C10,-3,2)	a1	TAKE last 3 rows, 2 cols
+=EXPAND(A1,3,3,0)	=EXPAND(A1,3,3,0)	a1	EXPAND
+=TOCOL(A1:C10,3)	=TOCOL(A1:C10,3)	a1	TOCOL skip blanks+errors
+=TOROW(A1:C10,1)	=TOROW(A1:C10,1)	a1	TOROW skip blanks
+=WRAPCOLS(A1:A10,3)	=WRAPCOLS(A1:A10,3)	a1	WRAPCOLS
+=VSTACK(A1:B2,C1:D2,E1:F2)	=VSTACK(A1:B2,C1:D2,E1:F2)	a1	VSTACK three
+=HSTACK(A1:A2,B1:B2,C1:C2)	=HSTACK(A1:A2,B1:B2,C1:C2)	a1	HSTACK three
+=PHONETIC(A1)	=PHONETIC(A1)	a1	PHONETIC
+=BAHTTEXT(1)	=BAHTTEXT(1)	a1	BAHTTEXT
+=ASC(A1)	=ASC(A1)	a1	ASC
+=JIS(A1)	=JIS(A1)	a1	JIS
+=DBCS(A1)	=DBCS(A1)	a1	DBCS
+=UNICHAR(65)	=UNICHAR(65)	a1	UNICHAR
+=UNICODE("A")	=UNICODE("A")	a1	UNICODE
+=NUMBERVALUE(A1,".",",")	=NUMBERVALUE(A1,".",",")	a1	NUMBERVALUE canonical separators
+=DOLLAR(A1,2)	=DOLLAR(A1,2)	a1	DOLLAR
+=FIXED(A1,2,TRUE)	=FIXED(A1,2,TRUE)	a1	FIXED
+=ROMAN(12)	=ROMAN(12)	a1	ROMAN
+=ARABIC("XII")	=ARABIC("XII")	a1	ARABIC
+=CONVERT(1,"m","ft")	=CONVERT(1,"m","ft")	a1	CONVERT
+=BIN2DEC("1010")	=BIN2DEC("1010")	a1	BIN2DEC
+=DEC2BIN(10)	=DEC2BIN(10)	a1	DEC2BIN
+=HEX2DEC("A")	=HEX2DEC("A")	a1	HEX2DEC
+=OCT2DEC("10")	=OCT2DEC("10")	a1	OCT2DEC
+=COMPLEX(3,4)	=COMPLEX(3,4)	a1	COMPLEX
+=IMABS("3+4i")	=IMABS("3+4i")	a1	IMABS
+=IMSUM("1+2i","3+4i")	=IMSUM("1+2i","3+4i")	a1	IMSUM
+=ERF(1)	=ERF(1)	a1	ERF
+=ERFC(1)	=ERFC(1)	a1	ERFC
+=GAMMALN(5)	=GAMMALN(5)	a1	GAMMALN
+=BESSELI(1,1)	=BESSELI(1,1)	a1	BESSELI
+=DELTA(1,1)	=DELTA(1,1)	a1	DELTA
+=GESTEP(1,0)	=GESTEP(1,0)	a1	GESTEP
+=BITAND(1,3)	=BITAND(1,3)	a1	BITAND
+=BITOR(1,2)	=BITOR(1,2)	a1	BITOR
+=BITXOR(1,3)	=BITXOR(1,3)	a1	BITXOR
+=BITLSHIFT(1,2)	=BITLSHIFT(1,2)	a1	BITLSHIFT
+=BITRSHIFT(4,1)	=BITRSHIFT(4,1)	a1	BITRSHIFT
+=BASE(10,2)	=BASE(10,2)	a1	BASE
+=DECIMAL("FF",16)	=DECIMAL("FF",16)	a1	DECIMAL
+=CONCAT(A1:A3,",")	=CONCAT(A1:A3,",")	a1	CONCAT range and string
+=TEXTJOIN(",",TRUE,A1,B1,C1)	=TEXTJOIN(",",TRUE,A1,B1,C1)	a1	TEXTJOIN three cells
+=TEXTSPLIT(A1,",",";")	=TEXTSPLIT(A1,",",";")	a1	TEXTSPLIT row and col delim
+=TEXTBEFORE(A1,",",-1)	=TEXTBEFORE(A1,",",-1)	a1	TEXTBEFORE last
+=TEXTAFTER(A1,",",-1)	=TEXTAFTER(A1,",",-1)	a1	TEXTAFTER last
+=REGEXTEST(A1,"[0-9]+")	=REGEXTEST(A1,"[0-9]+")	a1	REGEXTEST extension
+=REGEXEXTRACT(A1,"[0-9]+")	=REGEXEXTRACT(A1,"[0-9]+")	a1	REGEXEXTRACT
+=REGEXREPLACE(A1,"[0-9]+","X")	=REGEXREPLACE(A1,"[0-9]+","X")	a1	REGEXREPLACE
+=WEBSERVICE(A1)	=WEBSERVICE(A1)	a1	WEBSERVICE parses; eval is policy/WP-05
+=FILTERXML(A1,"//x")	=FILTERXML(A1,"//x")	a1	FILTERXML
+=ENCODEURL(A1)	=ENCODEURL(A1)	a1	ENCODEURL
+=IMAGE(A1)	=IMAGE(A1)	a1	IMAGE
+=STOCKHISTORY("MSFT",A1,B1)	=STOCKHISTORY("MSFT",A1,B1)	a1	STOCKHISTORY
+=PY(A1)	=PY(A1)	a1	PY parses as a call
+=R.Q(1)	=R.Q(1)	a1	dotted call R.Q
+=SKEW.P(A1:A10)	=SKEW.P(A1:A10)	a1	SKEW.P
+=NORM.S.DIST(1,TRUE)	=NORM.S.DIST(1,TRUE)	a1	NORM.S.DIST
+=NORM.DIST(1,0,1,TRUE)	=NORM.DIST(1,0,1,TRUE)	a1	NORM.DIST
+=T.DIST(1,10,TRUE)	=T.DIST(1,10,TRUE)	a1	T.DIST
+=CHISQ.DIST(1,2,TRUE)	=CHISQ.DIST(1,2,TRUE)	a1	CHISQ.DIST
+=F.DIST(1,2,3,TRUE)	=F.DIST(1,2,3,TRUE)	a1	F.DIST
+=BINOM.DIST(1,2,0.5,TRUE)	=BINOM.DIST(1,2,0.5,TRUE)	a1	BINOM.DIST
+=POISSON.DIST(1,2,TRUE)	=POISSON.DIST(1,2,TRUE)	a1	POISSON.DIST
+=WEIBULL.DIST(1,2,3,TRUE)	=WEIBULL.DIST(1,2,3,TRUE)	a1	WEIBULL.DIST
+=GAMMA.DIST(1,2,3,TRUE)	=GAMMA.DIST(1,2,3,TRUE)	a1	GAMMA.DIST
+=LOGNORM.DIST(1,0,1,TRUE)	=LOGNORM.DIST(1,0,1,TRUE)	a1	LOGNORM.DIST
+=CONFIDENCE.NORM(0.05,1,10)	=CONFIDENCE.NORM(0.05,1,10)	a1	CONFIDENCE.NORM
+=Z.TEST(A1:A10,0)	=Z.TEST(A1:A10,0)	a1	Z.TEST
+=T.TEST(A1:A10,B1:B10,2,1)	=T.TEST(A1:A10,B1:B10,2,1)	a1	T.TEST
+=F.TEST(A1:A10,B1:B10)	=F.TEST(A1:A10,B1:B10)	a1	F.TEST
+=CHISQ.TEST(A1:B2,C1:D2)	=CHISQ.TEST(A1:B2,C1:D2)	a1	CHISQ.TEST
+=PEARSON(A1:A10,B1:B10)	=PEARSON(A1:A10,B1:B10)	a1	PEARSON
+=RSQ(A1:A10,B1:B10)	=RSQ(A1:A10,B1:B10)	a1	RSQ
+=SLOPE(A1:A10,B1:B10)	=SLOPE(A1:A10,B1:B10)	a1	SLOPE
+=INTERCEPT(A1:A10,B1:B10)	=INTERCEPT(A1:A10,B1:B10)	a1	INTERCEPT
+=STEYX(A1:A10,B1:B10)	=STEYX(A1:A10,B1:B10)	a1	STEYX
+=COVARIANCE.S(A1:A10,B1:B10)	=COVARIANCE.S(A1:A10,B1:B10)	a1	COVARIANCE.S
+=COVARIANCE.P(A1:A10,B1:B10)	=COVARIANCE.P(A1:A10,B1:B10)	a1	COVARIANCE.P
+=CORREL(A1:A10,B1:B10)	=CORREL(A1:A10,B1:B10)	a1	CORREL
+=FISHER(0.5)	=FISHER(0.5)	a1	FISHER
+=FISHERINV(0.5)	=FISHERINV(0.5)	a1	FISHERINV
+=PERMUTATIONA(5,2)	=PERMUTATIONA(5,2)	a1	PERMUTATIONA
+=COMBINA(5,2)	=COMBINA(5,2)	a1	COMBINA
+=MULTINOMIAL(1,2,3)	=MULTINOMIAL(1,2,3)	a1	MULTINOMIAL
+=LCM(2,3,4,5)	=LCM(2,3,4,5)	a1	LCM four
+=GCD(12,18,24)	=GCD(12,18,24)	a1	GCD three
+=SERIESSUM(2,1,1,{1,1,1})	=SERIESSUM(2,1,1,{1,1,1})	a1	SERIESSUM
+=SQRTPI(1)	=SQRTPI(1)	a1	SQRTPI
+=SUMSQ(A1:A10)	=SUMSQ(A1:A10)	a1	SUMSQ
+=SUMX2MY2(A1:A10,B1:B10)	=SUMX2MY2(A1:A10,B1:B10)	a1	SUMX2MY2
+=SUMX2PY2(A1:A10,B1:B10)	=SUMX2PY2(A1:A10,B1:B10)	a1	SUMX2PY2
+=SUMXMY2(A1:A10,B1:B10)	=SUMXMY2(A1:A10,B1:B10)	a1	SUMXMY2
+=SUMPRODUCT(A1:A10,--(B1:B10>0))	=SUMPRODUCT(A1:A10,--(B1:B10>0))	a1	SUMPRODUCT double-unary mask
+=AGGREGATE(9,5,A1:A10)	=AGGREGATE(9,5,A1:A10)	a1	AGGREGATE SUM ignore errors
+=SUBTOTAL(101,A1:A10)	=SUBTOTAL(101,A1:A10)	a1	SUBTOTAL AVERAGE visible
+=DGET(A1:C10,"Amt",E1:E2)	=DGET(A1:C10,"Amt",E1:E2)	a1	DGET
+=DSUM(A1:C10,"Amt",E1:E2)	=DSUM(A1:C10,"Amt",E1:E2)	a1	DSUM
+=DCOUNT(A1:C10,"Amt",E1:E2)	=DCOUNT(A1:C10,"Amt",E1:E2)	a1	DCOUNT
+=DAVERAGE(A1:C10,"Amt",E1:E2)	=DAVERAGE(A1:C10,"Amt",E1:E2)	a1	DAVERAGE
+=DMAX(A1:C10,"Amt",E1:E2)	=DMAX(A1:C10,"Amt",E1:E2)	a1	DMAX
+=DMIN(A1:C10,"Amt",E1:E2)	=DMIN(A1:C10,"Amt",E1:E2)	a1	DMIN
+=DPRODUCT(A1:C10,"Amt",E1:E2)	=DPRODUCT(A1:C10,"Amt",E1:E2)	a1	DPRODUCT
+=DSTDEV(A1:C10,"Amt",E1:E2)	=DSTDEV(A1:C10,"Amt",E1:E2)	a1	DSTDEV
+=DVAR(A1:C10,"Amt",E1:E2)	=DVAR(A1:C10,"Amt",E1:E2)	a1	DVAR
