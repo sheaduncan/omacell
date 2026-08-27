@@ -38,6 +38,7 @@ Harness (`spikes/ironcalc/src/main.rs`):
 - Formula probes: `LET`, `LAMBDA`, named lambda, `SEQUENCE` spill, blocked `#SPILL!`, `UNIQUE`, `MAP`, `SUM(A:A)`.
 - Tiny L1/L2 `.xlsx` save/load under `$TMPDIR/omacell-wp-s1/` (removed after).
 - 100k- and 1M-formula in-memory workbooks (A = numbers, B = `=An*2`), edit A1, time `evaluate()`.
+- Isolated `--numeric-memory-only` probe: one million plain numbers, RSS delta over an empty model.
 - RSS via `/proc/self/status`, release binary size.
 
 `docs/adr/0002-engine.md` is **Decided: build `omacell-core`**. `PLAN.md` is unchanged. WP-02A/03A/04A files were not added (evidence for adopt is not strong).
@@ -80,7 +81,7 @@ No network from the harness after crates were fetched.
 | Full `evaluate()` #1 | **97.2 ms** | B1=2, B100000=200000 |
 | `evaluate()` after A1→100 | **95.3 ms** | B1=200; ratio 0.98 vs full |
 | Full `evaluate()` #2 | 96.8 ms | |
-| RSS | 74 MB | ~370 B/cell for 200k cells |
+| RSS | 74 MB | Mixed input/formula model; not used to infer plain numeric-cell cost |
 
 **1M** (same binary, after 100k in-process):
 
@@ -90,9 +91,14 @@ No network from the harness after crates were fetched.
 | Full `evaluate()` #1 | **1.69 s** | B1=2, B1000000=2000000 |
 | After A1→100 | **1.61 s** | ratio 0.95 |
 | Full #2 | 1.51 s | |
-| RSS | 761 MB | ~380 B/cell for 2M cells |
+| RSS | 761 MB | Mixed input/formula model |
 
-§12.1: 100k incremental **< 50 ms — miss** (and not incremental). 1M full **< 5 s / 8 threads — meet on 1 thread** (1.69 s); no 8-thread API. 64 B/cell — **miss**.
+**Numeric-only memory** (fresh process, `--numeric-memory-only`): one million
+plain numbers increased RSS from 6,756 KiB to 498,488 KiB, a 491,732 KiB
+delta or approximately **503.5 B/plain numeric cell**. This avoids mixing
+formula ASTs and dependency state into the numeric-cell estimate.
+
+§12.1: 100k incremental **< 50 ms — miss** (and not incremental). 1M full **< 5 s / 8 threads — meet on 1 thread** (1.69 s); no 8-thread API. 64 B/plain numeric cell — **miss** (~503.5 B/cell isolated RSS delta).
 
 `SUM(A:A)` vs `SUM(A1:A100000)` at 100k numbers: 57 ms vs 50 ms (isolated).
 
@@ -100,7 +106,9 @@ No network from the harness after crates were fetched.
 
 Formula probes: `LET`/`LAMBDA`/named lambda/`SEQUENCE` spill/`#SPILL!`/`UNIQUE`/`MAP` as in the ADR.
 
-Binary: spike 9.2 MiB vs `omacell` CLI 429 KiB.
+Binary under matching thin-LTO/codegen settings: spike 8.1 MiB vs `omacell`
+CLI 428 KiB. The spike includes its harness and `anyhow`, so the observed
+~7.6 MiB difference is not presented as a dependency-size floor.
 
 `cargo deny --config deny.toml --manifest-path spikes/ironcalc/Cargo.toml check` — pass (spike only).
 

@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use ironcalc::base::cell::CellValue;
 use ironcalc::base::types::Color;
 use ironcalc::base::{Model, UserModel};
@@ -21,6 +21,12 @@ fn main() -> Result<()> {
     println!("omacell WP-S1 IronCalc spike");
     println!("ironcalc 0.8.3  host={}", host_line());
     println!();
+
+    // Run this in a fresh process so formula/array probes and their allocator
+    // history cannot contaminate the numeric-cell RSS delta.
+    if std::env::args().any(|a| a == "--numeric-memory-only") {
+        return measure_numeric_memory(N_1M);
+    }
 
     probe_formulas()?;
     probe_async_surface();
@@ -328,6 +334,34 @@ fn measure_recalc(n: i32, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Populate only plain numeric cells and report RSS growth over an empty model.
+fn measure_numeric_memory(n: i32) -> Result<()> {
+    println!("== numeric-only memory ({n} plain numeric cells) ==");
+    let mut model =
+        Model::new_empty("numeric-memory", "en", "UTC", "en").map_err(|e| anyhow!(e))?;
+    let rss_empty = rss_kb().context("read RSS for empty model")?;
+    let t0 = Instant::now();
+
+    for row in 1..=n {
+        model
+            .update_cell_with_number(0, row, 1, f64::from(row))
+            .map_err(|e| anyhow!("set A{row}: {e}"))?;
+    }
+
+    let rss_populated = rss_kb().context("read RSS for populated model")?;
+    let delta_kb = rss_populated.saturating_sub(rss_empty);
+    let bytes_per_cell = delta_kb as f64 * 1024.0 / f64::from(n);
+    let first = cell_num(&model, 0, 1, 1)?;
+    let last = cell_num(&model, 0, n, 1)?;
+    println!("  populated in {}", fmt_dur(t0.elapsed()));
+    println!("  rss empty={rss_empty} kB populated={rss_populated} kB delta={delta_kb} kB");
+    println!("  approximate bytes/plain numeric cell: {bytes_per_cell:.1}");
+    println!("  A1={first} A{n}={last}");
+    println!("  §11.3 target: <= 64 B amortized/plain numeric cell");
+    println!();
+    Ok(())
+}
+
 fn measure_sum_column(n: i32) -> Result<()> {
     println!("== SUM(A:A) vs SUM(A1:An) at {n} numeric cells ==");
     let mut model = Model::new_empty("sumcol", "en", "UTC", "en").map_err(|e| anyhow!(e))?;
@@ -387,7 +421,7 @@ fn report_binary_size() -> Result<()> {
             );
         }
     }
-    println!("  product binary is omacell-cli; this is a lower bound for adding ironcalc.");
+    println!("  product binary is omacell-cli; compare only under matching release settings.");
     println!();
     Ok(())
 }

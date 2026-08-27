@@ -119,13 +119,18 @@ An adopt path is an adapter over a foreign model, not a drop-in for WP-01.
 
 ### Binary size
 
-| Binary | Size (release, stripped debuginfo) |
-|---|---|
-| `omacell` CLI (WP-00, no engine) | 429 KiB |
-| `omacell-spike-ironcalc` (engine + xlsx) | 9.2 MiB |
+Both binaries use the product workspace's release settings (`lto = "thin"`,
+`codegen-units = 1`). The spike also contains the measurement harness and
+`anyhow`, so this is an observed comparison, not a minimum dependency cost.
 
-Adopting IronCalc is a **~9 MiB** floor for any binary that links it
-(GUI/TUI would add more). Not a veto; not free.
+| Binary | Observed release size |
+|---|---|
+| `omacell` CLI (WP-00, no engine) | 428 KiB |
+| `omacell-spike-ironcalc` (engine + xlsx + harness) | 8.1 MiB |
+
+The observed difference is about 7.6 MiB. Link-time dead-code elimination
+and actual product usage make this unsuitable as a floor. Size is not a
+veto, but the engine is not free.
 
 ### Async-node hook feasibility (§8.3 / WP-04)
 
@@ -148,14 +153,21 @@ formulas). Edit A1 from `1` to `100`; B1 becomes `200`. Engine is
 | 100k formulas (isolated process) | 224 ms | **97 ms** | **95 ms** (ratio 0.98) | 97 ms | 74 MB |
 | 1M formulas | 3.72 s | **1.69 s** | **1.61 s** (ratio 0.95) | 1.51 s | 761 MB |
 
+Numeric storage was measured separately in a fresh process so formula ASTs,
+dependency state, and earlier allocator history were excluded. Populating an
+empty model with 1,000,000 plain numbers increased RSS from 6,756 KiB to
+498,488 KiB: a 491,732 KiB delta, or approximately **503.5 B per plain
+numeric cell**. RSS is an allocator-level approximation, but this margin is
+far beyond the §11.3 target.
+
 §12.1 gates:
 
 - Incremental recalc after one edit in a 100k-formula model **< 50 ms**:
   **miss** (95 ms, and it is a full pass).
 - Full recalc 1M formulas **< 5 s on 8 threads**: **meet on 1 thread**
   (1.69 s). No rayon; no 8-thread path.
-- ≤ 64 B/numeric cell: **miss**. 1M formula + 1M input ≈ 2M cells at
-  761 MB ≈ **380 B/cell**.
+- ≤ 64 B/plain numeric cell: **miss**. The isolated numeric-only RSS delta is
+  approximately **503.5 B/cell**.
 
 A second 100k pass in the same process as the 1M run was slower
 (full 215 ms / incr 173 ms) — allocator/cache noise; both passes show
@@ -163,6 +175,9 @@ incr ≈ full.
 
 Tiny `.xlsx` round-trip used `$TMPDIR/omacell-wp-s1/` (created and
 removed by the harness).
+
+Numeric-only command:
+`cargo run --release --manifest-path spikes/ironcalc/Cargo.toml -- --numeric-memory-only`.
 
 ## Recommendation and work-package cost
 
