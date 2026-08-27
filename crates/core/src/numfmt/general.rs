@@ -22,7 +22,11 @@ pub fn general_for_width(n: f64, width: usize) -> String {
     if a == 0.0 {
         return "0".to_string();
     }
-    let body = general_abs(a, width.max(1));
+    let width = width.max(1);
+    let body = general_abs(a, width);
+    if body.chars().count() > width {
+        return "#".repeat(width);
+    }
     if neg { format!("-{body}") } else { body }
 }
 

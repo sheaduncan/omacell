@@ -6,7 +6,8 @@ use omacell_core::dates::DateSystem;
 use omacell_core::error::ErrorKind;
 use omacell_core::locale::LocaleId;
 use omacell_core::numfmt::{
-    FormatOptions, FormatValue, MAX_FORMAT_LEN, builtin_format, format_with, parse,
+    FormatOptions, FormatValue, MAX_FORMAT_LEN, builtin_format, format_with, general_for_width,
+    parse,
 };
 use omacell_core::style::NumFmtId;
 
@@ -188,4 +189,25 @@ fn parse_never_panics_on_junk() {
     for s in ["", "[", "[[", "\"", ";;;;;;;;;;;", "*_*_[$-zzzz]", "@@@"] {
         let _ = parse(s);
     }
+}
+
+#[test]
+fn malformed_format_delimiters_are_rejected() {
+    for code in [
+        "[Red",
+        "Red]",
+        "\"unterminated",
+        "0;0;0;@;extra",
+        "0\\",
+        "0_",
+        "0*",
+    ] {
+        assert!(parse(code).is_err(), "unexpectedly accepted {code:?}");
+    }
+}
+
+#[test]
+fn general_for_width_never_exceeds_the_budget() {
+    assert_eq!(general_for_width(1.0e100, 3), "###");
+    assert!(general_for_width(12.345, 5).chars().count() <= 5);
 }

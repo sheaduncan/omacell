@@ -56,3 +56,36 @@ fn weekday_known() {
     assert_eq!(weekday_sun0(60, DateSystem::Excel1900), Some(3));
     assert_eq!(weekday_sun0(0, DateSystem::Excel1904), Some(5));
 }
+
+#[test]
+fn invalid_civil_dates_are_rejected() {
+    for date in [
+        CivilDate {
+            year: 2023,
+            month: 2,
+            day: 29,
+            lotus_leap: false,
+        },
+        CivilDate {
+            year: 2024,
+            month: 4,
+            day: 31,
+            lotus_leap: false,
+        },
+        CivilDate {
+            year: 1900,
+            month: 2,
+            day: 29,
+            lotus_leap: false,
+        },
+        CivilDate {
+            year: 2024,
+            month: 1,
+            day: 1,
+            lotus_leap: true,
+        },
+    ] {
+        assert_eq!(date_to_serial(date, DateSystem::Excel1900), None);
+        assert_eq!(date_to_serial(date, DateSystem::Excel1904), None);
+    }
+}

@@ -18,7 +18,7 @@ pub fn parse(input: &str) -> Result<ParsedFormat, CoreError> {
     if input.is_empty() || input.eq_ignore_ascii_case("General") {
         return Ok(ParsedFormat::general());
     }
-    let parts = split_sections(input);
+    let parts = split_sections(input)?;
     let mut sections = Vec::with_capacity(parts.len().min(4));
     for part in parts.iter().take(4) {
         sections.push(parse_section(part)?);
@@ -30,7 +30,7 @@ pub fn parse(input: &str) -> Result<ParsedFormat, CoreError> {
     Ok(ParsedFormat { sections })
 }
 
-fn split_sections(input: &str) -> Vec<String> {
+fn split_sections(input: &str) -> Result<Vec<String>, CoreError> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut chars = input.chars().peekable();
@@ -43,16 +43,22 @@ fn split_sections(input: &str) -> Vec<String> {
                 cur.push(c);
             }
             '[' if !in_quote => {
+                if in_bracket {
+                    return Err(parse_error("nested format bracket"));
+                }
                 in_bracket = true;
                 cur.push(c);
             }
             ']' if !in_quote => {
+                if !in_bracket {
+                    return Err(parse_error("unmatched closing format bracket"));
+                }
                 in_bracket = false;
                 cur.push(c);
             }
             ';' if !in_quote && !in_bracket => {
                 if out.len() >= 3 {
-                    cur.push(c);
+                    return Err(parse_error("number format has more than four sections"));
                 } else {
                     out.push(std::mem::take(&mut cur));
                 }
@@ -61,13 +67,25 @@ fn split_sections(input: &str) -> Vec<String> {
                 cur.push(c);
                 if let Some(n) = chars.next() {
                     cur.push(n);
+                } else {
+                    return Err(parse_error("trailing format escape"));
                 }
             }
             _ => cur.push(c),
         }
     }
+    if in_quote {
+        return Err(parse_error("unterminated quoted format literal"));
+    }
+    if in_bracket {
+        return Err(parse_error("unterminated format bracket"));
+    }
     out.push(cur);
-    out
+    Ok(out)
+}
+
+fn parse_error(message: &'static str) -> CoreError {
+    CoreError::new(codes::NUMFMT_PARSE, message)
 }
 
 fn parse_section(src: &str) -> Result<Section, CoreError> {
@@ -99,11 +117,17 @@ fn parse_section(src: &str) -> Result<Section, CoreError> {
             },
             Some('_') => {
                 s.bump();
-                tokens.push(Token::Skip(s.bump().unwrap_or(' ')));
+                let c = s
+                    .bump()
+                    .ok_or_else(|| parse_error("skip marker '_' requires a character"))?;
+                tokens.push(Token::Skip(c));
             }
             Some('*') => {
                 s.bump();
-                tokens.push(Token::Fill(s.bump().unwrap_or(' ')));
+                let c = s
+                    .bump()
+                    .ok_or_else(|| parse_error("fill marker '*' requires a character"))?;
+                tokens.push(Token::Fill(c));
             }
             Some('@') => {
                 s.bump();

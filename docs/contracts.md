@@ -113,10 +113,12 @@ WP-01 public fields of `LocaleId` / `LocaleSeparators` and the `EN_US` constants
 
 | Type / fn | Source |
 |---|---|
-| `DateSystem` (`Excel1900`, `Excel1904`) | [`dates.rs`](../crates/core/src/dates.rs) |
+| `DateSystem` (`Excel1900`, `Excel1904`) | [`date_system.rs`](../crates/core/src/date_system.rs), re-exported by [`dates.rs`](../crates/core/src/dates.rs) |
 | `CivilDate`, `TimeOfDay` | same |
 | `serial_to_date` / `date_to_serial` / `weekday_sun0` | same |
 | `MAX_SERIAL_1900`, `MAX_SERIAL_1904` | same |
+
+Civil-to-serial conversion rejects impossible calendar dates and inconsistent `lotus_leap` flags.
 
 ## Number formats — `omacell_core::numfmt` (WP-06)
 

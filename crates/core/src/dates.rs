@@ -9,31 +9,7 @@
 
 use std::fmt;
 
-/// Which epoch a workbook uses (F-1.6).
-///
-/// ```
-/// use omacell_core::dates::DateSystem;
-/// assert_eq!(DateSystem::Excel1900.epoch_year(), 1900);
-/// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum DateSystem {
-    /// Windows Excel default. Serial 1 = 1 Jan 1900; serial 60 = 29 Feb 1900.
-    #[default]
-    Excel1900,
-    /// Mac Excel historically. Serial 0 = 1 Jan 1904.
-    Excel1904,
-}
-
-impl DateSystem {
-    /// Calendar year of the epoch date.
-    #[must_use]
-    pub const fn epoch_year(self) -> i32 {
-        match self {
-            Self::Excel1900 => 1900,
-            Self::Excel1904 => 1904,
-        }
-    }
-}
+pub use crate::date_system::DateSystem;
 
 /// Largest integer serial that is a valid Excel date in the 1900 system
 /// (31 Dec 9999).
@@ -151,13 +127,13 @@ pub fn date_to_serial(date: CivilDate, system: DateSystem) -> Option<i64> {
 }
 
 fn date_to_serial_1900(date: CivilDate) -> Option<i64> {
-    if date.year == 1900 && date.month == 1 && date.day == 0 {
+    if date.year == 1900 && date.month == 1 && date.day == 0 && !date.lotus_leap {
         return Some(0);
     }
-    if date.lotus_leap || (date.year == 1900 && date.month == 2 && date.day == 29) {
+    if date.year == 1900 && date.month == 2 && date.day == 29 && date.lotus_leap {
         return Some(60);
     }
-    if date.day == 0 || date.month == 0 {
+    if date.lotus_leap {
         return None;
     }
     let unix = days_from_civil(date.year, date.month, date.day)?;
@@ -174,7 +150,7 @@ fn date_to_serial_1900(date: CivilDate) -> Option<i64> {
 }
 
 fn date_to_serial_1904(date: CivilDate) -> Option<i64> {
-    if date.lotus_leap || date.day == 0 || date.month == 0 {
+    if date.lotus_leap {
         return None;
     }
     let unix = days_from_civil(date.year, date.month, date.day)?;
@@ -301,7 +277,7 @@ fn civil_from_days(z: i64) -> (i32, u8, u8) {
 }
 
 fn days_from_civil(y: i32, m: u8, d: u8) -> Option<i64> {
-    if !(1..=12).contains(&m) || d == 0 || d > 31 {
+    if !(0..=9999).contains(&y) || !(1..=12).contains(&m) || d == 0 || d > days_in_month(y, m) {
         return None;
     }
     let y = if m <= 2 { y - 1 } else { y };
@@ -319,6 +295,16 @@ fn days_from_civil(y: i32, m: u8, d: u8) -> Option<i64> {
     let doy = (153 * mp + 2) / 5 + u32::from(d) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     Some(era * 146_097 + i64::from(doe) - 719_468)
+}
+
+fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
