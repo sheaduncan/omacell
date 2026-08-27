@@ -21,6 +21,18 @@ pub mod codes {
     pub const CHANGESET_INVERSE: &str = "changeset.inverse";
     /// Array shape is empty or overflows.
     pub const ARRAY_SHAPE: &str = "value.array_shape";
+    /// Sheet name is empty, too long, duplicate, or contains `[]:*?/\\`.
+    pub const SHEET_NAME: &str = "sheet.name";
+    /// Sheet id is not in this workbook.
+    pub const SHEET_ID: &str = "sheet.id";
+    /// Defined name is invalid, duplicate, or missing.
+    pub const NAME_DEFINED: &str = "name.defined";
+    /// Table name is invalid, duplicate, or missing.
+    pub const TABLE_NAME: &str = "table.name";
+    /// Undo or redo stack is empty.
+    pub const UNDO_EMPTY: &str = "undo.empty";
+    /// Formula source exceeds [`crate::limits::MAX_FORMULA_LEN`].
+    pub const FORMULA_LEN: &str = "formula.len";
 }
 
 /// Excel cell error value.
@@ -262,6 +274,43 @@ impl CoreError {
     #[must_use]
     pub fn addr_parse(message: impl Into<String>) -> Self {
         Self::new(codes::ADDR_PARSE, message)
+    }
+
+    /// Invalid sheet name (F-1.1).
+    #[must_use]
+    pub fn sheet_name(message: impl Into<String>) -> Self {
+        Self::new(codes::SHEET_NAME, message)
+            .with_hint("sheet names are at most 31 characters and cannot contain []:*?/\\")
+    }
+
+    /// Unknown sheet id.
+    #[must_use]
+    pub fn sheet_id(message: impl Into<String>) -> Self {
+        Self::new(codes::SHEET_ID, message)
+    }
+
+    /// Invalid or conflicting defined name (F-1.3).
+    #[must_use]
+    pub fn name_defined(message: impl Into<String>) -> Self {
+        Self::new(codes::NAME_DEFINED, message)
+    }
+
+    /// Invalid or conflicting table name (F-1.4).
+    #[must_use]
+    pub fn table_name(message: impl Into<String>) -> Self {
+        Self::new(codes::TABLE_NAME, message)
+    }
+
+    /// Nothing to undo or redo.
+    #[must_use]
+    pub fn undo_empty(message: impl Into<String>) -> Self {
+        Self::new(codes::UNDO_EMPTY, message)
+    }
+
+    /// Formula source longer than the Excel limit.
+    #[must_use]
+    pub fn formula_len(message: impl Into<String>) -> Self {
+        Self::new(codes::FORMULA_LEN, message).with_hint("formulas are at most 8192 UTF-8 bytes")
     }
 
     /// Maps `#REF!`-class engine errors onto the Excel cell error they should
