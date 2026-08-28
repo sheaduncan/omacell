@@ -1,0 +1,4 @@
+# formula	expected	note
+=SEQUENCE(1)	1	1×1 collapses to scalar
+=SEQUENCE(0)	#NUM!	known difference: zero rows rejected before allocation
+=SEQUENCE(-1)	#NUM!	known difference: negative rows rejected before allocation

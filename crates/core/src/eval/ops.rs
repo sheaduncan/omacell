@@ -6,7 +6,7 @@ use crate::coerce::{self, CmpOp, Scalar, finite_or_num, first_error, to_number, 
 use crate::error::ErrorKind;
 use crate::formula::BinOp;
 
-use super::RuntimeValue;
+use super::{RuntimeArray, RuntimeValue};
 
 /// Broadcast two values and apply a scalar operator.
 pub(super) fn binary(op: BinOp, left: RuntimeValue, right: RuntimeValue) -> RuntimeValue {
@@ -137,6 +137,9 @@ fn lift1(v: RuntimeValue, f: impl Fn(&Scalar) -> Scalar) -> RuntimeValue {
         RuntimeValue::Ref(_) => RuntimeValue::error(ErrorKind::Value),
         RuntimeValue::Scalar(s) => RuntimeValue::Scalar(f(&s)),
         RuntimeValue::Array(a) => {
+            if let Err(error) = a.validate() {
+                return RuntimeValue::error(error);
+            }
             let values: Vec<Scalar> = a.values.iter().map(f).collect();
             RuntimeValue::array(a.rows, a.cols, values)
         }
@@ -158,7 +161,10 @@ fn lift2(
     if rows == 1 && cols == 1 {
         return RuntimeValue::Scalar(f(l.at(0, 0), r.at(0, 0)));
     }
-    let mut values = Vec::with_capacity((rows as usize) * (cols as usize));
+    let Ok(len) = RuntimeArray::checked_len(rows, cols) else {
+        return RuntimeValue::error(ErrorKind::Num);
+    };
+    let mut values = Vec::with_capacity(len);
     for i in 0..rows {
         for j in 0..cols {
             let lv = pick(&l, i, j);
@@ -192,11 +198,14 @@ fn as_grid(v: RuntimeValue) -> Result<Grid, ErrorKind> {
             cols: 1,
             values: Arc::from([s]),
         }),
-        RuntimeValue::Array(a) => Ok(Grid {
-            rows: a.rows,
-            cols: a.cols,
-            values: Arc::clone(&a.values),
-        }),
+        RuntimeValue::Array(a) => {
+            a.validate()?;
+            Ok(Grid {
+                rows: a.rows,
+                cols: a.cols,
+                values: Arc::clone(&a.values),
+            })
+        }
         RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => Err(ErrorKind::Value),
     }
 }

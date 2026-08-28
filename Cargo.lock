@@ -411,6 +411,12 @@ dependencies = [
 [[package]]
 name = "omacell-fn"
 version = "0.0.0"
+dependencies = [
+ "omacell-core",
+ "schemars",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "omacell-gui"

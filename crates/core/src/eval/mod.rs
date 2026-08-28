@@ -3,7 +3,7 @@
 mod ops;
 mod registry;
 
-pub use registry::{ArrayLift, FnDef, FnRegistry};
+pub use registry::{ArrayLift, FnBody, FnDef, FnRegistry};
 
 use std::sync::Arc;
 
@@ -13,12 +13,14 @@ use crate::addr::{CellRef, RangeRef, SheetId, SheetSpec, col_to_letters};
 use crate::coerce::Scalar;
 use crate::error::ErrorKind;
 use crate::formula::{
-    BinOp, Callee, Expr, ExprKind, Formula, PostfixOp, PrefixOp, StructuredRef, TableColumns,
+    BinOp, Callee, Expr, ExprKind, Formula, PostfixOp, PrefixOp, Span, StructuredRef, TableColumns,
     TableItem, parse,
 };
 use crate::graph::CellCoord;
 use crate::intern::Interners;
 use crate::lambda::{self, Lambda};
+use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::locale::LocaleId;
 use crate::names::{NameReferent, NameScope};
 use crate::recalc::{AsyncRequest, AsyncState, ContentHash};
 use crate::spill::SpillTable;
@@ -114,6 +116,53 @@ pub struct RuntimeArray {
     pub values: Arc<[Scalar]>,
 }
 
+/// Hard safety cap for one transient evaluator array (16M cells).
+///
+/// This keeps malformed formulas and adversarial function implementations from
+/// requesting or iterating multi-gigabyte payloads before spill bounds are
+/// checked. It still permits a full Excel column across sixteen columns.
+pub const MAX_RUNTIME_ARRAY_CELLS: u32 = MAX_ROWS * 16;
+
+impl RuntimeArray {
+    /// Validate a shape and return its allocation length.
+    pub fn checked_len(rows: u32, cols: u32) -> Result<usize, ErrorKind> {
+        if rows == 0 || cols == 0 {
+            return Err(ErrorKind::Num);
+        }
+        if rows > MAX_ROWS || cols > u32::from(MAX_COLS) {
+            return Err(ErrorKind::Num);
+        }
+        let len = rows.checked_mul(cols).ok_or(ErrorKind::Num)?;
+        if len > MAX_RUNTIME_ARRAY_CELLS {
+            return Err(ErrorKind::Num);
+        }
+        usize::try_from(len).map_err(|_| ErrorKind::Num)
+    }
+
+    /// Checked constructor. Rejects zero, out-of-grid, overflowing, or
+    /// payload-mismatched shapes **before** storing the values.
+    pub fn try_new(rows: u32, cols: u32, values: Vec<Scalar>) -> Result<Self, ErrorKind> {
+        let len = Self::checked_len(rows, cols)?;
+        if values.len() != len {
+            return Err(ErrorKind::Value);
+        }
+        Ok(Self {
+            rows,
+            cols,
+            values: values.into(),
+        })
+    }
+
+    /// Validate a public runtime array before formatting, lifting, or spilling.
+    pub fn validate(&self) -> Result<usize, ErrorKind> {
+        let len = Self::checked_len(self.rows, self.cols)?;
+        if self.values.len() != len {
+            return Err(ErrorKind::Value);
+        }
+        Ok(len)
+    }
+}
+
 /// Runtime value used during evaluation. Commit maps this to interned [`Value`].
 #[derive(Clone, Debug)]
 pub enum RuntimeValue {
@@ -155,19 +204,28 @@ impl RuntimeValue {
         }
     }
 
-    /// Build an array, collapsing 1×1 to a scalar.
+    /// Build an array, collapsing 1×1 to a scalar. Invalid shapes become errors.
     #[must_use]
     pub fn array(rows: u32, cols: u32, values: Vec<Scalar>) -> Self {
-        let rows = rows.max(1);
-        let cols = cols.max(1);
-        if rows == 1 && cols == 1 {
-            return Self::Scalar(values.into_iter().next().unwrap_or(Scalar::Empty));
+        match RuntimeArray::try_new(rows, cols, values) {
+            Ok(array) if array.rows == 1 && array.cols == 1 => {
+                Self::Scalar(array.values.first().cloned().unwrap_or(Scalar::Empty))
+            }
+            Ok(array) => Self::Array(Arc::new(array)),
+            Err(error) => Self::error(error),
         }
-        Self::Array(Arc::new(RuntimeArray {
-            rows,
-            cols,
-            values: values.into(),
-        }))
+    }
+
+    /// Checked array construction (same rules as [`RuntimeArray::try_new`]).
+    pub fn try_array(rows: u32, cols: u32, values: Vec<Scalar>) -> Result<Self, ErrorKind> {
+        let array = RuntimeArray::try_new(rows, cols, values)?;
+        if array.rows == 1 && array.cols == 1 {
+            Ok(Self::Scalar(
+                array.values.first().cloned().unwrap_or(Scalar::Empty),
+            ))
+        } else {
+            Ok(Self::Array(Arc::new(array)))
+        }
     }
 
     /// Map a stored cell value into a runtime scalar (arrays stay arrays).
@@ -209,6 +267,70 @@ pub struct ArgVal {
     pub value: RuntimeValue,
 }
 
+/// Pass-stable calculation environment, sampled once before parallel eval.
+///
+/// Not stored on frozen [`crate::workbook::WorkbookSettings`].
+#[derive(Clone, Copy, Debug)]
+pub struct PassEnv {
+    /// Excel 1900 date serial (including time fraction) for `NOW`/`TODAY`.
+    pub clock: f64,
+    /// Locale for `TEXT` / `VALUE` / `DATEVALUE` (WP-05b).
+    pub locale: LocaleId,
+    /// Seed from which volatile random functions derive per-cell values.
+    pub random_nonce: u64,
+}
+
+impl Default for PassEnv {
+    fn default() -> Self {
+        Self {
+            clock: 0.0,
+            locale: LocaleId::EN_US,
+            random_nonce: 0,
+        }
+    }
+}
+
+impl PassEnv {
+    /// Unit-interval random for `function` at `index` in `cell` on `pass`.
+    #[must_use]
+    pub fn random_unit(self, cell: CellCoord, pass: u32, function: &str, index: u32) -> f64 {
+        self.random_unit_at(cell, pass, 0, function, index)
+    }
+
+    fn random_unit_at(
+        self,
+        cell: CellCoord,
+        pass: u32,
+        call_path: u64,
+        function: &str,
+        index: u32,
+    ) -> f64 {
+        let mut h = splitmix64(self.random_nonce ^ 0xD1B5_4A32_D192_ED03);
+        for component in [
+            u64::from(pass),
+            u64::from(cell.sheet.index()),
+            u64::from(cell.row),
+            u64::from(cell.col),
+            call_path,
+            u64::from(index),
+        ] {
+            h = splitmix64(h ^ component);
+        }
+        for byte in function.as_bytes() {
+            h = splitmix64(h ^ u64::from(*byte));
+        }
+        let mixed = splitmix64(h);
+        (mixed >> 11) as f64 / ((1u64 << 53) as f64)
+    }
+}
+
+fn splitmix64(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
     binds: Vec<(String, RuntimeValue)>,
@@ -225,6 +347,8 @@ pub struct EvalCtx<'a> {
     depth: u32,
     frames: Vec<ScopeFrame>,
     pass: u32,
+    env: PassEnv,
+    call_path: u64,
     pending_async: bool,
     stale: bool,
     async_hint: Option<String>,
@@ -249,6 +373,8 @@ impl<'a> EvalCtx<'a> {
             depth: 0,
             frames: Vec::new(),
             pass,
+            env: PassEnv::default(),
+            call_path: 0,
             pending_async: false,
             stale: false,
             async_hint: None,
@@ -264,6 +390,13 @@ impl<'a> EvalCtx<'a> {
         provider: Option<&'a dyn crate::recalc::AsyncNodeProvider>,
     ) -> Self {
         self.async_provider = provider;
+        self
+    }
+
+    /// Attach the pass-stable clock / locale / random environment.
+    #[must_use]
+    pub fn with_pass_env(mut self, env: PassEnv) -> Self {
+        self.env = env;
         self
     }
 
@@ -283,6 +416,37 @@ impl<'a> EvalCtx<'a> {
     #[must_use]
     pub fn coord(&self) -> CellCoord {
         self.cell
+    }
+
+    /// Pass-stable environment for this evaluation.
+    #[must_use]
+    pub fn pass_env(&self) -> PassEnv {
+        self.env
+    }
+
+    /// Injected / sampled `NOW` serial (date + time fraction).
+    #[must_use]
+    pub fn clock(&self) -> f64 {
+        self.env.clock
+    }
+
+    /// Integer date serial for `TODAY`.
+    #[must_use]
+    pub fn today(&self) -> f64 {
+        self.env.clock.trunc()
+    }
+
+    /// Locale for text/date conversion functions.
+    #[must_use]
+    pub fn locale(&self) -> LocaleId {
+        self.env.locale
+    }
+
+    /// Deterministic unit random for this cell, function, and array index.
+    #[must_use]
+    pub fn random_unit(&self, function: &str, index: u32) -> f64 {
+        self.env
+            .random_unit_at(self.cell, self.pass, self.call_path, function, index)
     }
 
     pub(crate) fn take_flags(&mut self) -> (bool, bool, Option<String>, Vec<Reference>) {
@@ -474,7 +638,10 @@ fn materialize_ref(ctx: &EvalCtx<'_>, r: &Reference) -> RuntimeValue {
             if rows == 1 && cols == 1 {
                 return RuntimeValue::Scalar(ctx.read_cell(*sheet, r1, c1));
             }
-            let mut values = Vec::with_capacity((rows as usize) * (cols as usize));
+            let Ok(len) = RuntimeArray::checked_len(rows, cols) else {
+                return RuntimeValue::error(ErrorKind::Num);
+            };
+            let mut values = Vec::with_capacity(len);
             for row in r1..=r2 {
                 for col in c1..=c2 {
                     values.push(ctx.read_cell(*sheet, row, col));
@@ -497,6 +664,25 @@ fn materialize_ref(ctx: &EvalCtx<'_>, r: &Reference) -> RuntimeValue {
         } => {
             if sheets.is_empty() {
                 return RuntimeValue::error(ErrorKind::Ref);
+            }
+            let rows_per_sheet = end_row
+                .max(start_row)
+                .saturating_sub(*end_row.min(start_row))
+                + 1;
+            let cols = u32::from(
+                end_col
+                    .max(start_col)
+                    .saturating_sub(*end_col.min(start_col))
+                    + 1,
+            );
+            let Ok(sheet_count) = u32::try_from(sheets.len()) else {
+                return RuntimeValue::error(ErrorKind::Num);
+            };
+            let Some(rows) = rows_per_sheet.checked_mul(sheet_count) else {
+                return RuntimeValue::error(ErrorKind::Num);
+            };
+            if RuntimeArray::checked_len(rows, cols).is_err() {
+                return RuntimeValue::error(ErrorKind::Num);
             }
             let mut rows_out: Vec<Vec<Scalar>> = Vec::new();
             for sheet in sheets {
@@ -553,7 +739,7 @@ pub fn eval_expr(ctx: &mut EvalCtx<'_>, expr: &Expr) -> RuntimeValue {
         ExprKind::Postfix { expr, op } => eval_postfix(ctx, expr, *op),
         ExprKind::Binary { op, left, right } => eval_binary(ctx, *op, left, right),
         ExprKind::Paren(inner) => eval_expr(ctx, inner),
-        ExprKind::Call { callee, args } => eval_call(ctx, callee, args),
+        ExprKind::Call { callee, args } => eval_call(ctx, callee, args, expr.span),
     }
 }
 
@@ -566,7 +752,10 @@ fn eval_array_lit(ctx: &mut EvalCtx<'_>, rows: &[Vec<Expr>]) -> RuntimeValue {
     if ncols == 0 {
         return RuntimeValue::error(ErrorKind::Value);
     }
-    let mut values = Vec::with_capacity((nrows as usize) * (ncols as usize));
+    let Ok(len) = RuntimeArray::checked_len(nrows, ncols) else {
+        return RuntimeValue::error(ErrorKind::Num);
+    };
+    let mut values = Vec::with_capacity(len);
     for row in rows {
         for c in 0..ncols as usize {
             if let Some(e) = row.get(c) {
@@ -1086,15 +1275,25 @@ fn implicit_intersect(ctx: &EvalCtx<'_>, v: RuntimeValue) -> RuntimeValue {
     }
 }
 
-fn eval_call(ctx: &mut EvalCtx<'_>, callee: &Callee, args: &[Option<Expr>]) -> RuntimeValue {
-    match callee {
+fn eval_call(
+    ctx: &mut EvalCtx<'_>,
+    callee: &Callee,
+    args: &[Option<Expr>],
+    span: Span,
+) -> RuntimeValue {
+    let previous_path = ctx.call_path;
+    let span_key = u64::from(span.start).wrapping_shl(32) | u64::from(span.end);
+    ctx.call_path = splitmix64(previous_path ^ span_key);
+    let result = match callee {
         Callee::Name(name) => eval_named_call(ctx, name, args),
         Callee::Expr(e) => {
             let v = eval_expr(ctx, e);
             let argv = eval_args(ctx, args);
             lambda::apply_value(ctx, v, &argv)
         }
-    }
+    };
+    ctx.call_path = previous_path;
+    result
 }
 
 fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> RuntimeValue {
@@ -1113,14 +1312,7 @@ fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> 
         if args.len() < def.min_args as usize || args.len() > def.max_args as usize {
             return RuntimeValue::error(ErrorKind::Value);
         }
-        let argv = eval_args(ctx, args);
-        if def.async_node {
-            return eval_async(ctx, def, &argv);
-        }
-        if def.array_lift == ArrayLift::All {
-            return eval_array_lifted(ctx, def, &argv);
-        }
-        return (def.eval)(ctx, &argv);
+        return dispatch_fn(ctx, def, args);
     }
     // Defined name that is a lambda / formula.
     if let Some(n) = ctx.wb.names().resolve(ctx.cell.sheet, name) {
@@ -1132,7 +1324,27 @@ fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> 
     registry::name_error()
 }
 
-fn eval_array_lifted(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> RuntimeValue {
+fn dispatch_fn(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[Option<Expr>]) -> RuntimeValue {
+    match def.body {
+        FnBody::Lazy(eval) => eval(ctx, args),
+        FnBody::Eager(eval) => {
+            let argv = eval_args(ctx, args);
+            if def.async_node {
+                eval_async(ctx, def, &argv)
+            } else if def.array_lift == ArrayLift::All {
+                eval_array_lifted(ctx, eval, &argv)
+            } else {
+                eval(ctx, &argv)
+            }
+        }
+    }
+}
+
+fn eval_array_lifted(
+    ctx: &mut EvalCtx<'_>,
+    eval: fn(&mut EvalCtx<'_>, &[ArgVal]) -> RuntimeValue,
+    args: &[ArgVal],
+) -> RuntimeValue {
     let args: Vec<ArgVal> = args
         .iter()
         .map(|arg| ArgVal {
@@ -1144,15 +1356,21 @@ fn eval_array_lifted(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> Run
     let mut cols = 1u32;
     for arg in &args {
         if let RuntimeValue::Array(array) = &arg.value {
+            if let Err(error) = array.validate() {
+                return RuntimeValue::error(error);
+            }
             rows = rows.max(array.rows);
             cols = cols.max(array.cols);
         }
     }
     if rows == 1 && cols == 1 {
-        return (def.eval)(ctx, &args);
+        return eval(ctx, &args);
     }
 
-    let mut values = Vec::with_capacity((rows as usize).saturating_mul(cols as usize));
+    let Ok(len) = RuntimeArray::checked_len(rows, cols) else {
+        return RuntimeValue::error(ErrorKind::Num);
+    };
+    let mut values = Vec::with_capacity(len);
     for row in 0..rows {
         for col in 0..cols {
             let cell_args: Vec<ArgVal> = args
@@ -1162,15 +1380,17 @@ fn eval_array_lifted(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> Run
                     value: RuntimeValue::Scalar(lifted_scalar(&arg.value, row, col)),
                 })
                 .collect();
-            let result = (def.eval)(ctx, &cell_args);
+            let result = eval(ctx, &cell_args);
             values.push(match result {
                 RuntimeValue::Scalar(scalar) => scalar,
-                RuntimeValue::Array(array) if array.rows == 1 && array.cols == 1 => {
-                    array.values.first().cloned().unwrap_or(Scalar::Empty)
-                }
-                RuntimeValue::Array(_) | RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => {
-                    Scalar::Error(ErrorKind::Value)
-                }
+                RuntimeValue::Array(array) => match array.validate() {
+                    Ok(_) if array.rows == 1 && array.cols == 1 => {
+                        array.values.first().cloned().unwrap_or(Scalar::Empty)
+                    }
+                    Ok(_) => Scalar::Error(ErrorKind::Value),
+                    Err(error) => Scalar::Error(error),
+                },
+                RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => Scalar::Error(ErrorKind::Value),
             });
         }
     }
@@ -1213,10 +1433,20 @@ fn eval_args(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> Vec<ArgVal> {
             },
             Some(e) => ArgVal {
                 omitted: false,
-                value: eval_expr(ctx, e),
+                value: validate_runtime_array(eval_expr(ctx, e)),
             },
         })
         .collect()
+}
+
+fn validate_runtime_array(value: RuntimeValue) -> RuntimeValue {
+    match value {
+        RuntimeValue::Array(array) => match array.validate() {
+            Ok(_) => RuntimeValue::Array(array),
+            Err(error) => RuntimeValue::error(error),
+        },
+        other => other,
+    }
 }
 
 fn eval_async(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> RuntimeValue {
@@ -1243,7 +1473,20 @@ pub fn eval_formula(
     ast: &Expr,
     pass: u32,
 ) -> (RuntimeValue, EvalFlags) {
-    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass);
+    eval_formula_in(wb, registry, spill, cell, ast, pass, PassEnv::default())
+}
+
+/// [`eval_formula`] with an explicit pass environment.
+pub fn eval_formula_in(
+    wb: &Workbook,
+    registry: &FnRegistry,
+    spill: &SpillTable,
+    cell: CellCoord,
+    ast: &Expr,
+    pass: u32,
+    env: PassEnv,
+) -> (RuntimeValue, EvalFlags) {
+    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass).with_pass_env(env);
     let raw = eval_expr(&mut ctx, ast);
     let value = prepare_result(&ctx, raw);
     let (pending, stale, hint, dynamic) = ctx.take_flags();
@@ -1272,14 +1515,14 @@ pub struct EvalFlags {
 }
 
 fn prepare_result(ctx: &EvalCtx<'_>, raw: RuntimeValue) -> RuntimeValue {
-    match raw {
+    validate_runtime_array(match raw {
         RuntimeValue::Ref(r) => {
             // Formula result: single cell → scalar; multi-cell → array (spill).
             ctx.materialize(RuntimeValue::Ref(r))
         }
         RuntimeValue::Lambda(l) => RuntimeValue::Lambda(l),
         other => other,
-    }
+    })
 }
 
 /// Format a runtime value for corpus comparison.
@@ -1318,6 +1561,9 @@ fn format_number(n: f64) -> String {
 }
 
 fn format_array(a: &RuntimeArray) -> String {
+    if let Err(error) = a.validate() {
+        return error.as_str().to_string();
+    }
     let mut out = String::from("{");
     let cols = a.cols as usize;
     for r in 0..a.rows as usize {
@@ -1328,8 +1574,9 @@ fn format_array(a: &RuntimeArray) -> String {
             if c > 0 {
                 out.push(',');
             }
+            let index = r.saturating_mul(cols).saturating_add(c);
             out.push_str(&format_scalar(
-                a.values.get(r * cols + c).unwrap_or(&Scalar::Empty),
+                a.values.get(index).unwrap_or(&Scalar::Empty),
             ));
         }
     }

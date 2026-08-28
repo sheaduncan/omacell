@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omacell.dev/schemas/functions.schema.json",
+  "title": "Omacell function catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "functions"],
+  "properties": {
+    "schema": { "type": "integer", "const": 1 },
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "aliases",
+          "tier",
+          "category",
+          "arg_kinds",
+          "min_args",
+          "max_args",
+          "strategy",
+          "volatile",
+          "array",
+          "async_node",
+          "signature",
+          "doc"
+        ],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "tier": { "type": "integer", "minimum": 0, "maximum": 2 },
+          "category": { "type": "string", "minLength": 1 },
+          "arg_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["number", "text", "logical", "any", "range", "array"]
+            }
+          },
+          "min_args": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "max_args": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "strategy": { "type": "string", "enum": ["eager", "lazy"] },
+          "volatile": { "type": "boolean" },
+          "array": {
+            "type": "string",
+            "enum": ["none", "lift_all", "returns_array"]
+          },
+          "async_node": { "type": "boolean" },
+          "signature": { "type": "string", "minLength": 1 },
+          "doc": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

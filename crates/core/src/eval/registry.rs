@@ -3,6 +3,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::error::ErrorKind;
+use crate::formula::Expr;
 
 use super::{ArgVal, EvalCtx, RuntimeValue};
 
@@ -14,6 +15,16 @@ pub enum ArrayLift {
     None,
     /// Lift the function over arrays / ranges element-wise (`ABS`).
     All,
+}
+
+/// Eager vs lazy argument evaluation. `LET`/`LAMBDA`/`ISOMITTED` stay
+/// evaluator language constructs and are not registered here.
+#[derive(Clone, Copy, Debug)]
+pub enum FnBody {
+    /// Arguments are evaluated before the implementation runs.
+    Eager(fn(&mut EvalCtx<'_>, &[ArgVal]) -> RuntimeValue),
+    /// Implementation receives unevaluated argument expressions.
+    Lazy(fn(&mut EvalCtx<'_>, &[Option<Expr>]) -> RuntimeValue),
 }
 
 /// One registered function.
@@ -29,10 +40,52 @@ pub struct FnDef {
     pub volatile: bool,
     /// Asynchronous graph node (A-3.3).
     pub async_node: bool,
-    /// Array-lifting behaviour.
+    /// Array-lifting behaviour (eager functions only).
     pub array_lift: ArrayLift,
     /// Implementation. Must not panic on any input.
-    pub eval: fn(&mut EvalCtx<'_>, &[ArgVal]) -> RuntimeValue,
+    pub body: FnBody,
+}
+
+impl FnDef {
+    /// Eager function (evaluated arguments).
+    pub const fn eager(
+        name: &'static str,
+        min_args: u8,
+        max_args: u8,
+        volatile: bool,
+        async_node: bool,
+        array_lift: ArrayLift,
+        eval: fn(&mut EvalCtx<'_>, &[ArgVal]) -> RuntimeValue,
+    ) -> Self {
+        Self {
+            name,
+            min_args,
+            max_args,
+            volatile,
+            async_node,
+            array_lift,
+            body: FnBody::Eager(eval),
+        }
+    }
+
+    /// Lazy / special-form function (unevaluated argument expressions).
+    pub const fn lazy(
+        name: &'static str,
+        min_args: u8,
+        max_args: u8,
+        volatile: bool,
+        eval: fn(&mut EvalCtx<'_>, &[Option<Expr>]) -> RuntimeValue,
+    ) -> Self {
+        Self {
+            name,
+            min_args,
+            max_args,
+            volatile,
+            async_node: false,
+            array_lift: ArrayLift::None,
+            body: FnBody::Lazy(eval),
+        }
+    }
 }
 
 /// Case-insensitive function table. Unknown names evaluate to `#NAME?`.

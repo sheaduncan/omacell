@@ -148,15 +148,15 @@ fn async_pending_then_ready() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
     let mut reg = FnRegistry::new();
-    reg.register(omacell_core::eval::FnDef {
-        name: "AI",
-        min_args: 1,
-        max_args: 8,
-        volatile: false,
-        async_node: true,
-        array_lift: omacell_core::eval::ArrayLift::None,
-        eval: |_, _| omacell_core::eval::RuntimeValue::error(omacell_core::error::ErrorKind::Na),
-    });
+    reg.register(omacell_core::eval::FnDef::eager(
+        "AI",
+        1,
+        8,
+        false,
+        true,
+        omacell_core::eval::ArrayLift::None,
+        |_, _| omacell_core::eval::RuntimeValue::error(omacell_core::error::ErrorKind::Na),
+    ));
     wb.set_formula_text(s, 0, 0, "=AI(\"x\")+1").unwrap();
     wb.set_formula_text(s, 1, 0, "=A1").unwrap();
     let mut eng = RecalcEngine::new(reg);
@@ -312,15 +312,15 @@ fn whole_column_is_one_bucket() {
 #[test]
 fn fn_registry_lookup_is_case_insensitive() {
     let mut r = FnRegistry::new();
-    r.register(omacell_core::eval::FnDef {
-        name: "SUM",
-        min_args: 1,
-        max_args: 255,
-        volatile: false,
-        async_node: false,
-        array_lift: omacell_core::eval::ArrayLift::None,
-        eval: |_, _| omacell_core::eval::RuntimeValue::error(omacell_core::error::ErrorKind::Value),
-    });
+    r.register(omacell_core::eval::FnDef::eager(
+        "SUM",
+        1,
+        255,
+        false,
+        false,
+        omacell_core::eval::ArrayLift::None,
+        |_, _| omacell_core::eval::RuntimeValue::error(omacell_core::error::ErrorKind::Value),
+    ));
     assert!(r.lookup("sum").is_some());
     assert!(r.lookup("Sum").is_some());
     assert!(r.lookup("NOPE").is_none());
@@ -341,15 +341,15 @@ fn registry_volatile_metadata_redirties_the_formula_each_pass() {
     let s = wb.active_sheet();
     wb.set_formula_text(s, 0, 0, "=TICK()").unwrap();
     let mut registry = FnRegistry::new();
-    registry.register(omacell_core::eval::FnDef {
-        name: "TICK",
-        min_args: 0,
-        max_args: 0,
-        volatile: true,
-        async_node: false,
-        array_lift: omacell_core::eval::ArrayLift::None,
-        eval: tick,
-    });
+    registry.register(omacell_core::eval::FnDef::eager(
+        "TICK",
+        0,
+        0,
+        true,
+        false,
+        omacell_core::eval::ArrayLift::None,
+        tick,
+    ));
     let mut eng = RecalcEngine::new(registry);
     eng.recalc_full(&mut wb);
     assert_eq!(display(&wb, 0, 0), "1");

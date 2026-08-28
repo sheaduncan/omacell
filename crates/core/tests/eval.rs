@@ -42,51 +42,51 @@ fn read_tsv(path: &Path) -> Vec<Vec<String>> {
 
 fn corpus_registry() -> FnRegistry {
     let mut r = FnRegistry::new();
-    r.register(FnDef {
-        name: "SUM",
-        min_args: 1,
-        max_args: 255,
-        volatile: false,
-        async_node: false,
-        array_lift: omacell_core::eval::ArrayLift::None,
-        eval: eval_sum,
-    });
-    r.register(FnDef {
-        name: "IF",
-        min_args: 2,
-        max_args: 3,
-        volatile: false,
-        async_node: false,
-        array_lift: omacell_core::eval::ArrayLift::None,
-        eval: eval_if,
-    });
-    r.register(FnDef {
-        name: "INDIRECT",
-        min_args: 1,
-        max_args: 2,
-        volatile: true,
-        async_node: false,
-        array_lift: omacell_core::eval::ArrayLift::None,
-        eval: eval_indirect,
-    });
-    r.register(FnDef {
-        name: "NOW",
-        min_args: 0,
-        max_args: 0,
-        volatile: true,
-        async_node: false,
-        array_lift: omacell_core::eval::ArrayLift::None,
-        eval: eval_now,
-    });
-    r.register(FnDef {
-        name: "AI",
-        min_args: 1,
-        max_args: 8,
-        volatile: false,
-        async_node: true,
-        array_lift: omacell_core::eval::ArrayLift::None,
-        eval: eval_ai_stub,
-    });
+    r.register(FnDef::eager(
+        "SUM",
+        1,
+        255,
+        false,
+        false,
+        omacell_core::eval::ArrayLift::None,
+        eval_sum,
+    ));
+    r.register(FnDef::eager(
+        "IF",
+        2,
+        3,
+        false,
+        false,
+        omacell_core::eval::ArrayLift::None,
+        eval_if,
+    ));
+    r.register(FnDef::eager(
+        "INDIRECT",
+        1,
+        2,
+        true,
+        false,
+        omacell_core::eval::ArrayLift::None,
+        eval_indirect,
+    ));
+    r.register(FnDef::eager(
+        "NOW",
+        0,
+        0,
+        true,
+        false,
+        omacell_core::eval::ArrayLift::None,
+        eval_now,
+    ));
+    r.register(FnDef::eager(
+        "AI",
+        1,
+        8,
+        false,
+        true,
+        omacell_core::eval::ArrayLift::None,
+        eval_ai_stub,
+    ));
     r
 }
 
@@ -698,8 +698,12 @@ fn stub_registry_unknown_is_name() {
 
 #[test]
 fn runtime_formatter_is_safe_for_a_short_array_payload() {
-    let value = RuntimeValue::array(2, 2, Vec::new());
-    assert_eq!(format_runtime(&value), "{,;,}");
+    let value = RuntimeValue::Array(std::sync::Arc::new(omacell_core::eval::RuntimeArray {
+        rows: 2,
+        cols: 2,
+        values: std::sync::Arc::from(Vec::new()),
+    }));
+    assert_eq!(format_runtime(&value), "#VALUE!");
 }
 
 #[test]
@@ -719,15 +723,15 @@ fn registry_array_lift_applies_a_scalar_function_elementwise() {
     }
 
     let mut registry = FnRegistry::new();
-    registry.register(FnDef {
-        name: "DOUBLE",
-        min_args: 1,
-        max_args: 1,
-        volatile: false,
-        async_node: false,
-        array_lift: omacell_core::eval::ArrayLift::All,
-        eval: double,
-    });
+    registry.register(FnDef::eager(
+        "DOUBLE",
+        1,
+        1,
+        false,
+        false,
+        omacell_core::eval::ArrayLift::All,
+        double,
+    ));
     let mut wb = Workbook::new();
     let sheet = wb.active_sheet();
     wb.set_formula_text(sheet, 0, 0, "=DOUBLE({1,2})").unwrap();

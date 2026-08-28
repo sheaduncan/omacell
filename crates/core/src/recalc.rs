@@ -9,11 +9,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::coerce::Scalar;
 use crate::error::ErrorKind;
 use crate::eval::{
-    ArgVal, AstCache, EvalCtx, EvalFlags, FnRegistry, Reference, RuntimeValue, eval_expr,
-    eval_formula, format_runtime,
+    ArgVal, AstCache, EvalCtx, EvalFlags, FnRegistry, PassEnv, Reference, RuntimeValue, eval_expr,
+    eval_formula_in, format_runtime,
 };
 use crate::graph::{CellCoord, DepGraph};
 use crate::intern::ArrayPayload;
+use crate::locale::LocaleId;
 use crate::spill::{SpillRegion, SpillTable, blocks_spill};
 use crate::storage::{CellFlags, CellSlot};
 use crate::value::{Array2D, Value};
@@ -274,6 +275,10 @@ pub struct RecalcEngine {
     threads: usize,
     pool: Option<rayon::ThreadPool>,
     pass: u32,
+    clock: Option<f64>,
+    random_nonce: Option<u64>,
+    locale: LocaleId,
+    pass_env: PassEnv,
     async_provider: Option<Arc<dyn AsyncNodeProvider>>,
     /// Last dynamic-resolved refs per cell.
     dynamic_edges: FxHashMap<CellCoord, Vec<Reference>>,
@@ -293,6 +298,10 @@ impl RecalcEngine {
             threads: 1,
             pool: None,
             pass: 0,
+            clock: None,
+            random_nonce: None,
+            locale: LocaleId::EN_US,
+            pass_env: PassEnv::default(),
             async_provider: None,
             dynamic_edges: FxHashMap::default(),
             orphaned_spills: FxHashSet::default(),
@@ -325,6 +334,21 @@ impl RecalcEngine {
     /// Install an async provider.
     pub fn set_async_provider(&mut self, provider: Arc<dyn AsyncNodeProvider>) {
         self.async_provider = Some(provider);
+    }
+
+    /// Inject a pass-stable clock serial (`NOW`/`TODAY`). `None` samples wall time.
+    pub fn set_clock(&mut self, serial: Option<f64>) {
+        self.clock = serial;
+    }
+
+    /// Inject the random nonce used by volatile random functions. `None` samples.
+    pub fn set_random_nonce(&mut self, nonce: Option<u64>) {
+        self.random_nonce = nonce;
+    }
+
+    /// Locale projected into [`PassEnv`] (not stored on workbook settings).
+    pub fn set_locale(&mut self, locale: LocaleId) {
+        self.locale = locale;
     }
 
     /// Pin the rayon pool to `n` threads (determinism tests use 1 vs 8).
@@ -468,9 +492,18 @@ impl RecalcEngine {
         }
     }
 
+    fn sample_pass_env(&self) -> PassEnv {
+        PassEnv {
+            clock: self.clock.unwrap_or_else(wall_clock_serial),
+            locale: self.locale,
+            random_nonce: self.random_nonce.unwrap_or_else(fresh_nonce),
+        }
+    }
+
     fn run(&mut self, wb: &mut Workbook, full: bool) -> RecalcResult {
         let t0 = Instant::now();
         self.pass = self.pass.saturating_add(1);
+        self.pass_env = self.sample_pass_env();
         let undo = wb.undo_log_mut().is_enabled();
         wb.undo_log_mut().set_enabled(false);
         for origin in self.orphaned_spills.drain() {
@@ -596,6 +629,7 @@ impl RecalcEngine {
             let spill = &self.spill;
             let asts = &self.asts;
             let pass = self.pass;
+            let env = self.pass_env;
             let provider = self.async_provider.clone();
             let eval_one = |cell: CellCoord| {
                 eval_one_cell(
@@ -604,6 +638,7 @@ impl RecalcEngine {
                     spill,
                     asts,
                     pass,
+                    env,
                     provider.as_deref(),
                     cell,
                 )
@@ -689,13 +724,14 @@ impl RecalcEngine {
                 let Ok(formula) = self.asts.get_or_parse(&src) else {
                     continue;
                 };
-                let (value, _) = eval_formula(
+                let (value, _) = eval_formula_in(
                     wb,
                     &self.registry,
                     &self.spill,
                     cell,
                     &formula.ast,
                     self.pass,
+                    self.pass_env,
                 );
                 let after = match &value {
                     RuntimeValue::Scalar(Scalar::Number(v)) => *v,
@@ -713,12 +749,14 @@ impl RecalcEngine {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn eval_one_cell(
     wb: &Workbook,
     registry: &FnRegistry,
     spill: &SpillTable,
     asts: &AstCache,
     pass: u32,
+    env: PassEnv,
     provider: Option<&dyn AsyncNodeProvider>,
     cell: CellCoord,
 ) -> Option<(CellCoord, RuntimeValue, EvalFlags, bool)> {
@@ -727,7 +765,9 @@ fn eval_one_cell(
     let src = wb.intern().formulas.get(fid)?;
     let cse = slot.flags.array();
     let formula = asts.peek(src)?;
-    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass).with_async_provider(provider);
+    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass)
+        .with_pass_env(env)
+        .with_async_provider(provider);
     let raw = eval_expr(&mut ctx, &formula.ast);
     let (pending, is_stale, hint, dynamic) = ctx.take_flags();
     let value = match raw {
@@ -817,12 +857,18 @@ fn commit_value(
             commit_scalar(wb, cell, s, flags(stale));
             None
         }
-        RuntimeValue::Array(a) if cse || (a.rows == 1 && a.cols == 1) => {
-            let s = a.values.first().cloned().unwrap_or(Scalar::Empty);
-            commit_scalar(wb, cell, s, flags(stale).with(CellFlags::ARRAY, cse));
-            None
-        }
-        RuntimeValue::Array(a) => spill_array(wb, spill, cell, &a, stale),
+        RuntimeValue::Array(a) => match a.validate() {
+            Err(error) => {
+                commit_scalar(wb, cell, Scalar::Error(error), flags(stale));
+                None
+            }
+            Ok(_) if cse || (a.rows == 1 && a.cols == 1) => {
+                let s = a.values.first().cloned().unwrap_or(Scalar::Empty);
+                commit_scalar(wb, cell, s, flags(stale).with(CellFlags::ARRAY, cse));
+                None
+            }
+            Ok(_) => spill_array(wb, spill, cell, &a, stale),
+        },
         RuntimeValue::Ref(_) => {
             commit_scalar(wb, cell, Scalar::Error(ErrorKind::Value), flags(stale));
             None
@@ -1003,6 +1049,22 @@ fn intern_scalar(wb: &mut Workbook, s: Scalar) -> Value {
         Scalar::Text(t) => Value::Text(wb.intern_text(&t)),
         Scalar::Error(e) => Value::Error(e),
     }
+}
+
+fn wall_clock_serial() -> f64 {
+    // 1 January 1970 in the 1900 date system (Excel).
+    const UNIX_EPOCH_SERIAL_1900: f64 = 25_569.0;
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => UNIX_EPOCH_SERIAL_1900 + duration.as_secs_f64() / 86_400.0,
+        Err(_) => 0.0,
+    }
+}
+
+fn fresh_nonce() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64 ^ duration.as_secs())
+        .unwrap_or(0xA5A5_A5A5_A5A5_A5A5)
 }
 
 /// Display a stored cell for corpora (resolves interned text / arrays).

@@ -13,6 +13,9 @@ libfuzzer-sys = "0.4"
 [dependencies.omacell-core]
 path = "../crates/core"
 
+[dependencies.omacell-fn]
+path = "../crates/fn"
+
 [[bin]]
 name = "parse_formula"
 path = "fuzz_targets/parse_formula.rs"
@@ -23,6 +26,13 @@ bench = false
 [[bin]]
 name = "parse_numfmt"
 path = "fuzz_targets/parse_numfmt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fn_eager"
+path = "fuzz_targets/fn_eager.rs"
 test = false
 doc = false
 bench = false
