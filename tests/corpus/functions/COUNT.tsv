@@ -1,0 +1,11 @@
+# formula	expected	note
+=COUNT(1,2,3)	3	three numbers
+=COUNT(1,TRUE)	2	TRUE counts as literal
+=COUNT({1,TRUE})	1	array skips logical; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNT(1,"2")	2	numeric text literal
+=COUNT({1,"x"})	1	array skips text
+=COUNT(#N/A,1)	1	errors not counted
+=COUNT("x")	0	non-numeric text
+=COUNT(1,2,)	2	omitted skipped; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNT(FALSE)	1	FALSE counts as literal
+=COUNT({1,2,3})	3	array

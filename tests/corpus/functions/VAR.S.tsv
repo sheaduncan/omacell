@@ -1,0 +1,11 @@
+# formula	expected	note
+=VAR.S(1,2,3)	1	sample var
+=VAR.S(5,5,5)	0	no var
+=VAR.S(1)	#DIV/0!	n=1
+=VAR.S({1,2,3})	1	array
+=VAR.S(1,#N/A)	#N/A	error
+=VAR.S(TRUE,FALSE,2)	1	literals
+=VAR.S(-1,1)	2	two values
+=VAR.S(1,2,3,4,5)	2.5	1..5
+=VAR.S(2,4)	2	two
+=VAR.S(0,0,1)	0.333333333	zeros and one

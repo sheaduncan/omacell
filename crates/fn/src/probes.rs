@@ -1,79 +1,18 @@
-//! Representative probe functions. WP-05a/b/c replace these registrations.
+//! Remaining probe functions owned by WP-05b (`NOW`) and WP-05c (`SEQUENCE`).
 
 use omacell_core::coerce::{self, Scalar};
 use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeValue};
-use omacell_core::formula::Expr;
 
+use crate::common::register_specs;
 use crate::metadata::{ArgKind, ArrayBehavior, FunctionSpec};
 
-/// Probe specs in declaration order (JSON output is re-sorted by name).
-pub const PROBE_SPECS: &[FunctionSpec] = &[ABS, SUM, IF, NOW, RAND, SEQUENCE];
+/// Probe specs still shipped until WP-05b/05c replace them.
+pub const PROBE_SPECS: &[FunctionSpec] = &[NOW, SEQUENCE];
 
-/// Register probe functions (and aliases) onto `registry`.
+/// Register remaining probe functions (and aliases) onto `registry`.
 pub fn register_probes(registry: &mut FnRegistry) {
-    for spec in PROBE_SPECS {
-        registry.register(spec.to_fn_def());
-        for alias in spec.aliases {
-            let mut def = spec.to_fn_def();
-            def.name = alias;
-            registry.register(def);
-        }
-    }
-}
-
-crate::define_fn! {
-const ABS = {
-    name: "ABS",
-    aliases: &[],
-    tier: 0,
-    category: "math",
-    arg_kinds: &[ArgKind::Number],
-    min_args: 1,
-    max_args: 1,
-    volatile: false,
-    array: ArrayBehavior::LiftAll,
-    async_node: false,
-    signature: "ABS(number)",
-    doc: "Absolute value of a number.",
-    body: FnBody::Eager(abs_impl),
-};
-}
-
-crate::define_fn! {
-const SUM = {
-    name: "SUM",
-    aliases: &[],
-    tier: 0,
-    category: "math",
-    arg_kinds: &[ArgKind::Any],
-    min_args: 1,
-    max_args: 255,
-    volatile: false,
-    array: ArrayBehavior::None,
-    async_node: false,
-    signature: "SUM(number1, [number2], ...)",
-    doc: "Adds all numbers in the arguments, walking ranges.",
-    body: FnBody::Eager(sum_impl),
-};
-}
-
-crate::define_fn! {
-const IF = {
-    name: "IF",
-    aliases: &[],
-    tier: 0,
-    category: "logical",
-    arg_kinds: &[ArgKind::Logical, ArgKind::Any, ArgKind::Any],
-    min_args: 2,
-    max_args: 3,
-    volatile: false,
-    array: ArrayBehavior::None,
-    async_node: false,
-    signature: "IF(logical_test, value_if_true, [value_if_false])",
-    doc: "Returns one value if the test is TRUE and another if FALSE. Unselected branches are not evaluated.",
-    body: FnBody::Lazy(if_impl),
-};
+    register_specs(registry, PROBE_SPECS);
 }
 
 crate::define_fn! {
@@ -95,24 +34,6 @@ const NOW = {
 }
 
 crate::define_fn! {
-const RAND = {
-    name: "RAND",
-    aliases: &[],
-    tier: 0,
-    category: "math",
-    arg_kinds: &[],
-    min_args: 0,
-    max_args: 0,
-    volatile: true,
-    array: ArrayBehavior::None,
-    async_node: false,
-    signature: "RAND()",
-    doc: "Uniform random in [0, 1), derived from the pass nonce and cell.",
-    body: FnBody::Eager(rand_impl),
-};
-}
-
-crate::define_fn! {
 const SEQUENCE = {
     name: "SEQUENCE",
     aliases: &[],
@@ -130,86 +51,8 @@ const SEQUENCE = {
 };
 }
 
-fn abs_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
-    let value = args
-        .first()
-        .map(|arg| ctx.materialize(arg.value.clone()))
-        .unwrap_or(RuntimeValue::error(ErrorKind::Value));
-    match value {
-        RuntimeValue::Scalar(scalar) => match coerce::to_number(&scalar) {
-            Ok(n) => RuntimeValue::Scalar(Scalar::Number(n.abs())),
-            Err(e) => RuntimeValue::error(e),
-        },
-        _ => RuntimeValue::error(ErrorKind::Value),
-    }
-}
-
-fn sum_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
-    let mut acc = 0.0;
-    let mut err = None;
-    let mut add = |s: Scalar| {
-        if err.is_some() {
-            return;
-        }
-        if let Some(e) = s.error() {
-            err = Some(e);
-            return;
-        }
-        if matches!(s, Scalar::Text(_) | Scalar::Empty) {
-            return;
-        }
-        match coerce::to_number(&s) {
-            Ok(n) => acc += n,
-            Err(e) => err = Some(e),
-        }
-    };
-    for a in args {
-        if a.omitted {
-            continue;
-        }
-        match &a.value {
-            RuntimeValue::Ref(r) => ctx.for_each_cell(r, &mut add),
-            RuntimeValue::Scalar(s) => add(s.clone()),
-            RuntimeValue::Array(ar) => {
-                for s in ar.values.iter() {
-                    add(s.clone());
-                }
-            }
-            RuntimeValue::Lambda(_) => return RuntimeValue::error(ErrorKind::Value),
-        }
-    }
-    match err {
-        Some(e) => RuntimeValue::error(e),
-        None => RuntimeValue::Scalar(Scalar::Number(acc)),
-    }
-}
-
-fn if_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
-    let Some(Some(test_expr)) = args.first() else {
-        return RuntimeValue::error(ErrorKind::Value);
-    };
-    let test = omacell_core::eval::eval_expr(ctx, test_expr);
-    let test = ctx.materialize(test);
-    let RuntimeValue::Scalar(scalar) = test else {
-        return RuntimeValue::error(ErrorKind::Value);
-    };
-    let cond = match coerce::to_bool(&scalar) {
-        Ok(b) => b,
-        Err(e) => return RuntimeValue::error(e),
-    };
-    let branch = if cond { 1 } else { 2 };
-    match args.get(branch) {
-        Some(Some(expr)) => omacell_core::eval::eval_expr(ctx, expr),
-        _ => RuntimeValue::Scalar(Scalar::Bool(false)),
-    }
-}
-
 fn now_impl(ctx: &mut EvalCtx<'_>, _args: &[ArgVal]) -> RuntimeValue {
     RuntimeValue::Scalar(Scalar::Number(ctx.clock()))
-}
-
-fn rand_impl(ctx: &mut EvalCtx<'_>, _args: &[ArgVal]) -> RuntimeValue {
-    RuntimeValue::Scalar(Scalar::Number(ctx.random_unit("RAND", 0)))
 }
 
 fn sequence_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {

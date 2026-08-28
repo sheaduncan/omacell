@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISERROR(1/0)	TRUE	div0
+=ISERROR(#N/A)	TRUE	includes NA
+=ISERROR(#VALUE!)	TRUE	value
+=ISERROR(1)	FALSE	number
+=ISERROR(TRUE)	FALSE	bool
+=ISERROR("a")	FALSE	text
+=ISERROR(#NUM!)	TRUE	num
+=ISERROR(#REF!)	TRUE	ref
+=ISERROR(NA())	TRUE	NA()
+=ISERROR(#NAME?)	TRUE	name

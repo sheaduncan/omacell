@@ -1,0 +1,11 @@
+# formula	expected	note
+=PI()*0	0	finite
+=DEGREES(PI())	180	pi radians is 180 degrees
+=COS(PI())	-1	cos pi
+=SIN(PI())*0	0	sin pi near 0
+=PI()>3	TRUE	greater than 3
+=PI()<4	TRUE	less than 4
+=PI()+PI()-2*PI()	0	additive inverse
+=IF(PI()>0,1,0)	1	positive
+=SIGN(PI())	1	sign
+=INT(PI())	3	INT of pi

@@ -1,0 +1,11 @@
+# formula	expected	note
+=LOG(100)	2	default base 10
+=LOG(8,2)	3	base 2
+=LOG(1,10)	0	log 1
+=LOG(0)	#NUM!	non-positive
+=LOG(-1)	#NUM!	negative
+=LOG(8,1)	#NUM!	base 1
+=LOG(8,0)	#NUM!	base 0
+=LOG(TRUE,10)	0	TRUE
+=LOG(#N/A)	#N/A	error
+=LOG("100")	2	numeric text

@@ -1,0 +1,11 @@
+# formula	expected	note
+=INTERCEPT({1,2,3},{1,2,3})	0	through origin
+=INTERCEPT({2,3,4},{1,2,3})	1	y=x+1
+=INTERCEPT({1,1,1},{1,2,3})	1	flat 1
+=INTERCEPT({1,2},{1})	#N/A	mismatch; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=INTERCEPT({1,#N/A},{1,2})	#N/A	error
+=INTERCEPT({1,2},{1,1})	#DIV/0!	zero x var
+=INTERCEPT({0,1},{0,1})	0	two
+=INTERCEPT({1,3},{0,1})	1	y=2x+1
+=INTERCEPT({-1,1},{-1,1})	0	signed
+=INTERCEPT({5,7},{1,2})	3	y=2x+3

@@ -1,0 +1,11 @@
+# formula	expected	note
+=RAND()*0	0	RAND returns a number (times zero)
+=IF(RAND()<1,1,0)	1	upper bound exclusive
+=IF(RAND()>=0,1,0)	1	lower bound inclusive
+=IF(AND(RAND()>=0,RAND()<1),1,0)	1	both bounds
+=SIGN(RAND()+1)	1	RAND+1 is positive
+=INT(RAND())	0	INT of unit interval is 0
+=ROUNDDOWN(RAND(),0)	0	rounddown of [0,1) is 0
+=IF(ISNUMBER(RAND()),1,0)	1	result is a number
+=RAND()^0	1	nonzero RAND to power 0; RAND=0 would be #NUM! rarely
+=IFERROR(RAND()*0,9)	0	RAND never makes +1 zero

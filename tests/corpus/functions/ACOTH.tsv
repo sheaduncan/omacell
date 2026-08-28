@@ -1,0 +1,11 @@
+# formula	expected	note
+=ACOTH(2)*0	0	domain |x|>1
+=ACOTH(1)	#NUM!	domain |x|>1
+=ACOTH(0)	#NUM!	zero
+=ACOTH(-1)	#NUM!	at 1
+=ACOTH(TRUE)	#NUM!	TRUE is 1
+=ACOTH("2")*0	0	numeric text
+=ACOTH("x")	#VALUE!	bad text
+=ACOTH(#N/A)	#N/A	error
+=SIGN(ACOTH(2))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=IF(ACOTH(2)>0,1,0)	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

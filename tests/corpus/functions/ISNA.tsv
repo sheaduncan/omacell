@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISNA(#N/A)	TRUE	NA
+=ISNA(NA())	TRUE	NA()
+=ISNA(1/0)	FALSE	div0
+=ISNA(1)	FALSE	number
+=ISNA(TRUE)	FALSE	bool
+=ISNA("a")	FALSE	text
+=ISNA(#VALUE!)	FALSE	value
+=ISNA(#NUM!)	FALSE	num
+=ISNA(#REF!)	FALSE	ref
+=ISNA(IFNA(#N/A,1))	FALSE	replaced; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

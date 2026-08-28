@@ -1,0 +1,11 @@
+# formula	expected	note
+=XOR(TRUE,FALSE)	TRUE	odd number of trues
+=XOR(TRUE,TRUE)	FALSE	even
+=XOR(FALSE,FALSE)	FALSE	zero
+=XOR(TRUE,TRUE,TRUE)	TRUE	three
+=XOR(TRUE)	TRUE	single
+=XOR(1,0)	TRUE	numbers
+=XOR(1,1)	FALSE	two ones
+=XOR(#N/A,TRUE)	#N/A	error
+=XOR({TRUE,FALSE})	TRUE	array
+=XOR(TRUE,"x")	#VALUE!	bad text

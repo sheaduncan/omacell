@@ -1,0 +1,11 @@
+# formula	expected	note
+=ATANH(0)	0	atanh 0
+=ROUND(ATANH(TANH(0.5)),10)	0.5	inverse
+=ATANH(1)	#NUM!	domain |x|<1
+=ATANH(-1)	#NUM!	domain
+=ATANH(TRUE)	#NUM!	TRUE is 1
+=ATANH("0")	0	numeric text
+=ATANH("x")	#VALUE!	bad text
+=ATANH(#N/A)	#N/A	error
+=ATANH({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=SIGN(ATANH(0.5))	1	positive

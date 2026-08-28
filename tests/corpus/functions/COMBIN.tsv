@@ -1,0 +1,11 @@
+# formula	expected	note
+=COMBIN(5,2)	10	5C2
+=COMBIN(5,0)	1	nC0
+=COMBIN(5,5)	1	nCn
+=COMBIN(5,6)	#NUM!	k>n
+=COMBIN(-1,1)	#NUM!	negative
+=COMBIN(5.9,2)	10	truncates
+=COMBIN(TRUE,0)	1	TRUE is 1
+=COMBIN(#N/A,1)	#N/A	error
+=COMBIN("5","2")	10	numeric text
+=COMBIN(10,1)	10	nC1

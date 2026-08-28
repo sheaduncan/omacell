@@ -1,0 +1,11 @@
+# formula	expected	note
+=VARPA(1,2,3)	0.666666667	pop
+=VARPA({1,TRUE,3})	0.888888889	TRUE is 1
+=VARPA(5,5)	0	no var
+=VARPA(1)	0	n=1
+=VARPA(1,#N/A)	#N/A	error
+=VARPA(TRUE,FALSE)	0.25	1 and 0
+=VARPA(-1,1)	1	signed
+=VARPA(2,4)	1	two
+=VARPA(0,0)	0	zeros
+=VARPA({1,2,3})	0.666666667	array

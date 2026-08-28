@@ -1,0 +1,11 @@
+# formula	expected	note
+=LOG10(100)	2	log10 100
+=LOG10(1)	0	log10 1
+=LOG10(10)	1	log10 10
+=LOG10(0)	#NUM!	non-positive
+=LOG10(-1)	#NUM!	negative
+=LOG10(TRUE)	0	TRUE
+=LOG10("100")	2	numeric text
+=LOG10("x")	#VALUE!	bad text
+=LOG10(#N/A)	#N/A	error
+=LOG10({100,10})	2	array lift; spilled origin is top-left (format_cell)

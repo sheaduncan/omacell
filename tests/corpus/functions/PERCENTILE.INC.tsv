@@ -1,0 +1,11 @@
+# formula	expected	note
+=PERCENTILE.INC({1,2,3,4},0)	1	min
+=PERCENTILE.INC({1,2,3,4},1)	4	max
+=PERCENTILE.INC({1,2,3,4},0.5)	2.5	median
+=PERCENTILE.INC({1,2,3,4},-0.1)	#NUM!	k<0
+=PERCENTILE.INC({1,2,3,4},1.1)	#NUM!	k>1
+=PERCENTILE.INC({5},0.3)	5	single
+=PERCENTILE.INC({1,#N/A},0)	#N/A	error
+=PERCENTILE.INC({1,3},0.5)	2	two
+=PERCENTILE.INC({10,20,30},0.25)	15	quarter
+=PERCENTILE.INC({1,2,3,4,5},0.25)	2	n=5

@@ -1,0 +1,11 @@
+# formula	expected	note
+=EVEN(1.5)	2	away from zero to even
+=EVEN(3)	4	odd integer up
+=EVEN(2)	2	already even
+=EVEN(-1.5)	-2	negative away from zero
+=EVEN(0)	0	zero
+=EVEN(-2)	-2	already even negative
+=EVEN(-3)	-4	odd negative
+=EVEN(TRUE)	2	TRUE is 1
+=EVEN("2")	2	numeric text
+=EVEN(#DIV/0!)	#DIV/0!	error

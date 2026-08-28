@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISBLANK("")	FALSE	empty string is not blank
+=ISBLANK(0)	FALSE	zero
+=ISBLANK(FALSE)	FALSE	false
+=ISBLANK(1)	FALSE	number
+=ISBLANK(#N/A)	FALSE	error
+=ISBLANK("a")	FALSE	text
+=ISBLANK(TRUE)	FALSE	true
+=ISBLANK(NA())	FALSE	NA
+=ISBLANK(1/0)	FALSE	div0
+=NOT(ISBLANK(1))	TRUE	not blank

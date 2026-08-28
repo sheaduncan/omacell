@@ -906,6 +906,11 @@ impl Workbook {
         Ok(())
     }
 
+    /// Hide or unhide a row (`SUBTOTAL` / `AGGREGATE` hidden-row semantics).
+    pub fn set_row_hidden(&mut self, id: SheetId, row: u32, hidden: bool) -> Result<(), CoreError> {
+        self.sheet_mut(id)?.geometry.rows.set_hidden(row, hidden)
+    }
+
     /// Insert a defined name.
     pub fn define_name(&mut self, name: DefinedName) -> Result<(), CoreError> {
         let scope = name.scope;

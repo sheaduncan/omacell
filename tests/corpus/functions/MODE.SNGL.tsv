@@ -1,0 +1,11 @@
+# formula	expected	note
+=MODE.SNGL(1,2,2,3)	2	most frequent
+=MODE.SNGL(1,1,2,2)	1	first mode on tie
+=MODE.SNGL(1,2,3)	#N/A	all unique; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=MODE.SNGL(5,5)	5	two
+=MODE.SNGL({1,2,2})	2	array
+=MODE.SNGL(1,#N/A,1)	#N/A	error
+=MODE.SNGL(TRUE,TRUE,2)	1	TRUE is 1
+=MODE.SNGL(0,0,1)	0	zero
+=MODE.SNGL(-1,-1,2)	-1	negative
+=MODE.SNGL(9,8,9,8,9)	9	3 vs 2

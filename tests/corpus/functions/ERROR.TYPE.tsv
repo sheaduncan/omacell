@@ -1,0 +1,11 @@
+# formula	expected	note
+=ERROR.TYPE(#NULL!)	1	Microsoft ERROR.TYPE: #NULL! → 1; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#DIV/0!)	2	Microsoft ERROR.TYPE: #DIV/0! → 2; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#VALUE!)	3	Microsoft ERROR.TYPE: #VALUE! → 3; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#REF!)	4	Microsoft ERROR.TYPE: #REF! → 4; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#NAME?)	5	Microsoft ERROR.TYPE: #NAME? → 5; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#NUM!)	6	Microsoft ERROR.TYPE: #NUM! → 6; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#N/A)	7	Microsoft ERROR.TYPE: #N/A → 7; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(1)	#N/A	non-error; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#SPILL!)	#N/A	newer errors → #N/A; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#CALC!)	#N/A	calc has no code; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

@@ -1,0 +1,11 @@
+# formula	expected	note
+=NOT(TRUE)	FALSE	not true
+=NOT(FALSE)	TRUE	not false
+=NOT(0)	TRUE	zero is false
+=NOT(1)	FALSE	nonzero
+=NOT(2)	FALSE	any nonzero
+=NOT("x")	#VALUE!	bad text
+=NOT(#N/A)	#N/A	error
+=NOT(NOT(TRUE))	TRUE	double
+=NOT({TRUE,FALSE})	FALSE	array lift; spilled origin is top-left (format_cell)
+=NOT("TRUE")	FALSE	text TRUE

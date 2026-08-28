@@ -1,0 +1,11 @@
+# formula	expected	note
+=POWER(2,3)	8	2^3
+=POWER(9,0.5)	3	square root
+=POWER(0,0)	#NUM!	Excel 0^0 is #NUM!; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=POWER(-8,1/3)	#NUM!	negative to fractional power; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=POWER(-2,3)	-8	negative to integer
+=POWER(2,0)	1	any^0
+=POWER(TRUE,2)	1	TRUE
+=POWER("2",3)	8	numeric text
+=POWER(#N/A,1)	#N/A	error
+=POWER(10,-1)	0.1	negative exponent

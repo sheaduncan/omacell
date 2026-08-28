@@ -1,0 +1,11 @@
+# formula	expected	note
+=DEGREES(PI())	180	pi to degrees
+=DEGREES(0)	0	zero
+=DEGREES(PI()/2)	90	pi/2
+=DEGREES(-PI())	-180	negative
+=DEGREES(TRUE)	57.29577951	TRUE is 1 radian
+=DEGREES("0")	0	numeric text
+=DEGREES("x")	#VALUE!	bad text
+=DEGREES(#N/A)	#N/A	error
+=DEGREES(2*PI())	360	full turn
+=DEGREES({0,0})	0	array lift; spilled origin is top-left (format_cell)

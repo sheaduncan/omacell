@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISREF(1)	FALSE	number
+=ISREF("A1")	FALSE	text
+=ISREF(TRUE)	FALSE	bool
+=ISREF(#N/A)	FALSE	error
+=ISREF({1,2})	FALSE	array
+=ISREF(ABS(1))	FALSE	function result
+=ISREF(PI())	FALSE	pi
+=ISREF(NA())	FALSE	NA
+=ISREF(FALSE)	FALSE	false
+=NOT(ISREF(1))	TRUE	not a ref

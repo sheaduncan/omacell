@@ -1,0 +1,11 @@
+# formula	expected	note
+=MIN(1,2,3)	1	min
+=MIN(-1,5)	-1	negative
+=MIN(5)	5	single
+=MIN({3,1,2})	1	array
+=MIN(1,#N/A)	#N/A	error
+=MIN(TRUE,2)	1	TRUE is 1
+=MIN({1,TRUE})	1	array skips logical
+=MIN(0,-0)	0	zero
+=MIN(10,2,8)	2	three
+=MIN("2",3)	2	numeric text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

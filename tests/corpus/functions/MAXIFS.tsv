@@ -1,0 +1,11 @@
+# formula	expected	note
+=MAXIFS({10;20;30},{1;2;3},">1")	30	max of matches
+=MAXIFS({10;20;30},{1;2;3},">1",{"a";"b";"a"},"a")	30	two criteria
+=MAXIFS({10;20},{1;2},1)	10	equals
+=MAXIFS({1;2;3},{1;2;3},">10")	0	none → 0
+=MAXIFS({1;2},{1;2;3},1)	#VALUE!	size mismatch
+=MAXIFS({4;6},{"ax";"b"},"a*")	4	wildcard
+=MAXIFS({1;2;3},{1;2;3},">0")	3	all
+=MAXIFS({5;1},{5;1},5)	5	one
+=MAXIFS({-1;2},{-1;2},">0")	2	signed
+=MAXIFS({1;2},{1;2},"<>1")	2	not 1

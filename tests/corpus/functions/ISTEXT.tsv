@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISTEXT("a")	TRUE	text
+=ISTEXT("")	TRUE	empty string
+=ISTEXT(1)	FALSE	number
+=ISTEXT(TRUE)	FALSE	bool
+=ISTEXT(#N/A)	FALSE	error
+=ISTEXT("1")	TRUE	numeric text
+=ISTEXT("TRUE")	TRUE	text true
+=ISTEXT(NA())	FALSE	NA
+=ISTEXT(" ")	TRUE	space
+=ISTEXT(0)	FALSE	zero

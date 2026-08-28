@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISEVEN(2)	TRUE	even
+=ISEVEN(3)	FALSE	odd
+=ISEVEN(2.9)	TRUE	truncates toward zero
+=ISEVEN(-2)	TRUE	negative even
+=ISEVEN(-3)	FALSE	negative odd
+=ISEVEN(0)	TRUE	zero is even
+=ISEVEN(TRUE)	FALSE	TRUE is 1 odd
+=ISEVEN("2")	TRUE	numeric text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISEVEN("x")	#VALUE!	bad text
+=ISEVEN(#N/A)	#N/A	error

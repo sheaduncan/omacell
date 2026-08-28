@@ -1,0 +1,11 @@
+# formula	expected	note
+=KURT(1,2,3,4,5,6,7)	-1.2	uniform-ish sample excess
+=KURT(1,2,3)	#DIV/0!	n<4
+=KURT({1,2,3,4,5,6,7})	-1.2	array
+=KURT(1,#N/A,2,3,4)	#N/A	error
+=KURT(5,5,5,5)	#DIV/0!	zero sd
+=KURT(1,2,3,4)	-1.2	n=4
+=KURT(-3,-2,-1,0,1,2,3)	-1.2	symmetric
+=KURT(TRUE,2,3,4,5)	-1.2	TRUE is 1
+=KURT(1,1,1,1,10)	5	peak plus outlier-ish
+=ISNUMBER(KURT(1,2,3,4,5))	TRUE	finite

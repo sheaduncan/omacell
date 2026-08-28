@@ -1,0 +1,11 @@
+# formula	expected	note
+=PERMUTATIONA(2,3)	8	2^3
+=PERMUTATIONA(5,0)	1	n^0
+=PERMUTATIONA(0,0)	1	0^0 treated as 1 here
+=PERMUTATIONA(5,1)	5	n^1
+=PERMUTATIONA(-1,1)	#NUM!	negative
+=PERMUTATIONA(2,2)	4	2^2
+=PERMUTATIONA(TRUE,2)	1	TRUE is 1
+=PERMUTATIONA(#N/A,1)	#N/A	error
+=PERMUTATIONA("2","3")	8	numeric text
+=PERMUTATIONA(3,2)	9	3^2

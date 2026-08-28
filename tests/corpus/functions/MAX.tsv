@@ -1,0 +1,11 @@
+# formula	expected	note
+=MAX(1,2,3)	3	max
+=MAX(-1,5)	5	positive
+=MAX(5)	5	single
+=MAX({3,1,2})	3	array
+=MAX(1,#N/A)	#N/A	error
+=MAX(TRUE,2)	2	TRUE is 1
+=MAX({1,TRUE})	1	array skips logical
+=MAX(0,-1)	0	zero
+=MAX(10,2,8)	10	three
+=MAX("2",3)	3	numeric text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

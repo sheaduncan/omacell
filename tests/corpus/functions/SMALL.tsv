@@ -1,0 +1,11 @@
+# formula	expected	note
+=SMALL({3,1,4},1)	1	smallest
+=SMALL({3,1,4},2)	3	2nd
+=SMALL({3,1,4},3)	4	3rd
+=SMALL({3,1,4},0)	#NUM!	k=0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SMALL({3,1,4},4)	#NUM!	k too big; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SMALL({1},1)	1	single
+=SMALL({1,#N/A},1)	#N/A	error
+=SMALL({5,5},1)	5	ties
+=SMALL({-1,2},1)	-1	signed
+=SMALL({10,20,30},2)	20	middle

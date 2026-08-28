@@ -1,0 +1,11 @@
+# formula	expected	note
+=AVERAGEA(1,2,3)	2	mean
+=AVERAGEA({1,TRUE})	1	TRUE is 1 in array
+=AVERAGEA({1,"x"})	0.5	text is 0 in array
+=AVERAGEA(1,#N/A)	#N/A	error
+=AVERAGEA(5)	5	single
+=AVERAGEA({FALSE,2})	1	FALSE is 0
+=AVERAGEA(1,TRUE)	1	literals coerce
+=AVERAGEA({1,2,3})	2	array numbers
+=AVERAGEA(0,0)	0	zeros
+=AVERAGEA({1,""})	0.5	empty text is 0

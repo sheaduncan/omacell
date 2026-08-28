@@ -16,3 +16,10 @@ omacell-core = { path = "../core", version = "0.0.0" }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "aggregates"
+harness = false

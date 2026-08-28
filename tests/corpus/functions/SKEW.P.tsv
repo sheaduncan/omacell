@@ -1,0 +1,11 @@
+# formula	expected	note
+=SKEW.P(1,2,3,4,5)	0	symmetric
+=SKEW.P(1,2)	0	n=2 pop defined if sd>0? two points skew 0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SKEW.P(1)	#DIV/0!	n<2
+=SKEW.P({1,2,3,4,5})	0	array
+=SKEW.P(1,#N/A,2,3)	#N/A	error
+=SKEW.P(5,5,5)	#DIV/0!	zero sd
+=SKEW.P(1,2,3)	0	three
+=SKEW.P(-1,0,1)	0	symmetric signed
+=SKEW.P(0,0,1)	0.707106781	pop skew
+=SKEW.P(2,4)	0	two; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

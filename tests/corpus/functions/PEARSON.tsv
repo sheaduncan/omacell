@@ -1,0 +1,11 @@
+# formula	expected	note
+=PEARSON({1,2,3},{1,2,3})	1	alias of CORREL
+=PEARSON({1,2,3},{3,2,1})	-1	inverse
+=PEARSON({1,2,3},{1,1,1})	#DIV/0!	zero var
+=PEARSON({1,2},{1})	#N/A	mismatch; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PEARSON({1,#N/A},{1,2})	#N/A	error
+=PEARSON({1,2,3,4},{2,4,6,8})	1	linear
+=PEARSON({0,1},{0,1})	1	two
+=PEARSON({-1,0,1},{-1,0,1})	1	signed
+=PEARSON({1,2},{2,1})	-1	inverse two
+=PEARSON({1,2,3},{1,2,2})	0.866025404	partial

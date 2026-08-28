@@ -1,0 +1,11 @@
+# formula	expected	note
+=ATAN(0)	0	atan 0
+=ATAN(1)*4/PI()	1	atan 1 = pi/4
+=ATAN(-1)*4/PI()	-1	atan -1
+=ATAN(TRUE)*4/PI()	1	TRUE
+=ATAN("0")	0	numeric text
+=ATAN("x")	#VALUE!	bad text
+=ATAN(#N/A)	#N/A	error
+=ATAN({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=SIGN(ATAN(2))	1	positive
+=ATAN(0)+ATAN(0)	0	sum

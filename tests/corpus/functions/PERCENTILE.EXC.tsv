@@ -1,0 +1,11 @@
+# formula	expected	note
+=PERCENTILE.EXC({1,2,3,4},0.5)	2.5	median exclusive
+=PERCENTILE.EXC({1,2,3,4},0)	#NUM!	k too small
+=PERCENTILE.EXC({1,2,3,4},1)	#NUM!	k too big
+=PERCENTILE.EXC({1},0.5)	#NUM!	n=1; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PERCENTILE.EXC({1,#N/A},0.5)	#N/A	error
+=PERCENTILE.EXC({1,2,3,4,5},0.5)	3	n=5
+=PERCENTILE.EXC({10,20,30,40},0.5)	25	even
+=PERCENTILE.EXC({1,2,3,4},0.2)	#NUM!	near low; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PERCENTILE.EXC({5,5,5,5},0.5)	5	constant
+=PERCENTILE.EXC({1,2,3,4},0.25)	1.25	exclusive 25th

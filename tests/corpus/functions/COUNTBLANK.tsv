@@ -1,0 +1,11 @@
+# formula	expected	note
+=COUNTBLANK({1,2,3})	0	no blanks
+=COUNTBLANK({1,"",3})	1	empty string is blank
+=COUNTBLANK(1)	0	number; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTBLANK("")	1	empty string; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTBLANK(0)	0	zero is not blank; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTBLANK(FALSE)	0	false; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTBLANK(#N/A)	0	error; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTBLANK({1,2})	0	two numbers
+=COUNTBLANK(TRUE)	0	true; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTBLANK("a")	0	text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

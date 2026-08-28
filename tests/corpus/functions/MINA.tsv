@@ -1,0 +1,11 @@
+# formula	expected	note
+=MINA(1,2,3)	1	min
+=MINA({TRUE,2})	1	TRUE is 1
+=MINA({FALSE,2})	0	FALSE is 0
+=MINA({1,"x"})	0	text is 0
+=MINA(1,#N/A)	#N/A	error
+=MINA(5)	5	single
+=MINA(-1,5)	-1	negative
+=MINA(TRUE,FALSE)	0	literals
+=MINA({2,3})	2	array
+=MINA(0,1)	0	zero

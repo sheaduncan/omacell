@@ -1,0 +1,11 @@
+# formula	expected	note
+=CSCH(0)	#DIV/0!	sinh 0 = 0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ROUND(CSCH(1)*SINH(1),10)	1	identity; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CSCH(-1)+CSCH(1)	0	odd; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CSCH(TRUE)*0	0	TRUE
+=CSCH("x")	#VALUE!	bad text
+=CSCH(#N/A)	#N/A	error
+=SIGN(CSCH(1))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=IF(CSCH(1)>0,1,0)	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CSCH(1)*0	0	times zero
+=CSCH(1)-CSCH(1)	0	difference zero; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

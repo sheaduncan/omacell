@@ -1,0 +1,11 @@
+# formula	expected	note
+=PERCENTRANK.INC({1,2,3,4},1)	0	min
+=PERCENTRANK.INC({1,2,3,4},4)	1	max
+=PERCENTRANK.INC({1,2,3,4},2.5)	0.5	mid
+=PERCENTRANK.INC({1,2,3,4},0)	#N/A	below min; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PERCENTRANK.INC({1,2,3,4},5)	#N/A	above max; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PERCENTRANK.INC({1,#N/A},1)	#N/A	error
+=PERCENTRANK.INC({1,2,3,4},1,2)	0	significance
+=PERCENTRANK.INC({10,20,30},20)	0.5	middle
+=PERCENTRANK.INC({5},5)	1	single → 1
+=PERCENTRANK.INC({1,2,3},2)	0.5	n=3

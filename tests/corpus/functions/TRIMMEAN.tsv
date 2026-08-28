@@ -1,0 +1,11 @@
+# formula	expected	note
+=TRIMMEAN({1,2,3,4,5,6,7,8},0.25)	4.5	drop 1 each tail of 8
+=TRIMMEAN({1,2,3},0)	2	no trim
+=TRIMMEAN({1,2,3},1)	#NUM!	percent 1
+=TRIMMEAN({1,2,3},-0.1)	#NUM!	negative
+=TRIMMEAN({5},0)	5	single
+=TRIMMEAN({1,#N/A},0)	#N/A	error
+=TRIMMEAN({1,2,3,4},0.5)	2.5	drop 1 each of 4
+=TRIMMEAN({9,9,9},0)	9	constant
+=TRIMMEAN({1,2},0)	1.5	two
+=TRIMMEAN({10,20,30,40},0)	25	no trim mean

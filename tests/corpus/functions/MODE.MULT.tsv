@@ -1,0 +1,11 @@
+# formula	expected	note
+=MODE.MULT(1,2,2,3)	2	single mode
+=MODE.MULT(1,1,2,2)	1	two modes in appearance order
+=MODE.MULT(9,8,9,7)	9	single mode among mixed
+=MODE.MULT(1,2,3)	#N/A	all unique; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=MODE.MULT(5,5)	5	two of five
+=MODE.MULT({2,2,1,1})	2	order of appearance
+=MODE.MULT(1,#N/A)	#N/A	error
+=MODE.MULT(0,0,1)	0	zero
+=MODE.MULT(-1,-1,2)	-1	negative
+=MODE.MULT(9,8,9,8)	9	tie two modes in appearance order

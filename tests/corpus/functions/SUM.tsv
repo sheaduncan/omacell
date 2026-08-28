@@ -1,3 +1,12 @@
 # formula	expected	note
 =SUM(1,2,3)	6	scalar sum
 =SUM(1,TRUE)	2	TRUE coerces to 1 in arithmetic
+=SUM(1,FALSE)	1	FALSE coerces to 0
+=SUM(1,"2")	3	numeric text literal coerces; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUM({1,2,TRUE})	3	array ignores logicals like a range; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUM({1,"x"})	1	array ignores text
+=SUM(1,#N/A)	#N/A	error propagates
+=SUM()	#VALUE!	too few arguments; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUM(1,)	1	omitted trailing argument skipped
+=SUM(-1,-2,3)	0	mixed signs
+=SUM(0,0,0)	0	all zeros

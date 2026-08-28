@@ -1,0 +1,11 @@
+# formula	expected	note
+=ROUND(COT(PI()/4),10)	1	cot pi/4; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COT(0)	#DIV/0!	tan 0 = 0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COT(TRUE)*0	0	TRUE finite*0
+=COT("x")	#VALUE!	bad text
+=COT(#N/A)	#N/A	error
+=COS(PI()/4)/SIN(PI()/4)-COT(PI()/4)	0	identity; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SIGN(COT(PI()/4))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COT(PI()/4)*2	2	times two
+=COT(PI()/4)	1	array lift; spilled origin is top-left (format_cell)
+=IF(COT(1)>0,1,0)	1	positive in (0,pi/2); known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

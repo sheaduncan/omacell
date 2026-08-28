@@ -1,0 +1,11 @@
+# formula	expected	note
+=AVERAGEIF({1;2;3},">1")	2.5	mean of 2 and 3
+=AVERAGEIF({1;2;3},2)	2	equals
+=AVERAGEIF({"a";"b"},"a",{10;20})	10	avg range
+=AVERAGEIF({1;2;3},">10")	#DIV/0!	none
+=AVERAGEIF({1;2;3},">0")	2	all
+=AVERAGEIF({"ax";"b"},"a*",{4;6})	4	wildcard
+=AVERAGEIF({1;2;3},"<>2")	2	not 2
+=AVERAGEIF({5;5;5},5)	5	constant
+=AVERAGEIF({-1;2},">0")	2	signed
+=AVERAGEIF({1;2},TRUE)	#DIV/0!	no match; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

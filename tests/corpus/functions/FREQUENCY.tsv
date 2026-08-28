@@ -1,0 +1,11 @@
+# formula	expected	note
+=FREQUENCY({1,2,3},{2})	2	one bin + overflow
+=FREQUENCY({1,2,3,4},{1,3})	1	two bins
+=FREQUENCY({5},{5})	1	equal to bin
+=FREQUENCY({1},{0})	0	all overflow
+=FREQUENCY({1,2},{1,2})	1	two bins
+=FREQUENCY({1,#N/A},{1})	#N/A	error in data
+=FREQUENCY({-1,0,1},{0})	2	negatives
+=FREQUENCY({1,2,3},{1,2})	1	bins+1 rows displayed
+=FREQUENCY({2,2},{2})	2	ties at bound
+=SUM(FREQUENCY({1,2,3},{2}))	3	counts all data

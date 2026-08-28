@@ -1,0 +1,12 @@
+# formula	expected	note
+=PRODUCT(2,3,4)	24	scalar product
+=PRODUCT(2,TRUE)	2	TRUE is 1 as literal
+=PRODUCT({2,3,TRUE})	6	array ignores logical
+=PRODUCT({2,"x"})	2	array ignores text
+=PRODUCT(5)	5	single argument
+=PRODUCT(2,#DIV/0!)	#DIV/0!	error propagates
+=PRODUCT(0,5)	0	zero factor
+=PRODUCT(-2,-3)	6	two negatives
+=PRODUCT(1,2,)	2	omitted arg skipped; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PRODUCT("2",3)	6	numeric text literal; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PRODUCT("x")	#VALUE!	non-numeric text literal

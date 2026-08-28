@@ -1,0 +1,11 @@
+# formula	expected	note
+=COVARIANCE.S({1,2,3},{1,2,3})	1	sample cov
+=COVARIANCE.S({1,2,3},{3,2,1})	-1	negative
+=COVARIANCE.S({1,2},{1})	#N/A	mismatch; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COVARIANCE.S({1,#N/A},{1,2})	#N/A	error
+=COVARIANCE.S({1,2},{2,4})	1	scaled
+=COVARIANCE.S({0,1},{0,1})	0.5	two
+=COVARIANCE.S({-1,1},{-1,1})	2	signed
+=COVARIANCE.S({5,5},{1,2})	0	const x
+=COVARIANCE.S({1},{1})	#DIV/0!	n=1; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COVARIANCE.S({1,2,3},{1,2,3})*1	1	identity

@@ -1,0 +1,11 @@
+# formula	expected	note
+=NA()	#N/A	the NA error
+=IF(ISNA(NA()),1,0)	1	ISNA of NA
+=IFERROR(NA(),9)	9	IFERROR
+=IFNA(NA(),8)	8	IFNA
+=NA()+1	#N/A	propagates in arithmetic
+=TYPE(NA())	16	TYPE error
+=ERROR.TYPE(NA())	7	ERROR.TYPE 7; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISERROR(NA())	TRUE	iserror
+=ISERR(NA())	FALSE	iserr excludes NA
+=N(NA())	#N/A	N propagates errors

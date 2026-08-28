@@ -1,0 +1,11 @@
+# formula	expected	note
+=ACOSH(1)	0	acosh 1
+=ROUND(ACOSH(COSH(1)),10)	1	inverse
+=ACOSH(0)	#NUM!	domain < 1
+=ACOSH(-1)	#NUM!	negative
+=ACOSH(TRUE)	0	TRUE is 1
+=ACOSH("1")	0	numeric text
+=ACOSH("x")	#VALUE!	bad text
+=ACOSH(#N/A)	#N/A	error
+=IF(ACOSH(2)>0,1,0)	1	positive
+=ACOSH({1,1})	0	array lift; spilled origin is top-left (format_cell)

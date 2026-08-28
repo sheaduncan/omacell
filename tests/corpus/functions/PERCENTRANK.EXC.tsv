@@ -1,0 +1,11 @@
+# formula	expected	note
+=PERCENTRANK.EXC({1,2,3,4},1)	0.2	first exclusive
+=PERCENTRANK.EXC({1,2,3,4},4)	0.8	last
+=PERCENTRANK.EXC({1,2,3,4},0)	#N/A	below; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PERCENTRANK.EXC({1,2,3,4},5)	#N/A	above; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PERCENTRANK.EXC({1,#N/A},1)	#N/A	error
+=PERCENTRANK.EXC({10,20,30},20)	0.5	middle
+=PERCENTRANK.EXC({1,2,3},2)	0.5	n=3
+=PERCENTRANK.EXC({5,5,5,5},5)	0.2	ties first
+=ISNUMBER(PERCENTRANK.EXC({1,2,3,4},2))	TRUE	finite; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PERCENTRANK.EXC({1,2,3,4},2.5)	0.5	interp

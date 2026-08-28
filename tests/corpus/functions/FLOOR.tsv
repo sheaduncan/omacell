@@ -1,0 +1,11 @@
+# formula	expected	note
+=FLOOR(2.5,1)	2	legacy toward zero for positive
+=FLOOR(2.5,2)	2	multiple
+=FLOOR(-2.5,-1)	-2	same-sign negative toward zero
+=FLOOR(-2.5,1)	#NUM!	legacy opposite signs; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=FLOOR(0,1)	0	zero
+=FLOOR(4,0)	#DIV/0!	significance 0
+=FLOOR(TRUE,1)	1	TRUE
+=FLOOR("2.2",1)	2	numeric text
+=FLOOR(#N/A,1)	#N/A	error
+=FLOOR(5,5)	5	exact

@@ -6,7 +6,7 @@ use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::{RecalcEngine, format_cell};
 use omacell_core::workbook::Workbook;
 
-use crate::register_probes;
+use crate::register_all;
 
 /// One corpus row.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,14 +54,14 @@ fn parse_tsv(text: &str) -> Result<Vec<CorpusRow>, String> {
     Ok(rows)
 }
 
-/// Evaluate each row in a one-cell workbook using probe registrations.
+/// Evaluate each row in a one-cell workbook using the full function registry.
 pub fn run_corpus_file(path: &Path) -> Result<Vec<(CorpusRow, String)>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let rows = parse_tsv(&text)?;
     let mut out = Vec::new();
     for row in rows {
         let mut registry = FnRegistry::new();
-        register_probes(&mut registry);
+        register_all(&mut registry);
         let mut wb = Workbook::new();
         let sheet = wb.active_sheet();
         wb.set_formula_text(sheet, 0, 0, &row.formula)

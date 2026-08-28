@@ -1,0 +1,11 @@
+# formula	expected	note
+=OR(FALSE,TRUE)	TRUE	one true
+=OR(FALSE,FALSE)	FALSE	both false
+=OR(FALSE,1/0)	#DIV/0!	does not short-circuit
+=OR(0,0)	FALSE	zeros
+=OR(0,2)	TRUE	nonzero
+=OR(FALSE)	FALSE	single
+=OR(FALSE,"x")	#VALUE!	bad text
+=OR(#N/A,TRUE)	#N/A	error
+=OR({FALSE,TRUE})	TRUE	array
+=OR(FALSE,FALSE,TRUE)	TRUE	three

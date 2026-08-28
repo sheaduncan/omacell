@@ -1,0 +1,11 @@
+# formula	expected	note
+=COSH(0)	1	cosh 0
+=COSH(-1)-COSH(1)	0	even
+=IF(COSH(1)>1,1,0)	1	greater than 1
+=COSH(TRUE)*0+1	1	TRUE finite
+=COSH("0")	1	numeric text
+=COSH("x")	#VALUE!	bad text
+=COSH(#N/A)	#N/A	error
+=COSH({0,0})	1	array lift; spilled origin is top-left (format_cell)
+=SIGN(COSH(0))	1	positive
+=COSH(0)*2	2	times two

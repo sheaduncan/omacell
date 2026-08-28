@@ -1,0 +1,11 @@
+# formula	expected	note
+=LN(1)	0	ln 1
+=LN(EXP(1))	1	inverse
+=LN(0)	#NUM!	non-positive
+=LN(-1)	#NUM!	negative
+=LN(TRUE)	0	TRUE is 1
+=LN("1")	0	numeric text
+=LN("x")	#VALUE!	bad text
+=LN(#N/A)	#N/A	error
+=LN(EXP(2))	2	round trip
+=LN({1,1})	0	array lift; spilled origin is top-left (format_cell)

@@ -3,3 +3,10 @@
 =IF(FALSE,1,2)	2	selected false branch
 =IF(TRUE,4,1/0)	4	unselected #DIV/0! is not evaluated
 =IF(FALSE,1/0,5)	5	unselected true-branch error skipped
+=IF(1,9,8)	9	nonzero number is TRUE
+=IF(0,9,8)	8	zero is FALSE
+=IF(TRUE,1)	1	omitted false branch unused
+=IF(FALSE,1)	FALSE	omitted false branch is FALSE
+=IF(#N/A,1,2)	#N/A	test error propagates
+=IF("x",1,2)	#VALUE!	non-bool text
+=IF(TRUE,#N/A,2)	#N/A	selected error propagates

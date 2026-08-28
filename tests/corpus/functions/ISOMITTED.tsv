@@ -1,0 +1,11 @@
+# formula	expected	note
+=LAMBDA(x,y,ISOMITTED(y))(1,)	TRUE	omitted LAMBDA slot; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=LAMBDA(x,y,ISOMITTED(y))(1,7)	FALSE	supplied LAMBDA arg; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISOMITTED(1)	FALSE	explicit value; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISOMITTED(TRUE)	FALSE	bool; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISOMITTED("a")	FALSE	text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISOMITTED(0)	FALSE	zero; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=LAMBDA(x,ISOMITTED(x))(0)	FALSE	zero is supplied; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=LAMBDA(x,y,ISOMITTED(x))(,1)	TRUE	first omitted; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=NOT(ISOMITTED(1))	TRUE	not omitted; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=IF(ISOMITTED(1),9,8)	8	with IF; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

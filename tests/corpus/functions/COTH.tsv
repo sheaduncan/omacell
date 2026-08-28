@@ -1,0 +1,11 @@
+# formula	expected	note
+=COTH(0)	#DIV/0!	coth 0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ROUND(COTH(1)*TANH(1),10)	1	identity; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COTH(-1)+COTH(1)	0	odd; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COTH(TRUE)*0	0	TRUE
+=COTH("x")	#VALUE!	bad text
+=COTH(#N/A)	#N/A	error
+=SIGN(COTH(1))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=IF(COTH(1)>1,1,0)	1	coth 1 > 1; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COTH(1)*0	0	times zero
+=COTH(1)-COTH(1)	0	difference; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

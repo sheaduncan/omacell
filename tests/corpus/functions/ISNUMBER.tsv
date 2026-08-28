@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISNUMBER(1)	TRUE	number
+=ISNUMBER(0)	TRUE	zero
+=ISNUMBER(PI())	TRUE	pi
+=ISNUMBER(TRUE)	FALSE	bool; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISNUMBER("1")	FALSE	numeric text
+=ISNUMBER(#N/A)	FALSE	error
+=ISNUMBER("a")	FALSE	text
+=ISNUMBER(-3)	TRUE	negative
+=ISNUMBER(1+1)	TRUE	sum
+=ISNUMBER(#NUM!)	FALSE	num error

@@ -1,0 +1,11 @@
+# formula	expected	note
+=STDEVA(1,2,3)	1	same as S when all numbers
+=STDEVA({1,TRUE,3})	1.154700538	TRUE is 1
+=STDEVA(5,5)	0	no var
+=STDEVA(1)	#DIV/0!	n=1
+=STDEVA(1,#N/A)	#N/A	error
+=STDEVA({1,"x",3})	1.527525232	text 0
+=STDEVA(-1,1)	1.414213562	signed
+=STDEVA(TRUE,FALSE)	0.707106781	1 and 0 sample
+=STDEVA(2,4)	1.414213562	two
+=STDEVA(0,0,0)	0	zeros

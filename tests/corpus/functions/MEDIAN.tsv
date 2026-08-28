@@ -1,0 +1,11 @@
+# formula	expected	note
+=MEDIAN(1,2,3)	2	odd count
+=MEDIAN(1,2,3,4)	2.5	even count average
+=MEDIAN(5)	5	single
+=MEDIAN(3,1,2)	2	unsorted
+=MEDIAN({1,2,3})	2	array
+=MEDIAN(1,#N/A)	#N/A	error
+=MEDIAN(-1,1)	0	signed
+=MEDIAN(TRUE,2)	1.5	TRUE is 1
+=MEDIAN(0,0,0)	0	zeros
+=MEDIAN(9,1)	5	two values
