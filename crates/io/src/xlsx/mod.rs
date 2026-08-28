@@ -16,8 +16,8 @@ mod warnings;
 mod xml;
 
 pub use opc::{
-    MAX_COMPRESSION_RATIO, MAX_ENTRY_BYTES, MAX_UNCOMPRESSED_TOTAL, MAX_ZIP_ENTRIES, OpcPackage,
-    PreservedPart, Relationship, open_package, sanitize_path,
+    MAX_COMPRESSION_RATIO, MAX_ENTRY_BYTES, MAX_PACKAGE_BYTES, MAX_UNCOMPRESSED_TOTAL,
+    MAX_ZIP_ENTRIES, OpcPackage, PreservedPart, Relationship, open_package, sanitize_path,
 };
 pub use read::WorksheetExtras;
 pub use warnings::{FileWarning, FileWarnings};
@@ -46,6 +46,14 @@ pub struct XlsxDocument {
 
 /// Open a path.
 pub fn open(path: &Path) -> Result<XlsxDocument, CoreError> {
+    let len = std::fs::metadata(path)
+        .map_err(|e| error::xlsx_zip(e.to_string()))?
+        .len();
+    if len > MAX_PACKAGE_BYTES {
+        return Err(error::xlsx_limit(format!(
+            "compressed package is {len} bytes; maximum is {MAX_PACKAGE_BYTES}"
+        )));
+    }
     let bytes = std::fs::read(path).map_err(|e| error::xlsx_zip(e.to_string()))?;
     open_bytes(&bytes)
 }

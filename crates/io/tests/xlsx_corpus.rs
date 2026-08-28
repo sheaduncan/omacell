@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use calamine::{Data, Reader};
 use omacell_core::error::ErrorKind;
+use omacell_core::names::NameScope;
 use omacell_core::sheet::SheetVisibility;
 use omacell_core::value::Value;
 use omacell_io::xlsx::open;
@@ -82,6 +83,22 @@ fn l1_values_match_sidecar_and_calamine() {
     assert_eq!(range.get((0, 0)), Some(&Data::Float(1.5)));
     assert_eq!(range.get((0, 1)), Some(&Data::String("hello".into())));
     assert_eq!(range.get((0, 2)), Some(&Data::Bool(true)));
+}
+
+#[test]
+fn custom_number_format_code_is_registered() {
+    let doc = open(&corpus("l1_values.xlsx")).unwrap();
+    let wb = &doc.workbook;
+    let cell = omacell_core::addr::parse_a1_cell("A2").unwrap();
+    let slot = wb
+        .get(wb.active_sheet(), cell.row, cell.col)
+        .unwrap()
+        .unwrap();
+    let style = wb.intern().styles.get(slot.style).expect("cell style");
+    assert_eq!(
+        wb.num_fmt_code(style.num_fmt).as_deref(),
+        Some("yyyy-mm-dd")
+    );
 }
 
 #[test]
@@ -175,6 +192,33 @@ fn hidden_sheet() {
     let hid = doc.workbook.sheet_by_name("Hidden").unwrap();
     assert_eq!(vis.visibility, SheetVisibility::Visible);
     assert_eq!(hid.visibility, SheetVisibility::Hidden);
+    assert_eq!(doc.workbook.active_sheet(), vis.id);
+    let local = doc
+        .workbook
+        .names()
+        .iter()
+        .find(|name| name.name == "LocalRate")
+        .expect("sheet-scoped name");
+    assert_eq!(local.scope, NameScope::Sheet(vis.id));
+}
+
+#[test]
+fn l2_inline_fragments_are_preserved_byte_for_byte() {
+    let doc = open(&corpus("l2_print.xlsx")).unwrap();
+    let extra = doc.extras.get("Sheet1").expect("worksheet extras");
+    assert_eq!(extra.print_xml.len(), 2);
+    assert!(
+        extra
+            .print_xml
+            .iter()
+            .any(|xml| xml.starts_with(b"<pageMargins "))
+    );
+    assert_eq!(extra.conditional_formatting_xml.len(), 1);
+    assert!(extra.conditional_formatting_xml[0].starts_with(b"<conditionalFormatting "));
+    assert_eq!(extra.data_validations_xml.len(), 1);
+    assert!(extra.data_validations_xml[0].starts_with(b"<dataValidations "));
+    assert_eq!(extra.sparkline_xml.len(), 1);
+    assert!(extra.sparkline_xml[0].starts_with(b"<x14:sparklineGroups "));
 }
 
 #[test]

@@ -369,8 +369,11 @@ def gen_l2_print() -> None:
         f"<sheetData>"
         f'<row r="1"><c r="A1"><v>1</v></c></row>'
         f"</sheetData>"
+        f'<conditionalFormatting sqref="A1"><cfRule type="expression" priority="1"><formula>A1&gt;0</formula></cfRule></conditionalFormatting>'
+        f'<dataValidations count="1"><dataValidation type="whole" sqref="A1"><formula1>0</formula1></dataValidation></dataValidations>'
         f'<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>'
         f'<pageSetup orientation="landscape" paperSize="9"/>'
+        f'<extLst><ext uri="{{sparkline-test}}"><x14:sparklineGroups xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:sparklineGroup/></x14:sparklineGroups></ext></extLst>'
         f"</worksheet>"
     )
     write_xlsx(OUT / "l2_print.xlsx", pack_simple(sheet))
@@ -391,10 +394,13 @@ def gen_hidden_sheet() -> None:
     parts["xl/workbook.xml"] = xml(
         f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<workbook xmlns="{NS}" xmlns:r="{OD}">'
+        f'<bookViews><workbookView activeTab="1"/></bookViews>'
         f"<sheets>"
-        f'<sheet name="Visible" sheetId="1" r:id="rId1"/>'
-        f'<sheet name="Hidden" sheetId="2" r:id="rId4" state="hidden"/>'
-        f"</sheets></workbook>"
+        f'<sheet name="Hidden" sheetId="1" r:id="rId1" state="hidden"/>'
+        f'<sheet name="Visible" sheetId="2" r:id="rId4"/>'
+        f"</sheets>"
+        f'<definedNames><definedName name="LocalRate" localSheetId="1">Visible!$A$1</definedName></definedNames>'
+        f"</workbook>"
     )
     parts["xl/_rels/workbook.xml.rels"] = rels(
         "wb",
@@ -422,7 +428,14 @@ def gen_hidden_sheet() -> None:
     write_xlsx(OUT / "l2_hidden_sheet.xlsx", parts)
     (OUT / "l2_hidden_sheet.json").write_text(
         json.dumps(
-            {"sheets": [{"name": "Visible", "hidden": False}, {"name": "Hidden", "hidden": True}]},
+            {
+                "sheets": [
+                    {"name": "Hidden", "hidden": True},
+                    {"name": "Visible", "hidden": False},
+                ],
+                "active": "Visible",
+                "local_name": "LocalRate",
+            },
             indent=2,
         )
         + "\n"

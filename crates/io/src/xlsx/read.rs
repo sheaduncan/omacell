@@ -6,6 +6,7 @@ use omacell_core::addr::{CellRef, RangeRef, RefKind, parse_a1, parse_a1_cell};
 use omacell_core::error::{CoreError, ErrorKind};
 use omacell_core::formula::{copy_delta, parse, print};
 use omacell_core::intern::RichTextRun;
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::sheet::{
     FreezePanes, Hyperlink, Note, ProtectionState, SheetVisibility, SplitView,
@@ -45,13 +46,13 @@ pub struct WorksheetExtras {
     /// AutoFilter `ref`.
     pub autofilter: Option<String>,
     /// Raw `pageSetup` / `pageMargins` / `printOptions` / `headerFooter` XML.
-    pub print_xml: Vec<String>,
+    pub print_xml: Vec<Vec<u8>>,
     /// Raw `conditionalFormatting` XML blobs.
-    pub conditional_formatting_xml: Vec<String>,
+    pub conditional_formatting_xml: Vec<Vec<u8>>,
     /// Raw `dataValidations` / `extLst` validation XML.
-    pub data_validations_xml: Vec<String>,
+    pub data_validations_xml: Vec<Vec<u8>>,
     /// Sparkline groups (`x14`).
-    pub sparkline_xml: Vec<String>,
+    pub sparkline_xml: Vec<Vec<u8>>,
 }
 
 pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
@@ -64,15 +65,79 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
     let wb_name = wb_part.name.clone();
     let wb_bytes = wb_part.bytes.clone();
     let wb_rels = package.rels_for(&wb_name)?;
-    let theme = load_theme(&package, &wb_rels, &mut warnings);
+    let theme = load_theme(&package, &wb_rels, &mut warnings)?;
     let sst = load_sst(&package, &wb_rels, &mut warnings)?;
-    let styles = load_styles(&package, &wb_rels, &theme, &mut warnings)?;
-    let sheets_meta = parse_workbook_xml(&wb_bytes, &mut wb, &mut warnings)?;
+    let styles = load_styles(&package, &wb_rels, &theme, &mut wb, &mut warnings)?;
+    let workbook_meta = parse_workbook_xml(&wb_bytes, &mut wb)?;
 
     let first_id = wb.active_sheet();
+    let mut sheet_ids = Vec::with_capacity(workbook_meta.sheets.len());
+    for (i, meta) in workbook_meta.sheets.iter().enumerate() {
+        let id = if i == 0 {
+            wb.rename_sheet(first_id, &meta.name)?;
+            first_id
+        } else {
+            wb.add_sheet(&meta.name)?
+        };
+        sheet_ids.push(id);
+    }
+    if !workbook_meta
+        .sheets
+        .iter()
+        .any(|meta| meta.visibility.is_visible())
+    {
+        return Err(error::xlsx_format(
+            "workbook must contain at least one visible sheet",
+        ));
+    }
+    for (meta, &id) in workbook_meta.sheets.iter().zip(&sheet_ids) {
+        wb.set_visibility(id, meta.visibility)?;
+    }
+    let active_index = workbook_meta
+        .active_tab
+        .filter(|&idx| {
+            workbook_meta
+                .sheets
+                .get(idx)
+                .is_some_and(|meta| meta.visibility.is_visible())
+        })
+        .or_else(|| {
+            workbook_meta
+                .sheets
+                .iter()
+                .position(|meta| meta.visibility.is_visible())
+        })
+        .unwrap_or(0);
+    wb.set_active_sheet(sheet_ids[active_index])?;
+
+    for name in workbook_meta.names {
+        let scope = match name.local_sheet_index {
+            Some(idx) => match sheet_ids.get(idx).copied() {
+                Some(id) => NameScope::Sheet(id),
+                None => {
+                    warnings.push(
+                        "xlsx.name",
+                        format!("defined name {} has invalid localSheetId {idx}", name.name),
+                        Some(wb_name.clone()),
+                    );
+                    continue;
+                }
+            },
+            None => NameScope::Workbook,
+        };
+        if let Err(e) = wb.define_name(DefinedName {
+            name: name.name,
+            scope,
+            referent: name.referent,
+            comment: name.comment,
+        }) {
+            warnings.push("xlsx.name", e.message, Some(wb_name.clone()));
+        }
+    }
+
     let mut extras: HashMap<String, WorksheetExtras> = HashMap::new();
 
-    for (i, meta) in sheets_meta.iter().enumerate() {
+    for (meta, &id) in workbook_meta.sheets.iter().zip(&sheet_ids) {
         let rel = wb_rels.iter().find(|r| r.id == meta.rid);
         let Some(rel) = rel else {
             warnings.push(
@@ -90,19 +155,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
             );
             continue;
         }
-        let id = if i == 0 {
-            wb.rename_sheet(first_id, &meta.name)?;
-            first_id
-        } else {
-            wb.add_sheet(&meta.name)?
-        };
-        if meta.hidden {
-            let _ = wb.set_visibility(id, SheetVisibility::Hidden);
-        }
-        if meta.very_hidden {
-            let _ = wb.set_visibility(id, SheetVisibility::VeryHidden);
-        }
-        let sheet_rels = package.rels_for(&rel.target).unwrap_or_default();
+        let sheet_rels = package.rels_for(&rel.target)?;
         let extra = load_sheet(
             &mut wb,
             id,
@@ -133,17 +186,27 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
 struct SheetMeta {
     name: String,
     rid: String,
-    hidden: bool,
-    very_hidden: bool,
+    visibility: SheetVisibility,
 }
 
-fn parse_workbook_xml(
-    bytes: &[u8],
-    wb: &mut Workbook,
-    warnings: &mut FileWarnings,
-) -> Result<Vec<SheetMeta>, CoreError> {
+struct NameMeta {
+    name: String,
+    local_sheet_index: Option<usize>,
+    referent: NameReferent,
+    comment: Option<String>,
+}
+
+struct WorkbookMeta {
+    sheets: Vec<SheetMeta>,
+    names: Vec<NameMeta>,
+    active_tab: Option<usize>,
+}
+
+fn parse_workbook_xml(bytes: &[u8], wb: &mut Workbook) -> Result<WorkbookMeta, CoreError> {
     let mut r = XmlReader::new(bytes);
     let mut sheets = Vec::new();
+    let mut names = Vec::new();
+    let mut active_tab = None;
     let mut in_sheets = false;
     let mut in_names = false;
     let mut name_attrs: Vec<(String, String)> = Vec::new();
@@ -161,9 +224,19 @@ fn parse_workbook_xml(
                 sheets.push(SheetMeta {
                     name: nm,
                     rid,
-                    hidden: state.eq_ignore_ascii_case("hidden"),
-                    very_hidden: state.eq_ignore_ascii_case("veryHidden"),
+                    visibility: if state.eq_ignore_ascii_case("veryHidden") {
+                        SheetVisibility::VeryHidden
+                    } else if state.eq_ignore_ascii_case("hidden") {
+                        SheetVisibility::Hidden
+                    } else {
+                        SheetVisibility::Visible
+                    },
                 });
+            }
+            XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
+                if name == "workbookView" =>
+            {
+                active_tab = attr(&attrs, "activeTab").and_then(|s| s.parse().ok());
             }
             XmlEvent::Empty { name, attrs } if name == "workbookPr" => {
                 if attr(&attrs, "date1904").is_some_and(truthy) {
@@ -194,25 +267,13 @@ fn parse_workbook_xml(
             XmlEvent::End { name } if in_names && name == "definedName" => {
                 let nm = attr(&name_attrs, "name").unwrap_or("").to_string();
                 if !nm.is_empty() {
-                    let local = attr(&name_attrs, "localSheetId");
-                    let scope = if let Some(idx) = local.and_then(|s| s.parse::<usize>().ok()) {
-                        sheets
-                            .get(idx)
-                            .and_then(|m| wb.sheet_by_name(&m.name).map(|s| s.id))
-                            .map(NameScope::Sheet)
-                            .unwrap_or(NameScope::Workbook)
-                    } else {
-                        NameScope::Workbook
-                    };
-                    let referent = parse_name_ref(name_text.trim());
-                    if let Err(e) = wb.define_name(DefinedName {
+                    names.push(NameMeta {
                         name: nm,
-                        scope,
-                        referent,
-                        comment: None,
-                    }) {
-                        warnings.push("xlsx.name", e.message, Some("xl/workbook.xml".into()));
-                    }
+                        local_sheet_index: attr(&name_attrs, "localSheetId")
+                            .and_then(|s| s.parse::<usize>().ok()),
+                        referent: parse_name_ref(name_text.trim()),
+                        comment: attr(&name_attrs, "comment").map(ToOwned::to_owned),
+                    });
                 }
                 name_text.clear();
             }
@@ -222,7 +283,11 @@ fn parse_workbook_xml(
     if sheets.is_empty() {
         return Err(error::xlsx_format("workbook.xml has no sheets"));
     }
-    Ok(sheets)
+    Ok(WorkbookMeta {
+        sheets,
+        names,
+        active_tab,
+    })
 }
 
 fn parse_name_ref(text: &str) -> NameReferent {
@@ -269,6 +334,7 @@ fn load_sst(
     let mut run_font = Font::default();
     let mut in_r = false;
     let mut in_rpr = false;
+    let mut in_rph = false;
     while let Some(ev) = r.next()? {
         match ev {
             XmlEvent::Start { name, .. } if name == "si" => {
@@ -280,7 +346,9 @@ fn load_sst(
                 in_si = false;
                 out.push((text.clone(), runs.clone()));
             }
-            XmlEvent::Start { name, attrs } if in_si && name == "t" => {
+            XmlEvent::Start { name, .. } if in_si && name == "rPh" => in_rph = true,
+            XmlEvent::End { name } if name == "rPh" => in_rph = false,
+            XmlEvent::Start { name, attrs } if in_si && !in_rph && name == "t" => {
                 in_t = true;
                 let _ = attrs;
             }
@@ -350,6 +418,7 @@ fn load_styles(
     package: &OpcPackage,
     rels: &[Relationship],
     theme: &Theme,
+    wb: &mut Workbook,
     warnings: &mut FileWarnings,
 ) -> Result<StyleTable, CoreError> {
     let Some(rel) = rels.iter().find(|r| r.rel_type == REL_STYLES) else {
@@ -534,7 +603,7 @@ fn load_styles(
             XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
                 if in_xfs && name == "xf" =>
             {
-                cell_xfs.push(xf_to_style(&attrs, &fonts, &fills, &borders, &numfmts));
+                cell_xfs.push(xf_to_style(&attrs, &fonts, &fills, &borders, &numfmts, wb)?);
             }
             XmlEvent::Start { name, attrs } if in_xfs && name == "alignment" => {
                 if let Some(last) = cell_xfs.last_mut() {
@@ -571,7 +640,8 @@ fn xf_to_style(
     fills: &[Fill],
     borders: &[Border],
     numfmts: &HashMap<u32, String>,
-) -> Style {
+    wb: &mut Workbook,
+) -> Result<Style, CoreError> {
     let font_id = attr(attrs, "fontId")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
@@ -594,9 +664,11 @@ fn xf_to_style(
     if let Some(b) = borders.get(border_id) {
         style.border = *b;
     }
-    style.num_fmt = NumFmtId::new(num_id);
-    let _ = numfmts;
-    style
+    style.num_fmt = match numfmts.get(&num_id) {
+        Some(code) => wb.intern_num_fmt(code)?,
+        None => NumFmtId::new(num_id),
+    };
+    Ok(style)
 }
 
 fn parse_alignment(attrs: &[(String, String)]) -> Alignment {
@@ -665,9 +737,13 @@ struct Theme {
     scheme: Vec<Color>,
 }
 
-fn load_theme(package: &OpcPackage, rels: &[Relationship], warnings: &mut FileWarnings) -> Theme {
+fn load_theme(
+    package: &OpcPackage,
+    rels: &[Relationship],
+    warnings: &mut FileWarnings,
+) -> Result<Theme, CoreError> {
     let Some(rel) = rels.iter().find(|r| r.rel_type == REL_THEME) else {
-        return Theme::default();
+        return Ok(Theme::default());
     };
     let Some(part) = package.part(&rel.target) else {
         warnings.push(
@@ -675,26 +751,31 @@ fn load_theme(package: &OpcPackage, rels: &[Relationship], warnings: &mut FileWa
             "theme relationship is dangling",
             Some(rel.target.clone()),
         );
-        return Theme::default();
+        return Ok(Theme::default());
     };
     let mut r = XmlReader::new(&part.bytes);
     let mut scheme = Vec::new();
     let mut in_scheme = false;
-    while let Ok(Some(ev)) = r.next() {
+    while let Some(ev) = r.next()? {
         match ev {
             XmlEvent::Start { name, .. } if name == "clrScheme" => in_scheme = true,
             XmlEvent::End { name } if name == "clrScheme" => in_scheme = false,
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if in_scheme && (name == "srgbClr" || name == "sysClr") =>
             {
-                if let Some(val) = attr(&attrs, "val").or_else(|| attr(&attrs, "lastClr")) {
+                let value = if name == "sysClr" {
+                    attr(&attrs, "lastClr").or_else(|| attr(&attrs, "val"))
+                } else {
+                    attr(&attrs, "val")
+                };
+                if let Some(val) = value {
                     scheme.push(rgb_from_hex(val));
                 }
             }
             _ => {}
         }
     }
-    Theme { scheme }
+    Ok(Theme { scheme })
 }
 
 fn parse_color(attrs: &[(String, String)], theme: Option<&Theme>) -> Color {
@@ -731,6 +812,79 @@ fn rgb_from_hex(s: &str) -> Color {
     };
     let argb = u32::from_str_radix(&padded, 16).unwrap_or(0xFF00_0000);
     Color::Rgb { argb }
+}
+
+#[derive(Clone, Copy)]
+enum FragmentKind {
+    Print,
+    ConditionalFormatting,
+    DataValidations,
+    Sparkline,
+}
+
+struct OpenFragment {
+    kind: FragmentKind,
+    name: String,
+    start: usize,
+}
+
+fn fragment_kind(name: &str) -> Option<FragmentKind> {
+    match name {
+        "pageSetup" | "pageMargins" | "printOptions" | "headerFooter" | "rowBreaks"
+        | "colBreaks" => Some(FragmentKind::Print),
+        "conditionalFormatting" => Some(FragmentKind::ConditionalFormatting),
+        "dataValidations" => Some(FragmentKind::DataValidations),
+        "sparklineGroups" => Some(FragmentKind::Sparkline),
+        _ => None,
+    }
+}
+
+fn store_fragment(extra: &mut WorksheetExtras, kind: FragmentKind, bytes: Vec<u8>) {
+    match kind {
+        FragmentKind::Print => extra.print_xml.push(bytes),
+        FragmentKind::ConditionalFormatting => extra.conditional_formatting_xml.push(bytes),
+        FragmentKind::DataValidations => extra.data_validations_xml.push(bytes),
+        FragmentKind::Sparkline => extra.sparkline_xml.push(bytes),
+    }
+}
+
+fn capture_fragment(
+    extra: &mut WorksheetExtras,
+    open: &mut Vec<OpenFragment>,
+    event: &XmlEvent,
+    span: std::ops::Range<usize>,
+    source: &[u8],
+) -> Result<(), CoreError> {
+    match event {
+        XmlEvent::Start { name, .. } => {
+            if let Some(kind) = fragment_kind(name) {
+                open.push(OpenFragment {
+                    kind,
+                    name: name.clone(),
+                    start: span.start,
+                });
+            }
+        }
+        XmlEvent::Empty { name, .. } => {
+            if let Some(kind) = fragment_kind(name) {
+                let bytes = source
+                    .get(span)
+                    .ok_or_else(|| error::xlsx_xml("XML event span is outside its part"))?;
+                store_fragment(extra, kind, bytes.to_vec());
+            }
+        }
+        XmlEvent::End { name } => {
+            if let Some(index) = open.iter().rposition(|fragment| fragment.name == *name) {
+                let fragment = open.remove(index);
+                let bytes = source
+                    .get(fragment.start..span.end)
+                    .ok_or_else(|| error::xlsx_xml("XML fragment span is outside its part"))?;
+                store_fragment(extra, fragment.kind, bytes.to_vec());
+            }
+        }
+        XmlEvent::Text(_) => {}
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -772,20 +926,36 @@ fn load_sheet(
     let mut shared: HashMap<u32, (u32, u16, String)> = HashMap::new();
     let mut merges: Vec<RangeRef> = Vec::new();
     let mut in_hyperlinks = false;
+    let mut open_fragments = Vec::new();
 
     while let Some(ev) = r.next()? {
+        capture_fragment(
+            &mut extra,
+            &mut open_fragments,
+            &ev,
+            r.last_span(),
+            &part.bytes,
+        )?;
         match ev {
             XmlEvent::Start { name, .. } if name == "sheetData" => in_sheet_data = true,
             XmlEvent::End { name } if name == "sheetData" => in_sheet_data = false,
             XmlEvent::Start { name, attrs } if in_sheet_data && name == "row" => {
                 if let Some(ridx) = attr(&attrs, "r").and_then(|s| s.parse::<u32>().ok()) {
-                    let row = ridx.saturating_sub(1);
-                    if attr(&attrs, "hidden").is_some_and(truthy) {
-                        let _ = wb.set_row_hidden(id, row, true);
+                    if ridx == 0 || ridx > MAX_ROWS {
+                        return Err(error::xlsx_limit(format!(
+                            "worksheet row {ridx} is outside 1..={MAX_ROWS}"
+                        )));
                     }
-                    if let Some(ht) = attr(&attrs, "ht").and_then(|s| s.parse::<f64>().ok()) {
+                    let row = ridx - 1;
+                    if attr(&attrs, "hidden").is_some_and(truthy) {
+                        wb.set_row_hidden(id, row, true)?;
+                    }
+                    if let Some(ht) = attr(&attrs, "ht")
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .filter(|height| height.is_finite() && *height > 0.0)
+                    {
                         let px = (ht * 96.0 / 72.0).round().max(1.0) as u32;
-                        let _ = wb.sheet_mut(id)?.geometry.rows.set_size(row, px);
+                        wb.set_row_height(id, row, px)?;
                     }
                 }
             }
@@ -815,6 +985,31 @@ fn load_sheet(
                     f_si,
                     &f_ref,
                     &is_text,
+                    sst,
+                    styles,
+                    &mut shared,
+                    warnings,
+                    part_name,
+                ) {
+                    warnings.push("xlsx.cell", e.message, Some(part_name.into()));
+                }
+            }
+            XmlEvent::Empty { name, attrs } if in_sheet_data && name == "c" => {
+                let empty_ref = attr(&attrs, "r").unwrap_or("");
+                let empty_type = attr(&attrs, "t").unwrap_or("n");
+                let empty_style = attr(&attrs, "s").and_then(|s| s.parse().ok());
+                if let Err(e) = commit_cell(
+                    wb,
+                    id,
+                    empty_ref,
+                    empty_type,
+                    empty_style,
+                    "",
+                    "",
+                    "",
+                    None,
+                    "",
+                    "",
                     sst,
                     styles,
                     &mut shared,
@@ -858,25 +1053,28 @@ fn load_sheet(
                 }
             }
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs } if name == "col" => {
-                let min = attr(&attrs, "min")
-                    .and_then(|s| s.parse::<u32>().ok())
-                    .unwrap_or(1);
-                let max = attr(&attrs, "max")
-                    .and_then(|s| s.parse::<u32>().ok())
-                    .unwrap_or(min);
+                let min = parse_u32_attr(&attrs, "min", 1)?;
+                let max = parse_u32_attr(&attrs, "max", min)?;
+                if min == 0 || min > max || max > u32::from(MAX_COLS) {
+                    return Err(error::xlsx_limit(format!(
+                        "worksheet column range {min}..={max} is outside 1..={MAX_COLS}"
+                    )));
+                }
                 let hidden = attr(&attrs, "hidden").is_some_and(truthy);
-                let width = attr(&attrs, "width").and_then(|s| s.parse::<f64>().ok());
-                let sheet = wb.sheet_mut(id)?;
+                let width = attr(&attrs, "width")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .filter(|width| width.is_finite() && *width > 0.0);
                 for col in min..=max {
-                    let idx = (col.saturating_sub(1)) as u16;
+                    let idx = u16::try_from(col - 1)
+                        .map_err(|_| error::xlsx_limit("worksheet column index overflow"))?;
                     if hidden {
-                        let _ = sheet.geometry.cols.set_hidden(u32::from(idx), true);
+                        wb.set_col_hidden(id, idx, true)?;
                     }
                     if let Some(w) = width {
                         let px = (w * f64::from(omacell_core::geometry::DEFAULT_COL_PX) / 8.43)
                             .round()
                             .max(1.0) as u32;
-                        let _ = sheet.geometry.cols.set_size(u32::from(idx), px);
+                        wb.set_col_width(id, idx, px)?;
                     }
                 }
             }
@@ -887,8 +1085,17 @@ fn load_sheet(
                 let x = attr(&attrs, "xSplit")
                     .and_then(|s| s.parse::<f64>().ok())
                     .unwrap_or(0.0);
+                if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
+                    return Err(error::xlsx_format(
+                        "worksheet pane has invalid split values",
+                    ));
+                }
                 let state = attr(&attrs, "state").unwrap_or("");
-                let view = &mut wb.sheet_mut(id)?.view;
+                let mut view = wb
+                    .sheet(id)
+                    .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
+                    .view
+                    .clone();
                 if state == "frozen" || state == "frozenSplit" {
                     view.freeze = FreezePanes {
                         rows: y.round().max(0.0) as u32,
@@ -900,18 +1107,39 @@ fn load_sheet(
                         y_px: y.round().max(0.0) as u32,
                     });
                 }
+                wb.set_sheet_view(id, view)?;
             }
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "sheetView" =>
             {
                 if let Some(z) = attr(&attrs, "zoomScale").and_then(|s| s.parse::<f64>().ok()) {
-                    wb.sheet_mut(id)?.view.zoom = z / 100.0;
+                    if z.is_finite() && z > 0.0 {
+                        let mut view = wb
+                            .sheet(id)
+                            .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
+                            .view
+                            .clone();
+                        view.zoom = z / 100.0;
+                        wb.set_sheet_view(id, view)?;
+                    }
                 }
                 if attr(&attrs, "showGridLines").is_some_and(|s| !truthy(s)) {
-                    wb.sheet_mut(id)?.view.gridlines = false;
+                    let mut view = wb
+                        .sheet(id)
+                        .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
+                        .view
+                        .clone();
+                    view.gridlines = false;
+                    wb.set_sheet_view(id, view)?;
                 }
                 if attr(&attrs, "showFormulas").is_some_and(truthy) {
-                    wb.sheet_mut(id)?.view.show_formulas = true;
+                    let mut view = wb
+                        .sheet(id)
+                        .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
+                        .view
+                        .clone();
+                    view.show_formulas = true;
+                    wb.set_sheet_view(id, view)?;
                 }
             }
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
@@ -920,10 +1148,16 @@ fn load_sheet(
                 if let Some(sq) = attr(&attrs, "sqref").and_then(|s| s.split_whitespace().next())
                     && let Ok(parsed) = parse_a1(sq)
                 {
-                    wb.sheet_mut(id)?.view.selection = match parsed.kind {
+                    let mut view = wb
+                        .sheet(id)
+                        .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
+                        .view
+                        .clone();
+                    view.selection = match parsed.kind {
                         RefKind::Range(rg) => rg,
                         RefKind::Cell(c) => RangeRef::from_corners(c, c),
                     };
+                    wb.set_sheet_view(id, view)?;
                 }
             }
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
@@ -934,12 +1168,15 @@ fn load_sheet(
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "sheetProtection" =>
             {
-                wb.sheet_mut(id)?.protection = ProtectionState {
-                    enabled: true,
-                    password: attr(&attrs, "hashValue")
-                        .or_else(|| attr(&attrs, "password"))
-                        .map(|s| s.as_bytes().to_vec()),
-                };
+                wb.set_sheet_protection(
+                    id,
+                    ProtectionState {
+                        enabled: true,
+                        password: attr(&attrs, "hashValue")
+                            .or_else(|| attr(&attrs, "password"))
+                            .map(|s| s.as_bytes().to_vec()),
+                    },
+                )?;
             }
             XmlEvent::Start { name, .. } if name == "hyperlinks" => in_hyperlinks = true,
             XmlEvent::End { name } if name == "hyperlinks" => in_hyperlinks = false,
@@ -974,19 +1211,25 @@ fn load_sheet(
                     );
                 }
             }
-            XmlEvent::Start { name, attrs } if name == "conditionalFormatting" => {
-                extra
-                    .conditional_formatting_xml
-                    .push(format!("ref={}", attr(&attrs, "ref").unwrap_or("")));
-            }
-            XmlEvent::Start { name, .. } if name == "dataValidations" => {
-                extra.data_validations_xml.push("dataValidations".into());
-            }
             _ => {}
         }
     }
-    wb.sheet_mut(id)?.merges = merges;
+    if !open_fragments.is_empty() {
+        return Err(error::xlsx_xml(
+            "worksheet ended inside a preserved XML fragment",
+        ));
+    }
+    wb.set_sheet_merges(id, merges)?;
     Ok(extra)
+}
+
+fn parse_u32_attr(attrs: &[(String, String)], name: &str, default: u32) -> Result<u32, CoreError> {
+    match attr(attrs, name) {
+        Some(value) => value
+            .parse()
+            .map_err(|_| error::xlsx_format(format!("invalid {name}={value:?}"))),
+        None => Ok(default),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1050,44 +1293,34 @@ fn commit_cell(
                 return Ok(());
             }
         }
-        if !v.is_empty() && t != "s" && t != "inlineStr" {
-            if let Ok(n) = v.parse::<f64>() {
-                let mut slot = wb
-                    .get(sheet, cell.row, cell.col)?
-                    .copied()
-                    .unwrap_or_else(CellSlot::empty);
-                slot.value = Value::Number(n);
-                wb.set_slot(sheet, cell.row, cell.col, slot)?;
-            } else if t == "b" {
-                let mut slot = wb
-                    .get(sheet, cell.row, cell.col)?
-                    .copied()
-                    .unwrap_or_else(CellSlot::empty);
-                slot.value = Value::Bool(truthy(v) || v == "1");
-                wb.set_slot(sheet, cell.row, cell.col, slot)?;
-            }
-        }
+        set_formula_cached_value(wb, sheet, cell, t, v, inline, sst, warnings, part)?;
         apply_style(wb, sheet, cell, style_idx, styles)?;
         return Ok(());
     }
 
     match t {
         "s" => {
-            let idx: usize = v.trim().parse().unwrap_or(0);
+            let Ok(idx) = v.trim().parse::<usize>() else {
+                warnings.push(
+                    "xlsx.shared-string",
+                    format!("invalid shared string index {v:?} at {r}"),
+                    Some(part.into()),
+                );
+                apply_style(wb, sheet, cell, style_idx, styles)?;
+                return Ok(());
+            };
             if let Some((text, runs)) = sst.0.get(idx) {
                 if runs.is_empty() {
                     wb.set_text(sheet, cell.row, cell.col, text)?;
                 } else {
-                    let sid = wb.intern_rich_text(text, runs.clone());
-                    let slot = CellSlot {
-                        value: Value::Text(sid),
-                        formula: None,
-                        style: omacell_core::style::StyleId::DEFAULT,
-                        flags: CellFlags::DEFAULT,
-                    };
-                    wb.set_slot(sheet, cell.row, cell.col, slot)?;
-                    wb.release_text(sid);
+                    wb.set_rich_text(sheet, cell.row, cell.col, text, runs.clone())?;
                 }
+            } else {
+                warnings.push(
+                    "xlsx.shared-string",
+                    format!("shared string index {idx} at {r} is out of range"),
+                    Some(part.into()),
+                );
             }
         }
         "inlineStr" | "str" => {
@@ -1125,7 +1358,7 @@ fn commit_cell(
         _ => {
             let trimmed = v.trim();
             if !trimmed.is_empty() {
-                if let Ok(n) = trimmed.parse::<f64>() {
+                if let Some(n) = trimmed.parse::<f64>().ok().filter(|n| n.is_finite()) {
                     wb.set_number(sheet, cell.row, cell.col, n)?;
                 } else {
                     wb.set_text(sheet, cell.row, cell.col, trimmed)?;
@@ -1134,6 +1367,78 @@ fn commit_cell(
         }
     }
     apply_style(wb, sheet, cell, style_idx, styles)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_formula_cached_value(
+    wb: &mut Workbook,
+    sheet: omacell_core::addr::SheetId,
+    cell: CellRef,
+    cell_type: &str,
+    value: &str,
+    inline: &str,
+    sst: &Sst,
+    warnings: &mut FileWarnings,
+    part: &str,
+) -> Result<(), CoreError> {
+    if value.is_empty() && inline.is_empty() {
+        return Ok(());
+    }
+    let mut slot = wb
+        .get(sheet, cell.row, cell.col)?
+        .copied()
+        .unwrap_or_else(CellSlot::empty);
+    let mut held_text = None;
+    slot.value = match cell_type {
+        "b" => Value::Bool(truthy(value) || value == "1"),
+        "e" => Value::Error(ErrorKind::from_display(value.trim()).unwrap_or(ErrorKind::Value)),
+        "str" | "inlineStr" => {
+            let text = if cell_type == "str" { value } else { inline };
+            let id = wb.intern_text(text);
+            held_text = Some(id);
+            Value::Text(id)
+        }
+        "s" => {
+            let Some(index) = value.trim().parse::<usize>().ok() else {
+                warnings.push(
+                    "xlsx.shared-string",
+                    format!("invalid cached shared-string index {value:?}"),
+                    Some(part.into()),
+                );
+                return Ok(());
+            };
+            let Some((text, _)) = sst.0.get(index) else {
+                warnings.push(
+                    "xlsx.shared-string",
+                    format!("cached shared-string index {index} is out of range"),
+                    Some(part.into()),
+                );
+                return Ok(());
+            };
+            let id = wb.intern_text(text);
+            held_text = Some(id);
+            Value::Text(id)
+        }
+        "d" => parse_iso_date(value, wb.settings().date_system)
+            .map(Value::Number)
+            .unwrap_or(Value::Empty),
+        _ => match value.trim().parse::<f64>() {
+            Ok(number) if number.is_finite() => Value::Number(number),
+            _ => {
+                warnings.push(
+                    "xlsx.cell",
+                    format!("invalid numeric cached value {value:?}"),
+                    Some(part.into()),
+                );
+                Value::Empty
+            }
+        },
+    };
+    wb.set_slot(sheet, cell.row, cell.col, slot)?;
+    if let Some(id) = held_text {
+        wb.release_text(id);
+    }
     Ok(())
 }
 

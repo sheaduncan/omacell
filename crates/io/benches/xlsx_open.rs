@@ -9,12 +9,12 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 fn big_xlsx() -> Vec<u8> {
-    // ~50k rows × 20 numeric cells ≈ 50+ MB uncompressed sheet XML.
+    // 86k rows × 20 numeric cells is just over 50 MiB of worksheet XML.
     let mut sheet = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"#,
     );
-    for r in 1..=20_000u32 {
+    for r in 1..=86_000u32 {
         sheet.push_str("<row r=\"");
         sheet.push_str(&r.to_string());
         sheet.push_str("\">");
@@ -30,6 +30,7 @@ fn big_xlsx() -> Vec<u8> {
         sheet.push_str("</row>");
     }
     sheet.push_str("</sheetData></worksheet>");
+    assert!(sheet.len() >= 50 * 1024 * 1024);
     let ns_pkg = "http://schemas.openxmlformats.org/package/2006";
     let od = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     let ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";

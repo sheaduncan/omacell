@@ -1,5 +1,6 @@
 //! OPC zip package with size, ratio, and path limits (spec F-9.6, §12.3).
 
+use std::collections::HashSet;
 use std::io::{Cursor, Read};
 
 use indexmap::IndexMap;
@@ -15,6 +16,8 @@ pub const MAX_ZIP_ENTRIES: usize = 16_384;
 pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 /// Maximum sum of uncompressed sizes.
 pub const MAX_UNCOMPRESSED_TOTAL: u64 = 512 * 1024 * 1024;
+/// Maximum compressed package size accepted in memory.
+pub const MAX_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
 /// `uncompressed / compressed` ceiling for entries with compressed size ≥ 64 bytes.
 pub const MAX_COMPRESSION_RATIO: u64 = 100;
 /// Tiny compressed entries are exempt from the ratio check (headers, etc.).
@@ -92,6 +95,12 @@ impl OpcPackage {
 
 /// Open bytes as an OPC zip.
 pub fn open_package(bytes: &[u8]) -> Result<OpcPackage, CoreError> {
+    if bytes.len() as u64 > MAX_PACKAGE_BYTES {
+        return Err(error::xlsx_limit(format!(
+            "compressed package is {} bytes; maximum is {MAX_PACKAGE_BYTES}",
+            bytes.len()
+        )));
+    }
     let cursor = Cursor::new(bytes);
     let mut zip = ZipArchive::new(cursor).map_err(|e| error::xlsx_zip(e.to_string()))?;
     if zip.len() > MAX_ZIP_ENTRIES {
@@ -101,16 +110,23 @@ pub fn open_package(bytes: &[u8]) -> Result<OpcPackage, CoreError> {
         )));
     }
     let mut parts = IndexMap::new();
+    let mut part_names = HashSet::new();
     let mut total = 0u64;
     for i in 0..zip.len() {
         let mut file = zip
             .by_index(i)
             .map_err(|e| error::xlsx_zip(e.to_string()))?;
+        let raw_name = file.name().to_string();
+        let name = sanitize_path(&raw_name)?;
         if file.is_dir() {
             continue;
         }
-        let raw_name = file.name().to_string();
-        let name = sanitize_path(&raw_name)?;
+        let normalized_name = normalize_lookup(&name);
+        if !part_names.insert(normalized_name) {
+            return Err(error::xlsx_format(format!(
+                "duplicate OPC part name {name:?}"
+            )));
+        }
         let uncompressed = file.size();
         let compressed = file.compressed_size();
         if uncompressed > MAX_ENTRY_BYTES {
@@ -118,24 +134,49 @@ pub fn open_package(bytes: &[u8]) -> Result<OpcPackage, CoreError> {
                 "entry {name} is {uncompressed} bytes uncompressed; maximum is {MAX_ENTRY_BYTES}"
             )));
         }
-        total = total.saturating_add(uncompressed);
-        if total > MAX_UNCOMPRESSED_TOTAL {
+        if total.saturating_add(uncompressed) > MAX_UNCOMPRESSED_TOTAL {
             return Err(error::xlsx_limit(format!(
                 "uncompressed package exceeds {MAX_UNCOMPRESSED_TOTAL} bytes"
             )));
         }
-        if compressed >= MIN_RATIO_COMPRESSED
-            && uncompressed / compressed.max(1) > MAX_COMPRESSION_RATIO
-        {
+        if ratio_exceeded(uncompressed, compressed) {
             return Err(error::xlsx_limit(format!(
                 "entry {name} compression ratio exceeds {MAX_COMPRESSION_RATIO}:1"
             )));
         }
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)
+        let ratio_cap = if compressed >= MIN_RATIO_COMPRESSED {
+            compressed.saturating_mul(MAX_COMPRESSION_RATIO)
+        } else {
+            MAX_ENTRY_BYTES
+        };
+        let read_cap = MAX_ENTRY_BYTES.min(ratio_cap);
+        let initial_capacity = uncompressed.min(read_cap).min(1024 * 1024) as usize;
+        let mut buf = Vec::with_capacity(initial_capacity);
+        file.by_ref()
+            .take(read_cap.saturating_add(1))
+            .read_to_end(&mut buf)
             .map_err(|e| error::xlsx_zip(e.to_string()))?;
-        if buf.len() as u64 != uncompressed && uncompressed > 0 {
-            // zip crate reports size; still accept actual length if smaller.
+        let actual = buf.len() as u64;
+        if actual > MAX_ENTRY_BYTES {
+            return Err(error::xlsx_limit(format!(
+                "entry {name} exceeds {MAX_ENTRY_BYTES} bytes while decompressing"
+            )));
+        }
+        if ratio_exceeded(actual, compressed) {
+            return Err(error::xlsx_limit(format!(
+                "entry {name} compression ratio exceeds {MAX_COMPRESSION_RATIO}:1 while decompressing"
+            )));
+        }
+        if actual != uncompressed {
+            return Err(error::xlsx_zip(format!(
+                "entry {name} declared {uncompressed} uncompressed bytes but produced {actual}"
+            )));
+        }
+        total = total.saturating_add(actual);
+        if total > MAX_UNCOMPRESSED_TOTAL {
+            return Err(error::xlsx_limit(format!(
+                "uncompressed package exceeds {MAX_UNCOMPRESSED_TOTAL} bytes"
+            )));
         }
         parts.insert(
             name.clone(),
@@ -163,22 +204,28 @@ pub fn open_package(bytes: &[u8]) -> Result<OpcPackage, CoreError> {
 /// Reject path traversal and absolute zip names.
 pub fn sanitize_path(name: &str) -> Result<String, CoreError> {
     let n = name.replace('\\', "/");
-    let n = n.trim_start_matches("./");
-    let n = n.trim_start_matches('/');
     if n.is_empty() {
         return Err(error::xlsx_path("empty zip entry name"));
+    }
+    if n.starts_with('/') {
+        return Err(error::xlsx_path(format!("zip entry {name:?} is absolute")));
     }
     if n.split('/').any(|seg| seg == ".." || seg == ".") {
         return Err(error::xlsx_path(format!(
             "zip entry {name:?} contains a '.' or '..' segment"
         )));
     }
-    if n.contains(':') && n.chars().nth(1) == Some(':') {
+    if n.as_bytes().get(1) == Some(&b':') {
         return Err(error::xlsx_path(format!(
             "zip entry {name:?} looks absolute"
         )));
     }
     Ok(n.to_string())
+}
+
+fn ratio_exceeded(uncompressed: u64, compressed: u64) -> bool {
+    compressed >= MIN_RATIO_COMPRESSED
+        && uncompressed > compressed.saturating_mul(MAX_COMPRESSION_RATIO)
 }
 
 fn normalize_lookup(name: &str) -> String {
@@ -309,6 +356,8 @@ mod tests {
     fn rejects_dotdot() {
         assert!(sanitize_path("../xl/workbook.xml").is_err());
         assert!(sanitize_path("xl/../workbook.xml").is_err());
-        assert!(sanitize_path("/xl/workbook.xml").is_ok());
+        assert!(sanitize_path("/xl/workbook.xml").is_err());
+        assert!(sanitize_path("\\xl\\workbook.xml").is_err());
+        assert!(sanitize_path("C:\\xl\\workbook.xml").is_err());
     }
 }
