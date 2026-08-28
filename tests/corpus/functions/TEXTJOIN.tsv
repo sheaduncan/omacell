@@ -1,0 +1,14 @@
+# formula	expected	note
+# delimiter + ignore_empty + values.
+=TEXTJOIN(",", TRUE, "a", "", "b")	a,b	skip empty
+=TEXTJOIN(",", FALSE, "a", "", "b")	a,,b	keep empty
+=TEXTJOIN("-", TRUE, {"a","b","c"})	a-b-c	array
+=TEXTJOIN(",", TRUE, 1, 2, 3)	1,2,3	numbers
+=TEXTJOIN("", TRUE, "a", "b")	ab	empty delimiter
+=TEXTJOIN(",", TRUE, "")		all empty
+=TEXTJOIN(",", TRUE, #N/A)	#N/A	error
+=TEXTJOIN("-", TRUE, "é", "😀")	é-😀	Unicode
+=TEXTJOIN(",", TRUE, TRUE, FALSE)	TRUE,FALSE	bools; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTJOIN(",", TRUE, {"a","","b"})	a,b	array skip empty
+=TEXTJOIN(",", FALSE, {"a","","b"})	a,,b	array keep empty
+=TEXTJOIN(", ", TRUE, "a", "b")	a, b	multi-char delimiter

@@ -1,0 +1,14 @@
+# formula	expected	note	locale	date_system
+# Locale currency; negatives in parentheses.
+=DOLLAR(1234.5)	$1,234.50	en-US default 2 decimals; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DOLLAR(1234.5, 0)	$1,235	0 decimals
+=DOLLAR(-1)	($1.00)	negative in parens; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DOLLAR(0)	$0.00	zero
+=DOLLAR(0.5, 0)	$1	half away from zero at 0 decimals
+=DOLLAR(#N/A)	#N/A	error
+=DOLLAR(1234.5)	€1.234,50	de-DE currency and separators; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)	de-DE
+=DOLLAR(1234.5, -1)	$1,230	negative decimals
+=DOLLAR(TRUE)	$1.00	TRUE is 1
+=DOLLAR("")	$0.00	empty is 0; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DOLLAR(0.4, 0)	$0	round down
+=DOLLAR({"1","2"})	{$1.00,$2.00}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

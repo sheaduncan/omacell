@@ -1,0 +1,14 @@
+# formula	expected	note
+# Simple one-to-one lowercase.
+=LOWER("ABC")	abc	ASCII
+=LOWER("Abc")	abc	mixed
+=LOWER("")		empty
+=LOWER("ÄÖÜ")	äöü	Latin-1
+=LOWER("STRASSE")	strasse	SS stays two letters
+=LOWER(TRUE)	true	bool to text then lower; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=LOWER(#N/A)	#N/A	error
+=LOWER({"AB","CD"})	{ab,cd}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=LOWER("123")	123	digits
+=LOWER("ΑΘΉΝΑ")	αθήνα	Greek
+=LOWER("E")	e	single
+=LOWER(" ")	 	space; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

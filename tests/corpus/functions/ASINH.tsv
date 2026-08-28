@@ -6,6 +6,6 @@
 =ASINH("0")	0	numeric text
 =ASINH("x")	#VALUE!	bad text
 =ASINH(#N/A)	#N/A	error
-=ASINH({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=ASINH({0,0})	{0,0}	array lift; full spill
 =SIGN(ASINH(2))	1	positive
 =ASINH(0)+1	1	plus one

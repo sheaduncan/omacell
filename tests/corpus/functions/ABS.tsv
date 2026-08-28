@@ -9,4 +9,4 @@
 =ABS("x")	#VALUE!	non-numeric text is #VALUE!
 =ABS(#DIV/0!)	#DIV/0!	error propagates
 =ABS(-1.005)*0	0	finite result times zero
-=ABS({-1,2})	1	array lifting element-wise; spilled origin is top-left (format_cell)
+=ABS({-1,2})	{1,2}	array lifting element-wise; full spill

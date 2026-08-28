@@ -1,0 +1,14 @@
+# formula	expected	note	locale	date_system
+# Explicit separators; percent suffix; accounting parens.
+=NUMBERVALUE("1,234.56")	1234.56	en-US default separators; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NUMBERVALUE("1.234,56", ",", ".")	1234.56	EU separators passed explicitly
+=NUMBERVALUE("1.234,56")	1234.56	de-DE locale defaults; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)	de-DE
+=NUMBERVALUE("50%")	0.5	trailing percent divides by 100
+=NUMBERVALUE("1 234.5", ".", " ")	1234.5	space group separator
+=NUMBERVALUE("abc")	#VALUE!	not a number
+=NUMBERVALUE(#N/A)	#N/A	error
+=NUMBERVALUE("")	0	empty is 0; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NUMBERVALUE("-2.5")	-2.5	negative; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NUMBERVALUE("(2)")	-2	accounting parens; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NUMBERVALUE("1,5", ",", ".")	1.5	explicit decimal comma: 1,5 = 1.5
+=NUMBERVALUE({"1","2"})	{1,2}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

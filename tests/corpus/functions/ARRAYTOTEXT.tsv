@@ -1,0 +1,14 @@
+# formula	expected	note
+# format 0 concise, 1 strict array constant.
+=ARRAYTOTEXT(1)	1	scalar concise; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT({1,2,3})	1, 2, 3	concise row; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT({1,2;3,4})	1, 2; 3, 4	concise 2x2 uses semicolon between rows; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT({1,2,3}, 1)	{1,2,3}	strict; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT({"a","b"}, 1)	{"a","b"}	strict quotes text; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT({"a","b"})	a, b	concise text unquoted; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT(TRUE, 1)	TRUE	bool strict; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT(#N/A)	#N/A	error
+=ARRAYTOTEXT({1,#N/A}, 1)	{1,#N/A}	strict preserves errors; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT("")		empty; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT({1}, 1)	1	1x1 strict is the scalar; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=ARRAYTOTEXT({"é","😀"})	é, 😀	Unicode concise; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

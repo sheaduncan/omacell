@@ -204,6 +204,8 @@ pub fn all_specs() -> Vec<FunctionSpec> {
     specs.extend_from_slice(crate::info::SPECS);
     specs.push(crate::info::ISOMITTED_SPEC);
     specs.extend_from_slice(crate::aggregate::SPECS);
+    specs.extend_from_slice(crate::TEXT_SPECS);
+    specs.extend_from_slice(crate::DATETIME_SPECS);
     specs
 }
 

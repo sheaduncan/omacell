@@ -1,0 +1,14 @@
+# formula	expected	note
+# Inclusive workdays; Sat/Sun weekend.
+=NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,7))	5	Mon-Sun → 5 weekdays
+=NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,5))	5	Mon-Fri
+=NETWORKDAYS(DATE(2024,1,6), DATE(2024,1,7))	0	Sat-Sun
+=NETWORKDAYS(DATE(2024,1,7), DATE(2024,1,1))	-5	reversed
+=NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,7), DATE(2024,1,1))	4	holiday on Monday
+=NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,1))	1	Monday only
+=NETWORKDAYS(DATE(2024,1,6), DATE(2024,1,6))	0	Saturday only
+=NETWORKDAYS(#N/A, 1)	#N/A	error
+=NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,7), {45292,45293})	3	two holidays as array
+=NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,8))	6	Mon through next Mon
+=NETWORKDAYS(DATE(1900,1,1), DATE(1900,1,7))	5	Excel Sun 1 Jan 1900 through Sat: weekdays Mon-Fri = 5
+=NETWORKDAYS(DATE(2024,1,1), DATE(2024,1,31))	23	January 2024 weekdays

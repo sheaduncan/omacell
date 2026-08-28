@@ -1,0 +1,14 @@
+# formula	expected	note
+# end - start as integer days (serial subtraction).
+=DAYS(DATE(2024,1,10), DATE(2024,1,1))	9	9 days
+=DAYS(DATE(2024,1,1), DATE(2024,1,10))	-9	negative when end < start
+=DAYS(DATE(2024,1,1), DATE(2024,1,1))	0	same day
+=DAYS(61, 59)	2	serial 61-59 crosses Lotus day
+=DAYS(61, 60)	1	Lotus to Mar 1
+=DAYS(#N/A, 1)	#N/A	error
+=DAYS(DATE(2024,2,29), DATE(2024,2,28))	1	leap day
+=DAYS(DATE(1900,3,1), DATE(1900,2,28))	2	includes Lotus serial in the subtraction; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAYS({45301,45292}, 45292)	{9,0}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAYS(1, 0)	1	serial 0 to 1
+=DAYS(DATE(2025,1,1), DATE(2024,1,1))	366	leap year span
+=DAYS(TRUE, FALSE)	1	1-0

@@ -1,0 +1,14 @@
+# formula	expected	note
+# Case-insensitive; * ? ~ wildcards.
+=SEARCH("a", "abc")	1	plain match
+=SEARCH("A", "abc")	1	case-insensitive
+=SEARCH("b", "abc")	2	middle
+=SEARCH("", "abc")	1	empty pattern; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=SEARCH("a*c", "abxc")	1	star wildcard
+=SEARCH("a?c", "abc")	1	question-mark wildcard
+=SEARCH("~*", "a*b")	2	tilde escapes star
+=SEARCH("z", "abc")	#VALUE!	not found
+=SEARCH("a", "abc", 2)	#VALUE!	start after only match
+=SEARCH(#N/A, "a")	#N/A	error
+=SEARCH("É", "aé")	2	Unicode case-insensitive
+=SEARCH("B", {"abc","xbc"})	{2,2}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

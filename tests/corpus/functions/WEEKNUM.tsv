@@ -1,0 +1,14 @@
+# formula	expected	note
+# Week containing Jan 1 is week 1; type 21 is ISO.
+=WEEKNUM(DATE(2012,1,1))	1	1 Jan 2012 Sunday, week 1
+=WEEKNUM(DATE(2012,1,8))	2	next Sunday is week 2
+=WEEKNUM(DATE(2012,1,1), 2)	1	Monday-start still week 1
+=WEEKNUM(DATE(2024,1,1), 21)	1	type 21 = ISO week
+=WEEKNUM(DATE(2021,1,1), 21)	53	2021-01-01 is ISO week 53 of 2020
+=WEEKNUM(DATE(2024,12,31))	53	last week of 2024 system 1; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WEEKNUM(#N/A)	#N/A	error
+=WEEKNUM(DATE(2024,1,1), 1)	1	type 1
+=WEEKNUM(1)	1	serial 1 is in week 1 of 1900
+=WEEKNUM(DATE(2024,1,1), 99)	#NUM!	bad return_type; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WEEKNUM({40909,40916})	{1,2}	array-lifting 2012-01-01 and 01-08; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WEEKNUM(DATE(2024,1,7))	2	Sunday 7 Jan 2024 starts week 2

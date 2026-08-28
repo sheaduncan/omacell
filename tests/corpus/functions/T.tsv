@@ -1,0 +1,14 @@
+# formula	expected	note
+# Return text as-is; non-text empty; errors propagate.
+=T("abc")	abc	text unchanged
+=T(1)		number → empty
+=T(TRUE)		bool → empty (Excel)
+=T(#N/A)	#N/A	error propagates; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=T("")		empty text
+=T("é")	é	Unicode
+=T({"a",1})	{a,}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=T(DATE(2024,1,1))		date serial is a number
+=T("TRUE")	TRUE	text TRUE is text
+=T(#VALUE!)	#VALUE!	error kind; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=T(" ")	 	space; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=T("😀")	😀	astral

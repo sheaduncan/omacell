@@ -25,6 +25,44 @@ fn probe_corpus_files() {
 }
 
 #[test]
+fn text_and_date_corpus_files() {
+    let mut files: Vec<_> = std::fs::read_dir(corpus_dir())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("tsv"))
+        .collect();
+    files.sort();
+    assert!(
+        files.len() >= 60,
+        "expected WP-05b corpora, found {}",
+        files.len()
+    );
+    for path in files {
+        let results = run_corpus_file(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let probe = matches!(path.file_stem().and_then(|s| s.to_str()), Some("SEQUENCE"));
+        if !probe {
+            assert!(
+                results.len() >= 10,
+                "{} has {} rows",
+                path.display(),
+                results.len()
+            );
+        }
+        for (row, got) in results {
+            assert_eq!(
+                got,
+                row.expected,
+                "{}: {} ({})",
+                path.file_name().unwrap().to_string_lossy(),
+                row.formula,
+                row.note
+            );
+        }
+    }
+}
+
+#[test]
 fn functions_json_is_sorted_and_matches_schema_version() {
     let json = functions_json().unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -50,6 +88,9 @@ fn functions_json_is_sorted_and_matches_schema_version() {
     assert_eq!(envelope.functions.len(), specs.len());
     assert!(names.contains(&"SUMIFS".to_string()));
     assert!(names.contains(&"ISOMITTED".to_string()));
+    assert!(names.contains(&"TEXT".to_string()));
+    assert!(names.contains(&"NOW".to_string()));
+    assert!(specs.len() > 1);
     for spec in &specs {
         assert!(
             spec.min_args <= spec.max_args,

@@ -1,0 +1,14 @@
+# formula	expected	note
+# Case-sensitive; optional instance_num.
+=SUBSTITUTE("aab", "a", "x")	xxb	replace all
+=SUBSTITUTE("aab", "a", "x", 1)	xab	first instance
+=SUBSTITUTE("aab", "a", "x", 2)	axb	second instance
+=SUBSTITUTE("aab", "a", "x", 9)	aab	instance past count unchanged
+=SUBSTITUTE("aab", "A", "x")	aab	case-sensitive miss
+=SUBSTITUTE("abc", "b", "")	ac	replace with empty
+=SUBSTITUTE("abc", "z", "x")	abc	no match
+=SUBSTITUTE("abc", "a", "x", 0)	#VALUE!	instance_num 0; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=SUBSTITUTE(#N/A, "a", "b")	#N/A	error
+=SUBSTITUTE("éé", "é", "x")	xx	Unicode
+=SUBSTITUTE({"aa","ab"}, "a", "x")	{xx,xb}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=SUBSTITUTE("", "a", "x")		empty text

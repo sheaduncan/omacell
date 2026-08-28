@@ -1,0 +1,14 @@
+# formula	expected	note	locale	date_system
+# Lotus day is 29; serial 0 is day 0.
+=DAY(DATE(2024,2,29))	29	leap day
+=DAY(60)	29	Lotus 29; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAY(0)	0	January 0, 1900; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAY(1)	1	1 Jan 1900; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAY(61)	1	1 Mar 1900
+=DAY(#N/A)	#N/A	error
+=DAY(-1)	#NUM!	negative 1900; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAY(DATE(2024,1,31))	31	31
+=DAY(0)	1	1904-01-01; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)		1904
+=DAY({1,60})	{1,29}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAY(45292)	1	2024-01-01
+=DAY(TRUE)	1	serial 1; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

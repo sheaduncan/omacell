@@ -1,0 +1,14 @@
+# formula	expected	note
+# ASCII space U+0020 only; collapse internals.
+=TRIM("  a  b  ")	a b	trim ends and collapse
+=TRIM("a")	a	no extra spaces
+=TRIM("")		empty
+=TRIM("   ")		spaces only
+=TRIM("a  b   c")	a b c	internal collapse
+=LEN(TRIM("a"&CHAR(9)&"b"))	3	tab is not a TRIM space (Excel); length stays 3
+=TRIM(#N/A)	#N/A	error
+=TRIM({"  a  "," b"})	{a,b}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TRIM(" a ")	a	both ends
+=TRIM(TRUE)	TRUE	bool; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TRIM("a b")	a b	single internal space kept
+=TRIM("  ä  ")	ä	Unicode payload kept

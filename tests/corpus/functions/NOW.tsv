@@ -1,0 +1,14 @@
+# formula	expected	note
+# Pass-stable; uses EvalCtx::clock(); never wall-clock per call.
+=NOW()	45000.5	injected clock 45000.5; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NOW()-TODAY()	0.5	time fraction; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NOW()-NOW()	0	identical across calls in one pass; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=HOUR(NOW())	12	0.5 → 12:00; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=MINUTE(NOW())	0	exact half day; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NOW()-0.5	45000	date part; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NOW()+0	45000.5	numeric; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=IF(NOW()=45000.5,1,0)	1	equals injected clock; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXT(NOW(), "h:mm")	12:00	formatted time; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NOW()>TODAY()	TRUE	time fraction is positive
+=NOW()*1	45000.5	arithmetic; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NOW()-45000.5	0	exact injected serial; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

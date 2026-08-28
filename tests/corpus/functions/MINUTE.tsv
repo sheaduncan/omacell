@@ -1,0 +1,13 @@
+# formula	expected	note
+=MINUTE(0.5)	0	noon
+=MINUTE(TIME(0,30,0))	30	30 min
+=MINUTE(TIME(1,59,0))	59	59
+=MINUTE(0)	0	zero
+=MINUTE(#N/A)	#N/A	error
+=MINUTE(TIME(12,30,45))	30	hms
+=MINUTE({0.5,0.25})	{0,0}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=MINUTE(TRUE)	0	integer
+=MINUTE(TIME(0,1,0))	1	one minute
+=MINUTE(-1)	#NUM!	negative; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=MINUTE(TIME(0,0,90))	1	90 seconds = 1 min 30 sec
+=MINUTE(DATE(2024,1,1))	0	date only

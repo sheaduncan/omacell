@@ -1,0 +1,14 @@
+# formula	expected	note
+# Simple one-to-one uppercase; ß stays ß (Excel).
+=UPPER("abc")	ABC	ASCII
+=UPPER("Abc")	ABC	mixed
+=UPPER("")		empty
+=UPPER("äöü")	ÄÖÜ	Latin-1 umlauts
+=UPPER("straße")	STRAßE	Excel keeps ß rather than SS; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UPPER(TRUE)	TRUE	bool; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UPPER(#N/A)	#N/A	error
+=UPPER({"ab","cd"})	{AB,CD}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UPPER("123")	123	digits
+=UPPER("Αθήνα")	ΑΘΉΝΑ	Greek
+=UPPER("e")	E	single letter
+=UPPER(" ")	 	space; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

@@ -1,0 +1,14 @@
+# formula	expected	note	locale	date_system
+# Locale-aware number and date parse.
+=VALUE("123")	123	plain integer text
+=VALUE("1,234")	1234	en-US thousands
+=VALUE("1.5")	1.5	decimal
+=VALUE("1/2/2024")	45293	en-US m/d/yyyy = 2 Jan 2024; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=VALUE("1/2/2024")	45323	en-GB d/m/yyyy = 1 Feb 2024; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)	en-GB
+=VALUE("12:00")	0.5	time text
+=VALUE("$1,234.50")	1234.5	currency prefix en-US
+=VALUE("abc")	#VALUE!	not numeric; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=VALUE(#N/A)	#N/A	error
+=VALUE("")	0	empty text is 0; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=VALUE("  8  ")	8	trimmed
+=VALUE({"1","2"})	{1,2}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

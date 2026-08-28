@@ -7,5 +7,5 @@
 =SIN("0")	0	numeric text
 =SIN("x")	#VALUE!	bad text
 =SIN(#N/A)	#N/A	error
-=SIN({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=SIN({0,0})	{0,0}	array lift; full spill
 =SIN(PI())+SIN(-PI())	0	odd function

@@ -1,0 +1,14 @@
+# formula	expected	note
+# 1-based start; Unicode scalars.
+=MID("abcd", 1, 2)	ab	start 1 length 2
+=MID("abcd", 2, 2)	bc	middle
+=MID("abcd", 3, 10)	cd	length past end
+=MID("abcd", 5, 1)		start past end is empty
+=MID("abcd", 0, 1)	#VALUE!	start_num < 1; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=MID("abcd", 1, 0)		num_chars 0
+=MID("abcd", 1, -1)	#VALUE!	negative num_chars; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=MID(#N/A, 1, 1)	#N/A	error
+=MID("éxé", 2, 1)	x	Unicode index
+=MID("a😀b", 2, 1)	😀	known difference: Excel UTF-16 index 2 is the trailing surrogate
+=MID({"abcd","wxyz"}, 2, 2)	{bc,xy}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=MID("", 1, 1)		empty text

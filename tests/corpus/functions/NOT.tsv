@@ -7,5 +7,5 @@
 =NOT("x")	#VALUE!	bad text
 =NOT(#N/A)	#N/A	error
 =NOT(NOT(TRUE))	TRUE	double
-=NOT({TRUE,FALSE})	FALSE	array lift; spilled origin is top-left (format_cell)
+=NOT({TRUE,FALSE})	{FALSE,TRUE}	array lift; full spill
 =NOT("TRUE")	FALSE	text TRUE

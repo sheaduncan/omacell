@@ -1,0 +1,14 @@
+# formula	expected	note
+# Flattens arrays/ranges.
+=CONCAT("a", "b")	ab	two scalars
+=CONCAT("a", "", "b")	ab	empty scalar contributes nothing
+=CONCAT({"a","b"})	ab	array flattened row-major
+=CONCAT({"a","b";"c","d"})	abcd	2x2 row-major
+=CONCAT(1, 2)	12	numbers via General
+=CONCAT(TRUE, FALSE)	TRUEFALSE	bools; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CONCAT(#N/A, "a")	#N/A	error
+=CONCAT("")		single empty
+=CONCAT("é", "😀")	é😀	Unicode
+=CONCAT("a", {"b","c"}, "d")	abcd	mixed scalar and array
+=CONCAT(LEFT("xyz", 1), "Q")	xQ	nested text fn
+=CONCAT(" ", "a")	 a	leading space kept; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

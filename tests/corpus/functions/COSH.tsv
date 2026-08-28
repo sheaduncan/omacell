@@ -6,6 +6,6 @@
 =COSH("0")	1	numeric text
 =COSH("x")	#VALUE!	bad text
 =COSH(#N/A)	#N/A	error
-=COSH({0,0})	1	array lift; spilled origin is top-left (format_cell)
+=COSH({0,0})	{1,1}	array lift; full spill
 =SIGN(COSH(0))	1	positive
 =COSH(0)*2	2	times two

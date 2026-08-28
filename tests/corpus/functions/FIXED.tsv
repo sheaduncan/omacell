@@ -1,0 +1,14 @@
+# formula	expected	note	locale	date_system
+# Round half away from zero; optional no grouping.
+=FIXED(1234.567, 1)	1,234.6	1 decimal with grouping
+=FIXED(1234.567, 1, TRUE)	1234.6	no grouping; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=FIXED(1234.567, 0)	1,235	round to integer
+=FIXED(1234.567, -1)	1,230	negative decimals round tens
+=FIXED(-1234.5, 1)	-1,234.5	negative number
+=FIXED(1.25, 1)	1.3	half away from zero
+=FIXED(0, 2)	0.00	zero
+=FIXED(#N/A, 1)	#N/A	error
+=FIXED(1234.567)	1,234.57	default 2 decimals
+=FIXED(1234.567, 1, TRUE)	1234,6	de-DE decimal comma when no grouping; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)	de-DE
+=FIXED(1000000, 0)	1,000,000	millions grouping
+=FIXED(1.25, 0)	1	integer result as text

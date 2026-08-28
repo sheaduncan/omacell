@@ -7,5 +7,5 @@
 =ATANH("0")	0	numeric text
 =ATANH("x")	#VALUE!	bad text
 =ATANH(#N/A)	#N/A	error
-=ATANH({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=ATANH({0,0})	{0,0}	array lift; full spill
 =SIGN(ATANH(0.5))	1	positive

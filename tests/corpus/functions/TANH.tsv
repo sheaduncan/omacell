@@ -6,6 +6,6 @@
 =TANH("0")	0	numeric text
 =TANH("x")	#VALUE!	bad text
 =TANH(#N/A)	#N/A	error
-=TANH({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=TANH({0,0})	{0,0}	array lift; full spill
 =SIGN(TANH(2))	1	positive
 =TANH(0)+1	1	plus one

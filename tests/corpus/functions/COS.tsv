@@ -6,6 +6,6 @@
 =COS("0")	1	numeric text
 =COS("x")	#VALUE!	bad text
 =COS(#N/A)	#N/A	error
-=COS({0,0})	1	array lift; spilled origin is top-left (format_cell)
+=COS({0,0})	{1,1}	array lift; full spill
 =COS(-PI())-COS(PI())	0	even function
 =SIGN(COS(0))	1	positive

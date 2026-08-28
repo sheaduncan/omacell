@@ -1,0 +1,14 @@
+# formula	expected	note
+# US NASD (FALSE) and European (TRUE).
+=DAYS360(DATE(2020,1,1), DATE(2020,2,1))	30	US Jan 1 to Feb 1
+=DAYS360(DATE(2020,1,1), DATE(2021,1,1))	360	US one year
+=DAYS360(DATE(2020,1,1), DATE(2020,1,1))	0	same day
+=DAYS360(DATE(2020,1,1), DATE(2020,2,1), TRUE)	30	EU same
+=DAYS360(DATE(2020,1,31), DATE(2020,2,29), TRUE)	29	EU 31→30, Feb 29 stays
+=DAYS360(DATE(2020,1,1), DATE(2019,1,1))	-360	negative
+=DAYS360(#N/A, 1)	#N/A	error
+=DAYS360(DATE(2020,1,1), DATE(2020,7,1))	180	half year 30/360
+=DAYS360(DATE(2020,12,31), DATE(2021,1,1), TRUE)	1	EU 31→30 then to Jan 1 = 1
+=DAYS360(DATE(2020,1,31), DATE(2020,3,31), TRUE)	60	EU two 31sts → 30ths = 60
+=DAYS360(DATE(2020,2,29), DATE(2020,3,31), TRUE)	31	EU Feb 29 to Mar 31→30
+=DAYS360(DATE(2020,1,30), DATE(2020,2,29), FALSE)	30	US NASD: start day 30, Feb 29 EOM → end 30, 30 days; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

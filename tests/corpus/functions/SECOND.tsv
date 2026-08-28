@@ -1,0 +1,13 @@
+# formula	expected	note
+=SECOND(0.5)	0	noon
+=SECOND(TIME(0,0,45))	45	45s
+=SECOND(0)	0	zero
+=SECOND(#N/A)	#N/A	error
+=SECOND(TIME(12,30,45))	45	hms
+=SECOND({0.5,0.25})	{0,0}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=SECOND(TRUE)	0	integer
+=SECOND(TIME(0,0,1))	1	one second
+=SECOND(-1)	#NUM!	negative; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=SECOND(DATE(2024,1,1))	0	date only
+=SECOND(TIME(0,1,0))	0	exact minute
+=SECOND(TIME(0,0,59))	59	59 seconds

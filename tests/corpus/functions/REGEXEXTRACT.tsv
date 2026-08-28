@@ -1,0 +1,14 @@
+# formula	expected	note
+# First match by default; 1x1 arrays collapse to scalars.
+=REGEXEXTRACT("abc123", "[0-9]+")	123	first match; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT("abc", "[0-9]+")	#N/A	no match; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT("ABC123", "[a-z]+", 0, 1)	ABC	case-insensitive; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT("a1b2", "[0-9]")	1	first digit; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT("a1b2", "[0-9]", 1)	{1,2}	return_mode 1 all matches; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT("id=42", "id=([0-9]+)", 2)	42	return_mode 2 capturing groups (1x1 → scalar); known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT(#N/A, "a")	#N/A	error
+=REGEXEXTRACT("abc", "(")	#VALUE!	invalid pattern; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT("", "a")	#N/A	empty text; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT("😀x", "😀")	😀	Unicode; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT("a1b2c3", "[0-9]", 1)	{1,2,3}	three matches; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXEXTRACT({"a1","b"}, "[0-9]")	{1,#N/A}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

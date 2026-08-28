@@ -1,0 +1,14 @@
+# formula	expected	note
+# Capitalize after any non-letter (Excel).
+=PROPER("hello world")	Hello World	space-separated
+=PROPER("HELLO")	Hello	already upper
+=PROPER("123abc")	123Abc	digit is a separator
+=PROPER("john o'grady")	John O'Grady	apostrophe is a separator
+=PROPER("")		empty
+=PROPER("a")	A	single letter
+=PROPER(#N/A)	#N/A	error
+=PROPER({"hello","WORLD"})	{Hello,World}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=PROPER("mcKinley")	Mckinley	no special Mc handling
+=PROPER("äpfel")	Äpfel	Unicode letter
+=PROPER("a-b")	A-B	hyphen separator
+=PROPER("  ab")	  Ab	leading spaces preserved; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

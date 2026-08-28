@@ -8,4 +8,4 @@
 =INT("3.2")	3	numeric text
 =INT("x")	#VALUE!	bad text
 =INT(#NUM!)	#NUM!	error
-=INT({1.9,-1.1})	1	array lift; spilled origin is top-left (format_cell)
+=INT({1.9,-1.1})	{1,-2}	array lift; full spill

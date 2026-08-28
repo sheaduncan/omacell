@@ -1,0 +1,14 @@
+# formula	expected	note
+# Weekend codes like NETWORKDAYS.INTL.
+=WORKDAY.INTL(DATE(2024,1,1), 1)	45293	default Sat+Sun; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,5), 1, 11)	45297	Fri+1 with Sunday-only weekend = Sat; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,5), 1, "0000011")	45299	string Sat+Sun → Mon; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,1), 0, 11)	45292	zero days; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,1), -1)	45289	back one workday; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(#N/A, 1)	#N/A	error
+=WORKDAY.INTL(DATE(2024,1,1), 1, 99)	#NUM!	bad weekend; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,1), 1, 17)	45293	Saturday-only; Tue is fine; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,5), 1, 17)	45298	Fri+1 with Saturday weekend = Sun; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,1), 1, 11, DATE(2024,1,2))	45294	holiday; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,1), 1, "0000000")	45293	no weekend days; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY.INTL(DATE(2024,1,6), 1, 11)	45299	Sat start, Sunday-only weekend: start is not counted, Sunday skipped, result Mon 8 Jan; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

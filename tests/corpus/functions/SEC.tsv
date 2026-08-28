@@ -5,7 +5,7 @@
 =SEC("0")	1	numeric text
 =SEC("x")	#VALUE!	bad text
 =SEC(#N/A)	#N/A	error
-=SEC({0,0})	1	array lift; spilled origin is top-left (format_cell)
+=SEC({0,0})	{1,1}	array lift; full spill
 =1/COS(0)-SEC(0)	0	identity; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =SIGN(SEC(0))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =SEC(0)+SEC(0)	2	sum; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
