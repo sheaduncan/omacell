@@ -13,8 +13,28 @@ pub const MAX_SNIFF_BYTES: usize = 64 * 1024;
 /// Default number of preview rows.
 pub const DEFAULT_PREVIEW_ROWS: usize = 50;
 
+/// Largest preview request accepted by the materializing preview API.
+pub const MAX_PREVIEW_ROWS: usize = 10_000;
+
 /// Largest single field the reader will accept.
 pub const MAX_FIELD_BYTES: usize = 8 * 1024 * 1024;
+
+/// Largest clipboard payload accepted by the materializing clipboard API.
+pub const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
+
+/// Largest number of rows accepted by the materializing clipboard API.
+pub const MAX_CLIPBOARD_ROWS: usize = 100_000;
+
+/// Largest total cell count accepted by the materializing clipboard API.
+pub const MAX_CLIPBOARD_CELLS: usize = 1_000_000;
+
+/// Largest output retained by the convenience [`super::export`] API.
+///
+/// Use [`super::export_write`] for larger exports.
+pub const MAX_BUFFERED_EXPORT_BYTES: usize = 256 * 1024 * 1024;
+
+/// Largest total UTF-8 field payload retained for one export record.
+pub const MAX_EXPORT_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
 /// Text encoding of a delimited file.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -296,6 +316,19 @@ pub enum ValueMode {
     Formulas,
 }
 
+/// Handling for text that spreadsheet programs may execute as a formula.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FormulaTextPolicy {
+    /// Reject the export. This is the safe default for untrusted workbook text.
+    #[default]
+    Reject,
+    /// Preserve text exactly. Use only when the recipient will not execute CSV formulas.
+    Preserve,
+    /// Prefix an apostrophe so common spreadsheet programs treat the field as text.
+    Escape,
+}
+
 /// How a delimited file should be written.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportPlan {
@@ -326,6 +359,9 @@ pub struct ExportPlan {
     /// Values or formulas.
     #[serde(default)]
     pub values: ValueMode,
+    /// Policy for formula-like text when exporting values.
+    #[serde(default)]
+    pub formula_text: FormulaTextPolicy,
     /// Locale for number-format rendering.
     #[serde(default)]
     pub locale: LocaleId,
@@ -347,6 +383,7 @@ impl Default for ExportPlan {
             sheet: None,
             range: None,
             values: ValueMode::Values,
+            formula_text: FormulaTextPolicy::Reject,
             locale: LocaleId::EN_US,
         }
     }

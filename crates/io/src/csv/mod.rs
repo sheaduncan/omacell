@@ -30,8 +30,10 @@ pub use clipboard::{ClipboardFormat, ClipboardTable, parse_clipboard};
 pub use encode::{bom_len, decode_all, detect_bom, encode_all, sniff_encoding};
 pub use infer::{Converted, ConvertedKind, convert_cell};
 pub use plan::{
-    ColumnPlan, ColumnType, DEFAULT_PREVIEW_ROWS, ExportPlan, ImportPlan, LineEnding,
-    MAX_FIELD_BYTES, MAX_SNIFF_BYTES, Quoting, TextEncoding, ValueMode,
+    ColumnPlan, ColumnType, DEFAULT_PREVIEW_ROWS, ExportPlan, FormulaTextPolicy, ImportPlan,
+    LineEnding, MAX_BUFFERED_EXPORT_BYTES, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_CELLS,
+    MAX_CLIPBOARD_ROWS, MAX_EXPORT_RECORD_BYTES, MAX_FIELD_BYTES, MAX_PREVIEW_ROWS,
+    MAX_SNIFF_BYTES, Quoting, TextEncoding, ValueMode,
 };
 pub use preview::{PreviewCell, PreviewRows, preview, preview_path, preview_row};
 pub use reader::{LoadOptions, LoadProgress, LoadResult, load, load_into, load_path};

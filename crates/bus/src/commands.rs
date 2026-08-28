@@ -294,7 +294,9 @@ fn range_set(ctx: &mut CommandContext<'_>, args: RangeSetArgs) -> Result<Effect,
                 row,
                 col,
             };
-            effect.append(set_one_cell(ctx, cell, &input)?);
+            let mut cell_effect = set_one_cell(ctx, cell, &input)?;
+            cell_effect.summary.text.clear();
+            effect.append(cell_effect);
         }
     } else if let Some(values) = args.values {
         if values.is_empty() {
@@ -325,14 +327,14 @@ fn range_set(ctx: &mut CommandContext<'_>, args: RangeSetArgs) -> Result<Effect,
                     col: range.min_col + c as u16,
                 };
                 let input = value.as_deref().unwrap_or("");
-                effect.append(set_one_cell(ctx, cell, input)?);
+                let mut cell_effect = set_one_cell(ctx, cell, input)?;
+                cell_effect.summary.text.clear();
+                effect.append(cell_effect);
             }
         }
     }
     effect.result = serde_json::json!({"changed": effect.summary.cells});
-    if effect.summary.text.is_empty() {
-        effect.summary.text = format!("set {}", format_range(ctx.workbook_ref(), range));
-    }
+    effect.summary.text = format!("set {}", format_range(ctx.workbook_ref(), range));
     Ok(effect)
 }
 
@@ -364,10 +366,13 @@ fn range_clear(ctx: &mut CommandContext<'_>, args: RangeClearArgs) -> Result<Eff
             {
                 continue;
             }
-            effect.append(set_one_cell(ctx, cell, "")?);
+            let mut cell_effect = set_one_cell(ctx, cell, "")?;
+            cell_effect.summary.text.clear();
+            effect.append(cell_effect);
         }
     }
     effect.result = serde_json::json!({"changed": effect.summary.cells});
+    effect.summary.text = format!("clear {}", format_range(ctx.workbook_ref(), range));
     Ok(effect)
 }
 

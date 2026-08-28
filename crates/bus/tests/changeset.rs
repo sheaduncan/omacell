@@ -190,3 +190,63 @@ fn changeset_inverse_restores_literal_type_and_exact_text() {
         Some("  spaced text  ")
     );
 }
+
+#[test]
+fn oversized_command_range_is_rejected_before_mutation() {
+    let mut bus = common::bus();
+    let err = bus
+        .propose(
+            Origin::User,
+            vec![CommandCall {
+                id: CommandId::new("range.set").unwrap(),
+                args: json!({"range": "A1:A100001", "input": "x"}),
+            }],
+        )
+        .unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::RANGE_SIZE);
+    assert!(common::cell_value(&bus, 0, 0).is_none());
+}
+
+#[test]
+fn range_changeset_summary_is_constant_size() {
+    let mut bus = common::bus();
+    let changeset = bus
+        .propose(
+            Origin::User,
+            vec![CommandCall {
+                id: CommandId::new("range.set").unwrap(),
+                args: json!({"range": "A1:A1000", "input": "x"}),
+            }],
+        )
+        .unwrap();
+    assert_eq!(changeset.summary.text, "set Sheet1!A1:A1000");
+    assert!(changeset.summary.text.len() < 64);
+}
+
+#[test]
+fn apply_rechecks_retained_size_before_live_mutation() {
+    let mut bus = common::bus();
+    let changeset = bus.propose(Origin::User, vec![set("A1", "new")]).unwrap();
+    let existing = "x".repeat(omacell_bus::MAX_CHANGESET_BYTES / 2 + 1_024);
+    let outcome = bus.execute(
+        Origin::User,
+        "cell.set",
+        json!({"ref": "A1", "input": existing}),
+    );
+    assert!(outcome.ok, "{:?}", outcome.error);
+
+    let err = bus.apply(Origin::User, &changeset.id).unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::CHANGESET_LIMIT);
+    let slot = bus
+        .workbook()
+        .get(bus.workbook().active_sheet(), 0, 0)
+        .unwrap()
+        .unwrap();
+    let Value::Text(id) = slot.value else {
+        panic!("expected original large text to remain");
+    };
+    assert_eq!(
+        bus.workbook().intern().strings.get(id).unwrap().len(),
+        omacell_bus::MAX_CHANGESET_BYTES / 2 + 1_024
+    );
+}

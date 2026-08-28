@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::encode::{DecodingReader, bom_len};
 use super::infer::{ConvertedKind, convert_cell};
-use super::plan::{DEFAULT_PREVIEW_ROWS, ImportPlan};
+use super::plan::{DEFAULT_PREVIEW_ROWS, ImportPlan, MAX_PREVIEW_ROWS};
 use super::records::{FieldLimitReader, reader_builder, record_to_row};
 use crate::error;
 
@@ -82,6 +82,12 @@ fn preview_reader<R: Read>(
     plan: &ImportPlan,
     n: usize,
 ) -> Result<PreviewRows, CoreError> {
+    let take = if n == 0 { DEFAULT_PREVIEW_ROWS } else { n };
+    if take > MAX_PREVIEW_ROWS {
+        return Err(error::limit(format!(
+            "preview requested {take} rows; maximum is {MAX_PREVIEW_ROWS}"
+        )));
+    }
     let limited = FieldLimitReader::new(reader, plan)?;
     let mut rdr = reader_builder(plan)?.from_reader(limited);
     let mut records = rdr.records();
@@ -99,7 +105,6 @@ fn preview_reader<R: Read>(
     } else {
         None
     };
-    let take = if n == 0 { DEFAULT_PREVIEW_ROWS } else { n };
     let mut rows = Vec::with_capacity(take);
     for rec in records.take(take) {
         let rec = record_to_row(&rec.map_err(super::records::map_csv)?)?;
@@ -157,5 +162,16 @@ mod tests {
         };
         let preview = preview_reader(reader, &ImportPlan::default(), 1).unwrap();
         assert_eq!(preview.rows.len(), 1);
+    }
+
+    #[test]
+    fn preview_rejects_an_excessive_row_request_before_allocating() {
+        let err = preview_reader(
+            "1\n".as_bytes(),
+            &ImportPlan::default(),
+            MAX_PREVIEW_ROWS + 1,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, crate::error::codes::CSV_LIMIT);
     }
 }

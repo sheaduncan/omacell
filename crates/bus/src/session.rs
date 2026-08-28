@@ -8,7 +8,7 @@ use omacell_core::event::Event;
 use omacell_core::recalc::{RecalcEngine, RecalcResult};
 use omacell_core::workbook::{CalcMode, Workbook};
 
-use crate::changeset::ChangesetStore;
+use crate::changeset::{ChangesetStore, MAX_EFFECT_RECORDS};
 use crate::commands::register_core;
 use crate::error as bus_error;
 use crate::event::{EventBus, SubscriberId};
@@ -159,6 +159,7 @@ impl Bus {
         if !MutationPolicy::allow_propose(origin) {
             return Err(bus_error::denied("this origin cannot propose a changeset"));
         }
+        self.changesets.ensure_can_propose(&forward)?;
         let effect = self.run(origin, &forward, Run::propose())?;
         let changeset =
             self.changesets
@@ -177,7 +178,7 @@ impl Bus {
         // Validate the lifecycle before dispatch. Running first and rejecting in
         // `mark_applied` would let an invalid second apply mutate live state.
         let forward = self.changesets.forward_for_apply(id)?.to_vec();
-        let effect = self.run(origin, &forward, Run::apply())?;
+        let effect = self.run(origin, &forward, Run::apply(id.clone()))?;
         let changeset = self
             .changesets
             .mark_applied(id, effect.inverse, effect.summary)?;
@@ -230,6 +231,10 @@ impl Bus {
             origin,
             calls,
         )?;
+        if let Some(id) = &how.applied_changeset {
+            self.changesets
+                .ensure_applied_fits(id, &preflight.inverse, &preflight.summary)?;
+        }
         if how.scratch_only {
             if how.recalc {
                 apply_recalc(&mut scratch_wb, &mut scratch_engine, &preflight);
@@ -241,11 +246,19 @@ impl Bus {
                 workbook,
                 engine,
                 registry,
+                changesets,
                 ..
             } = self;
             let mut live_effect = Effect::default();
             workbook.transact_try(|wb| {
                 live_effect = dispatch(registry, wb, engine, origin, calls)?;
+                if let Some(id) = &how.applied_changeset {
+                    changesets.ensure_applied_fits(
+                        id,
+                        &live_effect.inverse,
+                        &live_effect.summary,
+                    )?;
+                }
                 Ok(())
             })?;
             live_effect
@@ -295,6 +308,7 @@ struct Run {
     scratch_only: bool,
     emit: bool,
     recalc: bool,
+    applied_changeset: Option<ChangesetId>,
 }
 
 impl Run {
@@ -306,6 +320,7 @@ impl Run {
             scratch_only: false,
             emit: true,
             recalc: true,
+            applied_changeset: None,
         }
     }
 
@@ -317,6 +332,7 @@ impl Run {
             scratch_only: true,
             emit: false,
             recalc: true,
+            applied_changeset: None,
         }
     }
 
@@ -328,10 +344,11 @@ impl Run {
             scratch_only: true,
             emit: false,
             recalc: false,
+            applied_changeset: None,
         }
     }
 
-    fn apply() -> Self {
+    fn apply(id: ChangesetId) -> Self {
         Self {
             allow_internal: false,
             require_eligible: true,
@@ -339,6 +356,7 @@ impl Run {
             scratch_only: false,
             emit: true,
             recalc: true,
+            applied_changeset: Some(id),
         }
     }
 
@@ -350,6 +368,7 @@ impl Run {
             scratch_only: false,
             emit: true,
             recalc: true,
+            applied_changeset: None,
         }
     }
 }
@@ -388,10 +407,34 @@ fn dispatch(
             .ok_or_else(|| bus_error::unknown(call.id.as_str()))?;
         let mut ctx = CommandContext::new(workbook, engine, origin);
         let effect = cmd.invoke(&mut ctx, call.args.clone())?;
+        ensure_effect_fits(&effect)?;
         combined.append(effect);
+        ensure_effect_fits(&combined)?;
     }
     combined.inverse.reverse();
     Ok(combined)
+}
+
+fn ensure_effect_fits(effect: &Effect) -> Result<(), CoreError> {
+    const MAX_EFFECT_SUMMARY_BYTES: usize = 64 * 1024;
+    for (kind, count) in [
+        ("inverse commands", effect.inverse.len()),
+        ("events", effect.events.len()),
+        ("dirty cells", effect.dirty.len()),
+    ] {
+        if count > MAX_EFFECT_RECORDS {
+            return Err(bus_error::changeset_limit(format!(
+                "effect has {count} {kind}; maximum is {MAX_EFFECT_RECORDS}"
+            )));
+        }
+    }
+    if effect.summary.text.len() > MAX_EFFECT_SUMMARY_BYTES {
+        return Err(bus_error::changeset_limit(format!(
+            "effect summary is {} bytes; maximum is {MAX_EFFECT_SUMMARY_BYTES}",
+            effect.summary.text.len()
+        )));
+    }
+    Ok(())
 }
 
 fn apply_recalc(

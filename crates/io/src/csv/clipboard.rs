@@ -1,10 +1,14 @@
 //! Clipboard helpers for WP-14 (TSV / CSV / Markdown / HTML tables).
 
 use omacell_core::error::CoreError;
+use omacell_core::limits::MAX_COLS;
 use omacell_core::locale::LocaleId;
 use serde::{Deserialize, Serialize};
 
-use super::plan::{ColumnPlan, ColumnType, ImportPlan, LineEnding, TextEncoding};
+use super::plan::{
+    ColumnPlan, ColumnType, ImportPlan, LineEnding, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_CELLS,
+    MAX_CLIPBOARD_ROWS, MAX_FIELD_BYTES, TextEncoding,
+};
 use super::records::parse_records;
 use crate::error;
 
@@ -39,6 +43,12 @@ pub struct ClipboardTable {
 
 /// Parse pasted text into an [`ImportPlan`] and raw rows.
 pub fn parse_clipboard(text: &str, kind: ClipboardFormat) -> Result<ClipboardTable, CoreError> {
+    if text.len() > MAX_CLIPBOARD_BYTES {
+        return Err(error::limit(format!(
+            "clipboard payload is {} bytes; maximum is {MAX_CLIPBOARD_BYTES}",
+            text.len()
+        )));
+    }
     let kind = if kind == ClipboardFormat::Auto {
         detect(text)
     } else {
@@ -109,27 +119,32 @@ fn parse_delimited(text: &str, delimiter: char) -> Result<ClipboardTable, CoreEr
 }
 
 fn parse_markdown(text: &str) -> Result<ClipboardTable, CoreError> {
-    let mut lines: Vec<&str> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
-    if lines.len() < 2 {
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let Some(header_line) = lines.next() else {
         return Err(error::parse("markdown table needs a header and a body"));
-    }
-    let header = split_md_row(lines[0]);
-    let sep_idx = lines.iter().position(|l| is_md_sep(l)).unwrap_or(1);
-    if sep_idx + 1 > lines.len() {
-        return Err(error::parse("markdown table is missing a body"));
-    }
-    lines.drain(..=sep_idx);
-    let mut rows = Vec::new();
-    for line in lines {
-        if line.contains('|') {
-            rows.push(split_md_row(line));
+    };
+    let header = split_md_row(header_line)?;
+    let mut found_separator = false;
+    for line in lines.by_ref() {
+        if is_md_sep(line) {
+            found_separator = true;
+            break;
         }
     }
-    let width = header.len();
+    if !found_separator {
+        return Err(error::parse("markdown table is missing a separator row"));
+    }
+    let mut rows = Vec::new();
+    let mut cells = header.len();
+    for line in lines {
+        if line.contains('|') {
+            let mut row = split_md_row(line)?;
+            let materialized_width = header.len().max(row.len());
+            add_table_shape(&mut cells, rows.len(), materialized_width)?;
+            row.resize(header.len(), String::new());
+            rows.push(row);
+        }
+    }
     let mut plan = ImportPlan {
         delimiter: '|',
         has_header: true,
@@ -142,9 +157,6 @@ fn parse_markdown(text: &str) -> Result<ClipboardTable, CoreError> {
             ty: ColumnType::Auto,
         })
         .collect();
-    for row in &mut rows {
-        row.resize(width, String::new());
-    }
     Ok(ClipboardTable {
         plan,
         header: Some(header),
@@ -157,11 +169,27 @@ fn is_md_sep(line: &str) -> bool {
     !t.is_empty() && t.chars().all(|c| matches!(c, '-' | ':' | '|' | ' ' | '\t')) && t.contains('-')
 }
 
-fn split_md_row(line: &str) -> Vec<String> {
+fn split_md_row(line: &str) -> Result<Vec<String>, CoreError> {
     let t = line.trim();
     let t = t.strip_prefix('|').unwrap_or(t);
     let t = t.strip_suffix('|').unwrap_or(t);
-    t.split('|').map(|c| c.trim().to_string()).collect()
+    if t.split('|').take(usize::from(MAX_COLS) + 1).count() > usize::from(MAX_COLS) {
+        return Err(error::limit(format!(
+            "clipboard row has more than {MAX_COLS} columns"
+        )));
+    }
+    t.split('|')
+        .map(|cell| {
+            let cell = cell.trim();
+            if cell.len() > MAX_FIELD_BYTES {
+                return Err(error::limit(format!(
+                    "clipboard field is {} bytes; maximum is {MAX_FIELD_BYTES}",
+                    cell.len()
+                )));
+            }
+            Ok(cell.to_string())
+        })
+        .collect()
 }
 
 fn parse_html(text: &str) -> Result<ClipboardTable, CoreError> {
@@ -178,6 +206,7 @@ fn parse_html(text: &str) -> Result<ClipboardTable, CoreError> {
     let table = &rest[..end_rel];
     let mut rows = Vec::new();
     let mut header = None;
+    let mut cells = 0usize;
     let mut pos = 0;
     let table_l = table.to_ascii_lowercase();
     while let Some(tr) = table_l[pos..].find("<tr") {
@@ -191,11 +220,13 @@ fn parse_html(text: &str) -> Result<ClipboardTable, CoreError> {
             .map(|i| after + i)
             .unwrap_or(table.len());
         let row_html = &table[after..close];
-        let (cells, is_th) = parse_html_cells(row_html);
+        let (row, is_th) = parse_html_cells(row_html)?;
         if is_th && header.is_none() {
-            header = Some(cells);
-        } else if !cells.is_empty() {
-            rows.push(cells);
+            add_cells(&mut cells, row.len())?;
+            header = Some(row);
+        } else if !row.is_empty() {
+            add_table_shape(&mut cells, rows.len(), row.len())?;
+            rows.push(row);
         }
         pos = close.saturating_add(5);
         if pos >= table.len() {
@@ -221,7 +252,7 @@ fn parse_html(text: &str) -> Result<ClipboardTable, CoreError> {
     Ok(ClipboardTable { plan, header, rows })
 }
 
-fn parse_html_cells(row_html: &str) -> (Vec<String>, bool) {
+fn parse_html_cells(row_html: &str) -> Result<(Vec<String>, bool), CoreError> {
     let lower = row_html.to_ascii_lowercase();
     let mut cells = Vec::new();
     let mut is_th = false;
@@ -249,13 +280,46 @@ fn parse_html_cells(row_html: &str) -> (Vec<String>, bool) {
             .map(|i| after + i)
             .unwrap_or(row_html.len());
         let inner = &row_html[after..close];
-        cells.push(html_text(inner));
+        if cells.len() >= usize::from(MAX_COLS) {
+            return Err(error::limit(format!(
+                "clipboard row has more than {MAX_COLS} columns"
+            )));
+        }
+        let text = html_text(inner);
+        if text.len() > MAX_FIELD_BYTES {
+            return Err(error::limit(format!(
+                "clipboard field is {} bytes; maximum is {MAX_FIELD_BYTES}",
+                text.len()
+            )));
+        }
+        cells.push(text);
         pos = close.saturating_add(close_tag.len());
         if pos >= row_html.len() {
             break;
         }
     }
-    (cells, is_th)
+    Ok((cells, is_th))
+}
+
+fn add_table_shape(cells: &mut usize, current_rows: usize, width: usize) -> Result<(), CoreError> {
+    if current_rows >= MAX_CLIPBOARD_ROWS {
+        return Err(error::limit(format!(
+            "clipboard table has more than {MAX_CLIPBOARD_ROWS} body rows"
+        )));
+    }
+    add_cells(cells, width)
+}
+
+fn add_cells(cells: &mut usize, count: usize) -> Result<(), CoreError> {
+    *cells = cells
+        .checked_add(count)
+        .ok_or_else(|| error::limit("clipboard table cell count overflow"))?;
+    if *cells > MAX_CLIPBOARD_CELLS {
+        return Err(error::limit(format!(
+            "clipboard table has more than {MAX_CLIPBOARD_CELLS} cells"
+        )));
+    }
+    Ok(())
 }
 
 fn html_text(s: &str) -> String {

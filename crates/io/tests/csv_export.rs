@@ -1,9 +1,12 @@
 //! Export controls: delimiter, quoting, encoding, range, formulas-or-values.
 
+use std::io::{self, Write};
+
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_io::csv::{
-    ExportPlan, LineEnding, Quoting, TextEncoding, ValueMode, decode_all, export, load, sniff,
+    ExportPlan, FormulaTextPolicy, LineEnding, Quoting, TextEncoding, ValueMode, decode_all,
+    export, export_write, load, sniff,
 };
 
 #[test]
@@ -93,5 +96,54 @@ fn never_quote_rejects_ambiguous_fields() {
         ..ExportPlan::default()
     };
     let err = export(&wb, &plan).unwrap_err();
+    assert_eq!(err.code, omacell_io::error::codes::CSV_EXPORT);
+}
+
+#[test]
+fn formula_like_text_is_safe_by_default_and_explicit_otherwise() {
+    let mut wb = Workbook::new();
+    wb.set_text(wb.active_sheet(), 0, 0, "=2+2").unwrap();
+
+    let err = export(&wb, &ExportPlan::default()).unwrap_err();
+    assert_eq!(err.code, omacell_io::error::codes::CSV_EXPORT);
+
+    let preserve = ExportPlan {
+        formula_text: FormulaTextPolicy::Preserve,
+        ..ExportPlan::default()
+    };
+    assert_eq!(export(&wb, &preserve).unwrap(), b"=2+2\n");
+
+    let escape = ExportPlan {
+        formula_text: FormulaTextPolicy::Escape,
+        ..ExportPlan::default()
+    };
+    assert_eq!(export(&wb, &escape).unwrap(), b"'=2+2\n");
+}
+
+#[test]
+fn export_write_propagates_bounded_destination_failures() {
+    struct FailAfter {
+        remaining: usize,
+    }
+
+    impl Write for FailAfter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if bytes.len() > self.remaining {
+                return Err(io::Error::other("destination full"));
+            }
+            self.remaining -= bytes.len();
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_text(sheet, 0, 0, "first row").unwrap();
+    wb.set_text(sheet, 1, 0, "second row").unwrap();
+    let err = export_write(&wb, &ExportPlan::default(), FailAfter { remaining: 5 }).unwrap_err();
     assert_eq!(err.code, omacell_io::error::codes::CSV_EXPORT);
 }
