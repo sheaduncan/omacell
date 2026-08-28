@@ -16,6 +16,9 @@ path = "../crates/core"
 [dependencies.omacell-fn]
 path = "../crates/fn"
 
+[dependencies.omacell-bus]
+path = "../crates/bus"
+
 [[bin]]
 name = "parse_formula"
 path = "fuzz_targets/parse_formula.rs"
@@ -33,6 +36,13 @@ bench = false
 [[bin]]
 name = "fn_eager"
 path = "fuzz_targets/fn_eager.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_frame"
+path = "fuzz_targets/ipc_frame.rs"
 test = false
 doc = false
 bench = false

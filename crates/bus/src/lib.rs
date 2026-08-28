@@ -2,7 +2,7 @@
 //!
 //! This crate is the only mutation path for anything outside `omacell-core`.
 //! Front-ends, Lua, CLI, IPC, MCP, and models all invoke the same
-//! [`CommandRegistry`]. Unix-socket transport is WP-07b.
+//! [`CommandRegistry`]. Unix-socket IPC is [`ipc`].
 //!
 //! Later packages register commands with [`CommandRegistry::register`] without
 //! modifying this crate's handler modules.
@@ -16,6 +16,8 @@ mod commands;
 mod error;
 mod event;
 mod handler;
+#[cfg(unix)]
+pub mod ipc;
 mod logical;
 mod policy;
 mod registry;

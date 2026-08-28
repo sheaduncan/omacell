@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omacell.dev/schemas/ipc/discovery.schema.json",
+  "title": "Omacell IPC v1 instance discovery record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "pid", "socket", "started_unix_ms"],
+  "properties": {
+    "v": { "type": "integer", "const": 1 },
+    "pid": { "type": "integer", "minimum": 1 },
+    "socket": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9]+\\.sock$"
+    },
+    "started_unix_ms": { "type": "integer", "minimum": 0 }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omacell.dev/schemas/ipc/event.schema.json",
+  "title": "Omacell IPC v1 unsolicited record",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "kind", "event"],
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "kind": { "type": "string", "const": "event" },
+        "event": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "workbook_opened",
+                "cell_changed",
+                "recalc_done",
+                "before_save",
+                "file_saved",
+                "changeset_proposed",
+                "changeset_applied",
+                "changeset_reverted",
+                "theme_changed"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "kind", "dropped"],
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "kind": { "type": "string", "const": "overflow" },
+        "dropped": { "type": "integer", "minimum": 1 }
+      }
+    }
+  ]
+}

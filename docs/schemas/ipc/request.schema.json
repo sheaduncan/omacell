@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omacell.dev/schemas/ipc/request.schema.json",
+  "title": "Omacell IPC v1 request",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "cmd"],
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "id": { "type": "integer", "minimum": 0 },
+        "cmd": {
+          "type": "string",
+          "minLength": 3,
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9]*)+$"
+        },
+        "args": { "type": "object" },
+        "mode": { "type": "string", "enum": ["propose", "execute", "dry_run"] }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "op"],
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "id": { "type": "integer", "minimum": 0 },
+        "op": { "type": "string", "const": "subscribe" },
+        "events": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "enum": [
+              "workbook_opened",
+              "cell_changed",
+              "recalc_done",
+              "before_save",
+              "file_saved",
+              "changeset_proposed",
+              "changeset_applied",
+              "changeset_reverted",
+              "theme_changed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "op"],
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "id": { "type": "integer", "minimum": 0 },
+        "op": {
+          "type": "string",
+          "enum": ["unsubscribe", "changeset.list", "ping"]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "op", "changeset"],
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "id": { "type": "integer", "minimum": 0 },
+        "op": {
+          "type": "string",
+          "enum": ["changeset.apply", "changeset.revert", "changeset.get"]
+        },
+        "changeset": { "type": "string", "minLength": 1 }
+      }
+    }
+  ]
+}

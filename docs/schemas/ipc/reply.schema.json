@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omacell.dev/schemas/ipc/reply.schema.json",
+  "title": "Omacell IPC v1 reply",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "id", "ok"],
+  "properties": {
+    "v": { "type": "integer", "const": 1 },
+    "id": { "type": "integer", "minimum": 0 },
+    "ok": { "type": "boolean" },
+    "result": true,
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "hint": { "type": "string" }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": { "ok": { "const": true } },
+      "required": ["result"],
+      "not": { "required": ["error"] }
+    },
+    {
+      "properties": { "ok": { "const": false } },
+      "required": ["error"],
+      "not": { "required": ["result"] }
+    }
+  ]
+}
