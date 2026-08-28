@@ -44,6 +44,12 @@ corpus-verify:
     test -d tests/corpus/themes
     test -d tests/corpus/evals
 
+# reproduce the committed Gate G1 sample, baselines, and LibreOffice check
+g1-verify:
+    python3 scripts/g1-sample.py --check tests/fixtures/g1/spotcheck-20260828.tsv
+    python3 scripts/check-g1-baselines.py
+    python3 scripts/lo-crosscheck.py tests/fixtures/g1/spotcheck-20260828.tsv
+
 # record criterion baselines (packages that touch §12.1 call this)
 perf-baseline:
     cargo bench --workspace -- --save-baseline default

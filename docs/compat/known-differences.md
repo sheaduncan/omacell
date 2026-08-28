@@ -25,6 +25,7 @@ encode.
 | `REGEXTEST`/`REGEXEXTRACT`/`REGEXREPLACE` | Excel 365; LibreOffice has no equivalent names | Implemented with the `regex` crate (linear-time, 256-char pattern / 1 MiB compile cap) | WP-05b |
 | LibreOffice CSV of date serials | LO often emits a locale date string (`01/01/2024`) or `Err:502` | Omacell corpus expects the numeric serial / Excel error token | WP-05b |
 | LibreOffice array-lifting | Implicit intersection: first element only | Dynamic-array lift (`{2,3}`) | WP-05b |
+| LibreOffice CSV double unary boolean | Keeps `--TRUE` as logical `TRUE` | Coerces to numeric `1` per spec F-3.5 | WP-04 |
 | LibreOffice `YEAR(0)`/`YEAR(1)` | 1899 (LO epoch 1899-12-30) | 1900 (Excel January 0 / 1 Jan 1900) | WP-05b |
 | LibreOffice `YEARFRAC` reversed dates | Absolute value | Signed (Excel) | WP-05b |
 | LibreOffice `LEN(TRUE)` | 1 (TRUE as number) | 4 (TRUE as text) | WP-05b |

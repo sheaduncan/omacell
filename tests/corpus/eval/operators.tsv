@@ -30,7 +30,7 @@
 =TRUE+TRUE	2	bool arithmetic
 ="10"/2	5	numeric text in division
 =1e2+1	101	parser number + 1
-=--TRUE	1	double negate bool
+=--TRUE	1	F-3.5 double unary minus coerces TRUE to 1; known difference: LibreOffice CSV keeps logical TRUE
 =50%*10	5	percent then multiply
 =1<>"1"	TRUE	no coerce in comparison so 1 <> "1"
 =1<"A"	TRUE	numbers sort before text (Excel type rank)
