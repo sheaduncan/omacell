@@ -41,13 +41,11 @@ pub(super) fn unary_minus(v: RuntimeValue) -> RuntimeValue {
     })
 }
 
-/// Unary plus (identity after number-or-passthrough of text? Excel unary +
-/// on text is still text; on empty is 0).
+/// Unary plus, with the same arithmetic coercion as unary minus.
 pub(super) fn unary_plus(v: RuntimeValue) -> RuntimeValue {
-    lift1(v, |s| match s {
-        Scalar::Empty => Scalar::Number(0.0),
-        Scalar::Error(e) => Scalar::Error(*e),
-        other => other.clone(),
+    lift1(v, |s| match to_number(s) {
+        Ok(n) => finite_or_num(n),
+        Err(e) => Scalar::Error(e),
     })
 }
 
@@ -110,7 +108,7 @@ fn concat_scalar(a: &Scalar, b: &Scalar) -> Scalar {
     match (to_text(a), to_text(b)) {
         (Ok(l), Ok(r)) => {
             if l.is_empty() && r.is_empty() {
-                Scalar::Empty
+                Scalar::Text(Arc::from(""))
             } else if l.is_empty() {
                 Scalar::Text(r)
             } else if r.is_empty() {

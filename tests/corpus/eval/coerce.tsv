@@ -36,9 +36,12 @@
 =1<=1	TRUE	numeric less-or-equal
 =""&1	1	empty concat number uses General
 =TRUE&FALSE	TRUEFALSE	bool concat
+=(A2&A3)=0	FALSE	concatenating two empty cells produces empty text, not an empty cell
+=(A2&A3)=""	TRUE	concatenating two empty cells produces empty text
 ="2"*TRUE	2	numeric text and TRUE in arithmetic
 =--1	1	double unary minus
 =+1	1	unary plus
+=+TRUE=1	TRUE	unary plus is arithmetic coercion
 =50%	0.5	percent postfix
 =(200)%	2	percent of parenthesized number
 =1%+1%	0.02	percent then add

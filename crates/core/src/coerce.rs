@@ -257,13 +257,18 @@ fn rank(s: &Scalar) -> u8 {
 
 fn compare_ranked(left: &Scalar, right: &Scalar) -> Result<Cmp, ErrorKind> {
     match (left, right) {
-        (Scalar::Number(a), Scalar::Number(b)) => Ok(if a < b {
-            Cmp::Lt
-        } else if a > b {
-            Cmp::Gt
-        } else {
-            Cmp::Eq
-        }),
+        (Scalar::Number(a), Scalar::Number(b)) => {
+            if !a.is_finite() || !b.is_finite() {
+                return Err(ErrorKind::Num);
+            }
+            Ok(if a < b {
+                Cmp::Lt
+            } else if a > b {
+                Cmp::Gt
+            } else {
+                Cmp::Eq
+            })
+        }
         (Scalar::Bool(a), Scalar::Bool(b)) => Ok(match a.cmp(b) {
             Ordering::Less => Cmp::Lt,
             Ordering::Equal => Cmp::Eq,

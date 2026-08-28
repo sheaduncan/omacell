@@ -5,15 +5,13 @@ use std::sync::Arc;
 use crate::coerce::Scalar;
 use crate::error::ErrorKind;
 use crate::eval::{ArgVal, EvalCtx, RuntimeValue};
-use crate::formula::{Expr, ExprKind, StructuredRef, TableColumns};
+use crate::formula::{Expr, ExprKind};
 
 /// One LAMBDA parameter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LambdaParam {
     /// Binding name (original spelling).
     pub name: String,
-    /// Optional (`[x]`) — may be omitted at the call site.
-    pub optional: bool,
 }
 
 /// A closure: parameter list, body, and captured `LET`/`LAMBDA` bindings.
@@ -45,24 +43,7 @@ pub fn is_language_fn(name: &str) -> bool {
 /// Extract a parameter name from a LET/LAMBDA argument expression.
 pub fn param_of(expr: &Expr) -> Option<LambdaParam> {
     match &expr.kind {
-        ExprKind::Name { name, .. } => Some(LambdaParam {
-            name: name.clone(),
-            optional: false,
-        }),
-        ExprKind::Structured(sr) => optional_param(sr),
-        _ => None,
-    }
-}
-
-fn optional_param(sr: &StructuredRef) -> Option<LambdaParam> {
-    if sr.table.is_some() || sr.item.is_some() || sr.this_row {
-        return None;
-    }
-    match &sr.columns {
-        Some(TableColumns::One(name)) => Some(LambdaParam {
-            name: name.clone(),
-            optional: true,
-        }),
+        ExprKind::Name { name, .. } => Some(LambdaParam { name: name.clone() }),
         _ => None,
     }
 }
@@ -161,8 +142,9 @@ pub fn eval_isomitted(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeVa
 
 /// Apply a lambda to evaluated arguments.
 pub fn apply(ctx: &mut EvalCtx<'_>, lam: &Lambda, args: &[ArgVal]) -> RuntimeValue {
-    let required = lam.params.iter().filter(|p| !p.optional).count();
-    if args.len() > lam.params.len() || args.len() < required {
+    // An omitted placeholder still occupies an argument position (`(1,)`).
+    // Fewer or extra positions are an incorrect LAMBDA invocation in Excel.
+    if args.len() != lam.params.len() {
         return RuntimeValue::error(ErrorKind::Value);
     }
     if ctx.enter_call().is_err() {
@@ -179,8 +161,6 @@ pub fn apply(ctx: &mut EvalCtx<'_>, lam: &Lambda, args: &[ArgVal]) -> RuntimeVal
             } else {
                 ctx.bind(p.name.clone(), a.value.clone());
             }
-        } else {
-            ctx.bind_omitted(p.name.clone());
         }
     }
     let out = crate::eval::eval_expr(ctx, &lam.body);

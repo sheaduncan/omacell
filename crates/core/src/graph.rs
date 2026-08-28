@@ -132,6 +132,12 @@ impl DepGraph {
         self.nodes.get(&cell).map(|n| n.volatile).unwrap_or(false)
     }
 
+    pub(crate) fn set_volatile(&mut self, cell: CellCoord, volatile: bool) {
+        if let Some(node) = self.nodes.get_mut(&cell) {
+            node.volatile = volatile;
+        }
+    }
+
     /// Whether this formula contains `INDIRECT`/`OFFSET`.
     #[must_use]
     pub fn is_dynamic(&self, cell: CellCoord) -> bool {
@@ -375,61 +381,116 @@ impl DepGraph {
     /// Strongly connected components among `cells` with size > 1 or a self-loop.
     #[must_use]
     pub fn circular_set(&self, cells: &[CellCoord]) -> Vec<CellCoord> {
-        let set: FxHashSet<CellCoord> = cells.iter().copied().collect();
-        let mut circ = Vec::new();
-        for &c in cells {
-            if self.precedents_in(c, &set).contains(&c) {
-                circ.push(c);
+        let mut vertices = cells.to_vec();
+        vertices.sort_unstable();
+        vertices.dedup();
+        let all: FxHashSet<CellCoord> = vertices.iter().copied().collect();
+
+        // Most production graphs are acyclic. Peel every topologically ordered
+        // node first so the exact SCC pass below only allocates for the small
+        // residue containing cycles and their downstream cells.
+        let mut indegree: FxHashMap<CellCoord, usize> = FxHashMap::default();
+        for &cell in &vertices {
+            indegree.insert(cell, self.precedents_in(cell, &all).len());
+        }
+        let mut queue: Vec<CellCoord> = indegree
+            .iter()
+            .filter_map(|(cell, degree)| (*degree == 0).then_some(*cell))
+            .collect();
+        queue.sort_unstable();
+        let mut cursor = 0usize;
+        while cursor < queue.len() {
+            let cell = queue[cursor];
+            cursor += 1;
+            if indegree.remove(&cell).is_none() {
                 continue;
             }
-        }
-        // Tarjan-ish: nodes that cannot be fully ordered.
-        let mut indeg: FxHashMap<CellCoord, usize> = FxHashMap::default();
-        for &c in cells {
-            indeg.insert(c, 0);
-        }
-        for &c in cells {
-            for p in self.precedents_in(c, &set) {
-                if p != c {
-                    *indeg.entry(c).or_insert(0) += 1;
-                }
-            }
-        }
-        let mut q: Vec<CellCoord> = indeg
-            .iter()
-            .filter(|(_, d)| **d == 0)
-            .map(|(c, _)| *c)
-            .collect();
-        q.sort_unstable();
-        let mut seen = 0usize;
-        let mut i = 0usize;
-        let mut remaining = indeg;
-        while i < q.len() {
-            let c = q[i];
-            i += 1;
-            seen += 1;
-            remaining.remove(&c);
-            for d in self.dependents(c) {
-                if let Some(n) = remaining.get_mut(&d) {
-                    *n = n.saturating_sub(1);
-                    if *n == 0 {
-                        q.push(d);
+            for dependent in self.dependents(cell) {
+                if let Some(degree) = indegree.get_mut(&dependent) {
+                    *degree = degree.saturating_sub(1);
+                    if *degree == 0 {
+                        queue.push(dependent);
                     }
                 }
             }
         }
-        if seen < cells.len() {
-            let mut rest: Vec<CellCoord> = remaining.keys().copied().collect();
-            rest.sort_unstable();
-            for c in rest {
-                if !circ.contains(&c) {
-                    circ.push(c);
+        if indegree.is_empty() {
+            return Vec::new();
+        }
+        vertices = indegree.into_keys().collect();
+        vertices.sort_unstable();
+        let among: FxHashSet<CellCoord> = vertices.iter().copied().collect();
+
+        // Build both directions once, then use iterative Kosaraju so a long
+        // formula chain cannot overflow the Rust call stack. Kahn leftovers are
+        // insufficient here: they also contain acyclic cells downstream of a
+        // real cycle.
+        let mut forward: FxHashMap<CellCoord, Vec<CellCoord>> = FxHashMap::default();
+        let mut reverse: FxHashMap<CellCoord, Vec<CellCoord>> = FxHashMap::default();
+        for &cell in &vertices {
+            reverse.entry(cell).or_default();
+            let precedents = self.precedents_in(cell, &among);
+            for precedent in &precedents {
+                reverse.entry(*precedent).or_default().push(cell);
+            }
+            forward.insert(cell, precedents);
+        }
+        for edges in reverse.values_mut() {
+            edges.sort_unstable();
+            edges.dedup();
+        }
+
+        let mut seen: FxHashSet<CellCoord> = FxHashSet::default();
+        let mut finish = Vec::with_capacity(vertices.len());
+        for &start in &vertices {
+            if !seen.insert(start) {
+                continue;
+            }
+            let mut stack = vec![(start, false)];
+            while let Some((cell, expanded)) = stack.pop() {
+                if expanded {
+                    finish.push(cell);
+                    continue;
+                }
+                stack.push((cell, true));
+                if let Some(edges) = forward.get(&cell) {
+                    for &next in edges.iter().rev() {
+                        if seen.insert(next) {
+                            stack.push((next, false));
+                        }
+                    }
                 }
             }
         }
-        circ.sort_unstable();
-        circ.dedup();
-        circ
+
+        seen.clear();
+        let mut circular = Vec::new();
+        for &start in finish.iter().rev() {
+            if !seen.insert(start) {
+                continue;
+            }
+            let mut component = Vec::new();
+            let mut stack = vec![start];
+            while let Some(cell) = stack.pop() {
+                component.push(cell);
+                if let Some(edges) = reverse.get(&cell) {
+                    for &next in edges.iter().rev() {
+                        if seen.insert(next) {
+                            stack.push(next);
+                        }
+                    }
+                }
+            }
+            let self_loop = component.len() == 1
+                && forward
+                    .get(&component[0])
+                    .is_some_and(|edges| edges.contains(&component[0]));
+            if component.len() > 1 || self_loop {
+                circular.extend(component);
+            }
+        }
+        circular.sort_unstable();
+        circular
     }
 
     fn precedents_in(&self, c: CellCoord, among: &FxHashSet<CellCoord>) -> Vec<CellCoord> {

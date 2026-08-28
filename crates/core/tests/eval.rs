@@ -6,7 +6,7 @@ use std::sync::Arc;
 use omacell_core::addr::{RangeRef, SheetId, parse_a1, parse_a1_cell};
 use omacell_core::coerce::{self, Scalar};
 use omacell_core::error::ErrorKind;
-use omacell_core::eval::{ArgVal, EvalCtx, FnDef, FnRegistry, RuntimeValue};
+use omacell_core::eval::{ArgVal, EvalCtx, FnDef, FnRegistry, RuntimeValue, format_runtime};
 use omacell_core::graph::CellCoord;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::recalc::{AsyncNodeProvider, RecalcEngine, RecalcResult, format_cell};
@@ -696,6 +696,46 @@ fn stub_registry_unknown_is_name() {
     assert_eq!(display(&wb, s, 0, 0), "#NAME?");
 }
 
+#[test]
+fn runtime_formatter_is_safe_for_a_short_array_payload() {
+    let value = RuntimeValue::array(2, 2, Vec::new());
+    assert_eq!(format_runtime(&value), "{,;,}");
+}
+
+#[test]
+fn registry_array_lift_applies_a_scalar_function_elementwise() {
+    fn double(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
+        let value = args
+            .first()
+            .map(|arg| ctx.materialize(arg.value.clone()))
+            .unwrap_or(RuntimeValue::error(ErrorKind::Value));
+        let RuntimeValue::Scalar(scalar) = value else {
+            return RuntimeValue::error(ErrorKind::Value);
+        };
+        match coerce::to_number(&scalar) {
+            Ok(number) => RuntimeValue::Scalar(Scalar::Number(number * 2.0)),
+            Err(error) => RuntimeValue::error(error),
+        }
+    }
+
+    let mut registry = FnRegistry::new();
+    registry.register(FnDef {
+        name: "DOUBLE",
+        min_args: 1,
+        max_args: 1,
+        volatile: false,
+        async_node: false,
+        array_lift: omacell_core::eval::ArrayLift::All,
+        eval: double,
+    });
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_formula_text(sheet, 0, 0, "=DOUBLE({1,2})").unwrap();
+    let mut engine = RecalcEngine::new(registry);
+    engine.recalc_full(&mut wb);
+    assert_eq!(spill_display(&engine, &wb, sheet, 0, 0), "{2,4}");
+}
+
 struct CountingProvider {
     inner: omacell_core::recalc::MockAsyncProvider,
 }
@@ -738,6 +778,24 @@ fn async_mock_second_wave() {
     assert_eq!(display(&wb, s, 0, 0), "42");
     assert_eq!(display(&wb, s, 1, 0), "43");
     let _ = r2;
+}
+
+#[test]
+fn a_large_dynamic_range_tracks_edits_beyond_its_first_block() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_number(s, 4_999, 0, 1.0).unwrap();
+    wb.set_formula_text(s, 0, 1, "=SUM(INDIRECT(\"A1:A5000\"))")
+        .unwrap();
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+    assert_eq!(display(&wb, s, 0, 1), "1");
+
+    wb.set_number(s, 4_499, 0, 2.0).unwrap();
+    eng.notify_edit(&wb, CellCoord::new(s, 4_499, 0));
+    eng.recalc_incremental(&mut wb);
+    assert_eq!(display(&wb, s, 0, 1), "3");
 }
 
 #[allow(dead_code)]

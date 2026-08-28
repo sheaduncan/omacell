@@ -28,10 +28,10 @@ expect A8 11
 set A9 =LAMBDA(x,LAMBDA(y,x+y))(3)(4)
 expect A9 7
 
-set A10 =LAMBDA([x],IF(ISOMITTED(x),99,x))()
+set A10 =LAMBDA(x,y,IF(ISOMITTED(y),99,y))(1,)
 expect A10 99
 
-set A11 =LAMBDA([x],IF(ISOMITTED(x),99,x))(7)
+set A11 =LAMBDA(x,y,IF(ISOMITTED(y),99,y))(1,7)
 expect A11 7
 
 set A12 =LAMBDA(x,x)

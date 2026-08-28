@@ -229,6 +229,7 @@ pub struct EvalCtx<'a> {
     stale: bool,
     async_hint: Option<String>,
     resolved_dynamic: Vec<Reference>,
+    async_provider: Option<&'a dyn crate::recalc::AsyncNodeProvider>,
 }
 
 impl<'a> EvalCtx<'a> {
@@ -252,7 +253,18 @@ impl<'a> EvalCtx<'a> {
             stale: false,
             async_hint: None,
             resolved_dynamic: Vec::new(),
+            async_provider: None,
         }
+    }
+
+    /// Attach the provider used by async function calls during this evaluation.
+    #[must_use]
+    pub fn with_async_provider(
+        mut self,
+        provider: Option<&'a dyn crate::recalc::AsyncNodeProvider>,
+    ) -> Self {
+        self.async_provider = provider;
+        self
     }
 
     /// Workbook (read-only during eval).
@@ -1105,6 +1117,9 @@ fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> 
         if def.async_node {
             return eval_async(ctx, def, &argv);
         }
+        if def.array_lift == ArrayLift::All {
+            return eval_array_lifted(ctx, def, &argv);
+        }
         return (def.eval)(ctx, &argv);
     }
     // Defined name that is a lambda / formula.
@@ -1115,6 +1130,78 @@ fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> 
         return lambda::apply_value(ctx, callee_v, &argv);
     }
     registry::name_error()
+}
+
+fn eval_array_lifted(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> RuntimeValue {
+    let args: Vec<ArgVal> = args
+        .iter()
+        .map(|arg| ArgVal {
+            omitted: arg.omitted,
+            value: ctx.materialize(arg.value.clone()),
+        })
+        .collect();
+    let mut rows = 1u32;
+    let mut cols = 1u32;
+    for arg in &args {
+        if let RuntimeValue::Array(array) = &arg.value {
+            rows = rows.max(array.rows);
+            cols = cols.max(array.cols);
+        }
+    }
+    if rows == 1 && cols == 1 {
+        return (def.eval)(ctx, &args);
+    }
+
+    let mut values = Vec::with_capacity((rows as usize).saturating_mul(cols as usize));
+    for row in 0..rows {
+        for col in 0..cols {
+            let cell_args: Vec<ArgVal> = args
+                .iter()
+                .map(|arg| ArgVal {
+                    omitted: arg.omitted,
+                    value: RuntimeValue::Scalar(lifted_scalar(&arg.value, row, col)),
+                })
+                .collect();
+            let result = (def.eval)(ctx, &cell_args);
+            values.push(match result {
+                RuntimeValue::Scalar(scalar) => scalar,
+                RuntimeValue::Array(array) if array.rows == 1 && array.cols == 1 => {
+                    array.values.first().cloned().unwrap_or(Scalar::Empty)
+                }
+                RuntimeValue::Array(_) | RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => {
+                    Scalar::Error(ErrorKind::Value)
+                }
+            });
+        }
+    }
+    RuntimeValue::array(rows, cols, values)
+}
+
+fn lifted_scalar(value: &RuntimeValue, row: u32, col: u32) -> Scalar {
+    match value {
+        RuntimeValue::Scalar(scalar) => scalar.clone(),
+        RuntimeValue::Array(array) => {
+            let row = if array.rows == 1 {
+                0
+            } else if row < array.rows {
+                row
+            } else {
+                return Scalar::Error(ErrorKind::Na);
+            };
+            let col = if array.cols == 1 {
+                0
+            } else if col < array.cols {
+                col
+            } else {
+                return Scalar::Error(ErrorKind::Na);
+            };
+            let index = (row as usize)
+                .saturating_mul(array.cols as usize)
+                .saturating_add(col as usize);
+            array.values.get(index).cloned().unwrap_or(Scalar::Empty)
+        }
+        RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => Scalar::Error(ErrorKind::Value),
+    }
 }
 
 fn eval_args(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> Vec<ArgVal> {
@@ -1133,11 +1220,18 @@ fn eval_args(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> Vec<ArgVal> {
 }
 
 fn eval_async(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> RuntimeValue {
-    // Provider is installed on the engine; EvalCtx does not hold it. Recalc
-    // intercepts async defs before calling eval_expr. Fallback: #N/A.
-    let _ = (def, args);
-    ctx.mark_pending();
-    RuntimeValue::error(ErrorKind::Na)
+    let Some(provider) = ctx.async_provider else {
+        ctx.mark_pending();
+        return RuntimeValue::error(ErrorKind::GettingData);
+    };
+    let materialized: Vec<ArgVal> = args
+        .iter()
+        .map(|arg| ArgVal {
+            omitted: arg.omitted,
+            value: ctx.materialize(arg.value.clone()),
+        })
+        .collect();
+    eval_async_fn(ctx, def, &materialized, provider)
 }
 
 /// Evaluate a formula AST for `cell` and return the runtime result.
@@ -1234,7 +1328,9 @@ fn format_array(a: &RuntimeArray) -> String {
             if c > 0 {
                 out.push(',');
             }
-            out.push_str(&format_scalar(&a.values[r * cols + c]));
+            out.push_str(&format_scalar(
+                a.values.get(r * cols + c).unwrap_or(&Scalar::Empty),
+            ));
         }
     }
     out.push('}');
@@ -1245,8 +1341,12 @@ fn format_array(a: &RuntimeArray) -> String {
 #[must_use]
 pub fn a1_of(row: u32, col: u16) -> String {
     match col_to_letters(col) {
-        Ok(l) => format!("{}{}", l, row + 1),
-        Err(_) => format!("R{}C{}", row + 1, u32::from(col) + 1),
+        Ok(l) => format!("{}{}", l, row.saturating_add(1)),
+        Err(_) => format!(
+            "R{}C{}",
+            row.saturating_add(1),
+            u32::from(col).saturating_add(1)
+        ),
     }
 }
 
@@ -1284,14 +1384,15 @@ impl AstCache {
 pub fn eval_async_fn(
     ctx: &mut EvalCtx<'_>,
     def: &FnDef,
-    _args: &[ArgVal],
+    args: &[ArgVal],
     provider: &dyn crate::recalc::AsyncNodeProvider,
 ) -> RuntimeValue {
     let req = AsyncRequest {
         name: def.name.to_string(),
         cell: ctx.cell,
+        args: args.to_vec(),
     };
-    let key = ContentHash::of(def.name, ctx.cell, ctx.pass);
+    let key = ContentHash::of_args(def.name, args);
     match provider.evaluate(key, &req) {
         AsyncState::Ready(v) => RuntimeValue::from_stored(v, ctx.wb.intern()),
         AsyncState::Pending { cached } => {

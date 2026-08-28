@@ -54,6 +54,10 @@ impl SpillTable {
         self.by_origin.get(&origin).copied()
     }
 
+    pub(crate) fn origins(&self) -> impl Iterator<Item = CellCoord> + '_ {
+        self.by_origin.keys().copied()
+    }
+
     /// Forget a region's occupancy (does not clear sheet cells).
     pub fn remove(&mut self, origin: CellCoord) {
         if let Some(r) = self.by_origin.remove(&origin) {
@@ -118,7 +122,19 @@ impl SpillTable {
                     && slot.flags.spill()
                     && slot.formula.is_none()
                 {
-                    let _ = wb.clear_cell(r.origin.sheet, row, col);
+                    let mut cleared = *slot;
+                    cleared.value = Value::Empty;
+                    cleared.flags = cleared
+                        .flags
+                        .with(crate::storage::CellFlags::DIRTY, false)
+                        .with(crate::storage::CellFlags::SPILL, false)
+                        .with(crate::storage::CellFlags::ARRAY, false)
+                        .with(crate::storage::CellFlags::STALE, false);
+                    if cleared == CellSlot::empty() {
+                        let _ = wb.clear_cell(r.origin.sheet, row, col);
+                    } else {
+                        let _ = wb.set_slot(r.origin.sheet, row, col, cleared);
+                    }
                 }
             }
         }

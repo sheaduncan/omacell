@@ -9,14 +9,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::coerce::Scalar;
 use crate::error::ErrorKind;
 use crate::eval::{
-    ArgVal, AstCache, EvalCtx, EvalFlags, FnDef, FnRegistry, RuntimeValue, eval_async_fn,
-    eval_expr, eval_formula, format_runtime,
+    ArgVal, AstCache, EvalCtx, EvalFlags, FnRegistry, Reference, RuntimeValue, eval_expr,
+    eval_formula, format_runtime,
 };
 use crate::graph::{CellCoord, DepGraph};
 use crate::intern::ArrayPayload;
 use crate::spill::{SpillRegion, SpillTable, blocks_spill};
 use crate::storage::{CellFlags, CellSlot};
-use crate::style::StyleId;
 use crate::value::{Array2D, Value};
 use crate::workbook::{CalcMode, Workbook};
 
@@ -42,6 +41,114 @@ impl ContentHash {
         h ^= u64::from(cell.col).wrapping_shl(16);
         Self(h)
     }
+
+    /// Hash an async call including its evaluated arguments.
+    #[must_use]
+    pub fn of_args(name: &str, args: &[ArgVal]) -> Self {
+        let mut h = hash_bytes(0xcbf2_9ce4_8422_2325, name.as_bytes());
+        for arg in args {
+            h = hash_bytes(h, &[u8::from(arg.omitted)]);
+            h = hash_runtime(h, &arg.value);
+            h = hash_bytes(h, &[0xff]);
+        }
+        Self(h)
+    }
+}
+
+fn hash_bytes(mut h: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        h = h.wrapping_mul(0x1000_0000_01b3) ^ u64::from(*byte);
+    }
+    h
+}
+
+fn hash_runtime(mut h: u64, value: &RuntimeValue) -> u64 {
+    match value {
+        RuntimeValue::Scalar(scalar) => hash_scalar(h, scalar),
+        RuntimeValue::Array(array) => {
+            h = hash_bytes(h, &[1]);
+            h = hash_bytes(h, &array.rows.to_le_bytes());
+            h = hash_bytes(h, &array.cols.to_le_bytes());
+            for scalar in array.values.iter() {
+                h = hash_scalar(h, scalar);
+            }
+            h
+        }
+        RuntimeValue::Lambda(lambda) => {
+            h = hash_bytes(h, &[2]);
+            for param in lambda.params.iter() {
+                h = hash_bytes(h, param.name.as_bytes());
+            }
+            h = hash_bytes(h, format!("{:?}", lambda.body).as_bytes());
+            for (name, captured) in lambda.closure.iter() {
+                h = hash_bytes(h, name.as_bytes());
+                h = hash_runtime(h, captured);
+            }
+            h
+        }
+        RuntimeValue::Ref(reference) => hash_reference(hash_bytes(h, &[3]), reference),
+    }
+}
+
+fn hash_scalar(mut h: u64, scalar: &Scalar) -> u64 {
+    match scalar {
+        Scalar::Empty => hash_bytes(h, &[0]),
+        Scalar::Number(number) => {
+            h = hash_bytes(h, &[1]);
+            hash_bytes(h, &number.to_bits().to_le_bytes())
+        }
+        Scalar::Bool(value) => hash_bytes(h, &[2, u8::from(*value)]),
+        Scalar::Text(text) => {
+            h = hash_bytes(h, &[3]);
+            hash_bytes(h, text.as_bytes())
+        }
+        Scalar::Error(error) => {
+            h = hash_bytes(h, &[4]);
+            hash_bytes(h, error.as_str().as_bytes())
+        }
+    }
+}
+
+fn hash_reference(mut h: u64, reference: &Reference) -> u64 {
+    match reference {
+        Reference::Range {
+            sheet,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        } => {
+            h = hash_bytes(h, &[0]);
+            h = hash_bytes(h, &sheet.index().to_le_bytes());
+            h = hash_bytes(h, &start_row.to_le_bytes());
+            h = hash_bytes(h, &start_col.to_le_bytes());
+            h = hash_bytes(h, &end_row.to_le_bytes());
+            hash_bytes(h, &end_col.to_le_bytes())
+        }
+        Reference::Union(parts) => {
+            h = hash_bytes(h, &[1]);
+            for part in parts {
+                h = hash_reference(h, part);
+            }
+            h
+        }
+        Reference::ThreeD {
+            sheets,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        } => {
+            h = hash_bytes(h, &[2]);
+            for sheet in sheets {
+                h = hash_bytes(h, &sheet.index().to_le_bytes());
+            }
+            h = hash_bytes(h, &start_row.to_le_bytes());
+            h = hash_bytes(h, &start_col.to_le_bytes());
+            h = hash_bytes(h, &end_row.to_le_bytes());
+            hash_bytes(h, &end_col.to_le_bytes())
+        }
+    }
 }
 
 /// Request passed to [`AsyncNodeProvider::evaluate`].
@@ -51,6 +158,8 @@ pub struct AsyncRequest {
     pub name: String,
     /// Formula cell.
     pub cell: CellCoord,
+    /// Evaluated arguments, with references materialized to their current values.
+    pub args: Vec<ArgVal>,
 }
 
 /// Result of an async node evaluation (sync trait; core has no tokio).
@@ -134,6 +243,15 @@ pub struct RecalcResult {
     pub async_hints: Vec<(CellCoord, String)>,
 }
 
+#[derive(Default)]
+struct RecalcAccum {
+    spill_blocked: Vec<(CellCoord, CellCoord)>,
+    pending_async: Vec<CellCoord>,
+    stale: Vec<CellCoord>,
+    async_hints: Vec<(CellCoord, String)>,
+    spill_follow: FxHashSet<CellCoord>,
+}
+
 /// Recalculation engine: graph, AST cache, registry, spill table, thread pool.
 ///
 /// ```
@@ -158,7 +276,8 @@ pub struct RecalcEngine {
     pass: u32,
     async_provider: Option<Arc<dyn AsyncNodeProvider>>,
     /// Last dynamic-resolved refs per cell.
-    dynamic_edges: FxHashMap<CellCoord, Vec<CellCoord>>,
+    dynamic_edges: FxHashMap<CellCoord, Vec<Reference>>,
+    orphaned_spills: FxHashSet<CellCoord>,
 }
 
 impl RecalcEngine {
@@ -176,6 +295,7 @@ impl RecalcEngine {
             pass: 0,
             async_provider: None,
             dynamic_edges: FxHashMap::default(),
+            orphaned_spills: FxHashSet::default(),
         }
     }
 
@@ -223,19 +343,41 @@ impl RecalcEngine {
     /// Rebuild the graph from `wb` and dirty every formula cell.
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph.rebuild(wb, &mut self.asts);
+        self.refresh_registry_volatility(wb);
         self.dirty.clear();
-        self.dirty.extend(self.graph.formula_cells());
-        self.spill = SpillTable::new();
+        let formulas = self.graph.formula_cells();
+        self.dirty.extend(formulas.iter().copied());
+        let formula_set: FxHashSet<CellCoord> = formulas.into_iter().collect();
+        self.orphaned_spills.extend(
+            self.spill
+                .origins()
+                .filter(|origin| !formula_set.contains(origin)),
+        );
         self.dynamic_edges.clear();
     }
 
     /// Record that `coord` changed (value or formula).
     pub fn notify_edit(&mut self, wb: &Workbook, coord: CellCoord) {
+        if let Some(region) = self.spill.region_at(coord.sheet, coord.row, coord.col) {
+            if region.origin == coord {
+                let origin_still_has_formula = wb
+                    .get(coord.sheet, coord.row, coord.col)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|slot| slot.formula.is_some());
+                if !origin_still_has_formula {
+                    self.orphaned_spills.insert(coord);
+                }
+            } else {
+                self.dirty.insert(region.origin);
+            }
+        }
         let dependents = self.graph.dependents(coord);
         let was_formula = self.graph.calc_chain().contains(&coord);
         if let Ok(Some(slot)) = wb.get(coord.sheet, coord.row, coord.col) {
             if let Some(fid) = slot.formula {
                 self.graph.upsert_formula(wb, &mut self.asts, coord, fid);
+                self.refresh_cell_volatility(wb, coord);
             } else if was_formula {
                 self.graph.remove_node(coord);
             }
@@ -244,15 +386,12 @@ impl RecalcEngine {
         }
         self.dirty.insert(coord);
         self.dirty.extend(dependents);
-        if let Some(extra) = self.dynamic_edges.get(&coord).cloned() {
-            self.dirty.extend(extra);
-        }
         // Dynamic cells that resolved to this cell last pass.
         let dyn_watchers: Vec<CellCoord> = self
             .dynamic_edges
             .iter()
             .filter_map(|(c, refs)| {
-                if refs.contains(&coord) {
+                if refs.iter().any(|r| reference_contains(r, coord)) {
                     Some(*c)
                 } else {
                     None
@@ -260,6 +399,46 @@ impl RecalcEngine {
             })
             .collect();
         self.dirty.extend(dyn_watchers);
+    }
+
+    fn refresh_registry_volatility(&mut self, wb: &Workbook) {
+        for cell in self.graph.formula_cells() {
+            self.refresh_cell_volatility(wb, cell);
+        }
+    }
+
+    fn refresh_cell_volatility(&mut self, wb: &Workbook, cell: CellCoord) {
+        let Some(source) = wb
+            .get(cell.sheet, cell.row, cell.col)
+            .ok()
+            .flatten()
+            .and_then(|slot| slot.formula)
+            .and_then(|fid| wb.intern().formulas.get(fid))
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let Ok(formula) = self.asts.get_or_parse(&source) else {
+            return;
+        };
+        let mut registry_volatile = false;
+        formula.ast.walk(&mut |expr| {
+            if let crate::formula::ExprKind::Call {
+                callee: crate::formula::Callee::Name(name),
+                ..
+            } = &expr.kind
+                && self.registry.lookup(name).is_some_and(|def| def.volatile)
+            {
+                registry_volatile = true;
+            }
+        });
+        self.graph
+            .set_volatile(cell, self.graph.is_volatile(cell) || registry_volatile);
+    }
+
+    /// Mark a completed async node for its second recalculation wave.
+    pub fn notify_async_ready(&mut self, coord: CellCoord) {
+        self.dirty.insert(coord);
     }
 
     /// Full recalc of every formula cell.
@@ -292,6 +471,16 @@ impl RecalcEngine {
     fn run(&mut self, wb: &mut Workbook, full: bool) -> RecalcResult {
         let t0 = Instant::now();
         self.pass = self.pass.saturating_add(1);
+        let undo = wb.undo_log_mut().is_enabled();
+        wb.undo_log_mut().set_enabled(false);
+        for origin in self.orphaned_spills.drain() {
+            if let Some(region) = self.spill.get(origin) {
+                extend_spill_dependents(&self.graph, region, &mut self.dirty);
+            }
+            self.spill.clear_ghosts(wb, origin);
+            self.spill.remove(origin);
+        }
+        wb.undo_log_mut().set_enabled(undo);
         let mut dirty: Vec<CellCoord> = if full {
             self.graph.formula_cells()
         } else {
@@ -313,10 +502,7 @@ impl RecalcEngine {
         let mut circular = self.graph.circular_set(&dirty);
         let iteration = wb.settings().iteration;
         let mut evaluated = 0u64;
-        let mut spill_blocked = Vec::new();
-        let mut pending_async = Vec::new();
-        let mut stale = Vec::new();
-        let mut async_hints = Vec::new();
+        let mut accum = RecalcAccum::default();
 
         if !circular.is_empty() && !iteration.enabled {
             for c in &circular {
@@ -327,16 +513,10 @@ impl RecalcEngine {
 
         let gens = self.graph.generations(&dirty);
         for generation in gens {
-            evaluated += self.eval_generation(
-                wb,
-                &generation,
-                &mut spill_blocked,
-                &mut pending_async,
-                &mut stale,
-                &mut async_hints,
-            ) as u64;
+            evaluated += self.eval_generation(wb, &generation, &mut accum) as u64;
         }
 
+        let circular_nodes = circular.clone();
         if iteration.enabled && !circular.is_empty() {
             evaluated += self.iterate_cycle(
                 wb,
@@ -344,8 +524,48 @@ impl RecalcEngine {
                 iteration.max_iterations,
                 iteration.max_change,
             ) as u64;
+            accum.spill_follow.extend(circular.iter().copied());
             circular.clear();
         }
+
+        // A direct reference to a spill ghost is statically an edge to that
+        // cell, not to the spill origin. Re-run affected formulas after the
+        // origin commits, and likewise re-run dependents after an iterative
+        // cycle has converged. Chained spills may require several bounded waves.
+        let circular_set: FxHashSet<CellCoord> = circular_nodes.into_iter().collect();
+        let mut waves_left = self.graph.formula_cells().len().max(1);
+        while !accum.spill_follow.is_empty() && waves_left > 0 {
+            waves_left -= 1;
+            let seeds: Vec<CellCoord> = accum.spill_follow.drain().collect();
+            let mut wave = self.graph.propagate(seeds);
+            wave.retain(|cell| !circular_set.contains(cell));
+            if wave.is_empty() {
+                break;
+            }
+            let mut wave_accum = RecalcAccum::default();
+            for generation in self.graph.generations(&wave) {
+                evaluated += self.eval_generation(wb, &generation, &mut wave_accum) as u64;
+            }
+            accum.spill_blocked.extend(wave_accum.spill_blocked);
+            accum.pending_async.extend(wave_accum.pending_async);
+            accum.stale.extend(wave_accum.stale);
+            accum.async_hints.extend(wave_accum.async_hints);
+            accum.spill_follow = wave_accum.spill_follow;
+        }
+
+        accum.pending_async.sort_unstable();
+        accum.pending_async.dedup();
+        accum
+            .stale
+            .extend(self.graph.propagate(accum.pending_async.iter().copied()));
+        accum.stale.sort_unstable();
+        accum.stale.dedup();
+        let undo = wb.undo_log_mut().is_enabled();
+        wb.undo_log_mut().set_enabled(false);
+        for cell in &accum.stale {
+            set_stale_flag(wb, *cell, true);
+        }
+        wb.undo_log_mut().set_enabled(undo);
 
         // Dynamic nodes: record resolved refs for the next dirty pass.
         // (Evaluated as part of generations when they have no static preds.)
@@ -354,10 +574,10 @@ impl RecalcEngine {
             cells_evaluated: evaluated,
             elapsed_ms: t0.elapsed().as_millis() as u64,
             circular,
-            spill_blocked,
-            pending_async,
-            stale,
-            async_hints,
+            spill_blocked: accum.spill_blocked,
+            pending_async: accum.pending_async,
+            stale: accum.stale,
+            async_hints: accum.async_hints,
         }
     }
 
@@ -365,10 +585,7 @@ impl RecalcEngine {
         &mut self,
         wb: &mut Workbook,
         generation: &[CellCoord],
-        spill_blocked: &mut Vec<(CellCoord, CellCoord)>,
-        pending_async: &mut Vec<CellCoord>,
-        stale: &mut Vec<CellCoord>,
-        async_hints: &mut Vec<(CellCoord, String)>,
+        accum: &mut RecalcAccum,
     ) -> usize {
         if generation.is_empty() {
             return 0;
@@ -405,25 +622,35 @@ impl RecalcEngine {
         wb.undo_log_mut().set_enabled(false);
         for (cell, value, flags, cse) in results {
             if flags.pending_async {
-                pending_async.push(cell);
+                accum.pending_async.push(cell);
             }
             if flags.stale {
-                stale.push(cell);
+                accum.stale.push(cell);
             }
             if let Some(h) = flags.hint {
-                async_hints.push((cell, h));
+                accum.async_hints.push((cell, h));
             }
-            if !flags.dynamic.is_empty() {
-                let mut coords = Vec::new();
-                for r in &flags.dynamic {
-                    collect_ref_cells(r, &mut coords);
+            if flags.dynamic.is_empty() {
+                self.dynamic_edges.remove(&cell);
+            } else {
+                let mut refs = Vec::new();
+                for reference in flags.dynamic {
+                    if !refs.contains(&reference) {
+                        refs.push(reference);
+                    }
                 }
-                coords.sort_unstable();
-                coords.dedup();
-                self.dynamic_edges.insert(cell, coords);
+                self.dynamic_edges.insert(cell, refs);
             }
-            if let Some(block) = commit_value(wb, &mut self.spill, cell, value, cse, flags.stale) {
-                spill_blocked.push((cell, block));
+            let old_spill = self.spill.get(cell);
+            let blocked = commit_value(wb, &mut self.spill, cell, value, cse, flags.stale);
+            if let Some(region) = old_spill {
+                extend_spill_dependents(&self.graph, region, &mut accum.spill_follow);
+            }
+            if let Some(region) = self.spill.get(cell) {
+                extend_spill_dependents(&self.graph, region, &mut accum.spill_follow);
+            }
+            if let Some(block) = blocked {
+                accum.spill_blocked.push((cell, block));
             }
         }
         wb.undo_log_mut().set_enabled(undo);
@@ -500,18 +727,8 @@ fn eval_one_cell(
     let src = wb.intern().formulas.get(fid)?;
     let cse = slot.flags.array();
     let formula = asts.peek(src)?;
-    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass);
-    let raw = if let Some(def) = async_def(registry, &formula.ast) {
-        let argv: Vec<ArgVal> = Vec::new();
-        if let Some(p) = provider {
-            eval_async_fn(&mut ctx, def, &argv, p)
-        } else {
-            ctx.mark_pending();
-            RuntimeValue::error(ErrorKind::Na)
-        }
-    } else {
-        eval_expr(&mut ctx, &formula.ast)
-    };
+    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass).with_async_provider(provider);
+    let raw = eval_expr(&mut ctx, &formula.ast);
     let (pending, is_stale, hint, dynamic) = ctx.take_flags();
     let value = match raw {
         RuntimeValue::Ref(r) => ctx.materialize(RuntimeValue::Ref(r)),
@@ -530,54 +747,53 @@ fn eval_one_cell(
     ))
 }
 
-fn async_def<'a>(registry: &'a FnRegistry, ast: &crate::formula::Expr) -> Option<&'a FnDef> {
-    match &ast.kind {
-        crate::formula::ExprKind::Call {
-            callee: crate::formula::Callee::Name(n),
-            ..
-        } => {
-            let d = registry.lookup(n)?;
-            if d.async_node { Some(d) } else { None }
-        }
-        _ => None,
-    }
-}
-
-fn collect_ref_cells(r: &crate::eval::Reference, out: &mut Vec<CellCoord>) {
+fn reference_contains(r: &Reference, cell: CellCoord) -> bool {
     match r {
-        crate::eval::Reference::Range {
+        Reference::Range {
             sheet,
             start_row,
             start_col,
             end_row,
             end_col,
         } => {
-            let r1 = *start_row.min(end_row);
-            let r2 = *start_row.max(end_row);
-            let c1 = *start_col.min(end_col);
-            let c2 = *start_col.max(end_col);
-            // Don't explode whole columns; store the four corners as a proxy plus
-            // every cell for modest ranges.
-            let n = (u64::from(r2 - r1) + 1) * (u64::from(c2 - c1) + 1);
-            if n <= 4096 {
-                for row in r1..=r2 {
-                    for col in c1..=c2 {
-                        out.push(CellCoord::new(*sheet, row, col));
-                    }
-                }
-            } else {
-                out.push(CellCoord::new(*sheet, r1, c1));
-            }
+            cell.sheet == *sheet
+                && cell.row >= (*start_row).min(*end_row)
+                && cell.row <= (*start_row).max(*end_row)
+                && cell.col >= (*start_col).min(*end_col)
+                && cell.col <= (*start_col).max(*end_col)
         }
-        crate::eval::Reference::Union(parts) => {
-            for p in parts {
-                collect_ref_cells(p, out);
-            }
+        Reference::Union(parts) => parts.iter().any(|part| reference_contains(part, cell)),
+        Reference::ThreeD {
+            sheets,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        } => {
+            sheets.contains(&cell.sheet)
+                && cell.row >= (*start_row).min(*end_row)
+                && cell.row <= (*start_row).max(*end_row)
+                && cell.col >= (*start_col).min(*end_col)
+                && cell.col <= (*start_col).max(*end_col)
         }
-        crate::eval::Reference::ThreeD { sheets, .. } => {
-            for s in sheets {
-                out.push(CellCoord::new(*s, 0, 0));
+    }
+}
+
+fn extend_spill_dependents(graph: &DepGraph, region: SpillRegion, out: &mut FxHashSet<CellCoord>) {
+    if region.blocked_by.is_some() {
+        return;
+    }
+    for dr in 0..region.rows {
+        for dc in 0..region.cols {
+            if dr == 0 && dc == 0 {
+                continue;
             }
+            let ghost = CellCoord::new(
+                region.origin.sheet,
+                region.origin.row.saturating_add(dr),
+                region.origin.col.saturating_add(dc as u16),
+            );
+            out.extend(graph.dependents(ghost));
         }
     }
 }
@@ -692,12 +908,20 @@ fn spill_array(
 
 fn write_ghost(wb: &mut Workbook, sheet: crate::addr::SheetId, row: u32, col: u16, s: Scalar) {
     let value = intern_scalar(wb, s);
-    let slot = CellSlot {
-        value,
-        formula: None,
-        style: StyleId::DEFAULT,
-        flags: CellFlags::DEFAULT.with(CellFlags::SPILL, true),
-    };
+    let mut slot = wb
+        .get(sheet, row, col)
+        .ok()
+        .flatten()
+        .copied()
+        .unwrap_or_else(CellSlot::empty);
+    slot.value = value;
+    slot.formula = None;
+    slot.flags = slot
+        .flags
+        .with(CellFlags::DIRTY, false)
+        .with(CellFlags::SPILL, true)
+        .with(CellFlags::ARRAY, false)
+        .with(CellFlags::STALE, false);
     let _ = wb.set_slot(sheet, row, col, slot);
     release_intern_extra(wb, value);
 }
@@ -738,12 +962,23 @@ fn commit_scalar(wb: &mut Workbook, cell: CellCoord, s: Scalar, flags: CellFlags
         .copied()
         .unwrap_or_else(CellSlot::empty);
     slot.value = value;
-    slot.flags = flags
+    slot.flags = slot
+        .flags
         .with(CellFlags::DIRTY, false)
-        .with(CellFlags::ARRAY, slot.flags.array())
-        .with(CellFlags::SPILL, false);
+        .with(CellFlags::ARRAY, slot.flags.array() || flags.array())
+        .with(CellFlags::SPILL, false)
+        .with(CellFlags::STALE, flags.stale());
     let _ = wb.set_slot(cell.sheet, cell.row, cell.col, slot);
     release_intern_extra(wb, value);
+}
+
+fn set_stale_flag(wb: &mut Workbook, cell: CellCoord, stale: bool) {
+    let Ok(Some(slot)) = wb.get(cell.sheet, cell.row, cell.col) else {
+        return;
+    };
+    let mut slot = *slot;
+    slot.flags = slot.flags.with(CellFlags::STALE, stale);
+    let _ = wb.set_slot(cell.sheet, cell.row, cell.col, slot);
 }
 
 fn release_intern_extra(wb: &mut Workbook, value: Value) {
