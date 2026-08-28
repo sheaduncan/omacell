@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 indexmap = { workspace = true }
+rayon = { workspace = true }
 rustc-hash = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
@@ -34,4 +35,8 @@ harness = false
 
 [[bench]]
 name = "parse_formula"
+harness = false
+
+[[bench]]
+name = "recalc"
 harness = false

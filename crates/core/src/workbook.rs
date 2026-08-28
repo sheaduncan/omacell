@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::addr::{CellRef, ParsedRef, RefKind, SheetId, SheetSpec};
 pub use crate::date_system::DateSystem;
 use crate::error::CoreError;
-use crate::intern::{FormulaId, Interners};
+use crate::intern::{ArrayPayload, FormulaId, Interners};
 use crate::names::{DefinedName, NameRegistry};
 use crate::sheet::{
     Comment, Hyperlink, Note, ProtectionState, Sheet, SheetVisibility, ViewState,
@@ -22,7 +22,7 @@ use crate::storage::{CellSlot, UsedRange};
 use crate::style::{Color, Style, StyleId};
 use crate::tables::{Table, TableId, TableRegistry};
 use crate::undo::{AffectedRange, Delta, UndoLog, transaction_affected};
-use crate::value::{StrId, Value};
+use crate::value::{ArrayId, StrId, Value};
 
 /// Calculation mode (F-1.6).
 ///
@@ -125,6 +125,7 @@ pub struct WorkbookMeta {
 pub struct WorkbookSnapshot {
     sheets: IndexMap<SheetId, Sheet>,
     names: NameRegistry,
+    tables: crate::tables::TableRegistry,
     intern: Arc<Interners>,
     settings: WorkbookSettings,
 }
@@ -151,6 +152,12 @@ impl WorkbookSnapshot {
     #[must_use]
     pub fn names(&self) -> &NameRegistry {
         &self.names
+    }
+
+    /// Tables as of the snapshot.
+    #[must_use]
+    pub fn tables(&self) -> &crate::tables::TableRegistry {
+        &self.tables
     }
 
     /// Settings.
@@ -254,6 +261,7 @@ impl Workbook {
         WorkbookSnapshot {
             sheets: self.sheets.clone(),
             names: self.names.clone(),
+            tables: self.tables.clone(),
             intern: Arc::clone(&self.intern),
             settings: self.settings.clone(),
         }
@@ -1087,5 +1095,36 @@ impl Workbook {
             .map(|s| s.store.heap_bytes())
             .sum::<usize>()
             + self.intern.heap_bytes()
+    }
+
+    /// Replace a cell slot, preserving intern refcount rules of [`Self::set_text`].
+    pub fn set_slot(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        col: u16,
+        slot: CellSlot,
+    ) -> Result<Option<CellSlot>, CoreError> {
+        self.replace_slot(id, row, col, Some(slot))
+    }
+
+    /// Intern text (refcount +1). Pair with [`Self::release_text`] after the slot holds it.
+    pub fn intern_text(&mut self, text: &str) -> StrId {
+        self.intern_mut().strings.intern(text)
+    }
+
+    /// Drop an interned-text refcount.
+    pub fn release_text(&mut self, id: StrId) {
+        self.intern_mut().strings.release(id);
+    }
+
+    /// Intern an array payload (refcount +1).
+    pub fn intern_array(&mut self, payload: ArrayPayload) -> ArrayId {
+        self.intern_mut().arrays.intern(payload)
+    }
+
+    /// Drop an interned-array refcount.
+    pub fn release_array(&mut self, id: ArrayId) {
+        self.intern_mut().arrays.release(id);
     }
 }

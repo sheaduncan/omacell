@@ -28,6 +28,7 @@ proptest = "1"
 rustc-hash = "2"
 indexmap = { version = "2", features = ["serde"] }
 criterion = "0.5"
+rayon = "1"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

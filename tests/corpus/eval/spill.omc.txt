@@ -1,0 +1,42 @@
+# F-3.3 dynamic arrays, #SPILL!, spill refs, legacy CSE.
+sheet Sheet1
+
+set A1 ={1,2,3}
+expect A1 1
+expect B1 2
+expect C1 3
+
+set A3 ={1;2;3}
+expect A3 1
+expect A4 2
+expect A5 3
+
+set A7 ={1,2;3,4}
+expect A7 1
+expect B7 2
+expect A8 3
+expect B8 4
+
+# Spill ref A1# copies the spilled vector.
+set A10 =A1#
+expect A10 1
+expect B10 2
+expect C10 3
+
+# Legacy CSE: evaluate the array but do not spill.
+set A12 ={1,2,3}
+flag A12 array
+expect A12 1
+expect B12 (empty)
+
+# Blocked spill: D1 is the origin, E1 has a literal.
+set E1 99
+set D1 ={10,20}
+expect D1 #SPILL!
+recalc
+
+# Clearing the blocker lets the array spill.
+set E1 (empty)
+expect D1 10
+expect E1 20
+recalc

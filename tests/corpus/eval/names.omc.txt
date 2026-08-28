@@ -1,0 +1,25 @@
+# F-1.3 defined names: range, constant, formula, named lambda.
+sheet Sheet1
+
+set A1 5
+set A2 7
+
+name Rate 0.2
+name Pair A1:A2
+name PlusOne =A1+1
+name Double =LAMBDA(x,x*2)
+
+set B1 =Rate
+expect B1 0.2
+
+set B2 =SUM(Pair)
+expect B2 12
+
+set B3 =PlusOne
+expect B3 6
+
+set B4 =Double(9)
+expect B4 18
+
+set B5 =NoSuchName
+expect B5 #NAME?

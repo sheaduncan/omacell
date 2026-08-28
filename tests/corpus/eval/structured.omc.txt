@@ -1,0 +1,27 @@
+# F-1.4 / F-3.2 structured references.
+sheet Sheet1
+
+set A1 Item
+set B1 Amt
+set A2 apples
+set B2 10
+set A3 pears
+set B3 20
+
+table Sales A1:B3 Item Amt
+
+set C2 =Sales[[#This Row],[Amt]]
+expect C2 10
+
+set C3 =Sales[[#This Row],[Amt]]
+expect C3 20
+
+set D1 =Sales[Amt]
+expect D1 10
+expect D2 20
+
+set F1 =Sales[[#Headers],[Item]]
+expect F1 Item
+
+set G1 =SUM(Sales[Amt])
+expect G1 30

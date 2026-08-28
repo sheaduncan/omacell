@@ -1,0 +1,12 @@
+# F-3.6 circular references with iteration off: detect, write 0, do not hang.
+sheet Sheet1
+
+set A1 =A1+1
+expect_circular A1
+expect A1 0
+
+set B1 =C1+1
+set C1 =B1+1
+expect_circular B1 C1
+expect B1 0
+expect C1 0
