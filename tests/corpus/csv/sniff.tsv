@@ -1,0 +1,14 @@
+# file	delimiter	quote	encoding	bom	header	decimal	thousands	eol	note
+simple.csv	,	"	utf-8	false	false	.		lf	numeric grid, no header
+simple.tsv	\t	"	utf-8	false	false	.		lf	tab-separated values
+semicolon.csv	;	"	utf-8	false	false	.		lf	EU semicolon delimiter
+pipe.csv	|	"	utf-8	false	false	.		lf	pipe delimiter
+header.csv	,	"	utf-8	false	true	.		lf	header row plus ZIP/leading-zero columns
+quoted_newline.csv	,	"	utf-8	false	false	.		lf	RFC 4180 quoted embedded newline
+ragged.csv	,	"	utf-8	false	false	.		lf	ragged short and long rows
+de_numbers.csv	;	"	utf-8	false	true	,	.	lf	semicolon + German 1.234,56
+decimal_comma.csv	;	"	utf-8	false	true	,		lf	ungrouped decimal commas do not become delimiters
+single_quote.csv	,	'	utf-8	false	false	.		lf	single-quoted fields preserve embedded commas
+crlf.csv	,	"	utf-8	false	false	.		crlf	CRLF line endings
+cr.csv	,	"	utf-8	false	false	.		cr	CR line endings
+quotes.csv	,	"	utf-8	false	false	.		lf	doubled quotes inside a field

@@ -50,6 +50,10 @@ g1-verify:
     python3 scripts/check-g1-baselines.py
     python3 scripts/lo-crosscheck.py tests/fixtures/g1/spotcheck-20260828.tsv
 
+# Validate the durable WP-08 CSV performance and memory baseline record.
+wp08-baseline-verify:
+    python3 scripts/check-wp08-baselines.py
+
 # record criterion baselines (packages that touch §12.1 call this)
 perf-baseline:
     cargo bench --workspace -- --save-baseline default
