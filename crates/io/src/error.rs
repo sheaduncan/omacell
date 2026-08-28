@@ -41,7 +41,8 @@ pub fn plan(message: impl Into<String>) -> CoreError {
 /// Limit error.
 #[must_use]
 pub fn limit(message: impl Into<String>) -> CoreError {
-    CoreError::new(codes::CSV_LIMIT, message).with_hint("Excel's grid is A1:XFD1048576")
+    CoreError::new(codes::CSV_LIMIT, message)
+        .with_hint("narrow the grid request or use a streaming API for large files")
 }
 
 /// Cancelled load.
@@ -55,5 +56,5 @@ pub fn cancelled(message: impl Into<String>) -> CoreError {
 #[must_use]
 pub fn export(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::CSV_EXPORT, message)
-        .with_hint("use UTF-8 if the sheet contains characters Latin-1 cannot represent")
+        .with_hint("check the range, quoting, formula-text policy, encoding, and destination")
 }

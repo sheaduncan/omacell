@@ -20,6 +20,8 @@ pub mod codes {
     pub const CHANGESET_NOT_FOUND: &str = "changeset.not_found";
     /// Changeset lifecycle does not allow this operation.
     pub const CHANGESET_STATE: &str = "changeset.state";
+    /// Changeset count, command count, retained bytes, or effect records exceeded a limit.
+    pub const CHANGESET_LIMIT: &str = "changeset.limit";
     /// IPC envelope version is missing or not 1.
     pub const IPC_VERSION: &str = "ipc.version";
     /// Frame is oversized, not UTF-8, or not a single JSON line.
@@ -90,6 +92,11 @@ pub(crate) fn changeset_not_found(id: &str) -> CoreError {
 
 pub(crate) fn changeset_state(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::CHANGESET_STATE, message)
+}
+
+pub(crate) fn changeset_limit(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::CHANGESET_LIMIT, message)
+        .with_hint("split the work into smaller reviewed changesets or start a new session")
 }
 
 pub(crate) fn ipc_version(message: impl Into<String>) -> CoreError {

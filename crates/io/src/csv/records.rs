@@ -4,28 +4,25 @@ use std::fmt;
 use std::io::{self, Read};
 
 use omacell_core::error::CoreError;
+use omacell_core::limits::MAX_COLS;
 
-use super::plan::{ImportPlan, MAX_FIELD_BYTES};
+use super::plan::{ImportPlan, MAX_CLIPBOARD_CELLS, MAX_CLIPBOARD_ROWS, MAX_FIELD_BYTES};
 use crate::error;
 
 const READER_BUFFER_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
-struct FieldLimitExceeded {
-    bytes: usize,
+struct CsvLimitExceeded {
+    message: String,
 }
 
-impl fmt::Display for FieldLimitExceeded {
+impl fmt::Display for CsvLimitExceeded {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "field is more than {MAX_FIELD_BYTES} bytes (observed at least {})",
-            self.bytes
-        )
+        f.write_str(&self.message)
     }
 }
 
-impl std::error::Error for FieldLimitExceeded {}
+impl std::error::Error for CsvLimitExceeded {}
 
 /// Streaming guard that stops the CSV parser before a field can grow without
 /// bound. It counts decoded UTF-8 bytes and understands quoted delimiters,
@@ -35,6 +32,7 @@ pub(crate) struct FieldLimitReader<R: Read> {
     delimiter: u8,
     quote: u8,
     field_bytes: usize,
+    fields_in_record: usize,
     at_field_start: bool,
     in_quotes: bool,
     quote_pending: bool,
@@ -47,6 +45,7 @@ impl<R: Read> FieldLimitReader<R> {
             delimiter: plan.delimiter_byte()?,
             quote: plan.quote_byte()?,
             field_bytes: 0,
+            fields_in_record: 1,
             at_field_start: true,
             in_quotes: false,
             quote_pending: false,
@@ -58,8 +57,11 @@ impl<R: Read> FieldLimitReader<R> {
         if self.field_bytes > MAX_FIELD_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                FieldLimitExceeded {
-                    bytes: self.field_bytes,
+                CsvLimitExceeded {
+                    message: format!(
+                        "field is more than {MAX_FIELD_BYTES} bytes (observed at least {})",
+                        self.field_bytes
+                    ),
                 },
             ));
         }
@@ -67,8 +69,24 @@ impl<R: Read> FieldLimitReader<R> {
     }
 
     fn observe_outside(&mut self, byte: u8) -> io::Result<()> {
-        if byte == self.delimiter || matches!(byte, b'\r' | b'\n') {
+        if byte == self.delimiter {
             self.field_bytes = 0;
+            self.at_field_start = true;
+            self.fields_in_record += 1;
+            if self.fields_in_record > usize::from(MAX_COLS) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    CsvLimitExceeded {
+                        message: format!(
+                            "record has more than {MAX_COLS} fields (observed at least {})",
+                            self.fields_in_record
+                        ),
+                    },
+                ));
+            }
+        } else if matches!(byte, b'\r' | b'\n') {
+            self.field_bytes = 0;
+            self.fields_in_record = 1;
             self.at_field_start = true;
         } else if self.at_field_start && byte == self.quote {
             self.at_field_start = false;
@@ -134,8 +152,22 @@ pub(crate) fn collect_records<R: Read>(
     rdr: &mut ::csv::Reader<R>,
 ) -> Result<Vec<Vec<String>>, CoreError> {
     let mut rows = Vec::new();
+    let mut cells = 0usize;
     for rec in rdr.records() {
-        let rec = rec.map_err(|e| error::parse(e.to_string()))?;
+        let rec = rec.map_err(map_csv)?;
+        if rows.len() >= MAX_CLIPBOARD_ROWS {
+            return Err(error::limit(format!(
+                "materialized table has more than {MAX_CLIPBOARD_ROWS} rows"
+            )));
+        }
+        cells = cells
+            .checked_add(rec.len())
+            .ok_or_else(|| error::limit("materialized table cell count overflow"))?;
+        if cells > MAX_CLIPBOARD_CELLS {
+            return Err(error::limit(format!(
+                "materialized table has more than {MAX_CLIPBOARD_CELLS} cells"
+            )));
+        }
         if rec.len() == 1 && rec.get(0).is_some_and(|s| s.is_empty()) && rows.is_empty() {
             // keep empty records; a trailing newline after the last row is
             // an empty record we drop at the end instead.
@@ -149,6 +181,12 @@ pub(crate) fn collect_records<R: Read>(
 }
 
 pub(crate) fn check_record(rec: &::csv::StringRecord) -> Result<(), CoreError> {
+    if rec.len() > usize::from(MAX_COLS) {
+        return Err(error::limit(format!(
+            "record has {} fields; maximum is {MAX_COLS}",
+            rec.len()
+        )));
+    }
     if let Some(field) = rec.iter().find(|field| field.len() > MAX_FIELD_BYTES) {
         return Err(error::limit(format!(
             "field is {} bytes; maximum is {MAX_FIELD_BYTES}",
@@ -167,7 +205,7 @@ pub(crate) fn map_csv(err: ::csv::Error) -> CoreError {
     if let ::csv::ErrorKind::Io(io_error) = err.kind()
         && io_error
             .get_ref()
-            .is_some_and(|inner| inner.is::<FieldLimitExceeded>())
+            .is_some_and(|inner| inner.is::<CsvLimitExceeded>())
     {
         return error::limit(io_error.to_string());
     }

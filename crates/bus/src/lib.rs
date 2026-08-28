@@ -25,11 +25,15 @@ mod resolve;
 mod session;
 
 pub use catalog::{CommandJson, CommandsEnvelope, SCHEMA, commands_json};
-pub use changeset::ChangesetStore;
+pub use changeset::{
+    ChangesetStore, MAX_CHANGESET_BYTES, MAX_CHANGESET_COMMANDS, MAX_CHANGESET_STORE_BYTES,
+    MAX_CHANGESETS, MAX_EFFECT_RECORDS,
+};
 pub use commands::register_core;
 pub use error::codes;
 pub use event::{EventBus, SubscriberId};
 pub use handler::{CommandContext, Effect};
 pub use policy::MutationPolicy;
 pub use registry::{CommandKind, CommandRegistry, CommandSpec, Exposure, RegisteredCommand};
+pub use resolve::MAX_RANGE_CELLS;
 pub use session::{Bus, DryRun};

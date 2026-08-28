@@ -7,9 +7,11 @@ use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, RuntimeArray, RuntimeValue};
 
 use crate::util::{
-    MAX_EXCEL_TEXT, err, excel_lower, excel_lower_char, number, optional, scalar, text, to_bool,
-    to_number, to_text, trunc_i64,
+    MAX_EXCEL_TEXT, err, excel_lower, number, optional, scalar, text, to_bool, to_number, to_text,
+    trunc_i64,
 };
+
+const SEARCH_REGEX_SIZE_LIMIT: usize = 4 << 20;
 
 pub(crate) fn search_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     let needle = match to_text(ctx, &args[0]) {
@@ -221,21 +223,31 @@ fn search_wildcard(hay: &str, pat: &str, start: i64) -> Result<i64, ErrorKind> {
     if start < 1 {
         return Err(ErrorKind::Value);
     }
-    let hay_c: Vec<char> = hay.chars().map(excel_lower_char).collect();
-    let pat_c = decode_wildcard(&excel_lower(pat));
-    let start_idx = (start as usize).saturating_sub(1);
-    if start_idx > hay_c.len() {
+    let hay_len = hay.chars().count();
+    if hay_len > MAX_EXCEL_TEXT || pat.chars().count() > MAX_EXCEL_TEXT {
         return Err(ErrorKind::Value);
     }
+    let start_idx = usize::try_from(start - 1).map_err(|_| ErrorKind::Value)?;
+    if start_idx > hay_len {
+        return Err(ErrorKind::Value);
+    }
+    let pat_c = decode_wildcard(&excel_lower(pat));
     if pat_c.is_empty() {
         return Ok(start);
     }
-    for i in start_idx..=hay_c.len() {
-        if glob_prefix(&hay_c[i..], &pat_c) {
-            return Ok((i + 1) as i64);
-        }
-    }
-    Err(ErrorKind::Value)
+    let hay_lower = excel_lower(hay);
+    let start_byte = hay_lower
+        .char_indices()
+        .nth(start_idx)
+        .map_or(hay_lower.len(), |(byte, _)| byte);
+    let regex = compile_wildcard_regex(&pat_c)?;
+    let found = regex
+        .find(&hay_lower[start_byte..])
+        .ok_or(ErrorKind::Value)?;
+    let skipped = hay_lower[start_byte..start_byte + found.start()]
+        .chars()
+        .count();
+    i64::try_from(start_idx + skipped + 1).map_err(|_| ErrorKind::Value)
 }
 
 #[derive(Clone, Copy)]
@@ -264,20 +276,43 @@ fn decode_wildcard(pat: &str) -> Vec<Wild> {
     out
 }
 
-fn glob_prefix(hay: &[char], pat: &[Wild]) -> bool {
-    if pat.is_empty() {
-        return true;
-    }
-    match pat[0] {
-        Wild::Star => {
-            if pat.len() == 1 {
-                return true;
-            }
-            (0..=hay.len()).any(|i| glob_prefix(&hay[i..], &pat[1..]))
+fn compile_wildcard_regex(pat: &[Wild]) -> Result<regex::Regex, ErrorKind> {
+    let mut source = String::with_capacity(pat.len());
+    let mut literal = String::new();
+    let flush_literal = |source: &mut String, literal: &mut String| {
+        if !literal.is_empty() {
+            source.push_str(&regex::escape(literal));
+            literal.clear();
         }
-        Wild::Any => !hay.is_empty() && glob_prefix(&hay[1..], &pat[1..]),
-        Wild::Char(c) => !hay.is_empty() && hay[0] == c && glob_prefix(&hay[1..], &pat[1..]),
+    };
+    let mut previous_star = false;
+    for token in pat {
+        match token {
+            Wild::Char(c) => {
+                previous_star = false;
+                literal.push(*c);
+            }
+            Wild::Any => {
+                flush_literal(&mut source, &mut literal);
+                previous_star = false;
+                source.push('.');
+            }
+            Wild::Star if !previous_star => {
+                flush_literal(&mut source, &mut literal);
+                previous_star = true;
+                source.push_str(".*");
+            }
+            Wild::Star => {}
+        }
     }
+    flush_literal(&mut source, &mut literal);
+    regex::RegexBuilder::new(&source)
+        .dot_matches_new_line(true)
+        .size_limit(SEARCH_REGEX_SIZE_LIMIT)
+        .dfa_size_limit(SEARCH_REGEX_SIZE_LIMIT)
+        .nest_limit(32)
+        .build()
+        .map_err(|_| ErrorKind::Value)
 }
 
 fn split_keep(src: &str, delim: &str, insensitive: bool, ignore_empty: bool) -> Vec<String> {
@@ -361,4 +396,37 @@ fn find_all_delim(src: &str, delim: &str, insensitive: bool) -> Vec<(usize, usiz
         from = idx + needle.len().max(1);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_wildcard;
+    use omacell_core::error::ErrorKind;
+
+    #[test]
+    fn search_wildcards_keep_excel_prefix_semantics() {
+        assert_eq!(search_wildcard("xxAbczz", "a?c", 1), Ok(3));
+        assert_eq!(search_wildcard("xxa*c", "a~*c", 1), Ok(3));
+        assert_eq!(search_wildcard("abc", "*b", 1), Ok(1));
+        assert_eq!(search_wildcard("abc", "", 4), Ok(4));
+    }
+
+    #[test]
+    fn search_wildcards_do_not_backtrack_exponentially() {
+        let pattern = format!("{}b", "*a".repeat(64));
+        let hay = "a".repeat(128);
+        assert_eq!(search_wildcard(&hay, &pattern, 1), Err(ErrorKind::Value));
+    }
+
+    #[test]
+    fn search_rejects_text_above_the_excel_limit() {
+        assert_eq!(
+            search_wildcard(&"a".repeat(32_768), "a", 1),
+            Err(ErrorKind::Value)
+        );
+        assert_eq!(
+            search_wildcard("a", &"a".repeat(32_768), 1),
+            Err(ErrorKind::Value)
+        );
+    }
 }

@@ -4,13 +4,12 @@ use omacell_core::addr::{
     CellRef, ParsedRef, RangeRef, RefKind, SheetId, col_to_letters, parse_a1, quote_sheet_name,
 };
 use omacell_core::error::CoreError;
-use omacell_core::limits::MAX_ROWS;
 use omacell_core::workbook::Workbook;
 
 use crate::error;
 
-/// Maximum cells a range command will iterate (one full column).
-pub const MAX_RANGE_CELLS: u64 = MAX_ROWS as u64;
+/// Maximum cells a command-bus range operation will materialize.
+pub const MAX_RANGE_CELLS: u64 = 100_000;
 
 /// A resolved cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,6 +1,7 @@
 //! Clipboard CSV / TSV / Markdown / HTML helpers.
 
-use omacell_io::csv::{ClipboardFormat, parse_clipboard};
+use omacell_io::csv::{ClipboardFormat, MAX_CLIPBOARD_BYTES, parse_clipboard};
+use omacell_io::error::codes;
 
 #[test]
 fn tsv_and_csv() {
@@ -45,4 +46,15 @@ fn auto_detects_markdown() {
     let md = "| a |\n| --- |\n| 1 |\n";
     let table = parse_clipboard(md, ClipboardFormat::Auto).unwrap();
     assert_eq!(table.plan.delimiter, '|');
+}
+
+#[test]
+fn clipboard_payload_and_column_limits_fail_cleanly() {
+    let oversized = "x".repeat(MAX_CLIPBOARD_BYTES + 1);
+    let err = parse_clipboard(&oversized, ClipboardFormat::Csv).unwrap_err();
+    assert_eq!(err.code, codes::CSV_LIMIT);
+
+    let too_wide = ",".repeat(usize::from(omacell_core::limits::MAX_COLS));
+    let err = parse_clipboard(&too_wide, ClipboardFormat::Csv).unwrap_err();
+    assert_eq!(err.code, codes::CSV_LIMIT);
 }
