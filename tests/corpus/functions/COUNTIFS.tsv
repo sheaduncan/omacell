@@ -1,0 +1,11 @@
+# formula	expected	note
+=COUNTIFS({1;2;3},">1")	2	one criterion
+=COUNTIFS({1;2;3},">1",{"a";"b";"a"},"a")	1	two criteria
+=COUNTIFS({1;2},1)	1	equals
+=COUNTIFS({1;2;3},">10")	0	none
+=COUNTIFS({1;2},{1;2;3},1)	#VALUE!	size mismatch; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTIFS({"ax";"b"},"a*")	1	wildcard
+=COUNTIFS({1;2;3},">0")	3	all
+=COUNTIFS({5;1},5)	1	one
+=COUNTIFS({-1;2},">0")	1	signed
+=COUNTIFS({1;1;1},1)	3	all match

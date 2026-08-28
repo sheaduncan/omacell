@@ -1,0 +1,11 @@
+# formula	expected	note
+=TRUNC(8.9)	8	toward zero
+=TRUNC(-8.9)	-8	Excel TRUNC toward zero
+=TRUNC(8.9,1)	8.9	one decimal
+=TRUNC(8.99,1)	8.9	truncate digits
+=TRUNC(-8.99,1)	-8.9	negative digits
+=TRUNC(123,-1)	120	negative num_digits
+=TRUNC(0)	0	zero
+=TRUNC(TRUE)	1	TRUE
+=TRUNC("3.9")	3	numeric text
+=TRUNC(#N/A)	#N/A	error

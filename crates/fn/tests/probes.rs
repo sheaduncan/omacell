@@ -6,7 +6,7 @@ use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::{RecalcEngine, format_cell};
 use omacell_core::workbook::Workbook;
 use omacell_fn::{
-    FunctionsEnvelope, PROBE_SPECS, SCHEMA, functions_json, register_probes, run_corpus_file,
+    FunctionsEnvelope, SCHEMA, all_specs, functions_json, register_all, run_corpus_file,
 };
 
 fn corpus_dir() -> PathBuf {
@@ -46,8 +46,11 @@ fn functions_json_is_sorted_and_matches_schema_version() {
     let schema: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(schema_path).unwrap()).unwrap();
     validate_schema(&value, &schema, "$").unwrap();
-    assert_eq!(envelope.functions.len(), PROBE_SPECS.len());
-    for spec in PROBE_SPECS {
+    let specs = all_specs();
+    assert_eq!(envelope.functions.len(), specs.len());
+    assert!(names.contains(&"SUMIFS".to_string()));
+    assert!(names.contains(&"ISOMITTED".to_string()));
+    for spec in &specs {
         assert!(
             spec.min_args <= spec.max_args,
             "bad arity for {}",
@@ -150,7 +153,7 @@ fn validate_schema(
 #[test]
 fn lazy_if_probe_skips_unselected_error() {
     let mut registry = FnRegistry::new();
-    register_probes(&mut registry);
+    register_all(&mut registry);
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
     wb.set_formula_text(s, 0, 0, "=IF(TRUE,9,1/0)").unwrap();
@@ -162,7 +165,7 @@ fn lazy_if_probe_skips_unselected_error() {
 #[test]
 fn clock_and_random_probes() {
     let mut registry = FnRegistry::new();
-    register_probes(&mut registry);
+    register_all(&mut registry);
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
     for i in 0..32u32 {

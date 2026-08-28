@@ -1,0 +1,11 @@
+# formula	expected	note
+=COMBINA(5,2)	15	with repetition C(n+k-1,k)
+=COMBINA(5,0)	1	k=0
+=COMBINA(1,1)	1	1+1-1 C 1
+=COMBINA(0,0)	1	0 with 0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COMBINA(0,1)	#NUM!	n=0 k>0
+=COMBINA(-1,1)	#NUM!	negative
+=COMBINA(TRUE,1)	1	TRUE
+=COMBINA(#N/A,1)	#N/A	error
+=COMBINA("4","2")	10	numeric text
+=COMBINA(3,2)	6	3+2-1 C 2

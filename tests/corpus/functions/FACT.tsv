@@ -1,0 +1,11 @@
+# formula	expected	note
+=FACT(5)	120	5!
+=FACT(0)	1	0!
+=FACT(1)	1	1!
+=FACT(5.9)	120	truncates toward zero
+=FACT(-1)	#NUM!	negative
+=FACT(171)	#NUM!	overflow cap 170; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=FACT(TRUE)	1	TRUE is 1
+=FACT("4")	24	numeric text
+=FACT(#N/A)	#N/A	error
+=FACT(3)	6	3!

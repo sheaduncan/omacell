@@ -1,0 +1,11 @@
+# formula	expected	note
+=IFS(TRUE,1,TRUE,2)	1	first true wins
+=IFS(FALSE,1,TRUE,2)	2	later pair
+=IFS(FALSE,1/0,TRUE,3)	3	unselected error skipped
+=IFS(TRUE,4,1/0,5)	4	later unevaluated
+=IFS(FALSE,1,FALSE,2)	#N/A	no match
+=IFS(1,9)	9	numeric true
+=IFS(0,9,TRUE,8)	8	zero is false
+=IFS(#N/A,1,TRUE,2)	#N/A	test error
+=IFS(TRUE,#N/A)	#N/A	selected error
+=IFS(FALSE,1,TRUE,FALSE)	FALSE	false value

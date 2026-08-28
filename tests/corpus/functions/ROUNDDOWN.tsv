@@ -1,0 +1,11 @@
+# formula	expected	note
+=ROUNDDOWN(1.9,0)	1	toward zero
+=ROUNDDOWN(-1.9,0)	-1	negative toward zero
+=ROUNDDOWN(1.239,2)	1.23	two decimals
+=ROUNDDOWN(129,-1)	120	negative digits
+=ROUNDDOWN(0,0)	0	zero
+=ROUNDDOWN(TRUE,0)	1	TRUE
+=ROUNDDOWN("1.9",0)	1	numeric text
+=ROUNDDOWN(#N/A,0)	#N/A	error
+=ROUNDDOWN(2,0)	2	integer
+=ROUNDDOWN(-2.01,1)	-2	one decimal negative

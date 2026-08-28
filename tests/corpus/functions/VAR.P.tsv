@@ -1,0 +1,11 @@
+# formula	expected	note
+=VAR.P(1,2,3)	0.666666667	pop var
+=VAR.P(5,5,5)	0	no var
+=VAR.P(1)	0	n=1
+=VAR.P({1,2,3})	0.666666667	array
+=VAR.P(1,#N/A)	#N/A	error
+=VAR.P(TRUE,FALSE)	0.25	1 and 0
+=VAR.P(-1,1)	1	two
+=VAR.P(1,2,3,4,5)	2	1..5
+=VAR.P(2,4)	1	two
+=VAR.P(0,0)	0	zeros

@@ -1,0 +1,11 @@
+# formula	expected	note
+=EXP(0)	1	e^0
+=EXP(1)*0+1	1	finite
+=LN(EXP(2))	2	inverse of LN
+=EXP(TRUE)	2.718281828	TRUE is 1 → e
+=EXP(FALSE)	1	FALSE
+=EXP("0")	1	numeric text
+=EXP("x")	#VALUE!	bad text
+=EXP(#N/A)	#N/A	error
+=EXP(-1)*EXP(1)	1	reciprocals
+=EXP({0,0})	1	array lift; spilled origin is top-left (format_cell)

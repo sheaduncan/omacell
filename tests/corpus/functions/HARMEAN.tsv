@@ -1,0 +1,11 @@
+# formula	expected	note
+=HARMEAN(1,4)	1.6	2/(1+0.25)=1.6
+=HARMEAN(5)	5	single
+=HARMEAN(1,1)	1	ones
+=HARMEAN(0,1)	#NUM!	non-positive
+=HARMEAN(-1,2)	#NUM!	negative
+=HARMEAN({1,4})	1.6	array
+=HARMEAN(1,#N/A)	#N/A	error
+=HARMEAN(TRUE,1)	1	TRUE is 1
+=HARMEAN(2,2)	2	equal
+=HARMEAN(1,2,4)	1.714285714	3 / (1+0.5+0.25)

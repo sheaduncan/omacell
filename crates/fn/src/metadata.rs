@@ -193,13 +193,24 @@ pub fn spec_to_fn_def(spec: &FunctionSpec) -> FnDef {
     }
 }
 
+/// Every function spec in the catalog, including `ISOMITTED` (not registered).
+#[must_use]
+pub fn all_specs() -> Vec<FunctionSpec> {
+    let mut specs = Vec::new();
+    specs.extend_from_slice(crate::PROBE_SPECS);
+    specs.extend_from_slice(crate::math::SPECS);
+    specs.extend_from_slice(crate::stat::SPECS);
+    specs.extend_from_slice(crate::logical::SPECS);
+    specs.extend_from_slice(crate::info::SPECS);
+    specs.push(crate::info::ISOMITTED_SPEC);
+    specs.extend_from_slice(crate::aggregate::SPECS);
+    specs
+}
+
 /// Deterministic JSON catalog of every currently registered spec.
 pub fn functions_json() -> Result<String, serde_json::Error> {
-    let mut functions: Vec<FunctionJson> = crate::PROBE_SPECS
-        .iter()
-        .copied()
-        .map(FunctionSpec::to_json)
-        .collect();
+    let mut functions: Vec<FunctionJson> =
+        all_specs().into_iter().map(FunctionSpec::to_json).collect();
     functions.sort_by(|a, b| a.name.cmp(&b.name));
     let envelope = FunctionsEnvelope {
         schema: SCHEMA,

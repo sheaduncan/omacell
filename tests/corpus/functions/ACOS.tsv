@@ -1,0 +1,11 @@
+# formula	expected	note
+=ACOS(1)	0	acos 1
+=ACOS(-1)/PI()	1	acos -1 = pi
+=ACOS(0)*2/PI()	1	acos 0 = pi/2
+=ACOS(2)	#NUM!	out of domain
+=ACOS(-2)	#NUM!	out of domain
+=ACOS(TRUE)	0	TRUE is 1
+=ACOS("1")	0	numeric text
+=ACOS("x")	#VALUE!	bad text
+=ACOS(#N/A)	#N/A	error
+=ACOS({1,1})	0	array lift; spilled origin is top-left (format_cell)

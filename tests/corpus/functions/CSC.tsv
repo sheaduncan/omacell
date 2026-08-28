@@ -1,0 +1,11 @@
+# formula	expected	note
+=ROUND(CSC(PI()/2),10)	1	csc pi/2; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CSC(0)	#DIV/0!	sin 0 = 0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CSC(TRUE)*0	0	TRUE finite*0
+=CSC("x")	#VALUE!	bad text
+=CSC(#N/A)	#N/A	error
+=1/SIN(PI()/2)-CSC(PI()/2)	0	identity; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SIGN(CSC(PI()/2))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CSC(PI()/2)*2	2	times two
+=CSC(PI()/2)	1	array lift; spilled origin is top-left (format_cell)
+=IF(CSC(1)>0,1,0)	1	positive in (0,pi); known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

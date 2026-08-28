@@ -547,6 +547,11 @@ impl<'a> EvalCtx<'a> {
 
     /// Walk every cell in a reference (row-major, sheets in order).
     pub fn for_each_cell(&self, r: &Reference, f: &mut impl FnMut(Scalar)) {
+        self.for_each_cell_at(r, &mut |_sheet, _row, _col, scalar| f(scalar));
+    }
+
+    /// Walk every cell in a reference with coordinates (row-major, sheets in order).
+    pub fn for_each_cell_at(&self, r: &Reference, f: &mut impl FnMut(SheetId, u32, u16, Scalar)) {
         match r {
             Reference::Range {
                 sheet,
@@ -561,13 +566,13 @@ impl<'a> EvalCtx<'a> {
                 let c2 = (*start_col).max(*end_col);
                 for row in r1..=r2 {
                     for col in c1..=c2 {
-                        f(self.read_cell(*sheet, row, col));
+                        f(*sheet, row, col, self.read_cell(*sheet, row, col));
                     }
                 }
             }
             Reference::Union(parts) => {
                 for p in parts {
-                    self.for_each_cell(p, f);
+                    self.for_each_cell_at(p, f);
                 }
             }
             Reference::ThreeD {
@@ -578,7 +583,7 @@ impl<'a> EvalCtx<'a> {
                 end_col,
             } => {
                 for sheet in sheets {
-                    self.for_each_cell(
+                    self.for_each_cell_at(
                         &Reference::Range {
                             sheet: *sheet,
                             start_row: *start_row,
@@ -591,6 +596,131 @@ impl<'a> EvalCtx<'a> {
                 }
             }
         }
+    }
+
+    /// Walk occupied cells only (whole-column aggregates do not materialize empties).
+    pub fn for_each_stored_cell(
+        &self,
+        r: &Reference,
+        f: &mut impl FnMut(SheetId, u32, u16, Scalar),
+    ) {
+        match r {
+            Reference::Range {
+                sheet,
+                start_row,
+                start_col,
+                end_row,
+                end_col,
+            } => {
+                let Some(sheet_ref) = self.wb.sheet(*sheet) else {
+                    return;
+                };
+                let r1 = (*start_row).min(*end_row);
+                let r2 = (*start_row).max(*end_row);
+                let c1 = (*start_col).min(*end_col);
+                let c2 = (*start_col).max(*end_col);
+                for (row, col, _slot) in sheet_ref.store.iter_region(r1, c1, r2, c2) {
+                    f(*sheet, row, col, self.read_cell(*sheet, row, col));
+                }
+            }
+            Reference::Union(parts) => {
+                for p in parts {
+                    self.for_each_stored_cell(p, f);
+                }
+            }
+            Reference::ThreeD {
+                sheets,
+                start_row,
+                start_col,
+                end_row,
+                end_col,
+            } => {
+                for sheet in sheets {
+                    self.for_each_stored_cell(
+                        &Reference::Range {
+                            sheet: *sheet,
+                            start_row: *start_row,
+                            start_col: *start_col,
+                            end_row: *end_row,
+                            end_col: *end_col,
+                        },
+                        f,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Inclusive cell count of a reference (used by `COUNTBLANK`).
+    #[must_use]
+    pub fn reference_cell_count(&self, r: &Reference) -> u64 {
+        match r {
+            Reference::Range {
+                start_row,
+                start_col,
+                end_row,
+                end_col,
+                ..
+            } => {
+                let rows = u64::from((*start_row).max(*end_row) - (*start_row).min(*end_row)) + 1;
+                let cols = u64::from((*start_col).max(*end_col) - (*start_col).min(*end_col)) + 1;
+                rows.saturating_mul(cols)
+            }
+            Reference::Union(parts) => parts.iter().map(|p| self.reference_cell_count(p)).sum(),
+            Reference::ThreeD {
+                sheets,
+                start_row,
+                start_col,
+                end_row,
+                end_col,
+            } => {
+                let one = self.reference_cell_count(&Reference::Range {
+                    sheet: sheets.first().copied().unwrap_or(self.cell.sheet),
+                    start_row: *start_row,
+                    start_col: *start_col,
+                    end_row: *end_row,
+                    end_col: *end_col,
+                });
+                one.saturating_mul(sheets.len() as u64)
+            }
+        }
+    }
+
+    /// Whether `row` is hidden on `sheet` (`SUBTOTAL` / `AGGREGATE`).
+    #[must_use]
+    pub fn is_row_hidden(&self, sheet: SheetId, row: u32) -> bool {
+        self.wb
+            .sheet(sheet)
+            .and_then(|s| s.geometry.rows.is_hidden(row).ok())
+            .unwrap_or(false)
+    }
+
+    /// Formula source at a cell, if the slot stores a formula.
+    #[must_use]
+    pub fn formula_source(&self, sheet: SheetId, row: u32, col: u16) -> Option<&str> {
+        let slot = self.wb.get(sheet, row, col).ok().flatten()?;
+        slot.formula
+            .and_then(|id| self.wb.intern().formulas.get(id))
+    }
+
+    /// Number-format id of a stored cell (`CELL("format")`).
+    #[must_use]
+    pub fn cell_num_fmt(&self, sheet: SheetId, row: u32, col: u16) -> crate::style::NumFmtId {
+        let Ok(Some(slot)) = self.wb.get(sheet, row, col) else {
+            return crate::style::NumFmtId::GENERAL;
+        };
+        self.wb
+            .intern()
+            .styles
+            .get(slot.style)
+            .map(|style| style.num_fmt)
+            .unwrap_or(crate::style::NumFmtId::GENERAL)
+    }
+
+    /// Sheet display name.
+    #[must_use]
+    pub fn sheet_name(&self, sheet: SheetId) -> Option<&str> {
+        self.wb.sheet(sheet).map(|s| s.name.as_str())
     }
 
     /// Materialize a reference into a scalar or array.

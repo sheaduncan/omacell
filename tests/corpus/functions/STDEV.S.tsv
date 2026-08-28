@@ -1,0 +1,11 @@
+# formula	expected	note
+=STDEV.S(1,2,3)	1	sample sd of 1,2,3
+=STDEV.S(5,5,5)	0	no variation
+=STDEV.S(1)	#DIV/0!	n=1
+=STDEV.S({1,2,3})	1	array
+=STDEV.S(1,#N/A)	#N/A	error
+=STDEV.S(TRUE,FALSE,2)	1	literals
+=STDEV.S(-1,1)	1.414213562	two values
+=STDEV.S(1,2,3,4,5)	1.58113883	1..5
+=STDEV.S({1,TRUE})	#DIV/0!	array skips logical n=1; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=STDEV.S(2,4)	1.414213562	two

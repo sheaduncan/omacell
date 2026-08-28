@@ -1,0 +1,11 @@
+# formula	expected	note
+=SINH(0)	0	sinh 0
+=ROUND(SINH(1)-((EXP(1)-EXP(-1))/2),10)	0	definition
+=SINH(-1)+SINH(1)	0	odd
+=SINH(TRUE)*0	0	TRUE
+=SINH("0")	0	numeric text
+=SINH("x")	#VALUE!	bad text
+=SINH(#N/A)	#N/A	error
+=SINH({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=SIGN(SINH(2))	1	positive
+=SINH(0)+1	1	plus one

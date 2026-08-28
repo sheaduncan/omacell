@@ -1,0 +1,12 @@
+# formula	expected	note
+=SUMIF({1;2;3},">1")	5	comparison prefix
+=SUMIF({1;2;3},2)	2	equals number
+=SUMIF({"a";"b";"c"},"a",{10;20;30})	10	text match
+=SUMIF({"ax";"ay";"b"},"a*",{1;2;3})	3	wildcard *
+=SUMIF({"a1";"b1"},"?1",{4;5})	9	wildcard ?
+=SUMIF({1;2;3},"<>2")	4	not equal
+=SUMIF({1;2;3},#N/A)	0	error criteria matches errors only; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUMIF({1;2;3},">0")	6	all
+=SUMIF({1;2;3},">10")	0	none
+=SUMIF({1;2;3},TRUE)	0	bool vs numbers; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUMIF({"~*";"a"},"~~*",{1;2})	1	escaped star

@@ -420,6 +420,7 @@ dependencies = [
 name = "omacell-fn"
 version = "0.0.0"
 dependencies = [
+ "criterion",
  "omacell-core",
  "schemars",
  "serde",

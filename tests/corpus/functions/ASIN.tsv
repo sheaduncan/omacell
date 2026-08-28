@@ -1,0 +1,11 @@
+# formula	expected	note
+=ASIN(0)	0	asin 0
+=ASIN(1)*2/PI()	1	asin 1 = pi/2
+=ASIN(-1)*2/PI()	-1	asin -1
+=ASIN(2)	#NUM!	out of domain
+=ASIN(-2)	#NUM!	out of domain
+=ASIN(TRUE)*2/PI()	1	TRUE is 1
+=ASIN("0")	0	numeric text
+=ASIN("x")	#VALUE!	bad text
+=ASIN(#N/A)	#N/A	error
+=ASIN({0,0})	0	array lift; spilled origin is top-left (format_cell)

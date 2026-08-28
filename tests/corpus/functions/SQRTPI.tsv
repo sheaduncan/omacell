@@ -1,0 +1,11 @@
+# formula	expected	note
+=SQRTPI(1)	1.772453851	sqrt(pi) General
+=SQRTPI(0)	0	zero
+=SQRTPI(-1)	#NUM!	negative
+=SQRTPI(TRUE)	1.772453851	TRUE is 1
+=SQRTPI("1")	1.772453851	numeric text
+=SQRTPI(#N/A)	#N/A	error
+=SQRTPI(4)/2	1.772453851	sqrt(4pi)/2 = sqrt(pi)
+=SQRTPI(FALSE)	0	FALSE
+=SQRTPI("x")	#VALUE!	bad text
+=IF(SQRTPI(1)>1,1,0)	1	positive

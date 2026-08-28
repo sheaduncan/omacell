@@ -7,7 +7,7 @@ use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeArray, Runt
 use omacell_core::graph::CellCoord;
 use omacell_core::spill::SpillTable;
 use omacell_core::workbook::Workbook;
-use omacell_fn::{PROBE_SPECS, register_probes};
+use omacell_fn::{all_specs, register_all};
 
 const MAX_VALUES: usize = 16;
 
@@ -50,21 +50,20 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let mut registry = FnRegistry::new();
-    register_probes(&mut registry);
+    register_all(&mut registry);
     let wb = Workbook::new();
     let spill = SpillTable::new();
     let cell = CellCoord::new(wb.active_sheet(), 0, 0);
     let mut ctx = EvalCtx::new(&wb, &registry, &spill, cell, 1);
-    for spec in PROBE_SPECS {
+    for spec in all_specs() {
         if matches!(spec.body, FnBody::Eager(_)) {
             if let Some(def) = registry.lookup(spec.name) {
                 if let FnBody::Eager(eval) = def.body {
                     let limit = usize::from(spec.max_args).min(MAX_VALUES);
-                    let count = if limit == 0 {
-                        0
-                    } else {
-                        data.first().copied().unwrap_or(0) as usize % (limit + 1)
-                    };
+                    let minimum = usize::from(spec.min_args).min(limit);
+                    let width = limit.saturating_sub(minimum).saturating_add(1);
+                    let count = minimum
+                        + (data.first().copied().unwrap_or(0) as usize % width);
                     let args: Vec<_> = (0..count)
                         .map(|index| arg_from_bytes(data, index + 1))
                         .collect();

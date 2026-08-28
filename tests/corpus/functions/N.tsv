@@ -1,0 +1,11 @@
+# formula	expected	note
+=N(5)	5	number
+=N(TRUE)	1	TRUE
+=N(FALSE)	0	FALSE
+=N("abc")	0	text is 0
+=N("5")	0	numeric text is still text → 0
+=N(#N/A)	#N/A	error propagates
+=N(0)	0	zero
+=N({1,2})	1	array lift; spilled origin is top-left (format_cell)
+=N(-3)	-3	negative
+=N(PI())*0	0	pi is number

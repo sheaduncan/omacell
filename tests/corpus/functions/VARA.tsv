@@ -1,0 +1,11 @@
+# formula	expected	note
+=VARA(1,2,3)	1	sample
+=VARA({1,TRUE,3})	1.333333333	TRUE is 1
+=VARA(5,5)	0	no var
+=VARA(1)	#DIV/0!	n=1
+=VARA(1,#N/A)	#N/A	error
+=VARA(TRUE,FALSE)	0.5	1 and 0
+=VARA(-1,1)	2	signed
+=VARA(2,4)	2	two
+=VARA(0,0,0)	0	zeros
+=VARA({1,2,3})	1	array

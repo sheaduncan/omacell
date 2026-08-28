@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISODD(3)	TRUE	odd
+=ISODD(2)	FALSE	even
+=ISODD(3.9)	TRUE	truncates toward zero
+=ISODD(-3)	TRUE	negative odd
+=ISODD(-2)	FALSE	negative even
+=ISODD(0)	FALSE	zero
+=ISODD(TRUE)	TRUE	TRUE is 1
+=ISODD("3")	TRUE	numeric text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISODD("x")	#VALUE!	bad text
+=ISODD(#N/A)	#N/A	error

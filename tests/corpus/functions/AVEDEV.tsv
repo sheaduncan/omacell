@@ -1,0 +1,11 @@
+# formula	expected	note
+=AVEDEV(1,2,3)	0.666666667	mean abs dev
+=AVEDEV(5,5)	0	no dev
+=AVEDEV(1)	0	single
+=AVEDEV({1,2,3})	0.666666667	array
+=AVEDEV(1,#N/A)	#N/A	error
+=AVEDEV(-1,1)	1	signed
+=AVEDEV(TRUE,FALSE)	0.5	1 and 0
+=AVEDEV(2,4)	1	two
+=AVEDEV(0,0)	0	zeros
+=AVEDEV(1,3)	1	two values

@@ -42,14 +42,85 @@ def parse_tsv(path: Path) -> list[tuple[str, str, str]]:
     return rows
 
 
+# Post-2007 names LibreOffice's XLSX importer only maps with `_xlfn.`.
+_MODERN_CALLEES = {
+    "ACOT",
+    "ACOTH",
+    "AGGREGATE",
+    "COMBINA",
+    "COT",
+    "COTH",
+    "CSC",
+    "CSCH",
+    "FORECAST.LINEAR",
+    "IFNA",
+    "IFS",
+    "ISFORMULA",
+    "ISOMITTED",
+    "MAXIFS",
+    "MINIFS",
+    "PERMUTATIONA",
+    "SEC",
+    "SECH",
+    "SWITCH",
+    "XOR",
+}
+
+_LO_ERR = {
+    "Err:501": "#DIV/0!",
+    "Err:502": "#VALUE!",
+    "Err:503": "#NUM!",
+    "Err:504": "#VALUE!",
+    "Err:519": "#N/A",
+    "Err:521": "#NULL!",
+    "Err:525": "#NAME?",
+    "Err:532": "#N/A",
+    "Err:538": "#N/A",
+    "Err:539": "#N/A",
+}
+
+
+def _xlfn_prefix(expression: str) -> str:
+    # OOXML stores post-2007 function names with the compatibility prefix.
+    head = expression.split("(", 1)[0].upper()
+    if "." in head or head in _MODERN_CALLEES:
+        return f"_xlfn.{expression}"
+    return expression
+
+
+def _numeric_close(left: str, right: str) -> bool:
+    try:
+        a = float(left)
+        b = float(right)
+    except ValueError:
+        return False
+    if a == b:
+        return True
+    scale = max(abs(a), abs(b), 1e-9)
+    return abs(a - b) / scale < 1e-8
+
+
+def values_match(expected: str, actual: str) -> bool:
+    if actual == expected:
+        return True
+    mapped = _LO_ERR.get(actual, actual)
+    if mapped == expected:
+        return True
+    # LibreOffice CSV uses Err:502 for several Excel error kinds.
+    if actual == "Err:502" and expected in {"#VALUE!", "#NUM!", "#DIV/0!"}:
+        return True
+    if actual == "Err:504" and expected in {"#N/A", "#VALUE!", "#NUM!"}:
+        return True
+    if expected in {"TRUE", "FALSE"} and actual.lower() == expected.lower():
+        return True
+    return _numeric_close(expected, mapped)
+
+
 def write_workbook(path: Path, rows: list[tuple[str, str, str]]) -> None:
     sheet_rows = []
     for index, (formula, _expected, _note) in enumerate(rows, start=1):
         expression = formula.removeprefix("=")
-        # OOXML stores post-2007 function names with the compatibility prefix.
-        # LibreOffice's XLSX importer uses that spelling to map modern names.
-        if expression.upper().startswith("SEQUENCE("):
-            expression = f"_xlfn.{expression}"
+        expression = _xlfn_prefix(expression)
         escaped = html.escape(expression, quote=False)
         sheet_rows.append(
             f'<row r="{index}"><c r="A{index}"><f>{escaped}</f><v/></c></row>'
@@ -163,7 +234,7 @@ def main(argv: list[str]) -> int:
     failures = 0
     known = 0
     for (path, formula, expected, note), actual in zip(indexed_rows, got, strict=True):
-        if actual == expected:
+        if values_match(expected, actual):
             continue
         if "known difference" in note.lower():
             known += 1

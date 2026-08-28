@@ -1,0 +1,11 @@
+# formula	expected	note
+=ACOT(0)*2/PI()	1	acot 0 = pi/2
+=ACOT(1)*4/PI()	1	acot 1 = pi/4
+=IF(ACOT(-1)>PI()/2,1,0)	1	Excel ACOT negative is in (pi/2, pi); known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ACOT(TRUE)*4/PI()	1	TRUE is 1
+=ACOT("0")*2/PI()	1	numeric text
+=ACOT("x")	#VALUE!	bad text
+=ACOT(#N/A)	#N/A	error
+=SIGN(ACOT(2))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ACOT(0)*0	0	times zero
+=ACOT({0,0})*0	0	array lift; spilled origin is top-left (format_cell)

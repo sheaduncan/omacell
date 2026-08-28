@@ -1,0 +1,11 @@
+# formula	expected	note
+=RANK.AVG(2,{1,2,3})	2	unique
+=RANK.AVG(1,{1,1,3})	2.5	tie average of 2 and 3
+=RANK.AVG(3,{1,2,3})	1	largest
+=RANK.AVG(2,{1,2,3},1)	2	asc
+=RANK.AVG(5,{1,2,3})	#N/A	not found
+=RANK.AVG(#N/A,{1,2})	#N/A	error
+=RANK.AVG(1,{1})	1	single
+=RANK.AVG(0,{0,0,1})	2.5	two zeros desc ranks 2,3 avg 2.5
+=RANK.AVG(10,{10,20},1)	1	asc
+=RANK.AVG(4,{4,4,4})	2	all tie avg 1+2+3 /3 =2

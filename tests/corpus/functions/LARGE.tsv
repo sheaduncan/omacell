@@ -1,0 +1,11 @@
+# formula	expected	note
+=LARGE({3,1,4},1)	4	largest
+=LARGE({3,1,4},2)	3	2nd
+=LARGE({3,1,4},3)	1	3rd
+=LARGE({3,1,4},0)	#NUM!	k=0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=LARGE({3,1,4},4)	#NUM!	k too big; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=LARGE({1},1)	1	single
+=LARGE({1,#N/A},1)	#N/A	error
+=LARGE({5,5},1)	5	ties
+=LARGE({-1,2},1)	2	signed
+=LARGE({10,20,30},2)	20	middle

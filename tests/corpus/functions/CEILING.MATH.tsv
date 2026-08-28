@@ -1,0 +1,11 @@
+# formula	expected	note
+=CEILING.MATH(2.5)	3	toward +inf
+=CEILING.MATH(-2.5)	-2	toward +inf for negative
+=CEILING.MATH(-2.5,1,1)	-3	mode 1 away from zero
+=CEILING.MATH(2.5,2)	4	multiple of 2
+=CEILING.MATH(0)	0	zero
+=CEILING.MATH(4,0)	#DIV/0!	significance 0; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CEILING.MATH(TRUE)	1	TRUE
+=CEILING.MATH("2.2")	3	numeric text
+=CEILING.MATH(#N/A)	#N/A	error
+=CEILING.MATH(-5.5,2)	-4	negative multiple

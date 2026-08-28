@@ -1,0 +1,11 @@
+# formula	expected	note
+=SKEW(1,2,3,4,5)	0	symmetric
+=SKEW(1,1,1,2)	2	right skew-ish
+=SKEW(1,2)	#DIV/0!	n<3
+=SKEW({1,2,3,4,5})	0	array
+=SKEW(1,#N/A,2,3)	#N/A	error
+=SKEW(5,5,5,5)	#DIV/0!	zero sd
+=SKEW(-2,-1,0,1,10)	1.941863741	right tail
+=SKEW(1,2,3)	0	three symmetric
+=SKEW(TRUE,2,3,4)	0	TRUE is 1
+=SKEW(0,0,0,1)	2	mostly zeros

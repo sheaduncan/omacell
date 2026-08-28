@@ -1,0 +1,11 @@
+# formula	expected	note
+=INT(8.9)	8	positive floor
+=INT(-8.9)	-9	Excel INT toward -inf
+=INT(0)	0	zero
+=INT(-0.1)	-1	negative fraction
+=INT(TRUE)	1	TRUE
+=INT(FALSE)	0	FALSE
+=INT("3.2")	3	numeric text
+=INT("x")	#VALUE!	bad text
+=INT(#NUM!)	#NUM!	error
+=INT({1.9,-1.1})	1	array lift; spilled origin is top-left (format_cell)

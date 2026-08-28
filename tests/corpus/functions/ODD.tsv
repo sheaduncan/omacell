@@ -1,0 +1,11 @@
+# formula	expected	note
+=ODD(1.5)	3	away from zero to odd
+=ODD(2)	3	even up
+=ODD(1)	1	already odd
+=ODD(-1.5)	-3	negative away from zero
+=ODD(0)	1	Excel ODD(0)=1
+=ODD(-2)	-3	even negative
+=ODD(-1)	-1	already odd negative
+=ODD(TRUE)	1	TRUE is 1
+=ODD("4")	5	numeric text
+=ODD(#N/A)	#N/A	error

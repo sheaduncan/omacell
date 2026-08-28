@@ -1,0 +1,11 @@
+# formula	expected	note
+=TRUE()	TRUE	function form
+=TRUE()+0	1	coerces to 1
+=IF(TRUE(),1,0)	1	in IF
+=AND(TRUE(),TRUE)	TRUE	with AND
+=NOT(TRUE())	FALSE	not
+=TRUE()*2	2	arithmetic
+=OR(TRUE(),FALSE)	TRUE	or
+=N(TRUE())	1	N
+=TYPE(TRUE())	4	TYPE logical; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISLOGICAL(TRUE())	TRUE	islogical

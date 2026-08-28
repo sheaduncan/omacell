@@ -1,0 +1,11 @@
+# formula	expected	note
+=AND(TRUE,TRUE)	TRUE	both true
+=AND(TRUE,FALSE)	FALSE	one false
+=AND(FALSE,1/0)	#DIV/0!	does not short-circuit
+=AND(1,2)	TRUE	nonzero numbers
+=AND(1,0)	FALSE	zero is false
+=AND(TRUE)	TRUE	single
+=AND(TRUE,"x")	#VALUE!	bad text
+=AND(#N/A,TRUE)	#N/A	error
+=AND({TRUE,TRUE})	TRUE	array
+=AND(TRUE,TRUE,TRUE)	TRUE	three

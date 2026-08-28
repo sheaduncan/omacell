@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISNONTEXT(1)	TRUE	number
+=ISNONTEXT("a")	FALSE	text
+=ISNONTEXT(TRUE)	TRUE	bool
+=ISNONTEXT(#N/A)	TRUE	error is nontext
+=ISNONTEXT("")	FALSE	empty string is text
+=ISNONTEXT(0)	TRUE	zero
+=ISNONTEXT(FALSE)	TRUE	false
+=ISNONTEXT("1")	FALSE	numeric text
+=ISNONTEXT(NA())	TRUE	NA
+=ISNONTEXT(PI())	TRUE	pi

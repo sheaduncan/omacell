@@ -1,0 +1,11 @@
+# formula	expected	note
+=MAXA(1,2,3)	3	max
+=MAXA({TRUE,0})	1	TRUE is 1
+=MAXA({FALSE,2})	2	FALSE is 0
+=MAXA({-1,"x"})	0	text is 0
+=MAXA(1,#N/A)	#N/A	error
+=MAXA(5)	5	single
+=MAXA(-1,5)	5	positive
+=MAXA(TRUE,FALSE)	1	literals
+=MAXA({2,3})	3	array
+=MAXA(0,-1)	0	zero

@@ -1,0 +1,11 @@
+# formula	expected	note
+=ATAN2(1,0)	0	positive x-axis
+=ATAN2(0,1)*2/PI()	1	positive y-axis
+=ATAN2(-1,0)/PI()	1	negative x-axis
+=ATAN2(0,0)	#DIV/0!	Excel ATAN2(0,0) is #DIV/0!; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ATAN2(1,1)*4/PI()	1	pi/4
+=ATAN2(TRUE,0)	0	TRUE is 1
+=ATAN2("1",0)	0	numeric text
+=ATAN2("x",1)	#VALUE!	bad text
+=ATAN2(#N/A,1)	#N/A	error
+=ATAN2(1,#N/A)	#N/A	error y

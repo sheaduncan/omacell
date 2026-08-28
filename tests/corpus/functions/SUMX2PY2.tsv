@@ -1,0 +1,11 @@
+# formula	expected	note
+=SUMX2PY2({1,2},{3,4})	30	1+9 + 4+16
+=SUMX2PY2({1},{1})	2	1+1
+=SUMX2PY2({2},{0})	4	y zero
+=SUMX2PY2({1,2},{1})	#N/A	length mismatch; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUMX2PY2({1,#N/A},{1,1})	#N/A	error
+=SUMX2PY2({-2},{1})	5	negative x
+=SUMX2PY2({0,0},{0,0})	0	zeros
+=SUMX2PY2({3,4},{0,0})	25	sum of squares of x
+=SUMX2PY2({1;2},{0;0})	5	columns
+=SUMX2PY2({TRUE},{1})	0	logical skipped; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

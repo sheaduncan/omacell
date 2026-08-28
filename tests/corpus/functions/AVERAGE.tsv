@@ -1,0 +1,11 @@
+# formula	expected	note
+=AVERAGE(1,2,3)	2	mean
+=AVERAGE(1,TRUE)	1	TRUE as 1 literal
+=AVERAGE({1,2,TRUE})	1.5	array skips logical; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=AVERAGE(1,#N/A)	#N/A	error
+=AVERAGE(-1,1)	0	signed
+=AVERAGE(5)	5	single
+=AVERAGE(1,2,)	1.5	omitted skipped; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=AVERAGE("2",4)	3	numeric text literal; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=AVERAGE({1,"x"})	1	array skips text
+=AVERAGE(0,0,0)	0	zeros

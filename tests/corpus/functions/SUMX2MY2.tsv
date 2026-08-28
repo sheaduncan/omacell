@@ -1,0 +1,11 @@
+# formula	expected	note
+=SUMX2MY2({1,2},{3,4})	-20	1-9 + 4-16
+=SUMX2MY2({1},{1})	0	equal
+=SUMX2MY2({2},{0})	4	y zero
+=SUMX2MY2({1,2},{1})	#N/A	length mismatch; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUMX2MY2({1,#N/A},{1,1})	#N/A	error
+=SUMX2MY2({-2},{1})	3	negative x
+=SUMX2MY2({0,0},{0,0})	0	zeros
+=SUMX2MY2({3,4},{0,0})	25	sum of squares of x
+=SUMX2MY2({1;2},{0;0})	5	columns
+=SUMX2MY2({TRUE},{1})	0	logical skipped in pair

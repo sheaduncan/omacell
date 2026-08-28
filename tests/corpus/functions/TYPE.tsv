@@ -1,0 +1,11 @@
+# formula	expected	note
+=TYPE(1)	1	number
+=TYPE("a")	2	text
+=TYPE(TRUE)	4	logical; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=TYPE(#N/A)	16	error
+=TYPE({1,2})	64	array
+=TYPE(0)	1	zero is number
+=TYPE(FALSE)	4	false; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=TYPE(#DIV/0!)	16	div0
+=TYPE(N("x"))	1	N returns number 0
+=TYPE("")	2	empty string is text

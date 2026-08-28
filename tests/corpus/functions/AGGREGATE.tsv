@@ -1,0 +1,13 @@
+# formula	expected	note
+=AGGREGATE(9,4,{1,2,3})	6	SUM ignore nothing
+=AGGREGATE(1,4,{1,2,3})	2	AVERAGE
+=AGGREGATE(4,4,{1,5,2})	5	MAX
+=AGGREGATE(5,4,{1,5,2})	1	MIN
+=AGGREGATE(6,4,{2,3})	6	PRODUCT
+=AGGREGATE(12,4,{1,2,3,4})	2.5	MEDIAN
+=AGGREGATE(14,4,{3,1,4},2)	3	LARGE k=2
+=AGGREGATE(15,4,{3,1,4},1)	1	SMALL k=1
+=AGGREGATE(9,6,{1,#N/A,2})	3	ignore errors; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=AGGREGATE(0,4,{1})	#VALUE!	bad function_num
+=AGGREGATE(3,6,{1,"x",#N/A})	2	COUNTA ignoring errors; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=AGGREGATE(14,4,{1,2},#N/A)	#N/A	k error propagates

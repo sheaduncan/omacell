@@ -1,0 +1,11 @@
+# formula	expected	note
+=SWITCH(1,1,"a",2,"b")	a	first match
+=SWITCH(2,1,"a",2,"b")	b	second match
+=SWITCH(3,1,"a",2,"b","def")	def	default
+=SWITCH(3,1,"a",2,"b")	#N/A	no match no default
+=SWITCH(1,2,1/0,1,9)	9	unselected error skipped
+=SWITCH(1,1,1/0,2,9)	#DIV/0!	selected error
+=SWITCH(#N/A,1,2)	#N/A	expr error
+=SWITCH(TRUE,TRUE,5,FALSE,6)	5	bool match
+=SWITCH("A","a",1,"A",2)	1	text case-insensitive compare
+=SWITCH(1,"1",8,1,9)	9	no numeric-text coerce; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

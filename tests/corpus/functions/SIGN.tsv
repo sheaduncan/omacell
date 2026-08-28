@@ -1,0 +1,11 @@
+# formula	expected	note
+=SIGN(5)	1	positive
+=SIGN(-5)	-1	negative
+=SIGN(0)	0	zero
+=SIGN(-0.1)	-1	negative fraction
+=SIGN(TRUE)	1	TRUE is 1
+=SIGN(FALSE)	0	FALSE is 0
+=SIGN("3")	1	numeric text
+=SIGN("x")	#VALUE!	bad text
+=SIGN(#N/A)	#N/A	error
+=SIGN({-2,0,2})	-1	array lift; spilled origin is top-left (format_cell)

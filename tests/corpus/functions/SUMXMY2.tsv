@@ -1,0 +1,11 @@
+# formula	expected	note
+=SUMXMY2({1,2},{3,4})	8	(1-3)^2+(2-4)^2
+=SUMXMY2({1},{1})	0	equal
+=SUMXMY2({2},{0})	4	y zero
+=SUMXMY2({1,2},{1})	#N/A	length mismatch; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUMXMY2({1,#N/A},{1,1})	#N/A	error
+=SUMXMY2({-2},{1})	9	negative x
+=SUMXMY2({0,0},{0,0})	0	zeros
+=SUMXMY2({3,4},{3,4})	0	identical
+=SUMXMY2({1;2},{0;0})	5	columns
+=SUMXMY2({TRUE},{1})	0	logical skipped

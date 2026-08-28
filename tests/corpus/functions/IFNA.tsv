@@ -1,0 +1,11 @@
+# formula	expected	note
+=IFNA(1,2)	1	non-NA
+=IFNA(#N/A,9)	9	NA fallback
+=IFNA(1/0,9)	#DIV/0!	other errors pass through
+=IFNA(#VALUE!,9)	#VALUE!	value passes
+=IFNA(TRUE,0)	TRUE	bool
+=IFNA("a",0)	a	text
+=IFNA(1,1/0)	1	fallback not evaluated
+=IFNA(#N/A,1/0)	#DIV/0!	fallback error
+=IFNA(0,5)	0	zero
+=IFNA(NA(),8)	8	NA()

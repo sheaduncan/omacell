@@ -1,0 +1,11 @@
+# formula	expected	note
+=TAN(0)	0	tan 0
+=ROUND(TAN(PI()/4),10)	1	tan pi/4
+=TAN(-0)	0	neg zero
+=TAN(TRUE)*0	0	TRUE
+=TAN("0")	0	numeric text
+=TAN("x")	#VALUE!	bad text
+=TAN(#N/A)	#N/A	error
+=TAN({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=TAN(0)+TAN(0)	0	sum
+=IF(ABS(TAN(0))<1,1,0)	1	near zero

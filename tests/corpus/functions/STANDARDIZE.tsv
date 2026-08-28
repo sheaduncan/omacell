@@ -1,0 +1,11 @@
+# formula	expected	note
+=STANDARDIZE(2,0,1)	2	z-score
+=STANDARDIZE(5,5,2)	0	at mean
+=STANDARDIZE(1,0,0)	#DIV/0!	sd 0
+=STANDARDIZE(TRUE,0,1)	1	TRUE
+=STANDARDIZE("2",0,1)	2	numeric text
+=STANDARDIZE(#N/A,0,1)	#N/A	error
+=STANDARDIZE(-1,0,1)	-1	negative
+=STANDARDIZE(10,8,2)	1	one sd
+=STANDARDIZE(0,0,2)	0	zero
+=STANDARDIZE({2,0},{0,0},{1,1})	2	array lift; spilled origin is top-left (format_cell)

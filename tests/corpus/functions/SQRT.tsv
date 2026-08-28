@@ -1,0 +1,11 @@
+# formula	expected	note
+=SQRT(4)	2	perfect square
+=SQRT(0)	0	zero
+=SQRT(-1)	#NUM!	negative is #NUM!
+=SQRT(TRUE)	1	TRUE
+=SQRT(FALSE)	0	FALSE
+=SQRT("9")	3	numeric text
+=SQRT("x")	#VALUE!	bad text
+=SQRT(#N/A)	#N/A	error
+=SQRT(1)	1	one
+=SQRT({4,9})	2	array lift; spilled origin is top-left (format_cell)

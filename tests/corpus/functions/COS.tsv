@@ -1,0 +1,11 @@
+# formula	expected	note
+=COS(0)	1	cos 0
+=ROUND(COS(PI()),10)	-1	cos pi
+=ROUND(COS(PI()/2),10)	0	cos pi/2 ~ 0
+=COS(TRUE)*0+1	1	finite
+=COS("0")	1	numeric text
+=COS("x")	#VALUE!	bad text
+=COS(#N/A)	#N/A	error
+=COS({0,0})	1	array lift; spilled origin is top-left (format_cell)
+=COS(-PI())-COS(PI())	0	even function
+=SIGN(COS(0))	1	positive

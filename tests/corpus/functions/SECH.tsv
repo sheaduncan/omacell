@@ -1,0 +1,11 @@
+# formula	expected	note
+=SECH(0)	1	sech 0
+=SECH(-1)-SECH(1)	0	even; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=IF(SECH(1)<1,1,0)	1	less than 1; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SECH(TRUE)*0+1	1	TRUE
+=SECH("0")	1	numeric text
+=SECH("x")	#VALUE!	bad text
+=SECH(#N/A)	#N/A	error
+=SECH({0,0})	1	array lift; spilled origin is top-left (format_cell)
+=1/COSH(0)-SECH(0)	0	identity; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SIGN(SECH(0))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

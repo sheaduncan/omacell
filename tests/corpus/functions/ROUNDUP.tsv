@@ -1,0 +1,11 @@
+# formula	expected	note
+=ROUNDUP(1.1,0)	2	away from zero
+=ROUNDUP(-1.1,0)	-2	negative away from zero
+=ROUNDUP(1.234,2)	1.24	two decimals
+=ROUNDUP(1.230,2)	1.23	already exact
+=ROUNDUP(121,-1)	130	negative digits
+=ROUNDUP(0,0)	0	zero
+=ROUNDUP(TRUE,0)	1	TRUE
+=ROUNDUP("1.1",0)	2	numeric text
+=ROUNDUP(#N/A,0)	#N/A	error
+=ROUNDUP(2,0)	2	integer unchanged

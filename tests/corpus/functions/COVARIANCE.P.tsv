@@ -1,0 +1,11 @@
+# formula	expected	note
+=COVARIANCE.P({1,2,3},{1,2,3})	0.666666667	pop cov
+=COVARIANCE.P({1,2,3},{3,2,1})	-0.666666667	negative
+=COVARIANCE.P({1,2},{1})	#N/A	mismatch; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COVARIANCE.P({1,#N/A},{1,2})	#N/A	error
+=COVARIANCE.P({1,1},{1,2})	0	zero x var
+=COVARIANCE.P({1,2},{2,4})	0.5	scaled
+=COVARIANCE.P({0,1},{0,1})	0.25	two
+=COVARIANCE.P({-1,1},{-1,1})	1	signed
+=COVARIANCE.P({1,2,3},{1,2,3})*2	1.333333333	times 2
+=COVARIANCE.P({5,5},{1,2})	0	const x

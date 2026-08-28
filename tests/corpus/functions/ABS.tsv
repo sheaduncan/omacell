@@ -2,3 +2,11 @@
 =ABS(-3)	3	Excel ABS of negative
 =ABS(0)	0	zero
 =ABS(2.5)	2.5	positive unchanged
+=ABS(-2.5)	2.5	negative fraction
+=ABS(TRUE)	1	TRUE coerces to 1
+=ABS(FALSE)	0	FALSE coerces to 0
+=ABS("2")	2	numeric text coerces
+=ABS("x")	#VALUE!	non-numeric text is #VALUE!
+=ABS(#DIV/0!)	#DIV/0!	error propagates
+=ABS(-1.005)*0	0	finite result times zero
+=ABS({-1,2})	1	array lifting element-wise; spilled origin is top-left (format_cell)

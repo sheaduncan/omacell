@@ -1,0 +1,11 @@
+# formula	expected	note
+=MOD(3,2)	1	positive
+=MOD(-3,2)	1	Excel MOD sign follows divisor
+=MOD(3,-2)	-1	negative divisor
+=MOD(-3,-2)	-1	both negative
+=MOD(6,3)	0	exact
+=MOD(3,0)	#DIV/0!	divisor 0
+=MOD(TRUE,2)	1	TRUE is 1
+=MOD("5",2)	1	numeric text
+=MOD(#N/A,2)	#N/A	error
+=MOD(8.5,2)	0.5	fraction

@@ -1,0 +1,11 @@
+# formula	expected	note
+=FACTDOUBLE(5)	15	5!! = 5*3*1
+=FACTDOUBLE(6)	48	6!! = 6*4*2
+=FACTDOUBLE(0)	1	0!!
+=FACTDOUBLE(1)	1	1!!
+=FACTDOUBLE(-1)	#NUM!	negative
+=FACTDOUBLE(TRUE)	1	TRUE
+=FACTDOUBLE("5")	15	numeric text
+=FACTDOUBLE(#N/A)	#N/A	error
+=FACTDOUBLE(4)	8	4!!
+=FACTDOUBLE(2)	2	2!!

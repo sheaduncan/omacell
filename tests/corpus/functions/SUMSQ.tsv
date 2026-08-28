@@ -1,0 +1,11 @@
+# formula	expected	note
+=SUMSQ(3,4)	25	3^2+4^2
+=SUMSQ(-3)	9	square of negative
+=SUMSQ(0)	0	zero
+=SUMSQ(1,TRUE)	2	TRUE^2 as literal
+=SUMSQ({1,2})	5	array numbers
+=SUMSQ({1,TRUE})	1	array skips logical; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=SUMSQ(1,#N/A)	#N/A	error propagates
+=SUMSQ(2,2,2)	12	three terms
+=SUMSQ(-1,-1)	2	two negatives
+=SUMSQ(10)	100	single

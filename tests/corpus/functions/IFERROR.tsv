@@ -1,0 +1,11 @@
+# formula	expected	note
+=IFERROR(1,2)	1	non-error
+=IFERROR(1/0,9)	9	div0 fallback
+=IFERROR(#N/A,3)	3	NA fallback
+=IFERROR(#VALUE!,4)	4	value fallback
+=IFERROR(TRUE,0)	TRUE	bool passthrough
+=IFERROR("a",0)	a	text passthrough
+=IFERROR(1,1/0)	1	fallback not evaluated
+=IFERROR(#N/A,1/0)	#DIV/0!	fallback error
+=IFERROR(0,5)	0	zero
+=IFERROR(#NUM!,7)	7	num fallback

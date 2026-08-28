@@ -1,0 +1,11 @@
+# formula	expected	note
+=RANK.EQ(2,{1,2,3})	2	desc default
+=RANK.EQ(3,{1,2,3})	1	largest rank 1
+=RANK.EQ(1,{1,2,3})	3	smallest
+=RANK.EQ(2,{1,2,3},1)	2	asc
+=RANK.EQ(1,{1,1,3})	2	ties share 2
+=RANK.EQ(5,{1,2,3})	#N/A	not found
+=RANK.EQ(#N/A,{1,2})	#N/A	error
+=RANK.EQ(1,{1})	1	single
+=RANK.EQ(0,{0,1},0)	2	zero desc
+=RANK.EQ(10,{10,20,30},1)	1	asc smallest

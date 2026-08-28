@@ -1,0 +1,11 @@
+# formula	expected	note
+=COUNTA(1,2,3)	3	three
+=COUNTA(1,"a")	2	text counts
+=COUNTA(TRUE)	1	bool
+=COUNTA(#N/A)	1	error counts
+=COUNTA({1,"x"})	2	array
+=COUNTA(1,)	1	omitted skipped; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTA("")	1	empty string counts
+=COUNTA(0)	1	zero
+=COUNTA(FALSE,TRUE)	2	bools
+=COUNTA({1,2,#N/A})	3	error in array; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

@@ -1,0 +1,11 @@
+# formula	expected	note
+=QUARTILE.EXC({1,2,3,4,5,6},1)	1.75	Q1 exclusive-ish
+=QUARTILE.EXC({1,2,3,4,5,6},2)	3.5	median
+=QUARTILE.EXC({1,2,3,4,5,6},3)	5.25	Q3
+=QUARTILE.EXC({1,2,3,4},0)	#NUM!	quart 0 invalid
+=QUARTILE.EXC({1,2,3,4},4)	#NUM!	quart 4 invalid
+=QUARTILE.EXC({1},2)	#NUM!	n=1; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=QUARTILE.EXC({1,#N/A,2,3,4,5},2)	#N/A	error
+=QUARTILE.EXC({5,5,5,5,5,5},2)	5	constant
+=QUARTILE.EXC({1,2,3,4,5,6},2)*2	7	median*2
+=ISNUMBER(QUARTILE.EXC({1,2,3,4,5,6},1))	TRUE	finite; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

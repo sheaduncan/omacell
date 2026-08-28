@@ -1,0 +1,12 @@
+# formula	expected	note
+=COUNTIF({1;2;3},">1")	2	comparison
+=COUNTIF({1;2;3},2)	1	equals
+=COUNTIF({"a";"b";"a"},"a")	2	text
+=COUNTIF({"ax";"ay";"b"},"a*")	2	wildcard *
+=COUNTIF({"a1";"b1"},"?1")	2	wildcard ?
+=COUNTIF({1;2;3},"<>2")	2	not equal
+=COUNTIF({1;2;3},">10")	0	none
+=COUNTIF({1;2;3},">0")	3	all
+=COUNTIF({"A";"a"},"a")	2	case-insensitive
+=COUNTIF({1;2;TRUE},TRUE)	1	bool; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=COUNTIF({"é"},"?")	1	question mark matches one Unicode scalar

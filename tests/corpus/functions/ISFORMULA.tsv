@@ -1,0 +1,11 @@
+# formula	expected	note
+=ISFORMULA(1)	#VALUE!	literal is not a reference; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISFORMULA("A1")	#VALUE!	text is not a reference; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISFORMULA(TRUE)	#VALUE!	bool; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISFORMULA(#N/A)	#VALUE!	error; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISFORMULA({1,2})	#VALUE!	array; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISFORMULA(PI())	#VALUE!	pi; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISFORMULA(NA())	#VALUE!	NA; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISFORMULA(FALSE)	#VALUE!	false; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ISFORMULA("x")	#VALUE!	text x; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=IFERROR(ISFORMULA(1),9)	9	error path
