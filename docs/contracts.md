@@ -80,6 +80,10 @@ Records are `Eq` + `Hash` (`f64` fields compare by `to_bits`) so WP-02 can inter
 
 No commands are registered here. WP-07a creates the first versioned command catalog and `docs/schemas/commands.schema.json`; those schemas freeze when WP-07a merges, not retroactively at G0.
 
+## Command catalog — `docs/schemas/commands.schema.json` (WP-07a)
+
+Envelope `{schema: 1, commands[]}` from `omacell_bus::commands_json`. Command ids and public argument schemas freeze when WP-07a merges. Internal restore handlers (`cell.restore`, `style.restore`, `sheet.remove`) are excluded from the catalog. Frozen WP-01 `CommandDescriptor` is unchanged.
+
 ## Changesets — `omacell_core::changeset`
 
 | Type | Source |

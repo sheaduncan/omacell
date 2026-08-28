@@ -13,6 +13,7 @@ use crate::sheet::{Sheet, SheetVisibility};
 use crate::storage::CellSlot;
 use crate::style::Color;
 use crate::tables::Table;
+use crate::workbook::CalcMode;
 
 /// Default undo memory budget (64 MiB of estimated delta size).
 pub const DEFAULT_BUDGET: usize = 64 * 1024 * 1024;
@@ -206,6 +207,13 @@ pub enum Delta {
         /// Cells removed by a delete, at their original coordinates.
         removed: Vec<(u32, u16, CellSlot)>,
     },
+    /// Calculation mode (WP-07a `calc.mode`).
+    CalcMode {
+        /// Mode before the command.
+        before: CalcMode,
+        /// Mode after the command.
+        after: CalcMode,
+    },
 }
 
 impl Delta {
@@ -229,6 +237,7 @@ impl Delta {
             Self::ShiftRows { removed, .. } | Self::ShiftCols { removed, .. } => {
                 24 + removed.len() * std::mem::size_of::<(u32, u16, CellSlot)>()
             }
+            Self::CalcMode { .. } => 2,
         }
     }
 
@@ -262,6 +271,7 @@ impl Delta {
             Self::ShiftRows { sheet, .. } | Self::ShiftCols { sheet, .. } => {
                 AffectedRange::sheet(*sheet)
             }
+            Self::CalcMode { .. } => AffectedRange::sheet(SheetId::new(0)),
         }
     }
 }
@@ -401,6 +411,22 @@ impl UndoLog {
             true
         } else {
             false
+        }
+    }
+
+    /// Drop the current nesting level without committing.
+    ///
+    /// When the outer transaction is aborted, recorded deltas are returned so
+    /// the caller can roll the model back. Nested aborts only decrement depth.
+    pub fn abort(&mut self) -> Option<Transaction> {
+        if self.depth == 0 {
+            return None;
+        }
+        self.depth -= 1;
+        if self.depth == 0 {
+            self.open.take()
+        } else {
+            None
         }
     }
 
