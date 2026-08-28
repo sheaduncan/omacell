@@ -1,0 +1,14 @@
+# formula	expected	note
+# Unicode scalar values (not Excel UTF-16 code units).
+=LEN("abc")	3	Excel LEN counts characters
+=LEN("")	0	empty string is 0
+=LEN(TRUE)	4	TRUE coerces to the text TRUE; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=LEN(123)	3	number via General
+=LEN(#N/A)	#N/A	error propagation
+=LEN({"aa","bbb"})	{2,3}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=LEN("é")	1	U+00E9 is one scalar
+=LEN("😀")	1	known difference: Excel Windows UTF-16 LEN of U+1F600 is 2; Omacell counts Unicode scalar values
+=LEN("a"&CHAR(10)&"b")	3	LF is one character
+=LEN(A2)	0	empty cell is empty text; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=LEN("  a  ")	5	spaces count
+=LEN(#VALUE!)	#VALUE!	error kind preserved

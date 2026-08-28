@@ -1,0 +1,14 @@
+# formula	expected	note
+# Negative instance_num searches from the end.
+=TEXTAFTER("one-two-three", "-")	two-three	first delimiter
+=TEXTAFTER("one-two-three", "-", 2)	three	second instance
+=TEXTAFTER("one-two-three", "-", -1)	three	from end
+=TEXTAFTER("abc", "x")	#N/A	not found
+=TEXTAFTER("abc", "x", 1, 0, 0, "miss")	miss	if_not_found
+=TEXTAFTER("ABC", "b", 1, 1)	C	match_mode 1
+=TEXTAFTER("abc", "")	abc	empty delimiter after start; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTAFTER(#N/A, "-")	#N/A	error
+=TEXTAFTER("é-😀", "-")	😀	Unicode
+=TEXTAFTER("a-b-c", "-", 9)	#N/A	instance past count
+=TEXTAFTER("one two", " ")	two	space
+=TEXTAFTER("abc", "abc")		delimiter is the whole string

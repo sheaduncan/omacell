@@ -1,0 +1,14 @@
+# formula	expected	note
+# Latin-1 code of first scalar if ≤ 255.
+=CODE("A")	65	ASCII
+=CODE("ABC")	65	first character only
+=CODE(" ")	32	space
+=CODE("a")	97	lowercase
+=CODE("")	#VALUE!	empty; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CODE(#N/A)	#N/A	error
+=CODE("ÿ")	255	U+00FF; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CODE("é")	233	U+00E9; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CODE("😀")	#VALUE!	astral is not Latin-1; use UNICODE; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CODE({"A","B"})	{65,66}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CODE(TRUE)	84	T of TRUE; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CODE(CHAR(65))	65	round-trip

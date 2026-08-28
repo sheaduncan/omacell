@@ -1,0 +1,14 @@
+# formula	expected	note	locale	date_system
+# Parse using locale date order.
+=DATEVALUE("1/2/2024")	45293	en-US m/d/yyyy = 2 Jan; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATEVALUE("1/2/2024")	45323	en-GB d/m/yyyy = 1 Feb; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)	en-GB
+=DATEVALUE("1.2.2024")	45323	de-DE d.m.yyyy = 1 Feb; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)	de-DE
+=DATEVALUE("2024-01-02")	45293	ISO yyyy-mm-dd
+=DATEVALUE("January 2, 2024")	45293	en-US month name
+=DATEVALUE("29-Feb-1900")	60	Lotus leap textual; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATEVALUE("not a date")	#VALUE!	invalid; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATEVALUE(#N/A)	#N/A	error
+=DATEVALUE("1900-01-01")	1	epoch; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATEVALUE("9999-12-31")	2958465	Excel max date
+=DATEVALUE("2/29/2024")	45351	leap day 2024 en-US
+=DATEVALUE({"1/1/2024","1/2/2024"})	{45292,45293}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

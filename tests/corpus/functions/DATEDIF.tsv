@@ -1,0 +1,14 @@
+# formula	expected	note
+# Y/M/D/YM/YD/MD; start > end is #NUM!.
+=DATEDIF(DATE(2020,1,1), DATE(2024,1,1), "Y")	4	complete years
+=DATEDIF(DATE(2020,1,1), DATE(2024,1,1), "M")	48	complete months
+=DATEDIF(DATE(2020,1,1), DATE(2020,1,10), "D")	9	days
+=DATEDIF(DATE(2020,1,15), DATE(2021,3,20), "YM")	2	months ignoring years
+=DATEDIF(DATE(2020,1,1), DATE(2020,2,10), "MD")	9	days ignoring months
+=DATEDIF(DATE(2020,3,1), DATE(2021,3,1), "YD")	0	same month-day
+=DATEDIF(DATE(2024,1,1), DATE(2020,1,1), "Y")	#NUM!	start after end; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATEDIF(#N/A, 1, "Y")	#N/A	error
+=DATEDIF(DATE(2020,1,1), DATE(2020,1,1), "Y")	0	zero years
+=DATEDIF(DATE(2020,1,1), DATE(2024,1,1), "y")	4	unit is case-insensitive
+=DATEDIF(DATE(2020,1,1), DATE(2024,1,1), "Q")	#NUM!	unknown unit; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATEDIF(DATE(2019,2,28), DATE(2020,2,28), "Y")	1	non-leap to leap Feb 28

@@ -1,0 +1,16 @@
+# formula	expected	note	locale	date_system
+# Year 0-1899 += 1900; month/day overflow; Lotus 29 Feb 1900.
+=DATE(2024,1,1)	45292	2024-01-01 serial 1900 system; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(1900,1,1)	1	Excel epoch; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(1900,2,28)	59	day before Lotus leap; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(1900,2,29)	60	Lotus 29 Feb 1900; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(1900,3,1)	61	day after Lotus leap; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(1900,1,0)	0	January 0, 1900; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(2024,13,1)	45658	month overflow: 2025-01-01; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(2024,0,1)	45261	month 0 = 2023-12-01; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(108,1,2)	39449	year 0-1899 adds 1900 → 2008-01-02; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(10000,1,1)	#NUM!	year > 9999; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(-1,1,1)	#NUM!	negative year; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(2024,2,29)	45351	real leap day 2024; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATE(2024,1,1)	43830	1904 system serial; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)		1904
+=DATE(#N/A,1,1)	#N/A	error

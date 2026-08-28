@@ -1,0 +1,14 @@
+# formula	expected	note
+# Unicode scalar; surrogates and 0 are #VALUE!.
+=UNICHAR(65)	A	ASCII
+=UNICHAR(233)	é	U+00E9
+=UNICHAR(128512)	😀	U+1F600
+=UNICHAR(0)	#VALUE!	0 rejected; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICHAR(55296)	#VALUE!	U+D800 surrogate rejected; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICHAR(1114112)	#VALUE!	above U+10FFFF; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICHAR(-1)	#VALUE!	negative; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICHAR(#N/A)	#N/A	error
+=UNICHAR(32)	 	space; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICHAR({"65","66"})	{A,B}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICHAR(8364)	€	euro sign
+=LEN(UNICHAR(10))	1	LF; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

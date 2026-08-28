@@ -1,0 +1,14 @@
+# formula	expected	note
+# Case-sensitive, no wildcards, 1-based.
+=FIND("a", "abc")	1	match at start
+=FIND("b", "abc")	2	middle
+=FIND("A", "abc")	#VALUE!	case-sensitive miss
+=FIND("", "abc")	1	empty find_text matches at start_num; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=FIND("a", "banana", 2)	2	start_num 2
+=FIND("a", "banana", 3)	4	after first match
+=FIND("z", "abc")	#VALUE!	not found
+=FIND("a", "abc", 0)	#VALUE!	start_num < 1
+=FIND(#N/A, "a")	#N/A	error
+=FIND("é", "aéé")	2	Unicode
+=FIND("B", {"ABC","XBC"})	{2,2}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=FIND("a", "banana", 6)	6	last character

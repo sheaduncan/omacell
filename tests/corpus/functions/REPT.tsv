@@ -1,0 +1,14 @@
+# formula	expected	note
+# Cap 32767; count < 0 is #VALUE!.
+=REPT("a", 3)	aaa	repeat
+=REPT("ab", 2)	abab	multi-char
+=REPT("a", 0)		zero times
+=REPT("a", -1)	#VALUE!	negative; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REPT("", 5)		empty text
+=REPT("é", 2)	éé	Unicode
+=REPT(#N/A, 2)	#N/A	error
+=REPT("a", 1)	a	once
+=REPT("😀", 2)	😀😀	astral
+=REPT("a", TRUE)	a	TRUE is 1
+=REPT({"x","y"}, 2)	{xx,yy}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REPT("a", 2.9)	aa	count truncated toward zero

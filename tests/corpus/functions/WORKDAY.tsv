@@ -1,0 +1,14 @@
+# formula	expected	note
+# Add workdays; days=0 returns start even on weekend; days truncated toward 0.
+=WORKDAY(DATE(2024,1,1), 0)	45292	zero days
+=WORKDAY(DATE(2024,1,1), 1)	45293	Mon+1 = Tue
+=WORKDAY(DATE(2024,1,5), 1)	45299	Fri+1 = Mon
+=WORKDAY(DATE(2024,1,1), 5)	45299	Mon+5 = next Mon
+=WORKDAY(DATE(2024,1,1), -1)	45289	Mon-1 = Fri 29 Dec 2023
+=WORKDAY(DATE(2024,1,6), 1)	45299	Sat+1 = Mon
+=WORKDAY(DATE(2024,1,1), 1, DATE(2024,1,2))	45294	skip holiday Tue
+=WORKDAY(#N/A, 1)	#N/A	error
+=WORKDAY(DATE(2024,1,1), 0.9)	45292	days truncated toward 0 so 0.9 → 0
+=WORKDAY(DATE(2024,1,1), {1,5})	{45293,45299}	array-lifting on days; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY(DATE(9999,12,31), 1)	#NUM!	overflow; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WORKDAY(DATE(2024,1,1), 1, {45293})	45294	holiday array

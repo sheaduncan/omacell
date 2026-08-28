@@ -35,9 +35,9 @@ def parse_tsv(path: Path) -> list[tuple[str, str, str]]:
         if not line or line.startswith("#"):
             continue
         parts = line.split("\t")
-        if len(parts) != 3 or not parts[0].startswith("=") or not parts[2].strip():
+        if len(parts) < 3 or len(parts) > 5 or not parts[0].startswith("=") or not parts[2].strip():
             raise ValueError(f"{path}: malformed corpus row: {line!r}")
-        formula, expected, note = parts
+        formula, expected, note = parts[0], parts[1], parts[2]
         rows.append((formula, expected, note))
     return rows
 
@@ -64,6 +64,22 @@ _MODERN_CALLEES = {
     "SECH",
     "SWITCH",
     "XOR",
+    "ARRAYTOTEXT",
+    "CONCAT",
+    "DAYS",
+    "ISOWEEKNUM",
+    "NUMBERVALUE",
+    "REGEXEXTRACT",
+    "REGEXREPLACE",
+    "REGEXTEST",
+    "SEQUENCE",
+    "TEXTJOIN",
+    "TEXTSPLIT",
+    "TEXTBEFORE",
+    "TEXTAFTER",
+    "UNICHAR",
+    "UNICODE",
+    "VALUETOTEXT",
 }
 
 _LO_ERR = {

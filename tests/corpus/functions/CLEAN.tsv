@@ -1,0 +1,14 @@
+# formula	expected	note
+# Strip U+0000..U+001F.
+=CLEAN("AB")	AB	no controls
+=CLEAN("A"&CHAR(7)&"B")	AB	BEL removed
+=CLEAN("A"&CHAR(9)&"B")	AB	tab removed
+=CLEAN("A"&CHAR(10)&"B")	AB	LF removed
+=CLEAN("")		empty
+=CLEAN(#N/A)	#N/A	error
+=CLEAN({"A","B"})	{A,B}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CLEAN("é")	é	non-ASCII kept
+=CLEAN(CHAR(1)&CHAR(2))		only controls
+=CLEAN("A B")	A B	space U+0020 kept
+=CLEAN(TRUE)	TRUE	bool; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CLEAN("😀")	😀	astral kept

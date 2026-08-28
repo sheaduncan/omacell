@@ -1,0 +1,14 @@
+# formula	expected	note
+# Spill array; default pad #N/A; 1x1 collapses to a scalar.
+=TEXTSPLIT("a,b,c", ",")	{a,b,c}	column split; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("a,b;c,d", ",", ";")	{a,b;c,d}	row and column delimiters; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("a,,b", ",",, TRUE)	{a,b}	ignore empty; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("a,,b", ",",, FALSE)	{a,,b}	keep empty; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("a,b;c", ",", ";")	{a,b;c,#N/A}	ragged row padded with #N/A; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("ABC", "b",,, 1)	{A,C}	match_mode 1 case-insensitive; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("", ",")	#N/A	empty text is #N/A; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("abc", "x")	abc	no delimiter → original text (1x1)
+=TEXTSPLIT(#N/A, ",")	#N/A	error
+=TEXTSPLIT("é|😀", "|")	{é,😀}	Unicode; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("a;b;c",, ";")	{a;b;c}	row delimiter only → column vector; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXTSPLIT("a--b", "--")	{a,b}	multi-char delimiter; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

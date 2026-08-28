@@ -1,0 +1,14 @@
+# formula	expected	note
+# Replace matches; occurrence 0 = all.
+=REGEXREPLACE("abc", "b", "X")	aXc	single match; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("abcb", "b", "X")	aXcX	all matches by default; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("abcb", "b", "X", 1)	aXcb	occurrence 1 first only; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("ABC", "a", "X", 0, 1)	XBC	case-insensitive; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("a1b2", "[0-9]", "#")	a#b#	class; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("abc", "z", "X")	abc	no match unchanged; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE(#N/A, "a", "b")	#N/A	error
+=REGEXREPLACE("abc", "(", "x")	#VALUE!	invalid pattern; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("", "a", "b")		empty text; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("éé", "é", "x")	xx	Unicode; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE({"ab","cd"}, "b", "X")	{aX,cd}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("abc", "b", "")	ac	replace with empty; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

@@ -1,0 +1,14 @@
+# formula	expected	note
+# Case-sensitive equality.
+=EXACT("a", "a")	TRUE	equal
+=EXACT("a", "A")	FALSE	case-sensitive
+=EXACT("", "")	TRUE	empty
+=EXACT("a", "a ")	FALSE	trailing space
+=EXACT(1, "1")	TRUE	number via General equals text 1
+=EXACT(#N/A, "a")	#N/A	error
+=EXACT("é", "é")	TRUE	Unicode
+=EXACT("é", "É")	FALSE	case
+=EXACT(TRUE, "TRUE")	TRUE	bool to text; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=EXACT({"a","b"}, {"a","B"})	{TRUE,FALSE}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=EXACT("😀", "😀")	TRUE	astral
+=EXACT("a", "b")	FALSE	different

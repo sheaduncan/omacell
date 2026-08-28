@@ -1,0 +1,14 @@
+# formula	expected	note
+# First scalar value.
+=UNICODE("A")	65	ASCII
+=UNICODE("é")	233	U+00E9
+=UNICODE("😀")	128512	U+1F600
+=UNICODE("ABC")	65	first only
+=UNICODE("")	#VALUE!	empty; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICODE(#N/A)	#N/A	error
+=UNICODE(" ")	32	space
+=UNICODE({"A","é"})	{65,233}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICODE("€")	8364	euro
+=UNICODE(TRUE)	84	T of TRUE; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICODE(UNICHAR(128512))	128512	round-trip emoji; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICODE("a")	97	lowercase

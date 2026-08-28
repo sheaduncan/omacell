@@ -1,0 +1,14 @@
+# formula	expected	note
+# Add months; clip to last day of month. Excel Feb 1900 has 29 days.
+=EDATE(DATE(2024,1,15), 1)	45337	15 Feb 2024
+=EDATE(DATE(2024,1,31), 1)	45351	clip to 29 Feb 2024
+=EDATE(DATE(2024,1,31), 2)	45382	31 Mar 2024
+=EDATE(DATE(2024,3,31), -1)	45351	back to 29 Feb 2024
+=EDATE(DATE(2024,1,15), 0)	45306	zero months
+=EDATE(DATE(1900,1,31), 1)	60	Excel Feb 1900 has 29 days so Jan 31 + 1 month = Lotus 29 Feb
+=EDATE(60, 1)	89	Lotus 29 Feb + 1 month = 29 Mar 1900; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=EDATE(#N/A, 1)	#N/A	error
+=EDATE(DATE(2024,1,15), 12)	45672	2025-01-15
+=EDATE({45292,45322}, 1)	{45323,45351}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=EDATE(DATE(2023,1,31), 1)	44985	non-leap Feb clips to 28 Feb 2023
+=EDATE(DATE(9999,12,1), 1)	#NUM!	overflow past Excel max; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

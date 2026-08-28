@@ -1,0 +1,14 @@
+# formula	expected	note
+# Parse time strings; locale AM/PM.
+=TIMEVALUE("12:00")	0.5	noon 24h
+=TIMEVALUE("12:00:00")	0.5	with seconds
+=TIMEVALUE("6:00 AM")	0.25	en-US AM
+=TIMEVALUE("6:00 PM")	0.75	en-US PM
+=TIMEVALUE("00:00")	0	midnight
+=TIMEVALUE("18:00")	0.75	24h evening
+=TIMEVALUE("not a time")	#VALUE!	invalid; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIMEVALUE(#N/A)	#N/A	error
+=TIMEVALUE("12:00:00 PM")	0.5	12 PM is noon
+=TIMEVALUE("12:00:00 AM")	0	12 AM is midnight
+=TIMEVALUE("1:30")	0.0625	1:30
+=TIMEVALUE({"12:00","6:00"})	{0.5,0.25}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

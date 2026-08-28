@@ -1,0 +1,14 @@
+# formula	expected	note
+# Wraps modulo 24h; negative is #NUM!.
+=TIME(0,0,0)	0	midnight; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIME(12,0,0)	0.5	noon; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIME(6,0,0)	0.25	6am; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIME(18,0,0)	0.75	6pm; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIME(24,0,0)	0	24:00 wraps to 0; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=HOUR(TIME(25,0,0))	1	25:00 wraps to 1:00
+=TIME(-1,0,0)	#NUM!	negative hour; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIME(1,30,0)	0.0625	1:30; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIME(0,90,0)	0.0625	90 minutes = 1:30; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIME(#N/A,0,0)	#N/A	error
+=HOUR(TIME(TRUE,0,0))	1	TRUE is 1 hour
+=TIME(0,0,0)*24	0	midnight times 24

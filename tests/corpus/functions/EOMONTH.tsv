@@ -1,0 +1,14 @@
+# formula	expected	note
+# Last day of month after adding months.
+=EOMONTH(DATE(2024,1,15), 0)	45322	31 Jan 2024
+=EOMONTH(DATE(2024,1,15), 1)	45351	29 Feb 2024
+=EOMONTH(DATE(2023,1,15), 1)	44985	28 Feb 2023
+=EOMONTH(DATE(2024,1,15), -1)	45291	31 Dec 2023
+=EOMONTH(60, 0)	60	Lotus day is already EOM
+=EOMONTH(DATE(2024,12,1), 0)	45657	31 Dec 2024
+=EOMONTH(#N/A, 0)	#N/A	error
+=EOMONTH(DATE(1900,1,1), 0)	31	31 Jan 1900; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=EOMONTH({45292,45306}, 0)	{45322,45322}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=EOMONTH(DATE(2024,2,1), 0)	45351	29 Feb 2024
+=EOMONTH(DATE(9999,12,1), 1)	#NUM!	overflow; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=EOMONTH(DATE(2024,1,31), 0)	45322	already EOM

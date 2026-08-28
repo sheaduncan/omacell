@@ -1,0 +1,14 @@
+# formula	expected	note
+# Time fraction; 0.5 → 12.
+=HOUR(0.5)	12	noon
+=HOUR(0)	0	midnight
+=HOUR(TIME(18,0,0))	18	6pm
+=HOUR(TIME(0,59,0))	0	minutes do not carry into HOUR
+=HOUR(1.25)	6	integer days ignored
+=HOUR(#N/A)	#N/A	error
+=HOUR(TIME(12,30,45))	12	hms
+=HOUR(-0.1)	#NUM!	negative serial; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=HOUR({0.5,0.25})	{12,6}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=HOUR(TRUE)	0	TRUE is 1.0 → hour 0
+=HOUR(DATE(2024,1,1)+TIME(7,0,0))	7	date+time
+=HOUR(TIME(23,0,0))	23	11pm

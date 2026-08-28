@@ -1,0 +1,14 @@
+# formula	expected	note
+# Pass-stable; uses EvalCtx::today(); corpus clock 45000.5 → 2023-03-15.
+=TODAY()	45000	injected clock truncates to date; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TODAY()+0	45000	numeric; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TODAY()-TODAY()	0	identical in one pass
+=YEAR(TODAY())	2023	45000 = 2023-03-15; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=MONTH(TODAY())	3	March; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAY(TODAY())	15	15; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TODAY()-1	44999	yesterday relative to injected clock; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=IF(TODAY()=45000,1,0)	1	equals the truncated clock; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXT(TODAY(), "yyyy-mm-dd")	2023-03-15	formatted; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=WEEKDAY(TODAY())	4	2023-03-15 is Wednesday → type1 = 4; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TODAY()*1	45000	arithmetic; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TODAY()-NOW()+0.5	0	TODAY is NOW without the time fraction; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

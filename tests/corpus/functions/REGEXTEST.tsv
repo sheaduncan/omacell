@@ -1,0 +1,14 @@
+# formula	expected	note
+# Excel 365 regex; size/nest limited.
+=REGEXTEST("abc", "b")	TRUE	substring; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("abc", "^a")	TRUE	anchor; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("abc", "z")	FALSE	no match; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("ABC", "a")	FALSE	default case-sensitive; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("ABC", "a", 1)	TRUE	case_sensitivity 1; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("123", "[0-9]+")	TRUE	character class; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("", "a")	FALSE	empty text; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("abc", "")	TRUE	empty pattern matches; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST(#N/A, "a")	#N/A	error
+=REGEXTEST("abc", "(")	#VALUE!	invalid pattern; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("é", "É", 1)	TRUE	Unicode case-insensitive; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST({"a","1"}, "^[0-9]$")	{FALSE,TRUE}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

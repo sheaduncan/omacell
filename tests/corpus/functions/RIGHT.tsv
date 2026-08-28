@@ -1,0 +1,14 @@
+# formula	expected	note
+# 1-based Unicode scalar slicing from the end.
+=RIGHT("abc", 1)	c	last character
+=RIGHT("abc", 2)	bc	last two
+=RIGHT("abc")	c	omitted num_chars defaults to 1
+=RIGHT("abc", 0)		zero characters
+=RIGHT("abc", 10)	abc	overflow returns all
+=RIGHT("abc", -1)	#VALUE!	negative; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=RIGHT("", 1)		empty
+=RIGHT(#DIV/0!, 1)	#DIV/0!	error propagation
+=RIGHT("éé", 1)	é	Unicode scalar
+=RIGHT("x😀", 1)	😀	known difference: Excel UTF-16 may split the emoji
+=RIGHT({"abc","de"}, 2)	{bc,de}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=RIGHT(1234, 2)	34	number via General

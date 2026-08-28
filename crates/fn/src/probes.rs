@@ -1,4 +1,4 @@
-//! Remaining probe functions owned by WP-05b (`NOW`) and WP-05c (`SEQUENCE`).
+//! Remaining probe functions owned by WP-05c (`SEQUENCE`).
 
 use omacell_core::coerce::{self, Scalar};
 use omacell_core::error::ErrorKind;
@@ -7,30 +7,12 @@ use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeValue};
 use crate::common::register_specs;
 use crate::metadata::{ArgKind, ArrayBehavior, FunctionSpec};
 
-/// Probe specs still shipped until WP-05b/05c replace them.
-pub const PROBE_SPECS: &[FunctionSpec] = &[NOW, SEQUENCE];
+/// Probe specs still shipped until WP-05c replaces them.
+pub const PROBE_SPECS: &[FunctionSpec] = &[SEQUENCE];
 
 /// Register remaining probe functions (and aliases) onto `registry`.
 pub fn register_probes(registry: &mut FnRegistry) {
     register_specs(registry, PROBE_SPECS);
-}
-
-crate::define_fn! {
-const NOW = {
-    name: "NOW",
-    aliases: &[],
-    tier: 0,
-    category: "date",
-    arg_kinds: &[],
-    min_args: 0,
-    max_args: 0,
-    volatile: true,
-    array: ArrayBehavior::None,
-    async_node: false,
-    signature: "NOW()",
-    doc: "Current date and time as a serial, sampled once per recalc pass.",
-    body: FnBody::Eager(now_impl),
-};
 }
 
 crate::define_fn! {
@@ -49,10 +31,6 @@ const SEQUENCE = {
     doc: "Returns a sequence array. Invalid or out-of-grid shapes are `#NUM!`.",
     body: FnBody::Eager(sequence_impl),
 };
-}
-
-fn now_impl(ctx: &mut EvalCtx<'_>, _args: &[ArgVal]) -> RuntimeValue {
-    RuntimeValue::Scalar(Scalar::Number(ctx.clock()))
 }
 
 fn sequence_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {

@@ -1,0 +1,14 @@
+# formula	expected	note
+# 1-based Unicode scalar slicing.
+=LEFT("abc", 1)	a	first character
+=LEFT("abc", 2)	ab	first two
+=LEFT("abc")	a	omitted num_chars defaults to 1
+=LEFT("abc", 0)		zero characters
+=LEFT("abc", 10)	abc	longer than text returns all
+=LEFT("abc", -1)	#VALUE!	negative num_chars; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=LEFT("", 1)		empty text
+=LEFT(#N/A, 1)	#N/A	error propagation
+=LEFT("éé", 1)	é	Unicode scalar not byte
+=LEFT("😀x", 1)	😀	known difference: Excel UTF-16 LEFT of an astral scalar may yield a lone surrogate
+=LEFT({"abc","de"}, 2)	{ab,de}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=LEFT(TRUE, 1)	T	TRUE → text; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)

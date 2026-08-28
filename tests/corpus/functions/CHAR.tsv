@@ -1,0 +1,14 @@
+# formula	expected	note
+# Latin-1 code points 1..255 (not Windows-1252).
+=CHAR(65)	A	ASCII A
+=CHAR(32)	 	space; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CHAR(49)	1	digit
+=LEN(CHAR(1))	1	SOH is one character
+=CHAR(255)	ÿ	U+00FF; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CHAR(0)	#VALUE!	0 is out of range; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CHAR(256)	#VALUE!	256 is out of range; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CHAR(-1)	#VALUE!	negative; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CHAR(#N/A)	#N/A	error
+=CHAR(97)	a	lowercase
+=CHAR({"65","66"})	{A,B}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=LEN(CHAR(10))	1	LF is one character; known difference vs system code page

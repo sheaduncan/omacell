@@ -1,0 +1,14 @@
+# formula	expected	note	locale	date_system
+# Uses WP-06 number formats and EvalCtx locale.
+=TEXT(1234.5, "0.00")	1234.50	fixed 2 decimals
+=TEXT(1234.5, "#,##0.00")	1,234.50	thousands grouping en-US; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TEXT(0.5, "h:mm")	12:00	time fraction 0.5 is noon
+=TEXT(44927, "yyyy-mm-dd")	2023-01-01	date serial via WP-06
+=TEXT(TRUE, "0")	1	bool to 1
+=TEXT(#N/A, "0")	#N/A	errors ignore the format
+=TEXT(1234.5, "#,##0.00")	1.234,50	de-DE grouping and decimal; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)	de-DE
+=TEXT(-1, "0")	-1	negative
+=TEXT(0, "0.00")	0.00	zero
+=TEXT("abc", "@")	abc	text section @
+=TEXT(1.5, "0%")	150%	percent
+=TEXT(45292, "yyyy")	2024	year of DATE(2024,1,1)
