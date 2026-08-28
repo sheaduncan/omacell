@@ -6,7 +6,7 @@
 | Lane | A — Engine / core |
 | Size | M (≈ 3–5) |
 | Depends on | WP-01 |
-| Unblocks | WP-05b, WP-07, WP-08, WP-09, WP-11, WP-18 |
+| Unblocks | WP-05F, WP-05b, WP-07a, WP-08, WP-09, WP-11, WP-18 |
 | Spec sections | §6.2 F-2.1, F-2.3, F-2.6, §6.12 F-12.2 |
 | Where | `crates/core` (module `numfmt`, `dates`, `locale`) |
 

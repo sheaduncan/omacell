@@ -17,7 +17,7 @@ A complete keyboard-driven spreadsheet in a terminal — the first front-end rea
 ## Deliverables
 
 - Grid widget: virtualized rendering, headers, gridlines per `[tui] unicode_borders`, type-aware alignment, number formats, overflow into empty neighbors, frozen panes, selection and cursor styles, stale hatching, spill outlines, reference colorization while editing.
-- Formula bar, status line (segments from `[layout] status_line`), sheet tabs, command palette, panels (format, sort/filter, find/replace, go-to, comments list, changeset review — the last two backed by WP-07/WP-19 models as they land).
+- Formula bar, status line (segments from `[layout] status_line`), sheet tabs, command palette, panels (format, sort/filter, find/replace, go-to, comments list, changeset review — the last two backed by WP-07a/WP-19 models as they land).
 - Theming through ANSI palette indices (so Omarchy's terminal theme applies for free) with truecolor only for colors that came from a file; `[tui] truecolor = auto` detection.
 - Mouse support where the terminal reports it; resize handling; `omacell --tui file`; IPC available inside the TUI process; optional sixel/kitty graphics hook (chart previews land with WP-25).
 - Startup < 100 ms measured and recorded.

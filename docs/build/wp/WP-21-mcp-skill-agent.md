@@ -5,7 +5,7 @@
 | Phase | 5 — Scripting, agents, AI |
 | Lane | D — Integration (bus, CLI, Lua, MCP, AI, release) |
 | Size | L (≈ 6–10) |
-| Depends on | WP-07, WP-13, WP-19, WP-12 |
+| Depends on | WP-07a, WP-13, WP-19, WP-12 |
 | Unblocks | WP-23, WP-28 |
 | Spec sections | §7.6, §7.9, §8.5, §8.6 A-6.4 |
 | Where | `crates/bus` (module `mcp`), `crates/cli` (`mcp`, `agent`), `default/agents/skills/omacell/SKILL.md` |

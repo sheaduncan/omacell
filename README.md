@@ -11,8 +11,9 @@ nothing that phones home.
 One engine, three clients: a Wayland GUI, a TUI, and a JSON-speaking CLI that
 doubles as an IPC surface for scripts and AI agents.
 
-**Status:** pre-alpha. The design spec is v0.3; this repository is the WP-00
-bootstrap. Nothing product-specific works yet.
+**Status:** pre-alpha. Gate G0 and the Phase-1 engine foundation through WP-04
+and WP-06 are merged. The next independent packages are WP-05F (function
+runtime foundation) and WP-07a (in-process command bus and changesets).
 
 ## Build
 

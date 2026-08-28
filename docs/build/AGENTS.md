@@ -18,7 +18,7 @@ You are building **Omacell**, a spreadsheet for Omarchy Linux. The design spec i
 ## Architecture rules (violations are PR rejections)
 - Crate boundaries: `core` has no I/O, no toolkit, no async. `fn` depends on `core` only. `io` depends on `core`. `ui` (shared UI logic) has no `egui`/`ratatui`/`winit` types. `tui` and `gui` are thin renderers over `ui` + `bus`. `bus` is the only mutation path for anything outside `core`. `ai` and MCP are the only async code (`tokio`). `conf` owns configuration and Omarchy adapters.
 - Every mutation is a registered command with a JSON schema. Models and agents mutate only through changesets. No exceptions, including "temporary" ones.
-- Public types in `crates/core` from WP-01, command schemas, and IPC/MCP/card wire formats are **frozen after Gate G0**. Changing them requires an `RFC` section in your report and human approval before merge.
+- Public types in `crates/core` from WP-01 are **frozen after Gate G0**. Command schemas freeze when WP-07a lands; the IPC envelope freezes when WP-07b lands; MCP and workbook-card wire formats freeze when their owning packages land. Changing a contract after its freeze point requires an `RFC` section in your report and human approval before merge.
 - No feature may run on file open, and no feature may send data anywhere, without an explicit user or agent action.
 - Never write under `/usr/share/omarchy` or `~/.config/omarchy` except from `omacell setup omarchy`, and never from the package installer. Use `omarchy-notification-send` when present, else the freedesktop D-Bus interface.
 

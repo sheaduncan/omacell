@@ -273,7 +273,7 @@ impl Workbook {
         &self.settings
     }
 
-    /// Mutable settings (not undo-tracked; WP-07 will wrap this).
+    /// Mutable settings (not undo-tracked; WP-07a will wrap this).
     pub fn settings_mut(&mut self) -> &mut WorkbookSettings {
         &mut self.settings
     }
