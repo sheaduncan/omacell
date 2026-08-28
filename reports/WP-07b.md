@@ -92,27 +92,80 @@ Discovery record (`<pid>.instance`):
 
 ## What was built
 
-(To be filled after implementation.)
+Versioned JSON-lines IPC on a per-instance Unix socket, wrapping the WP-07a bus without weakening mutation policy.
+
+Key files:
+
+- [`docs/schemas/ipc/`](../docs/schemas/ipc/) — request, reply, event/overflow, discovery (v1 freeze)
+- [`crates/bus/src/ipc/protocol.rs`](../crates/bus/src/ipc/protocol.rs) — fail-closed decoder, frame cap, nesting cap
+- [`crates/bus/src/ipc/server.rs`](../crates/bus/src/ipc/server.rs) — std-thread accept/client loops, `Arc<Mutex<Bus>>`
+- [`crates/bus/src/ipc/client.rs`](../crates/bus/src/ipc/client.rs) — correlated requests, subscribe, timeouts
+- [`crates/bus/src/ipc/discover.rs`](../crates/bus/src/ipc/discover.rs) — 0700/0600, owner, stale, symlink refusal
+- Tests: [`ipc_protocol.rs`](../crates/bus/tests/ipc_protocol.rs), [`ipc_server.rs`](../crates/bus/tests/ipc_server.rs)
+- Fuzz: [`fuzz/fuzz_targets/ipc_frame.rs`](../fuzz/fuzz_targets/ipc_frame.rs) (picked up by nightly `cargo fuzz list`)
+- Bench: [`crates/bus/benches/ipc_roundtrip.rs`](../crates/bus/benches/ipc_roundtrip.rs)
 
 ## Interfaces exposed (for dependents)
 
-(To be filled after implementation.)
+| Item | Where |
+|---|---|
+| `ipc::serve`, `IpcHandle` | bind `{runtime_dir}/{pid}.sock` |
+| `ipc::IpcClient` | `connect` / `connect_newest` / `command` / `control` / `apply` / `revert` / `subscribe` / `poll_record` |
+| `ipc::{Request, Reply, ServerRecord, Discovery, Mode, ControlOp}` | v1 envelopes |
+| `ipc::{decode_request, decode_request_bytes, MAX_*}` | decoder + limits |
+| `ipc::{discover_newest, default_runtime_dir}` | newest live owned instance |
+| Error codes | `ipc.version`, `ipc.frame`, `ipc.protocol`, `ipc.mode`, `ipc.limit`, `ipc.socket`, `ipc.timeout`, `ipc.disconnected`, `ipc.overflow` |
+| Schemas | `docs/schemas/ipc/*.schema.json` |
+
+WP-13 should use `IpcClient`; it must not reach into server internals. Origin on the wire is always `Origin::Ipc`.
 
 ## Deviations from the spec or the package (with reasons)
 
+- **Spec F-10.6 sketch `{id, cmd, args}`** is extended with `v`, optional `mode`, and control `op` as planned. Replies still echo `id` and carry exactly one of `result`/`error`.
+- **Event filter names** use frozen `Event` tags (`cell_changed`) rather than spec prose `cell.changed`.
+- **`edit.undo` / `edit.redo` / `calc.recalc`** execute directly (not changeset-eligible). Eligible mutating commands cannot use `mode: execute`.
+- **Focused-window discovery** is out of scope (WP-14/WP-16). `discover_newest` picks the newest live owned instance.
+
 ## Measurements
+
+Host: local Linux.
+
+- `cargo test -p omacell-bus` — protocol 5, server 9, plus existing bus tests, all pass.
+- `just check` — green.
+- `RUSTDOCFLAGS="-D warnings" cargo doc -p omacell-bus --no-deps` — pass.
+- `cargo deny check` — advisories/bans/licenses/sources ok.
+- `cargo +nightly fuzz run ipc_frame -- -runs=2000` — 2000 executions, no crash.
+- `cargo bench -p omacell-bus --bench ipc_roundtrip -- --save-baseline wp07b`:
+  - `ipc_roundtrip/ping` — 20.4 µs (19.1–21.5)
+  - `ipc_roundtrip/cell_set_propose` — 158 µs (138–174), no workbook recalc in the timed path.
+
+No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-approved). `libfuzzer-sys` remains fuzz-workspace only.
 
 ## Open questions / decisions needed
 
+1. Should WP-13 hide `edit.undo` / `edit.redo` on `omacell ipc` even though the socket allows them as direct execute?
+2. Confirm 1 MiB frame / 32 connections is enough once file commands land (WP-08–11).
+
 ## RFC (only if a frozen contract changed)
 
-None planned. IPC v1 is a new freeze point.
+None. Frozen WP-01 types are unchanged. IPC v1 is a new freeze point, recorded in `docs/contracts.md`.
 
 ## Checklist
 
-- [ ] `just check` green on a clean clone
-- [ ] Every acceptance criterion ticked with evidence
-- [ ] Docs warning-free; public items documented
-- [ ] Baselines recorded (if the package has performance gates)
-- [ ] No new `TODO(` without a `WP-` reference; no new dependency without justification
-- [ ] Nothing written outside the repository except documented temp dirs
+- [x] `just check` green on a clean clone
+- [x] Every acceptance criterion ticked with evidence
+- [x] Docs warning-free; public items documented
+- [x] Baselines recorded (if the package has performance gates) — IPC ping/propose criterion baseline `wp07b`
+- [x] No new `TODO(` without a `WP-` reference; no new dependency without justification
+- [x] Nothing written outside the repository except documented temp dirs (`/tmp/omacell-ipc-*` in tests)
+
+### Acceptance (WP-07b)
+
+- [x] Request/reply/event fixtures validate against the committed IPC v1 schemas and round-trip through client/server — `ipc_protocol.rs`, `ipc_server.rs`
+- [x] Integration tests cover query, proposed mutation, explicit apply/revert, subscription, two concurrent clients, request ordering, timeouts, and clean shutdown — `ipc_server.rs`
+- [x] Malformed, partial, deeply nested, oversized, unknown-version, unknown-field, and internal-command inputs are rejected without panic or server death — `ipc_protocol.rs`, `mutating_execute_is_rejected_internal_ids_are_rejected`
+- [x] Socket directory/permissions, owner validation, stale cleanup, and symlink resistance are tested on Linux — `runtime_dir_rejects_symlink_and_world_writable`, `stale_socket_for_dead_pid_is_removed`
+- [x] A stalled subscriber cannot block mutations — `stalled_subscriber_does_not_block_another_client`
+- [x] Decoder fuzz target is listed by `cargo fuzz list` and runs in the existing nightly job; smoke 2000 runs clean
+- [x] Local request/reply benchmark records IPC overhead separately from recalculation — `ipc_roundtrip` ping ~20 µs, propose ~158 µs
+
