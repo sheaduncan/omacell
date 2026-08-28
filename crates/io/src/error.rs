@@ -26,6 +26,10 @@ pub mod codes {
     pub const XLSX_FORMAT: &str = "xlsx.format";
     /// A zip entry path is absolute, has `..`, or is otherwise illegal.
     pub const XLSX_PATH: &str = "xlsx.path";
+    /// Writing or encoding an `.xlsx` package failed.
+    pub const XLSX_WRITE: &str = "xlsx.write";
+    /// A LibreOffice-compatible lock file blocked the save.
+    pub const XLSX_LOCK: &str = "xlsx.lock";
 }
 
 /// Encoding error.
@@ -101,4 +105,18 @@ pub fn xlsx_format(message: impl Into<String>) -> CoreError {
 pub fn xlsx_path(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::XLSX_PATH, message)
         .with_hint("zip entries cannot be absolute or contain '..'")
+}
+
+/// Write error.
+#[must_use]
+pub fn xlsx_write(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::XLSX_WRITE, message)
+        .with_hint("check free space and that the destination directory is writable")
+}
+
+/// Lock error.
+#[must_use]
+pub fn xlsx_lock(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::XLSX_LOCK, message)
+        .with_hint("close the other editor or remove a stale .~lock.*# file")
 }

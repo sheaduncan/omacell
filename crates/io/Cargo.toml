@@ -33,3 +33,7 @@ harness = false
 [[bench]]
 name = "xlsx_open"
 harness = false
+
+[[bench]]
+name = "xlsx_save"
+harness = false

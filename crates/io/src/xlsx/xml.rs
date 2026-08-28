@@ -202,6 +202,23 @@ fn collect_attrs(
     Ok(out)
 }
 
+/// Escape XML text / attribute values.
+#[must_use]
+pub fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Attribute helper.
 #[must_use]
 pub fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
