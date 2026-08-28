@@ -1,0 +1,27 @@
+{
+  "sheets": [
+    "Sheet1"
+  ],
+  "cells": {
+    "A1": {
+      "kind": "number",
+      "n": 1.5
+    },
+    "B1": {
+      "kind": "text",
+      "t": "hello"
+    },
+    "C1": {
+      "kind": "bool",
+      "b": true
+    },
+    "D1": {
+      "kind": "error",
+      "e": "#DIV/0!"
+    },
+    "E1": {
+      "kind": "text",
+      "t": "inline"
+    }
+  }
+}

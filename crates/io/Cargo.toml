@@ -14,14 +14,22 @@ workspace = true
 [dependencies]
 csv = "1"
 encoding_rs = "0.8"
+indexmap = { workspace = true }
 omacell-core = { path = "../core", version = "0.0.0" }
+quick-xml = "0.41"
 serde = { workspace = true }
 serde_json = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+calamine = "0.35"
 criterion = { workspace = true }
 proptest = { workspace = true }
 
 [[bench]]
 name = "csv_parse"
+harness = false
+
+[[bench]]
+name = "xlsx_open"
 harness = false

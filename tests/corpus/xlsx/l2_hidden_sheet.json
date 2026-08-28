@@ -1,0 +1,12 @@
+{
+  "sheets": [
+    {
+      "name": "Visible",
+      "hidden": false
+    },
+    {
+      "name": "Hidden",
+      "hidden": true
+    }
+  ]
+}

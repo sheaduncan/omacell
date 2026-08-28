@@ -16,6 +16,16 @@ pub mod codes {
     pub const CSV_CANCELLED: &str = "csv.cancelled";
     /// Export failed (range, encoding, or quoting policy).
     pub const CSV_EXPORT: &str = "csv.export";
+    /// Zip container is malformed or not an OPC package.
+    pub const XLSX_ZIP: &str = "xlsx.zip";
+    /// A zip/XML size, depth, count, or compression-ratio limit was exceeded.
+    pub const XLSX_LIMIT: &str = "xlsx.limit";
+    /// XML is malformed, too deep, or contains a DTD/entity.
+    pub const XLSX_XML: &str = "xlsx.xml";
+    /// The package is not a readable workbook (missing parts or broken rels).
+    pub const XLSX_FORMAT: &str = "xlsx.format";
+    /// A zip entry path is absolute, has `..`, or is otherwise illegal.
+    pub const XLSX_PATH: &str = "xlsx.path";
 }
 
 /// Encoding error.
@@ -57,4 +67,38 @@ pub fn cancelled(message: impl Into<String>) -> CoreError {
 pub fn export(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::CSV_EXPORT, message)
         .with_hint("check the range, quoting, formula-text policy, encoding, and destination")
+}
+
+/// Zip container error.
+#[must_use]
+pub fn xlsx_zip(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::XLSX_ZIP, message).with_hint("the file is not a readable OPC zip package")
+}
+
+/// Zip/XML limit error.
+#[must_use]
+pub fn xlsx_limit(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::XLSX_LIMIT, message)
+        .with_hint("parsers reject zip bombs, deep XML, and oversized parts (spec F-9.6)")
+}
+
+/// XML error.
+#[must_use]
+pub fn xlsx_xml(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::XLSX_XML, message)
+        .with_hint("external entities are disabled; XML depth is capped")
+}
+
+/// Workbook structure error.
+#[must_use]
+pub fn xlsx_format(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::XLSX_FORMAT, message)
+        .with_hint("the package must contain a workbook part and worksheet relationships")
+}
+
+/// Illegal zip path.
+#[must_use]
+pub fn xlsx_path(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::XLSX_PATH, message)
+        .with_hint("zip entries cannot be absolute or contain '..'")
 }

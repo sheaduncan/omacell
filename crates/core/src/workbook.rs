@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use crate::addr::{CellRef, ParsedRef, RefKind, SheetId, SheetSpec};
 pub use crate::date_system::DateSystem;
 use crate::error::CoreError;
-use crate::intern::{ArrayPayload, FormulaId, Interners};
+use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
 use crate::locale::LocaleId;
 use crate::names::{DefinedName, NameRegistry, NameScope};
 use crate::numfmt;
@@ -404,7 +404,8 @@ impl Workbook {
         })
     }
 
-    fn sheet_mut(&mut self, id: SheetId) -> Result<&mut Sheet, CoreError> {
+    /// Mutable sheet (file loaders and WP-10 writers).
+    pub fn sheet_mut(&mut self, id: SheetId) -> Result<&mut Sheet, CoreError> {
         self.sheets
             .get_mut(&id)
             .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
@@ -456,6 +457,11 @@ impl Workbook {
         n: f64,
     ) -> Result<Option<CellSlot>, CoreError> {
         self.replace_slot(id, row, col, Some(CellSlot::number(n)))
+    }
+
+    /// Intern plain or rich text (refcount +1). Pair with [`Self::release_text`].
+    pub fn intern_rich_text(&mut self, text: &str, runs: Vec<RichTextRun>) -> StrId {
+        self.intern_mut().strings.intern_rich(text, runs)
     }
 
     /// Intern `text` and store it as the cell value.

@@ -11,7 +11,12 @@ targets = [
 
 [advisories]
 yanked = "deny"
-ignore = []
+ignore = [
+    # Transitive via calamine (dev-only). Runtime `omacell-io` uses quick-xml 0.41.
+    # Remove when calamine ≥ 0.36 is allowed by the workspace MSRV.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
 
 [licenses]
 allow = [
