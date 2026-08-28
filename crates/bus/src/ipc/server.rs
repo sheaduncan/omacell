@@ -18,8 +18,8 @@ use super::discover::{
     instance_path, prepare_runtime_dir, remove_stale_socket, socket_path, write_discovery,
 };
 use super::protocol::{
-    ControlOp, FrameBuf, MAX_CONNECTIONS, MAX_EVENT_QUEUE, Mode, Reply, Request, ServerRecord,
-    encode_line, event_type_name,
+    ControlOp, FrameBuf, MAX_CONNECTIONS, MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, Mode, Reply,
+    Request, ServerRecord, encode_line, event_type_name,
 };
 use crate::error;
 use crate::event::SubscriberId;
@@ -36,6 +36,7 @@ pub struct IpcHandle {
     path: PathBuf,
     shutdown: Arc<AtomicBool>,
     accept: Option<JoinHandle<()>>,
+    clients: Arc<Mutex<Vec<JoinHandle<()>>>>,
     bus: Arc<Mutex<Bus>>,
 }
 
@@ -70,6 +71,13 @@ impl IpcHandle {
         if let Some(handle) = self.accept.take() {
             let _ = handle.join();
         }
+        let clients = {
+            let mut clients = lock_clients(&self.clients);
+            clients.drain(..).collect::<Vec<_>>()
+        };
+        for client in clients {
+            let _ = client.join();
+        }
         let _ = std::fs::remove_file(&self.path);
         let _ = std::fs::remove_file(instance_path(&self.dir, self.pid));
     }
@@ -99,32 +107,42 @@ pub fn serve(dir: PathBuf, bus: Bus) -> Result<IpcHandle, CoreError> {
     }
     let listener = UnixListener::bind(&path)
         .map_err(|err| error::ipc_socket(format!("bind {}: {err}", path.display())))?;
+    let mut cleanup = BoundCleanup::new(path.clone());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
         .map_err(|err| error::ipc_socket(format!("chmod {}: {err}", path.display())))?;
     listener
         .set_nonblocking(true)
         .map_err(|err| error::ipc_socket(format!("set nonblocking: {err}")))?;
     write_discovery(&dir, pid)?;
+    cleanup.instance = Some(instance_path(&dir, pid));
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let connections = Arc::new(AtomicUsize::new(0));
+    let clients = Arc::new(Mutex::new(Vec::new()));
     let bus = Arc::new(Mutex::new(bus));
     let accept_shutdown = shutdown.clone();
     let accept_bus = bus.clone();
-    let accept_path = path.clone();
+    let accept_clients = clients.clone();
     let accept = thread::Builder::new()
         .name("omacell-ipc-accept".into())
         .spawn(move || {
-            accept_loop(listener, accept_bus, accept_shutdown, connections);
+            accept_loop(
+                listener,
+                accept_bus,
+                accept_shutdown,
+                connections,
+                accept_clients,
+            );
         })
         .map_err(|err| error::ipc_socket(format!("spawn accept: {err}")))?;
-    let _ = accept_path;
+    cleanup.disarm();
     Ok(IpcHandle {
         dir,
         pid,
         path,
         shutdown,
         accept: Some(accept),
+        clients,
         bus,
     })
 }
@@ -134,8 +152,10 @@ fn accept_loop(
     bus: Arc<Mutex<Bus>>,
     shutdown: Arc<AtomicBool>,
     connections: Arc<AtomicUsize>,
+    clients: Arc<Mutex<Vec<JoinHandle<()>>>>,
 ) {
     while !shutdown.load(Ordering::SeqCst) {
+        reap_finished_clients(&clients);
         match listener.accept() {
             Ok((stream, _)) => {
                 if shutdown.load(Ordering::SeqCst) {
@@ -151,13 +171,19 @@ fn accept_loop(
                     continue;
                 }
                 let bus = bus.clone();
-                let connections = connections.clone();
-                let _ = thread::Builder::new()
+                let client_connections = connections.clone();
+                let client_shutdown = shutdown.clone();
+                match thread::Builder::new()
                     .name("omacell-ipc-client".into())
                     .spawn(move || {
-                        client_loop(stream, bus);
+                        client_loop(stream, bus, client_shutdown);
+                        client_connections.fetch_sub(1, Ordering::SeqCst);
+                    }) {
+                    Ok(handle) => lock_clients(&clients).push(handle),
+                    Err(_) => {
                         connections.fetch_sub(1, Ordering::SeqCst);
-                    });
+                    }
+                }
             }
             Err(err) if err.kind() == ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(20));
@@ -165,6 +191,7 @@ fn accept_loop(
             Err(_) => thread::sleep(Duration::from_millis(20)),
         }
     }
+    reap_finished_clients(&clients);
 }
 
 fn write_error_and_close(mut stream: UnixStream, err: CoreError) -> Result<(), CoreError> {
@@ -174,7 +201,7 @@ fn write_error_and_close(mut stream: UnixStream, err: CoreError) -> Result<(), C
     Ok(())
 }
 
-fn client_loop(stream: UnixStream, bus: Arc<Mutex<Bus>>) {
+fn client_loop(stream: UnixStream, bus: Arc<Mutex<Bus>>, shutdown: Arc<AtomicBool>) {
     let _ = stream.set_read_timeout(Some(READ_TICK));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let mut writer = match stream.try_clone() {
@@ -186,27 +213,27 @@ fn client_loop(stream: UnixStream, bus: Arc<Mutex<Bus>>) {
     let mut chunk = [0u8; 8192];
     let mut sub: Option<SubscriberId> = None;
     let mut filter: Vec<String> = Vec::new();
-    loop {
+    'client: while !shutdown.load(Ordering::SeqCst) {
         match reader.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => match frames.push(&chunk[..n]) {
                 Ok(lines) => {
                     for line in lines {
                         if !handle_line(&mut writer, &bus, &mut sub, &mut filter, &line) {
-                            return;
+                            break 'client;
                         }
                     }
                 }
                 Err(err) => {
                     let _ = write_reply(&mut writer, Reply::err(0, err));
-                    return;
+                    break 'client;
                 }
             },
             Err(err)
                 if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut =>
             {
                 if !flush_events(&mut writer, &bus, &mut sub, &filter) {
-                    return;
+                    break 'client;
                 }
             }
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
@@ -338,7 +365,7 @@ fn dispatch_control(
                 bus.unsubscribe(old);
             }
             *filter = events;
-            *sub = Some(bus.subscribe(MAX_EVENT_QUEUE));
+            *sub = Some(bus.subscribe_ipc(MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, filter));
             Reply::ok(id, serde_json::json!({ "subscribed": filter.clone() }))
         }
         ControlOp::Unsubscribe => {
@@ -481,4 +508,60 @@ fn write_record(writer: &mut UnixStream, record: &ServerRecord) -> Result<(), Co
 
 fn lock_bus(bus: &Arc<Mutex<Bus>>) -> std::sync::MutexGuard<'_, Bus> {
     bus.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+fn lock_clients(
+    clients: &Arc<Mutex<Vec<JoinHandle<()>>>>,
+) -> std::sync::MutexGuard<'_, Vec<JoinHandle<()>>> {
+    clients.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+fn reap_finished_clients(clients: &Arc<Mutex<Vec<JoinHandle<()>>>>) {
+    let finished = {
+        let mut clients = lock_clients(clients);
+        let mut finished = Vec::new();
+        let mut index = 0;
+        while index < clients.len() {
+            if clients[index].is_finished() {
+                finished.push(clients.swap_remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        finished
+    };
+    for client in finished {
+        let _ = client.join();
+    }
+}
+
+struct BoundCleanup {
+    socket: PathBuf,
+    instance: Option<PathBuf>,
+    armed: bool,
+}
+
+impl BoundCleanup {
+    fn new(socket: PathBuf) -> Self {
+        Self {
+            socket,
+            instance: None,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for BoundCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.socket);
+            if let Some(instance) = &self.instance {
+                let _ = std::fs::remove_file(instance);
+            }
+        }
+    }
 }

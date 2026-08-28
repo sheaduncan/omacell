@@ -11,7 +11,8 @@ use serde_json::Value;
 
 use super::discover::{default_runtime_dir, discover_newest, discovered_socket};
 use super::protocol::{
-    ControlOp, FrameBuf, Mode, Reply, ServerRecord, encode_command, encode_control,
+    ControlOp, FrameBuf, Mode, Reply, ServerRecord, VERSION, check_json_depth, encode_command,
+    encode_control,
 };
 use crate::error;
 
@@ -23,7 +24,7 @@ pub struct IpcClient {
     stream: UnixStream,
     next_id: u64,
     timeout: Duration,
-    pending_records: Vec<ServerRecord>,
+    pending_records: VecDeque<ServerRecord>,
     frames: FrameBuf,
     lines: VecDeque<Vec<u8>>,
 }
@@ -44,7 +45,7 @@ impl IpcClient {
             stream,
             next_id: 1,
             timeout: DEFAULT_TIMEOUT,
-            pending_records: Vec::new(),
+            pending_records: VecDeque::new(),
             frames: FrameBuf::new(),
             lines: VecDeque::new(),
         })
@@ -134,7 +135,7 @@ impl IpcClient {
 
     /// Next buffered or incoming unsolicited record.
     pub fn poll_record(&mut self) -> Result<Option<ServerRecord>, CoreError> {
-        if let Some(record) = self.pending_records.pop() {
+        if let Some(record) = self.pending_records.pop_front() {
             return Ok(Some(record));
         }
         self.stream
@@ -173,7 +174,7 @@ impl IpcClient {
                         reply.id
                     )));
                 }
-                Some(Wire::Record(record)) => self.pending_records.push(record),
+                Some(Wire::Record(record)) => self.pending_records.push_back(record),
                 None => {
                     return Err(error::ipc_timeout(format!(
                         "timed out waiting for reply {want}"
@@ -225,6 +226,7 @@ fn parse_wire(line: &[u8]) -> Result<Wire, CoreError> {
     if text.is_empty() {
         return Err(error::ipc_frame("empty IPC frame"));
     }
+    check_json_depth(text)?;
     let value: Value = serde_json::from_str(text)
         .map_err(|err| error::ipc_frame(format!("invalid JSON: {err}")))?;
     let obj = value
@@ -233,22 +235,11 @@ fn parse_wire(line: &[u8]) -> Result<Wire, CoreError> {
     if obj.contains_key("ok") {
         let reply: Reply = serde_json::from_value(value)
             .map_err(|err| error::ipc_protocol(format!("invalid reply: {err}")))?;
-        if reply.v != super::protocol::VERSION {
+        if reply.v != VERSION {
             return Err(error::ipc_version(format!(
                 "unsupported IPC version {}",
                 reply.v
             )));
-        }
-        if reply.ok && reply.result.is_none() {
-            return Err(error::ipc_protocol("ok reply missing result"));
-        }
-        if !reply.ok && reply.error.is_none() {
-            return Err(error::ipc_protocol("error reply missing error"));
-        }
-        if reply.ok && reply.error.is_some() || !reply.ok && reply.result.is_some() {
-            return Err(error::ipc_protocol(
-                "reply must contain exactly one of result or error",
-            ));
         }
         return Ok(Wire::Reply(reply));
     }
@@ -257,6 +248,20 @@ fn parse_wire(line: &[u8]) -> Result<Wire, CoreError> {
     {
         let record: ServerRecord = serde_json::from_value(value)
             .map_err(|err| error::ipc_protocol(format!("invalid server record: {err}")))?;
+        let (version, valid_payload) = match &record {
+            ServerRecord::Event { v, .. } => (*v, true),
+            ServerRecord::Overflow { v, dropped } => (*v, *dropped > 0),
+        };
+        if version != VERSION {
+            return Err(error::ipc_version(format!(
+                "unsupported IPC version {version}"
+            )));
+        }
+        if !valid_payload {
+            return Err(error::ipc_protocol(
+                "overflow record must report at least one dropped event",
+            ));
+        }
         return Ok(Wire::Record(record));
     }
     Err(error::ipc_protocol("unrecognized IPC record"))

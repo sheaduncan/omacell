@@ -26,18 +26,7 @@
       "properties": {
         "v": { "type": "integer", "const": 1 },
         "id": { "type": "integer", "minimum": 0 },
-        "op": {
-          "type": "string",
-          "enum": [
-            "subscribe",
-            "unsubscribe",
-            "changeset.apply",
-            "changeset.revert",
-            "changeset.list",
-            "changeset.get",
-            "ping"
-          ]
-        },
+        "op": { "type": "string", "const": "subscribe" },
         "events": {
           "type": "array",
           "maxItems": 16,
@@ -55,6 +44,32 @@
               "theme_changed"
             ]
           }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "op"],
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "id": { "type": "integer", "minimum": 0 },
+        "op": {
+          "type": "string",
+          "enum": ["unsubscribe", "changeset.list", "ping"]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "op", "changeset"],
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "id": { "type": "integer", "minimum": 0 },
+        "op": {
+          "type": "string",
+          "enum": ["changeset.apply", "changeset.revert", "changeset.get"]
         },
         "changeset": { "type": "string", "minLength": 1 }
       }

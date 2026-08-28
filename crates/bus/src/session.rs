@@ -92,6 +92,16 @@ impl Bus {
         self.events.subscribe(cap)
     }
 
+    /// Subscribe an IPC client with count/byte limits and a wire-event filter.
+    pub(crate) fn subscribe_ipc(
+        &mut self,
+        cap: usize,
+        byte_cap: usize,
+        filter: &[String],
+    ) -> SubscriberId {
+        self.events.subscribe_filtered(cap, byte_cap, filter)
+    }
+
     /// Drain queued events for a subscriber.
     pub fn drain(&mut self, id: SubscriberId) -> Vec<Event> {
         self.events.drain(id)

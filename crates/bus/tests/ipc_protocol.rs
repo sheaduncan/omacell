@@ -3,8 +3,8 @@
 #![cfg(unix)]
 
 use omacell_bus::ipc::{
-    ControlOp, MAX_FRAME_BYTES, MAX_JSON_DEPTH, Mode, Request, check_json_depth, decode_request,
-    decode_request_bytes,
+    ControlOp, MAX_FRAME_BYTES, MAX_JSON_DEPTH, Mode, Reply, Request, check_json_depth,
+    decode_request, decode_request_bytes,
 };
 use std::path::PathBuf;
 
@@ -27,6 +27,13 @@ fn validate(
     schema: &serde_json::Value,
     path: &str,
 ) -> Result<(), String> {
+    if let Some(boolean) = schema.as_bool() {
+        return if boolean {
+            Ok(())
+        } else {
+            Err(format!("{path}: false schema"))
+        };
+    }
     if let Some(expected) = schema.get("const")
         && value != expected
     {
@@ -39,42 +46,29 @@ fn validate(
     }
     if let Some(options) = schema.get("oneOf").and_then(serde_json::Value::as_array) {
         let mut errors = Vec::new();
+        let mut matches = 0;
         for (i, option) in options.iter().enumerate() {
             match validate(value, option, &format!("{path}.oneOf[{i}]")) {
-                Ok(()) => return Ok(()),
+                Ok(()) => matches += 1,
                 Err(e) => errors.push(e),
             }
         }
-        return Err(format!("{path}: no oneOf matched ({})", errors.join("; ")));
+        if matches != 1 {
+            return Err(format!(
+                "{path}: expected one oneOf match, got {matches} ({})",
+                errors.join("; ")
+            ));
+        }
+    }
+    if let Some(negated) = schema.get("not")
+        && validate(value, negated, &format!("{path}.not")).is_ok()
+    {
+        return Err(format!("{path}: matched a forbidden schema"));
     }
     match schema.get("type").and_then(serde_json::Value::as_str) {
         Some("object") => {
-            let object = value
-                .as_object()
-                .ok_or_else(|| format!("{path}: expected object"))?;
-            let properties = schema
-                .get("properties")
-                .and_then(serde_json::Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
-                for key in required.iter().filter_map(serde_json::Value::as_str) {
-                    if !object.contains_key(key) {
-                        return Err(format!("{path}: missing {key}"));
-                    }
-                }
-            }
-            if schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {
-                for key in object.keys() {
-                    if !properties.contains_key(key) {
-                        return Err(format!("{path}: unexpected property {key}"));
-                    }
-                }
-            }
-            for (key, child) in object {
-                if let Some(child_schema) = properties.get(key) {
-                    validate(child, child_schema, &format!("{path}.{key}"))?;
-                }
+            if !value.is_object() {
+                return Err(format!("{path}: expected object"));
             }
         }
         Some("array") => {
@@ -86,15 +80,30 @@ fn validate(
                     validate(item, items, &format!("{path}[{i}]"))?;
                 }
             }
+            if let Some(max) = schema.get("maxItems").and_then(serde_json::Value::as_u64)
+                && array.len() as u64 > max
+            {
+                return Err(format!("{path}: array is longer than {max}"));
+            }
         }
         Some("string") => {
-            if !value.is_string() {
-                return Err(format!("{path}: expected string"));
+            let string = value
+                .as_str()
+                .ok_or_else(|| format!("{path}: expected string"))?;
+            if let Some(min) = schema.get("minLength").and_then(serde_json::Value::as_u64)
+                && string.chars().count() < min as usize
+            {
+                return Err(format!("{path}: string is shorter than {min}"));
             }
         }
         Some("integer") => {
             if value.as_u64().is_none() && value.as_i64().is_none() {
                 return Err(format!("{path}: expected integer"));
+            }
+            if let Some(minimum) = schema.get("minimum").and_then(serde_json::Value::as_i64)
+                && value.as_i64().is_some_and(|number| number < minimum)
+            {
+                return Err(format!("{path}: integer is less than {minimum}"));
             }
         }
         Some("boolean") => {
@@ -104,6 +113,32 @@ fn validate(
         }
         Some(other) => return Err(format!("{path}: unsupported schema type {other}")),
         None => {}
+    }
+    if let Some(object) = value.as_object() {
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+            for key in required.iter().filter_map(serde_json::Value::as_str) {
+                if !object.contains_key(key) {
+                    return Err(format!("{path}: missing {key}"));
+                }
+            }
+        }
+        if schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {
+            for key in object.keys() {
+                if !properties.contains_key(key) {
+                    return Err(format!("{path}: unexpected property {key}"));
+                }
+            }
+        }
+        for (key, child) in object {
+            if let Some(child_schema) = properties.get(key) {
+                validate(child, child_schema, &format!("{path}.{key}"))?;
+            }
+        }
     }
     Ok(())
 }
@@ -145,6 +180,10 @@ fn fixtures_round_trip_through_decoder() {
         }
         other => panic!("{other:?}"),
     }
+
+    let null_reply = Reply::ok(9, serde_json::Value::Null);
+    let encoded = serde_json::to_string(&null_reply).unwrap();
+    assert_eq!(serde_json::from_str::<Reply>(&encoded).unwrap(), null_reply);
 }
 
 #[test]
@@ -188,4 +227,44 @@ fn frame_buf_rejects_a_line_without_newline_past_the_cap() {
     let chunk = vec![b'a'; MAX_FRAME_BYTES + 1];
     let err = buf.push(&chunk).unwrap_err();
     assert_eq!(err.code, omacell_bus::codes::IPC_FRAME);
+}
+
+#[test]
+fn frame_cap_includes_the_trailing_newline() {
+    let mut allowed = vec![b'a'; MAX_FRAME_BYTES - 1];
+    allowed.push(b'\n');
+    let mut buf = omacell_bus::ipc::FrameBuf::new();
+    assert_eq!(buf.push(&allowed).unwrap()[0].len(), MAX_FRAME_BYTES - 1);
+
+    let mut oversized = vec![b'a'; MAX_FRAME_BYTES];
+    oversized.push(b'\n');
+    let err = buf.push(&oversized).unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::IPC_FRAME);
+}
+
+#[test]
+fn request_schema_matches_control_operation_fields() {
+    let request = schema("request.schema.json");
+    for invalid in [
+        serde_json::json!({"v":1,"id":1,"op":"ping","events":[]}),
+        serde_json::json!({"v":1,"id":1,"op":"subscribe","changeset":"cs-1"}),
+        serde_json::json!({"v":1,"id":1,"op":"changeset.apply"}),
+    ] {
+        assert!(
+            validate(&invalid, &request, "request").is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
+fn decoder_rejects_fields_that_do_not_belong_to_the_control_op() {
+    for invalid in [
+        r#"{"v":1,"id":1,"op":"ping","events":[]}"#,
+        r#"{"v":1,"id":1,"op":"subscribe","changeset":"cs-1"}"#,
+        r#"{"v":1,"id":1,"op":"changeset.apply"}"#,
+    ] {
+        let err = decode_request(invalid).unwrap_err();
+        assert_eq!(err.code, omacell_bus::codes::IPC_PROTOCOL, "{invalid}");
+    }
 }

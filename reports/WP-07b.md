@@ -105,6 +105,14 @@ Key files:
 - Fuzz: [`fuzz/fuzz_targets/ipc_frame.rs`](../fuzz/fuzz_targets/ipc_frame.rs) (picked up by nightly `cargo fuzz list`)
 - Bench: [`crates/bus/benches/ipc_roundtrip.rs`](../crates/bus/benches/ipc_roundtrip.rs)
 
+Review hardening added before merge:
+
+- Shutdown now stops and joins active client threads, removes every subscription on all exit paths, and reaps completed thread handles during normal operation.
+- Subscription filters and the 256 KiB budget are enforced before events enter a client queue; unrelated events cannot force a filtered subscriber to overflow.
+- Client-side unsolicited events remain FIFO. Reply/event envelopes reject unknown fields and unsupported versions, while a valid JSON `null` result remains distinguishable from a missing result.
+- Discovery treats metadata as untrusted: socket paths are reconstructed from the validated pid, instance files are size/type/owner checked, and failed startup removes a newly bound socket without following or deleting a pre-existing symlink.
+- The 1 MiB limit now includes the newline without transiently buffering an oversized frame, and control-op schemas exactly match the decoder's op-specific fields.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -130,14 +138,14 @@ WP-13 should use `IpcClient`; it must not reach into server internals. Origin on
 
 Host: local Linux.
 
-- `cargo test -p omacell-bus` — protocol 5, server 9, plus existing bus tests, all pass.
+- `cargo test -p omacell-bus` — protocol 8, server 15, one event-queue unit test, plus existing bus tests, all pass.
 - `just check` — green.
 - `RUSTDOCFLAGS="-D warnings" cargo doc -p omacell-bus --no-deps` — pass.
 - `cargo deny check` — advisories/bans/licenses/sources ok.
-- `cargo +nightly fuzz run ipc_frame -- -runs=2000` — 2000 executions, no crash.
-- `cargo bench -p omacell-bus --bench ipc_roundtrip -- --save-baseline wp07b`:
-  - `ipc_roundtrip/ping` — 20.4 µs (19.1–21.5)
-  - `ipc_roundtrip/cell_set_propose` — 158 µs (138–174), no workbook recalc in the timed path.
+- `ASAN_OPTIONS=detect_leaks=0 cargo +nightly fuzz run ipc_frame -- -runs=10000` — 10,000 executions, no crash (`detect_leaks=0` is required because this review environment blocks LeakSanitizer's ptrace use).
+- `cargo bench -p omacell-bus --bench ipc_roundtrip -- --noplot` after review hardening:
+  - `ipc_roundtrip/ping` — 10.5 µs (10.3–10.7)
+  - `ipc_roundtrip/cell_set_propose` — 51.5 µs (49.5–54.0), no workbook recalc in the timed path.
 
 No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-approved). `libfuzzer-sys` remains fuzz-workspace only.
 
@@ -162,10 +170,9 @@ None. Frozen WP-01 types are unchanged. IPC v1 is a new freeze point, recorded i
 ### Acceptance (WP-07b)
 
 - [x] Request/reply/event fixtures validate against the committed IPC v1 schemas and round-trip through client/server — `ipc_protocol.rs`, `ipc_server.rs`
-- [x] Integration tests cover query, proposed mutation, explicit apply/revert, subscription, two concurrent clients, request ordering, timeouts, and clean shutdown — `ipc_server.rs`
+- [x] Integration tests cover query, proposed mutation, explicit apply/revert, subscription, two concurrent clients, request ordering, timeouts, and shutdown of active clients — `ipc_server.rs`
 - [x] Malformed, partial, deeply nested, oversized, unknown-version, unknown-field, and internal-command inputs are rejected without panic or server death — `ipc_protocol.rs`, `mutating_execute_is_rejected_internal_ids_are_rejected`
 - [x] Socket directory/permissions, owner validation, stale cleanup, and symlink resistance are tested on Linux — `runtime_dir_rejects_symlink_and_world_writable`, `stale_socket_for_dead_pid_is_removed`
-- [x] A stalled subscriber cannot block mutations — `stalled_subscriber_does_not_block_another_client`
-- [x] Decoder fuzz target is listed by `cargo fuzz list` and runs in the existing nightly job; smoke 2000 runs clean
-- [x] Local request/reply benchmark records IPC overhead separately from recalculation — `ipc_roundtrip` ping ~20 µs, propose ~158 µs
-
+- [x] A stalled or selectively filtered subscriber cannot block mutations or overflow on irrelevant events — `stalled_subscriber_does_not_block_another_client`, `filtered_events_do_not_consume_the_subscriber_queue`
+- [x] Decoder fuzz target is listed by `cargo fuzz list` and runs in the existing nightly job; review smoke 10,000 runs clean
+- [x] Local request/reply benchmark records IPC overhead separately from recalculation — `ipc_roundtrip` ping ~10.5 µs, propose ~51.5 µs

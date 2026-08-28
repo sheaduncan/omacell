@@ -4,13 +4,19 @@
 
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 use std::time::Duration;
 
 use omacell_bus::Bus;
-use omacell_bus::ipc::{IpcClient, Mode, default_runtime_dir, discover_newest, serve};
+use omacell_bus::ipc::{
+    IpcClient, MAX_EVENT_QUEUE, Mode, default_runtime_dir, discover_newest, discovered_socket,
+    serve,
+};
+use omacell_core::changeset::CommandCall;
+use omacell_core::command::{CommandId, Origin};
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
@@ -183,6 +189,164 @@ fn timeout_and_clean_shutdown() {
     handle.shutdown();
     std::thread::sleep(Duration::from_millis(50));
     assert!(IpcClient::connect(&path).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn shutdown_disconnects_existing_clients_before_returning() {
+    let (handle, dir) = start();
+    let mut client = IpcClient::connect(handle.socket_path()).unwrap();
+    assert!(client.ping().unwrap().ok);
+    handle.shutdown();
+    assert!(client.ping().is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn client_preserves_unsolicited_event_order() {
+    let (handle, dir) = start();
+    let mut client = IpcClient::connect(handle.socket_path()).unwrap();
+    client
+        .subscribe(&["changeset_proposed".to_string()])
+        .unwrap();
+
+    let first = client
+        .command(
+            "cell.set",
+            serde_json::json!({"ref":"A1","input":"1"}),
+            Some(Mode::Propose),
+        )
+        .unwrap()
+        .result
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let second = client
+        .command(
+            "cell.set",
+            serde_json::json!({"ref":"A2","input":"2"}),
+            Some(Mode::Propose),
+        )
+        .unwrap()
+        .result
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(client.ping().unwrap().ok);
+
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let Some(omacell_bus::ipc::ServerRecord::Event {
+            event: omacell_core::event::Event::ChangesetProposed { id },
+            ..
+        }) = client.poll_record().unwrap()
+        else {
+            panic!("expected changeset event");
+        };
+        ids.push(id.as_str().to_string());
+    }
+    assert_eq!(ids, vec![first, second]);
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn filtered_events_do_not_consume_the_subscriber_queue() {
+    let (handle, dir) = start();
+    let mut client = IpcClient::connect(handle.socket_path()).unwrap();
+    client.subscribe(&["recalc_done".to_string()]).unwrap();
+    {
+        let mut bus = handle.bus().lock().unwrap();
+        for i in 0..=MAX_EVENT_QUEUE {
+            bus.propose(
+                Origin::Ipc,
+                vec![CommandCall {
+                    id: CommandId::new("cell.set").unwrap(),
+                    args: serde_json::json!({"ref":"A1","input":i.to_string()}),
+                }],
+            )
+            .unwrap();
+        }
+    }
+    thread::sleep(Duration::from_millis(150));
+    assert!(client.ping().unwrap().ok);
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn discovery_metadata_cannot_redirect_outside_the_runtime_dir() {
+    let (handle, dir) = start();
+    let pid = std::process::id();
+    std::fs::write(
+        dir.join(format!("{pid}.instance")),
+        format!(
+            r#"{{"v":1,"pid":{pid},"socket":"../elsewhere.sock","started_unix_ms":18446744073709551615}}"#
+        ),
+    )
+    .unwrap();
+    let newest = discover_newest(&dir).unwrap().unwrap();
+    assert_eq!(newest.socket, format!("{pid}.sock"));
+    assert_eq!(discovered_socket(&dir, &newest), handle.socket_path());
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn failed_discovery_write_does_not_strand_the_bound_socket() {
+    let dir = runtime_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let pid = std::process::id();
+    let target = dir.join("target");
+    std::fs::write(&target, b"leave me").unwrap();
+    std::os::unix::fs::symlink(&target, dir.join(format!("{pid}.instance"))).unwrap();
+    assert!(serve(dir.clone(), bus()).is_err());
+    assert!(!dir.join(format!("{pid}.sock")).exists());
+    assert_eq!(std::fs::read(&target).unwrap(), b"leave me");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn client_rejects_unknown_reply_fields_and_wrong_event_versions() {
+    let dir = runtime_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("fake.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 1024];
+        let _ = stream.read(&mut request).unwrap();
+        stream
+            .write_all(b"{\"v\":1,\"id\":1,\"ok\":true,\"result\":{},\"extra\":true}\n")
+            .unwrap();
+    });
+    let mut client = IpcClient::connect(&path).unwrap();
+    let err = client.ping().unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::IPC_PROTOCOL);
+    server.join().unwrap();
+
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 1024];
+        let _ = stream.read(&mut request).unwrap();
+        stream
+            .write_all(
+                b"{\"v\":1,\"id\":1,\"ok\":true,\"result\":null}\n{\"kind\":\"overflow\",\"v\":2,\"dropped\":1}\n",
+            )
+            .unwrap();
+    });
+    let mut client = IpcClient::connect(&path).unwrap();
+    let reply = client.ping().unwrap();
+    assert!(reply.ok);
+    assert_eq!(reply.result, Some(serde_json::Value::Null));
+    let err = client.poll_record().unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::IPC_VERSION);
+    server.join().unwrap();
     let _ = std::fs::remove_dir_all(dir);
 }
 

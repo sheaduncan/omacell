@@ -2,13 +2,13 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use omacell_core::error::CoreError;
 
-use super::protocol::{Discovery, VERSION};
+use super::protocol::{Discovery, MAX_FRAME_BYTES, VERSION};
 use crate::error;
 
 const DIR_MODE: u32 = 0o700;
@@ -34,42 +34,42 @@ fn uid() -> Option<u32> {
 /// Prepare `dir` as a 0700, non-symlink directory owned by this user.
 pub fn prepare_runtime_dir(dir: &Path) -> Result<(), CoreError> {
     if dir.exists() {
-        let meta = fs::symlink_metadata(dir)
-            .map_err(|err| error::ipc_socket(format!("stat {}: {err}", dir.display())))?;
-        if meta.file_type().is_symlink() {
-            return Err(error::ipc_socket(format!("{} is a symlink", dir.display())));
-        }
-        if !meta.is_dir() {
-            return Err(error::ipc_socket(format!(
-                "{} is not a directory",
-                dir.display()
-            )));
-        }
-        let mode = meta.permissions().mode() & 0o777;
-        if mode != DIR_MODE {
-            return Err(error::ipc_socket(format!(
-                "{} mode is {mode:o}, expected {DIR_MODE:o}",
-                dir.display()
-            )));
-        }
-        if !owned_by_self(&meta) {
-            return Err(error::ipc_socket(format!(
-                "{} is not owned by this user",
-                dir.display()
-            )));
-        }
-        return Ok(());
+        return validate_runtime_dir(dir);
     }
     fs::DirBuilder::new()
         .mode(DIR_MODE)
         .recursive(true)
         .create(dir)
         .map_err(|err| error::ipc_socket(format!("create {}: {err}", dir.display())))?;
-    // Refuse if a symlink appeared between check and create.
+    fs::set_permissions(dir, fs::Permissions::from_mode(DIR_MODE))
+        .map_err(|err| error::ipc_socket(format!("chmod {}: {err}", dir.display())))?;
+    validate_runtime_dir(dir)
+}
+
+fn validate_runtime_dir(dir: &Path) -> Result<(), CoreError> {
     let meta = fs::symlink_metadata(dir)
         .map_err(|err| error::ipc_socket(format!("stat {}: {err}", dir.display())))?;
     if meta.file_type().is_symlink() {
         return Err(error::ipc_socket(format!("{} is a symlink", dir.display())));
+    }
+    if !meta.is_dir() {
+        return Err(error::ipc_socket(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
+    let mode = meta.permissions().mode() & 0o777;
+    if mode != DIR_MODE {
+        return Err(error::ipc_socket(format!(
+            "{} mode is {mode:o}, expected {DIR_MODE:o}",
+            dir.display()
+        )));
+    }
+    if !owned_by_self(&meta) {
+        return Err(error::ipc_socket(format!(
+            "{} is not owned by this user",
+            dir.display()
+        )));
     }
     Ok(())
 }
@@ -143,14 +143,26 @@ pub fn write_discovery(dir: &Path, pid: u32) -> Result<Discovery, CoreError> {
             path.display()
         )));
     }
+    if let Ok(meta) = fs::symlink_metadata(&path) {
+        if !meta.is_file() || !owned_by_self(&meta) {
+            return Err(error::ipc_socket(format!(
+                "{} is not a regular file owned by this user",
+                path.display()
+            )));
+        }
+        fs::remove_file(&path)
+            .map_err(|err| error::ipc_socket(format!("replace {}: {err}", path.display())))?;
+    }
     let json = serde_json::to_vec_pretty(&record)
         .map_err(|err| error::ipc_frame(format!("discovery json: {err}")))?;
     let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(true).mode(FILE_MODE);
+    opts.write(true).create_new(true).mode(FILE_MODE);
     use std::io::Write;
     let mut file = opts
         .open(&path)
         .map_err(|err| error::ipc_socket(format!("write {}: {err}", path.display())))?;
+    file.set_permissions(fs::Permissions::from_mode(FILE_MODE))
+        .map_err(|err| error::ipc_socket(format!("chmod {}: {err}", path.display())))?;
     file.write_all(&json)
         .map_err(|err| error::ipc_socket(format!("write {}: {err}", path.display())))?;
     Ok(record)
@@ -185,27 +197,25 @@ pub fn list_live_instances(dir: &Path) -> Result<Vec<Discovery>, CoreError> {
             Ok(m) => m,
             Err(_) => continue,
         };
-        if meta.file_type().is_symlink() || !owned_by_self(&meta) || !pid_is_alive(pid) {
+        if !meta.file_type().is_socket() || !owned_by_self(&meta) || !pid_is_alive(pid) {
             continue;
         }
         let inst = instance_path(dir, pid);
-        let record = match fs::read_to_string(&inst) {
-            Ok(text) => serde_json::from_str::<Discovery>(&text).ok(),
-            Err(_) => None,
-        };
-        found.push(
-            record.unwrap_or(Discovery {
-                v: VERSION,
-                pid,
-                socket: name.to_string(),
-                started_unix_ms: meta
-                    .modified()
+        let expected_socket = name.to_string();
+        let started_unix_ms =
+            read_valid_started(&inst, pid, &expected_socket).unwrap_or_else(|| {
+                meta.modified()
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0),
-            }),
-        );
+                    .unwrap_or(0)
+            });
+        found.push(Discovery {
+            v: VERSION,
+            pid,
+            socket: expected_socket,
+            started_unix_ms,
+        });
     }
     found.sort_by_key(|a| std::cmp::Reverse(a.started_unix_ms));
     Ok(found)
@@ -219,7 +229,18 @@ pub fn discover_newest(dir: &Path) -> Result<Option<Discovery>, CoreError> {
 /// Absolute socket path for a discovery record.
 #[must_use]
 pub fn discovered_socket(dir: &Path, record: &Discovery) -> PathBuf {
-    dir.join(&record.socket)
+    socket_path(dir, record.pid)
+}
+
+fn read_valid_started(path: &Path, pid: u32, socket: &str) -> Option<u64> {
+    let meta = fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() || !owned_by_self(&meta) || meta.len() > MAX_FRAME_BYTES as u64 {
+        return None;
+    }
+    let text = fs::read_to_string(path).ok()?;
+    let record: Discovery = serde_json::from_str(&text).ok()?;
+    (record.v == VERSION && record.pid == pid && record.socket == socket)
+        .then_some(record.started_unix_ms)
 }
 
 #[must_use]
@@ -234,6 +255,6 @@ fn owned_by_self(meta: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     match uid() {
         Some(uid) => meta.uid() == uid,
-        None => true,
+        None => false,
     }
 }

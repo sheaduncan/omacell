@@ -117,7 +117,7 @@ impl Request {
 }
 
 /// A v1 reply. Exactly one of `result` or `error`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Reply {
     /// Envelope version.
     pub v: u32,
@@ -131,6 +131,78 @@ pub struct Reply {
     /// Failure payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<CoreError>,
+}
+
+impl<'de> Deserialize<'de> for Reply {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ReplyWire::deserialize(deserializer)?;
+        let (result, error) = match (wire.ok, wire.result, wire.error) {
+            (true, Present::Value(result), Present::Missing) => (Some(result), None),
+            (false, Present::Missing, Present::Value(error))
+                if !error.code.is_empty() && !error.message.is_empty() =>
+            {
+                (
+                    None,
+                    Some(CoreError {
+                        code: error.code,
+                        message: error.message,
+                        hint: error.hint,
+                    }),
+                )
+            }
+            (false, Present::Missing, Present::Value(_)) => {
+                return Err(serde::de::Error::custom(
+                    "reply error code and message must be non-empty",
+                ));
+            }
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "reply must contain exactly one of result or error",
+                ));
+            }
+        };
+        Ok(Self {
+            v: wire.v,
+            id: wire.id,
+            ok: wire.ok,
+            result,
+            error,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplyWire {
+    v: u32,
+    id: u64,
+    ok: bool,
+    #[serde(default)]
+    result: Present<Value>,
+    #[serde(default)]
+    error: Present<WireError>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireError {
+    code: String,
+    message: String,
+    #[serde(default)]
+    hint: Option<String>,
+}
+
+#[derive(Default)]
+enum Present<T> {
+    #[default]
+    Missing,
+    Value(T),
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Present<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self::Value)
+    }
 }
 
 impl Reply {
@@ -161,7 +233,7 @@ impl Reply {
 
 /// Unsolicited record written on a subscribed connection.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ServerRecord {
     /// A bus event that passed the client's filter.
     Event {
@@ -198,6 +270,7 @@ impl ServerRecord {
 
 /// Instance discovery file (`<pid>.instance`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Discovery {
     /// Envelope version.
     pub v: u32,
@@ -224,43 +297,28 @@ impl FrameBuf {
 
     /// Append bytes and return every complete line (without the newline).
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, CoreError> {
-        if self.buf.len().saturating_add(bytes.len()) > MAX_FRAME_BYTES
-            && !bytes.contains(&b'\n')
-            && !self.buf.contains(&b'\n')
-        {
-            return Err(error::ipc_frame(
-                "IPC frame exceeds 1 MiB without a newline",
-            ));
-        }
-        self.buf.extend_from_slice(bytes);
-        if self.buf.len() > MAX_FRAME_BYTES && !self.buf.contains(&b'\n') {
-            self.buf.clear();
-            return Err(error::ipc_frame(
-                "IPC frame exceeds 1 MiB without a newline",
-            ));
-        }
         let mut lines = Vec::new();
-        while let Some(idx) = self.buf.iter().position(|b| *b == b'\n') {
-            if idx > MAX_FRAME_BYTES {
+        let mut rest = bytes;
+        while let Some(idx) = rest.iter().position(|b| *b == b'\n') {
+            if self.buf.len().saturating_add(idx).saturating_add(1) > MAX_FRAME_BYTES {
                 self.buf.clear();
                 return Err(error::ipc_frame("IPC frame exceeds 1 MiB"));
             }
-            let mut line: Vec<u8> = self.buf.drain(..=idx).collect();
-            line.pop();
+            self.buf.extend_from_slice(&rest[..idx]);
+            let mut line = std::mem::take(&mut self.buf);
             if line.last().copied() == Some(b'\r') {
                 line.pop();
             }
-            if line.len() > MAX_FRAME_BYTES {
-                return Err(error::ipc_frame("IPC frame exceeds 1 MiB"));
-            }
             lines.push(line);
+            rest = &rest[idx + 1..];
         }
-        if self.buf.len() > MAX_FRAME_BYTES {
+        if self.buf.len().saturating_add(rest.len()) >= MAX_FRAME_BYTES {
             self.buf.clear();
             return Err(error::ipc_frame(
                 "IPC frame exceeds 1 MiB without a newline",
             ));
         }
+        self.buf.extend_from_slice(rest);
         Ok(lines)
     }
 }
@@ -271,7 +329,7 @@ pub fn decode_request(text: &str) -> Result<Request, CoreError> {
     if text.is_empty() {
         return Err(error::ipc_frame("empty IPC frame"));
     }
-    if text.len() > MAX_FRAME_BYTES {
+    if text.len() >= MAX_FRAME_BYTES {
         return Err(error::ipc_frame("IPC frame exceeds 1 MiB"));
     }
     check_json_depth(text)?;
@@ -285,7 +343,9 @@ pub fn decode_request(text: &str) -> Result<Request, CoreError> {
 
 /// Decode bytes as a request (optional trailing newline).
 pub fn decode_request_bytes(data: &[u8]) -> Result<Request, CoreError> {
-    if data.len() > MAX_FRAME_BYTES {
+    if data.len() > MAX_FRAME_BYTES
+        || (data.len() == MAX_FRAME_BYTES && data.last().copied() != Some(b'\n'))
+    {
         return Err(error::ipc_frame("IPC frame exceeds 1 MiB"));
     }
     let text = std::str::from_utf8(data).map_err(|_| error::ipc_frame("IPC frame is not UTF-8"))?;
@@ -360,7 +420,11 @@ fn decode_request_object(obj: &Map<String, Value>) -> Result<Request, CoreError>
         Some(_) => return Err(error::ipc_protocol("changeset must be a non-empty string")),
     };
     match op {
-        ControlOp::Subscribe => {}
+        ControlOp::Subscribe => {
+            if obj.contains_key("changeset") {
+                return Err(error::ipc_protocol("unexpected field for this op"));
+            }
+        }
         ControlOp::Unsubscribe | ControlOp::ChangesetList | ControlOp::Ping => {
             if obj.contains_key("events") || obj.contains_key("changeset") {
                 return Err(error::ipc_protocol("unexpected field for this op"));
@@ -488,18 +552,7 @@ pub fn check_json_depth(text: &str) -> Result<(), CoreError> {
 /// Frozen `Event` tag.
 #[must_use]
 pub fn event_type_name(event: &Event) -> &'static str {
-    match event {
-        Event::WorkbookOpened { .. } => "workbook_opened",
-        Event::CellChanged { .. } => "cell_changed",
-        Event::RecalcDone { .. } => "recalc_done",
-        Event::BeforeSave { .. } => "before_save",
-        Event::FileSaved { .. } => "file_saved",
-        Event::ChangesetProposed { .. } => "changeset_proposed",
-        Event::ChangesetApplied { .. } => "changeset_applied",
-        Event::ChangesetReverted { .. } => "changeset_reverted",
-        Event::ThemeChanged { .. } => "theme_changed",
-        _ => "unknown",
-    }
+    crate::event::event_type_name(event).unwrap_or("unknown")
 }
 
 /// Encode a value as a JSON line (trailing newline).
