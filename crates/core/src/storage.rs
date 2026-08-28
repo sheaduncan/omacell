@@ -21,9 +21,9 @@ pub const BLOCK_SIZE: u32 = 256;
 const BLOCK: usize = 256;
 const WORDS: usize = (BLOCK * BLOCK) / 64;
 
-/// Packed per-cell flags (locked / hidden-formula / dirty).
+/// Packed per-cell flags (locked / hidden-formula / dirty / spill / CSE / stale).
 ///
-/// Excel’s default is locked. Dirty is reserved for WP-04 recalc.
+/// Excel’s default is locked. Dirty, spill, CSE, and stale are used by WP-04.
 ///
 /// ```
 /// use omacell_core::storage::CellFlags;
@@ -41,6 +41,12 @@ impl CellFlags {
     pub const HIDDEN: u8 = 1 << 1;
     /// Needs recalculation (WP-04).
     pub const DIRTY: u8 = 1 << 2;
+    /// Spill-ghost cell written by a dynamic array (WP-04).
+    pub const SPILL: u8 = 1 << 3;
+    /// Legacy CSE array formula: evaluate without spilling (WP-04).
+    pub const ARRAY: u8 = 1 << 4;
+    /// Async/AI result is stale (WP-04, A-3.3).
+    pub const STALE: u8 = 1 << 5;
 
     /// Empty flags (unlocked).
     #[must_use]
@@ -70,6 +76,24 @@ impl CellFlags {
     #[must_use]
     pub const fn dirty(self) -> bool {
         self.0 & Self::DIRTY != 0
+    }
+
+    /// Spill-ghost flag.
+    #[must_use]
+    pub const fn spill(self) -> bool {
+        self.0 & Self::SPILL != 0
+    }
+
+    /// Legacy CSE array-formula flag.
+    #[must_use]
+    pub const fn array(self) -> bool {
+        self.0 & Self::ARRAY != 0
+    }
+
+    /// Async/AI stale flag.
+    #[must_use]
+    pub const fn stale(self) -> bool {
+        self.0 & Self::STALE != 0
     }
 
     /// Set or clear a bit.

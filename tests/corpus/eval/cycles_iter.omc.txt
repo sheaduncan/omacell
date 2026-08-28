@@ -1,0 +1,7 @@
+# F-3.6 iterative calculation: bounded loop converges within max_change.
+sheet Sheet1
+settings iteration on max_iterations=80 max_change=0.000000000001
+
+# x = (x+2)/2 converges to 2 from the iteration-off seed 0.
+set D1 =(D1+2)/2
+expect D1 2

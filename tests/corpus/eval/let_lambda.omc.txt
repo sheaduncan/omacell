@@ -1,0 +1,42 @@
+# F-3.4 LET / LAMBDA language constructs (not the WP-05 library).
+sheet Sheet1
+
+set A1 =LET(x,1,x+1)
+expect A1 2
+
+set A2 =LET(x,1,y,x+1,y*2)
+expect A2 4
+
+set A3 =LET(x,10,LET(y,3,x+y))
+expect A3 13
+
+set A4 =LAMBDA(x,x+1)(5)
+expect A4 6
+
+set A5 =LAMBDA(x,y,x/y)(10,2)
+expect A5 5
+
+set A6 =LAMBDA(x,x)(0)
+expect A6 0
+
+set A7 =LET(f,LAMBDA(x,x+1),f(2))
+expect A7 3
+
+set A8 =LET(y,10,LAMBDA(x,x+y))(1)
+expect A8 11
+
+set A9 =LAMBDA(x,LAMBDA(y,x+y))(3)(4)
+expect A9 7
+
+set A10 =LAMBDA([x],IF(ISOMITTED(x),99,x))()
+expect A10 99
+
+set A11 =LAMBDA([x],IF(ISOMITTED(x),99,x))(7)
+expect A11 7
+
+set A12 =LAMBDA(x,x)
+expect A12 #CALC!
+
+name Double =LAMBDA(x,x*2)
+set A13 =Double(6)
+expect A13 12

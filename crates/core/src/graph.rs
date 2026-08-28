@@ -1,0 +1,665 @@
+//! Range-aware dependency graph (spec §11.3, F-3.6).
+//!
+//! Single-cell refs are direct edges. Range refs go through per-sheet buckets
+//! (whole sheet / whole row / whole column / 256×256 blocks) so `A:A` is one
+//! column-bucket edge.
+
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::addr::{RangeRef, SheetId, SheetSpec};
+use crate::eval::AstCache;
+use crate::formula::{Deps, collect_deps};
+use crate::intern::FormulaId;
+use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::storage::BLOCK_SIZE;
+use crate::workbook::Workbook;
+
+/// Formula-cell coordinate, ordered by `(sheet, row, col)` for determinism.
+///
+/// ```
+/// use omacell_core::addr::SheetId;
+/// use omacell_core::graph::CellCoord;
+/// let a = CellCoord::new(SheetId::new(0), 0, 0);
+/// let b = CellCoord::new(SheetId::new(0), 0, 1);
+/// assert!(a < b);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CellCoord {
+    /// Sheet.
+    pub sheet: SheetId,
+    /// 0-based row.
+    pub row: u32,
+    /// 0-based column.
+    pub col: u16,
+}
+
+impl CellCoord {
+    /// Construct a coordinate.
+    #[must_use]
+    pub fn new(sheet: SheetId, row: u32, col: u16) -> Self {
+        Self { sheet, row, col }
+    }
+}
+
+/// One precedent of a formula cell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Precedent {
+    /// A single cell.
+    Cell(CellCoord),
+    /// A rectangle on one sheet.
+    Range {
+        /// Sheet.
+        sheet: SheetId,
+        /// Range body.
+        range: RangeRef,
+        /// Whole-column bucket (O(1) `A:A`).
+        whole_col: bool,
+        /// Whole-row bucket.
+        whole_row: bool,
+    },
+    /// 3-D rectangle.
+    ThreeD {
+        /// Sheets in workbook order.
+        sheets: Vec<SheetId>,
+        /// Range body on each sheet.
+        range: RangeRef,
+    },
+}
+
+#[derive(Clone, Debug, Default)]
+struct Node {
+    volatile: bool,
+    dynamic: bool,
+    precedents: Vec<Precedent>,
+    /// Formula cells that directly depend on this cell (not via a range bucket).
+    cell_dependents: Vec<CellCoord>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SheetBuckets {
+    sheet: Vec<CellCoord>,
+    cols: FxHashMap<u16, Vec<CellCoord>>,
+    rows: FxHashMap<u32, Vec<CellCoord>>,
+    blocks: FxHashMap<(u32, u16), Vec<(CellCoord, RangeRef)>>,
+}
+
+/// Per-workbook dependency graph.
+#[derive(Clone, Debug, Default)]
+pub struct DepGraph {
+    nodes: FxHashMap<CellCoord, Node>,
+    buckets: FxHashMap<SheetId, SheetBuckets>,
+    /// Sorted formula cells (calc chain).
+    chain: Vec<CellCoord>,
+}
+
+impl DepGraph {
+    /// Empty graph.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether any formula nodes exist.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Formula cells in deterministic order (the persisted calc chain).
+    #[must_use]
+    pub fn calc_chain(&self) -> &[CellCoord] {
+        &self.chain
+    }
+
+    /// All formula cells.
+    #[must_use]
+    pub fn formula_cells(&self) -> Vec<CellCoord> {
+        self.chain.clone()
+    }
+
+    /// Direct precedents of a formula cell.
+    #[must_use]
+    pub fn precedents(&self, cell: CellCoord) -> &[Precedent] {
+        self.nodes
+            .get(&cell)
+            .map(|n| n.precedents.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Whether this formula is volatile.
+    #[must_use]
+    pub fn is_volatile(&self, cell: CellCoord) -> bool {
+        self.nodes.get(&cell).map(|n| n.volatile).unwrap_or(false)
+    }
+
+    /// Whether this formula contains `INDIRECT`/`OFFSET`.
+    #[must_use]
+    pub fn is_dynamic(&self, cell: CellCoord) -> bool {
+        self.nodes.get(&cell).map(|n| n.dynamic).unwrap_or(false)
+    }
+
+    /// Volatile formula cells (sorted).
+    #[must_use]
+    pub fn volatiles(&self) -> Vec<CellCoord> {
+        let mut v: Vec<CellCoord> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.volatile)
+            .map(|(c, _)| *c)
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Dynamic formula cells (sorted).
+    #[must_use]
+    pub fn dynamics(&self) -> Vec<CellCoord> {
+        let mut v: Vec<CellCoord> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.dynamic)
+            .map(|(c, _)| *c)
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Dependents of a cell (direct + range buckets), sorted and unique.
+    #[must_use]
+    pub fn dependents(&self, cell: CellCoord) -> Vec<CellCoord> {
+        let mut out: FxHashSet<CellCoord> = FxHashSet::default();
+        if let Some(n) = self.nodes.get(&cell) {
+            out.extend(n.cell_dependents.iter().copied());
+        }
+        if let Some(b) = self.buckets.get(&cell.sheet) {
+            out.extend(b.sheet.iter().copied());
+            if let Some(v) = b.cols.get(&cell.col) {
+                out.extend(v.iter().copied());
+            }
+            if let Some(v) = b.rows.get(&cell.row) {
+                out.extend(v.iter().copied());
+            }
+            let br = cell.row / BLOCK_SIZE;
+            let bc = u32::from(cell.col) / BLOCK_SIZE;
+            if let Some(v) = b.blocks.get(&(br, bc as u16)) {
+                for (dep, range) in v {
+                    if range_contains(*range, cell.row, cell.col) {
+                        out.insert(*dep);
+                    }
+                }
+            }
+        }
+        let mut list: Vec<CellCoord> = out.into_iter().collect();
+        list.sort_unstable();
+        list
+    }
+
+    /// Rebuild from every formula cell in `wb`.
+    pub fn rebuild(&mut self, wb: &Workbook, asts: &mut AstCache) {
+        *self = Self::new();
+        let mut cells = Vec::new();
+        for sheet in wb.sheets() {
+            for (row, col, slot) in sheet.store.iter() {
+                if let Some(fid) = slot.formula {
+                    cells.push((CellCoord::new(sheet.id, row, col), fid));
+                }
+            }
+        }
+        cells.sort_by_key(|(c, _)| *c);
+        for (coord, fid) in &cells {
+            self.add_node(wb, asts, *coord, *fid);
+        }
+        self.chain = cells.into_iter().map(|(c, _)| c).collect();
+        self.finish_edges();
+    }
+
+    /// Insert or replace one formula node (incremental edit).
+    pub fn upsert_formula(
+        &mut self,
+        wb: &Workbook,
+        asts: &mut AstCache,
+        coord: CellCoord,
+        fid: FormulaId,
+    ) {
+        self.remove_node(coord);
+        self.add_node(wb, asts, coord, fid);
+        if !self.chain.contains(&coord) {
+            self.chain.push(coord);
+            self.chain.sort_unstable();
+        }
+        self.finish_edges();
+    }
+
+    /// Remove a formula node.
+    pub fn remove_node(&mut self, coord: CellCoord) {
+        self.nodes.remove(&coord);
+        self.chain.retain(|c| *c != coord);
+        for b in self.buckets.values_mut() {
+            b.sheet.retain(|c| *c != coord);
+            for v in b.cols.values_mut() {
+                v.retain(|c| *c != coord);
+            }
+            for v in b.rows.values_mut() {
+                v.retain(|c| *c != coord);
+            }
+            for v in b.blocks.values_mut() {
+                v.retain(|(c, _)| *c != coord);
+            }
+        }
+        for n in self.nodes.values_mut() {
+            n.cell_dependents.retain(|c| *c != coord);
+        }
+    }
+
+    fn add_node(&mut self, wb: &Workbook, asts: &mut AstCache, coord: CellCoord, fid: FormulaId) {
+        let Some(src) = wb.intern().formulas.get(fid) else {
+            return;
+        };
+        let Ok(ref formula) = asts.get_or_parse(src) else {
+            self.nodes.insert(
+                coord,
+                Node {
+                    volatile: false,
+                    dynamic: false,
+                    precedents: Vec::new(),
+                    cell_dependents: Vec::new(),
+                },
+            );
+            return;
+        };
+        let deps = collect_deps(&formula.ast);
+        let precedents = resolve_deps(wb, coord.sheet, &deps);
+        self.nodes.insert(
+            coord,
+            Node {
+                volatile: deps.volatile,
+                dynamic: deps.dynamic,
+                precedents,
+                cell_dependents: Vec::new(),
+            },
+        );
+    }
+
+    fn finish_edges(&mut self) {
+        // Reset reverse edges / buckets.
+        for n in self.nodes.values_mut() {
+            n.cell_dependents.clear();
+        }
+        self.buckets.clear();
+        let coords: Vec<CellCoord> = self.nodes.keys().copied().collect();
+        for coord in coords {
+            let precs = self
+                .nodes
+                .get(&coord)
+                .map(|n| n.precedents.clone())
+                .unwrap_or_default();
+            for p in precs {
+                self.add_reverse(coord, &p);
+            }
+        }
+        for n in self.nodes.values_mut() {
+            n.cell_dependents.sort_unstable();
+            n.cell_dependents.dedup();
+        }
+    }
+
+    fn add_reverse(&mut self, dep: CellCoord, p: &Precedent) {
+        match p {
+            Precedent::Cell(c) => {
+                if let Some(n) = self.nodes.get_mut(c) {
+                    n.cell_dependents.push(dep);
+                } else {
+                    // Precedent is a literal / empty cell: still need a reverse
+                    // slot so dirty-from-edit finds `dep`. Store on a phantom node.
+                    self.nodes.entry(*c).or_default().cell_dependents.push(dep);
+                }
+            }
+            Precedent::Range {
+                sheet,
+                range,
+                whole_col,
+                whole_row,
+            } => {
+                let b = self.buckets.entry(*sheet).or_default();
+                if *whole_col && range.start.col == range.end.col {
+                    b.cols.entry(range.start.col).or_default().push(dep);
+                } else if *whole_row && range.start.row == range.end.row {
+                    b.rows.entry(range.start.row).or_default().push(dep);
+                } else if *whole_col && *whole_row {
+                    b.sheet.push(dep);
+                } else {
+                    for block in blocks_of(*range) {
+                        b.blocks.entry(block).or_default().push((dep, *range));
+                    }
+                }
+            }
+            Precedent::ThreeD { sheets, range } => {
+                for sheet in sheets {
+                    self.add_reverse(
+                        dep,
+                        &Precedent::Range {
+                            sheet: *sheet,
+                            range: *range,
+                            whole_col: range.whole_col,
+                            whole_row: range.whole_row,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Close `seeds` under reverse edges. Result is sorted.
+    #[must_use]
+    pub fn propagate(&self, seeds: impl IntoIterator<Item = CellCoord>) -> Vec<CellCoord> {
+        let mut out: FxHashSet<CellCoord> = FxHashSet::default();
+        let mut stack: Vec<CellCoord> = seeds.into_iter().collect();
+        while let Some(c) = stack.pop() {
+            if !out.insert(c) {
+                continue;
+            }
+            for d in self.dependents(c) {
+                if !out.contains(&d) {
+                    stack.push(d);
+                }
+            }
+        }
+        // Keep only formula cells (phantoms for literals have empty precedents
+        // and no formula — they still sit in `nodes`. Filter to chain.)
+        let chain: FxHashSet<CellCoord> = self.chain.iter().copied().collect();
+        let mut list: Vec<CellCoord> = out.into_iter().filter(|c| chain.contains(c)).collect();
+        list.sort_unstable();
+        list
+    }
+
+    /// Strongly connected components among `cells` with size > 1 or a self-loop.
+    #[must_use]
+    pub fn circular_set(&self, cells: &[CellCoord]) -> Vec<CellCoord> {
+        let set: FxHashSet<CellCoord> = cells.iter().copied().collect();
+        let mut circ = Vec::new();
+        for &c in cells {
+            if self.precedents_in(c, &set).contains(&c) {
+                circ.push(c);
+                continue;
+            }
+        }
+        // Tarjan-ish: nodes that cannot be fully ordered.
+        let mut indeg: FxHashMap<CellCoord, usize> = FxHashMap::default();
+        for &c in cells {
+            indeg.insert(c, 0);
+        }
+        for &c in cells {
+            for p in self.precedents_in(c, &set) {
+                if p != c {
+                    *indeg.entry(c).or_insert(0) += 1;
+                }
+            }
+        }
+        let mut q: Vec<CellCoord> = indeg
+            .iter()
+            .filter(|(_, d)| **d == 0)
+            .map(|(c, _)| *c)
+            .collect();
+        q.sort_unstable();
+        let mut seen = 0usize;
+        let mut i = 0usize;
+        let mut remaining = indeg;
+        while i < q.len() {
+            let c = q[i];
+            i += 1;
+            seen += 1;
+            remaining.remove(&c);
+            for d in self.dependents(c) {
+                if let Some(n) = remaining.get_mut(&d) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        q.push(d);
+                    }
+                }
+            }
+        }
+        if seen < cells.len() {
+            let mut rest: Vec<CellCoord> = remaining.keys().copied().collect();
+            rest.sort_unstable();
+            for c in rest {
+                if !circ.contains(&c) {
+                    circ.push(c);
+                }
+            }
+        }
+        circ.sort_unstable();
+        circ.dedup();
+        circ
+    }
+
+    fn precedents_in(&self, c: CellCoord, among: &FxHashSet<CellCoord>) -> Vec<CellCoord> {
+        let mut out = Vec::new();
+        let Some(n) = self.nodes.get(&c) else {
+            return out;
+        };
+        for p in &n.precedents {
+            match p {
+                Precedent::Cell(x) => {
+                    if among.contains(x) {
+                        out.push(*x);
+                    }
+                }
+                Precedent::Range { sheet, range, .. } => {
+                    for other in among {
+                        if other.sheet == *sheet && range_contains(*range, other.row, other.col) {
+                            out.push(*other);
+                        }
+                    }
+                }
+                Precedent::ThreeD { sheets, range } => {
+                    for other in among {
+                        if sheets.contains(&other.sheet)
+                            && range_contains(*range, other.row, other.col)
+                        {
+                            out.push(*other);
+                        }
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Topological generations of `cells`. Circular cells are omitted (caller
+    /// handles them). Within a generation, cells are sorted.
+    #[must_use]
+    pub fn generations(&self, cells: &[CellCoord]) -> Vec<Vec<CellCoord>> {
+        let among: FxHashSet<CellCoord> = cells.iter().copied().collect();
+        let circ: FxHashSet<CellCoord> = self.circular_set(cells).into_iter().collect();
+        let acyclic: Vec<CellCoord> = cells
+            .iter()
+            .copied()
+            .filter(|c| !circ.contains(c))
+            .collect();
+        let set: FxHashSet<CellCoord> = acyclic.iter().copied().collect();
+        let mut indeg: FxHashMap<CellCoord, usize> = FxHashMap::default();
+        for &c in &acyclic {
+            let n = self
+                .precedents_in(c, &among)
+                .into_iter()
+                .filter(|p| set.contains(p))
+                .count();
+            indeg.insert(c, n);
+        }
+        let mut gens = Vec::new();
+        let mut remaining: FxHashSet<CellCoord> = set.clone();
+        while !remaining.is_empty() {
+            let mut generation: Vec<CellCoord> = remaining
+                .iter()
+                .copied()
+                .filter(|c| indeg.get(c).copied().unwrap_or(0) == 0)
+                .collect();
+            if generation.is_empty() {
+                // Should be circular leftovers; stop.
+                break;
+            }
+            generation.sort_unstable();
+            for c in &generation {
+                remaining.remove(c);
+            }
+            for c in &generation {
+                for d in self.dependents(*c) {
+                    if remaining.contains(&d)
+                        && let Some(n) = indeg.get_mut(&d)
+                    {
+                        *n = n.saturating_sub(1);
+                    }
+                }
+            }
+            gens.push(generation);
+        }
+        gens
+    }
+}
+
+fn range_contains(range: RangeRef, row: u32, col: u16) -> bool {
+    let r1 = range.start.row.min(range.end.row);
+    let r2 = range.start.row.max(range.end.row);
+    let c1 = range.start.col.min(range.end.col);
+    let c2 = range.start.col.max(range.end.col);
+    row >= r1 && row <= r2 && col >= c1 && col <= c2
+}
+
+fn blocks_of(range: RangeRef) -> Vec<(u32, u16)> {
+    let r1 = range.start.row.min(range.end.row) / BLOCK_SIZE;
+    let r2 = range.start.row.max(range.end.row) / BLOCK_SIZE;
+    let c1 = u32::from(range.start.col.min(range.end.col)) / BLOCK_SIZE;
+    let c2 = u32::from(range.start.col.max(range.end.col)) / BLOCK_SIZE;
+    let mut out = Vec::new();
+    for r in r1..=r2 {
+        for c in c1..=c2 {
+            out.push((r, c as u16));
+        }
+    }
+    out
+}
+
+fn resolve_deps(wb: &Workbook, default_sheet: SheetId, deps: &Deps) -> Vec<Precedent> {
+    let mut out = Vec::new();
+    for (spec, range) in &deps.ranges {
+        match resolve_sheet_spec(wb, spec.as_ref(), default_sheet) {
+            SheetResolve::One(sheet) => {
+                let whole_col = range.whole_col
+                    || (range.start.row == 0 && range.end.row == MAX_ROWS.saturating_sub(1));
+                let whole_row = range.whole_row
+                    || (range.start.col == 0 && range.end.col == MAX_COLS.saturating_sub(1));
+                if range.start.row == range.end.row
+                    && range.start.col == range.end.col
+                    && !whole_col
+                    && !whole_row
+                {
+                    out.push(Precedent::Cell(CellCoord::new(
+                        sheet,
+                        range.start.row,
+                        range.start.col,
+                    )));
+                } else {
+                    out.push(Precedent::Range {
+                        sheet,
+                        range: *range,
+                        whole_col,
+                        whole_row,
+                    });
+                }
+            }
+            SheetResolve::Span(sheets) => out.push(Precedent::ThreeD {
+                sheets,
+                range: *range,
+            }),
+            SheetResolve::Missing => {}
+        }
+    }
+    for (spec, name) in &deps.names {
+        let sheet = match spec {
+            Some(s) => wb.resolve_sheet_name(&s.start).unwrap_or(default_sheet),
+            None => default_sheet,
+        };
+        if let Some(n) = wb.names().resolve(sheet, name) {
+            match &n.referent {
+                crate::names::NameReferent::Range(r) => {
+                    let sh = r.start.sheet.unwrap_or(sheet);
+                    out.push(Precedent::Range {
+                        sheet: sh,
+                        range: *r,
+                        whole_col: r.whole_col,
+                        whole_row: r.whole_row,
+                    });
+                }
+                crate::names::NameReferent::Formula(src) => {
+                    if let Ok(f) = crate::formula::parse(src) {
+                        let inner = collect_deps(&f.ast);
+                        out.extend(resolve_deps(wb, sheet, &inner));
+                    }
+                }
+                crate::names::NameReferent::Constant(_) => {}
+            }
+        }
+    }
+    for tname in &deps.tables {
+        if let Some(t) = wb.tables().get_by_name(tname) {
+            let start = crate::addr::CellRef {
+                sheet: Some(t.sheet),
+                row: t.start_row,
+                col: t.start_col,
+                row_abs: true,
+                col_abs: true,
+            };
+            let end = crate::addr::CellRef {
+                sheet: Some(t.sheet),
+                row: t.end_row,
+                col: t.end_col,
+                row_abs: true,
+                col_abs: true,
+            };
+            out.push(Precedent::Range {
+                sheet: t.sheet,
+                range: RangeRef::from_corners(start, end),
+                whole_col: false,
+                whole_row: false,
+            });
+        }
+    }
+    out
+}
+
+enum SheetResolve {
+    One(SheetId),
+    Span(Vec<SheetId>),
+    Missing,
+}
+
+fn resolve_sheet_spec(wb: &Workbook, spec: Option<&SheetSpec>, default: SheetId) -> SheetResolve {
+    match spec {
+        None => SheetResolve::One(default),
+        Some(s) if s.end.is_none() => match wb.resolve_sheet_name(&s.start) {
+            Ok(id) => SheetResolve::One(id),
+            Err(_) => SheetResolve::Missing,
+        },
+        Some(s) => {
+            let Ok(a) = wb.resolve_sheet_name(&s.start) else {
+                return SheetResolve::Missing;
+            };
+            let Some(end_name) = &s.end else {
+                return SheetResolve::One(a);
+            };
+            let Ok(b) = wb.resolve_sheet_name(end_name) else {
+                return SheetResolve::Missing;
+            };
+            let ids: Vec<SheetId> = wb.sheets().map(|sh| sh.id).collect();
+            let i = ids.iter().position(|&x| x == a);
+            let j = ids.iter().position(|&x| x == b);
+            match (i, j) {
+                (Some(i), Some(j)) if i <= j => SheetResolve::Span(ids[i..=j].to_vec()),
+                (Some(i), Some(j)) => SheetResolve::Span(ids[j..=i].to_vec()),
+                _ => SheetResolve::Missing,
+            }
+        }
+    }
+}

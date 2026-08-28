@@ -399,6 +399,7 @@ dependencies = [
  "criterion",
  "indexmap",
  "proptest",
+ "rayon",
  "rustc-hash",
  "schemars",
  "serde",

@@ -1,0 +1,46 @@
+# formula	expected	note
+# F-3.5 Coercion and comparison. Each formula is evaluated in A1 of a fresh sheet.
+=1+TRUE	2	F-3.5 TRUE→1 in arithmetic
+=1+FALSE	1	F-3.5 FALSE→0 in arithmetic
+=TRUE*3	3	F-3.5 TRUE→1 in multiplication
+=FALSE*3	0	F-3.5 FALSE→0 in multiplication
+=-TRUE	-1	F-3.5 unary minus of TRUE
+="1"+1	2	F-3.5 numeric text coerces in arithmetic
+=" 2 "*3	6	F-3.5 trimmed numeric text coerces in arithmetic
+="1e2"+0	100	F-3.5 scientific numeric text coerces in arithmetic
+="x"+1	#VALUE!	F-3.5 non-numeric text in arithmetic is #VALUE!
+="1"=1	FALSE	F-3.5 numeric text does not coerce in comparison
+=1="1"	FALSE	F-3.5 comparison is not arithmetic coercion
+="A"="a"	TRUE	F-3.5 text comparison is case-insensitive
+="Ab"="aB"	TRUE	F-3.5 case-insensitive equality
+="A"<"b"	TRUE	F-3.5 case-insensitive ordering
+=TRUE=1	FALSE	F-3.5 bool vs number does not coerce in comparison
+=FALSE=0	FALSE	F-3.5 FALSE is not equal to 0 in comparison
+=A2+1	1	F-3.5 empty cell → 0 in arithmetic
+=A2&"x"	x	F-3.5 empty cell → "" in concatenation
+=A2=0	TRUE	F-3.5 empty compares equal to 0
+=A2=""	TRUE	F-3.5 empty compares equal to ""
+=A2=FALSE	TRUE	F-3.5 empty compares equal to FALSE (empty→0, FALSE ranks as 0-equal empty)
+=1&TRUE	1TRUE	F-3.5 concat of number and bool uses TRUE/FALSE text
+=1/0	#DIV/0!	F-3.5 division by zero
+=#REF!+1	#REF!	F-3.5 errors propagate
+=1+#NAME?	#NAME?	F-3.5 errors propagate from the right operand when the left is clean
+=#DIV/0!+#NAME?	#DIV/0!	F-3.5 errors propagate left-to-right
+=#VALUE!&"x"	#VALUE!	F-3.5 errors propagate through concat
+=FOO()	#NAME?	unknown function is #NAME? (stub registry)
+=1=1	TRUE	numeric equality
+=1<>2	TRUE	numeric inequality
+=2>1	TRUE	numeric greater
+=1>=1	TRUE	numeric greater-or-equal
+=1<2	TRUE	numeric less
+=1<=1	TRUE	numeric less-or-equal
+=""&1	1	empty concat number uses General
+=TRUE&FALSE	TRUEFALSE	bool concat
+="2"*TRUE	2	numeric text and TRUE in arithmetic
+=--1	1	double unary minus
+=+1	1	unary plus
+=50%	0.5	percent postfix
+=(200)%	2	percent of parenthesized number
+=1%+1%	0.02	percent then add
+="1"+TRUE	2	numeric text + TRUE
+=A2&A3	(empty)	empty concat empty is empty string (displayed empty)

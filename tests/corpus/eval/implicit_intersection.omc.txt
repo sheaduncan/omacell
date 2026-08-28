@@ -1,0 +1,29 @@
+# F-3.2 / F-3.3 implicit intersection and @.
+sheet Sheet1
+
+set A1 10
+set A2 20
+set A3 30
+set B1 1
+set B2 2
+set B3 3
+
+# @ of a column from a cell on row 2 (1-based row 2 = index 1) takes A2.
+set C2 =@A1:A3
+expect C2 20
+
+# Range used as a formula in C1: modern DA spills; @ forces a scalar.
+set D1 =@A1:A3
+expect D1 10
+expect D2 (empty)
+
+# Cell ref to a spill origin returns the origin scalar, not the whole array.
+set F1 ={7,8,9}
+set F3 =F1
+expect F3 7
+expect G3 (empty)
+
+set F4 =F1#
+expect F4 7
+expect G4 8
+expect H4 9
