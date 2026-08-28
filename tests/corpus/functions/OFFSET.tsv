@@ -1,0 +1,13 @@
+# formula	expected	note
+=ROWS(OFFSET(C2,0,0,3,2))	3	height argument sets the returned reference height without allocating values
+=COLUMNS(OFFSET(C2,0,0,3,2))	2	width argument sets the returned reference width
+=OFFSET(B1,0,0)		offset 0,0 of an empty cell is empty
+=OFFSET(B2,-1,0)		negative row offset to B1 (empty)
+=OFFSET(B1,-1,0)	#REF!	row offset above row 1 is #REF!
+=OFFSET(B2,0,-2)	#REF!	column offset left of column A is #REF!
+=OFFSET(C2,0,0,0,1)	#REF!	height 0 is #REF!
+=OFFSET(C2,0,0,1,0)	#REF!	width 0 is #REF!
+=OFFSET(#N/A,0,0)	#N/A	non-reference first argument that is an error propagates
+=ROWS(OFFSET(C2,1,1))	1	omitted height/width keep the original 1×1 shape
+=OFFSET(C2,1048576,0)	#REF!	result start row out of grid is #REF! before any allocation
+=COLUMNS(OFFSET(C2,0,0,1,3))	3	width 3 from A1 is A1:C1

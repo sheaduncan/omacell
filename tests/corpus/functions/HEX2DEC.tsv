@@ -1,0 +1,12 @@
+# formula	expected	note
+=HEX2DEC("FF")	255	FF is 255
+=HEX2DEC("0")	0	zero
+=HEX2DEC("FFFFFFFFFF")	-1	10-digit two’s complement all-F
+=HEX2DEC("8000000000")	-549755813888	min 40-bit
+=HEX2DEC("A")	10	letter digit
+=HEX2DEC("ff")	255	hex is case-insensitive
+=HEX2DEC("G")	#NUM!	invalid hex digit
+=HEX2DEC(#N/A)	#N/A	error propagates
+=HEX2DEC("")	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. empty string is #NUM!
+=HEX2DEC("7FFFFFFFFF")	549755813887	max positive 40-bit
+=HEX2DEC("FFFFFFFFFFF")	#NUM!	more than 10 digits is #NUM!

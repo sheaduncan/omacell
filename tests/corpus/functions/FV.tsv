@@ -1,0 +1,12 @@
+# formula	expected	note
+=FV(0.1,1,0,-100)	110	compound pv one period
+=FV(0,5,10,0)	-50	zero rate: -pmt*nper
+=FV(0.1,1,-110,0)	110	annuity of one payment at end
+=FV(0.1,0,0,-100)	100	nper 0 returns -pv (sign convention)
+=FV(#N/A,1,0,-100)	#N/A	rate error propagates
+=FV(0.1,1,0,100)	-110	positive pv → negative fv
+=FV(0,1,-50,0,1)	50	zero rate: -pmt*nper
+=FV(0.1,#N/A,0,-100)	#N/A	nper error propagates
+=FV(0,2,0,-40)	40	zero rate no pmt: fv = -pv
+=FV(0.1,1,0,-100,0)	110	explicit type 0
+=FV(0.1,1,0,-100,1)	110	type 1 with pmt=0 equals type 0

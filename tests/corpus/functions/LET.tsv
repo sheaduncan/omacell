@@ -1,0 +1,12 @@
+# formula	expected	note
+=LET(x,1,x+1)	2	single binding (WP-04 evaluator, not a registered FnDef)
+=LET(x,1,y,x+1,y*2)	4	two bindings, later sees earlier
+=LET(x,10,LET(y,3,x+y))	13	nested LET
+=LET(f,LAMBDA(x,x+1),f(2))	3	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. LET-bound LAMBDA invoked
+=LET(x,1/0,x)	#DIV/0!	value error propagates and skips calc
+=LET(x,2,y,3,x*y)	6	product of two bindings
+=LET(x,"a",x)	a	text binding
+=LET(x,TRUE,x)	TRUE	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. logical binding
+=LET(x,{1,2,3},SUM(x))	6	array binding used by SUM
+=LET(x,1)	#VALUE!	odd argument count / missing calc is #VALUE!
+=LET(x,2,x,x+1,x)	3	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. rebinding the same name uses the new value in calc

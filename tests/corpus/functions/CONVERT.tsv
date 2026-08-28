@@ -1,0 +1,13 @@
+# formula	expected	note
+=CONVERT(1,"m","m")	1	identity distance
+=CONVERT(100,"cm","m")	1	centi prefix on metres
+=CONVERT(0,"C","F")	32	temperature 0°C is 32°F
+=CONVERT(32,"F","C")	0	inverse temperature
+=CONVERT(1,"g","kg")	0.001	kilo prefix on grams
+=CONVERT(1,"m","g")	#N/A	known difference: incompatible dimensions are `#N/A` (LibreOffice may use Err:502)
+=CONVERT(#N/A,"m","m")	#N/A	number error propagates
+=CONVERT(1,#N/A,"m")	#N/A	from_unit error propagates
+=CONVERT(1,"m","bogus")	#N/A	known difference: unknown unit is `#N/A` (LibreOffice may use Err:502)
+=CONVERT(1,"lbm","g")	453.59237	known difference: avoirdupois pound to gram uses the Microsoft CONVERT table (LibreOffice factor differs)
+=CONVERT(1,"bit","byte")	0.125	8 bits in a byte
+=CONVERT(273.15,"K","C")	0	kelvin to celsius

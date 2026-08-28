@@ -40,15 +40,12 @@ fn text_and_date_corpus_files() {
     );
     for path in files {
         let results = run_corpus_file(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let probe = matches!(path.file_stem().and_then(|s| s.to_str()), Some("SEQUENCE"));
-        if !probe {
-            assert!(
-                results.len() >= 10,
-                "{} has {} rows",
-                path.display(),
-                results.len()
-            );
-        }
+        assert!(
+            results.len() >= 10,
+            "{} has {} rows",
+            path.display(),
+            results.len()
+        );
         for (row, got) in results {
             assert_eq!(
                 got,
@@ -90,7 +87,9 @@ fn functions_json_is_sorted_and_matches_schema_version() {
     assert!(names.contains(&"ISOMITTED".to_string()));
     assert!(names.contains(&"TEXT".to_string()));
     assert!(names.contains(&"NOW".to_string()));
-    assert!(specs.len() > 1);
+    assert!(names.contains(&"XLOOKUP".to_string()));
+    assert!(names.contains(&"SEQUENCE".to_string()));
+    assert!(names.contains(&"LET".to_string()));
     for spec in &specs {
         assert!(
             spec.min_args <= spec.max_args,

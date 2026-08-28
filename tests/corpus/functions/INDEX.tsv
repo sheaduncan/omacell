@@ -1,0 +1,13 @@
+# formula	expected	note
+=INDEX({10,20,30},2)	20	vector INDEX 1-based
+=INDEX({1,2;3,4},2,1)	3	2-D INDEX row, column
+=INDEX({1,2;3,4},1,2)	2	2-D INDEX first row second col
+=INDEX({1,2;3,4},0,1)	1	row 0 returns the whole column (spill origin)
+=INDEX({1,2;3,4},2,0)	3	column 0 returns the whole row (spill origin)
+=INDEX({1,2,3},4)	#REF!	row beyond array is #REF!
+=INDEX({1,2,3},-1)	#VALUE!	negative row is #VALUE!
+=INDEX({10,20,30},2.9)	20	non-integer row is truncated toward zero
+=INDEX(#N/A,1)	#N/A	array error as scalar argument propagates
+=SUM(INDEX({1,2;3,4},0,0))	10	0,0 returns the whole array
+=INDEX(B1,1,1)		known difference: empty INDEX of an empty cell is blank; LibreOffice CSV may show 0
+=INDEX({1,2,3},)	1	omitted row_num on a vector returns the array origin

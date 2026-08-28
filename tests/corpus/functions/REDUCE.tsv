@@ -1,0 +1,12 @@
+# formula	expected	note
+=REDUCE(0,{1,2,3},LAMBDA(a,b,a+b))	6	sum fold
+=REDUCE(1,{2,3,4},LAMBDA(a,b,a*b))	24	product fold
+=REDUCE(10,{1},LAMBDA(a,b,a+b))	11	single-element array
+=REDUCE(5,{-1},LAMBDA(a,b,a))	5	lambda may ignore the value and keep the accumulator
+=REDUCE(0,{1,2},LAMBDA(a,b,1/0))	#DIV/0!	lambda error stops the fold
+=REDUCE(0,{1},5)	#VALUE!	last argument must be a lambda
+=REDUCE(#N/A,{1},LAMBDA(a,b,a+b))	#N/A	initial_value error propagates
+=REDUCE(0,#N/A,LAMBDA(a,b,a+b))	#N/A	array error propagates
+=REDUCE("x",{1,2},LAMBDA(a,b,a))	x	text accumulator is returned as-is
+=REDUCE(0,{TRUE,FALSE},LAMBDA(a,b,a+b))	1	TRUE adds 1, FALSE adds 0
+=REDUCE(2,,LAMBDA(a,b,a+b))	2	omitted array leaves the initial value

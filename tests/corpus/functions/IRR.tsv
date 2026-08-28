@@ -1,0 +1,12 @@
+# formula	expected	note
+=IRR({-100,110})	0.1	one-period IRR is 10%
+=IRR({-100,100})	0	break-even IRR is 0
+=IRR({-100,-50})	#NUM!	no sign change / no real root within iteration cap
+=IRR({-1,1},0.1)	0	guess ignored when the root is 0
+=IRR(#N/A)	#N/A	values error propagates
+=IRR({-100,0,121})	0.1	(1.1)^2 = 1.21
+=IRR({10,20})	#NUM!	no negative cash flow → #NUM! after 20 iterations
+=IRR({-100,110},#N/A)	#N/A	guess error propagates
+=IRR({-100})	#NUM!	single value cannot change sign usefully
+=IRR({-50,50})	0	simple return of the same amount is 0%
+=IRR({-100,110},0)	0.1	guess 0 still finds 0.1

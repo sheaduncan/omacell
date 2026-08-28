@@ -1,0 +1,12 @@
+# formula	expected	note
+=DEC2HEX(255)	FF	255 is FF
+=DEC2HEX(255,4)	00FF	places pads leading zeros
+=DEC2HEX(-1)	FFFFFFFFFF	40-bit two’s complement (10 hex digits)
+=DEC2HEX(0)	0	zero
+=DEC2HEX(10)	A	single hex letter, upper case
+=DEC2HEX(#N/A)	#N/A	number error propagates
+=DEC2HEX(255,1)	#NUM!	places too small
+=DEC2HEX(15.9)	F	truncated toward zero
+=DEC2HEX(-549755813888)	8000000000	minimum 40-bit signed hex
+=DEC2HEX(549755813887)	7FFFFFFFFF	maximum 40-bit signed hex
+=DEC2HEX(549755813888)	#NUM!	above max is #NUM!

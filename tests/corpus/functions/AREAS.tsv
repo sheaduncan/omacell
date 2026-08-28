@@ -1,0 +1,12 @@
+# formula	expected	note
+=AREAS(B1)	1	single cell is one area
+=AREAS(B1:C2)	1	single range is one area
+=AREAS((B1,C2))	2	union of two cells is two areas
+=AREAS((B1:C1,C3:D4,E5))	3	three-area union
+=AREAS((B1))	1	parenthesized single ref still one area
+=AREAS(#REF!)	#REF!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. error argument propagates
+=AREAS(INDIRECT("A1:B2"))	1	INDIRECT range is one area
+=AREAS(OFFSET(C2,0,0,2,2))	1	OFFSET range is one area
+=AREAS((B:B,2:2))	2	whole-column union whole-row is two areas
+=AREAS(B:B)	1	whole column is one area
+=AREAS((B1,B1))	2	Excel counts listed areas even if they overlap

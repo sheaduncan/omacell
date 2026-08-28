@@ -1,0 +1,12 @@
+# formula	expected	note
+=DDB(1000,100,5,1)	400	double-declining default factor 2: 1000*2/5
+=DDB(1000,100,5,1,2)	400	explicit factor 2
+=DDB(1000,100,5,1,1)	200	factor 1: 1000*1/5
+=DDB(1000,100,5,0)	#NUM!	period < 1 is #NUM!
+=DDB(1000,100,0,1)	#NUM!	life 0 is #NUM!
+=DDB(#N/A,100,5,1)	#N/A	cost error propagates
+=DDB(1000,100,5,1,0)	#NUM!	factor ≤ 0 is #NUM!
+=DDB(1000,100,5,#N/A)	#N/A	period error propagates
+=DDB(100,100,5,1)	0	already at salvage
+=DDB(1000,100,5,5)	29.6	last period is clamped so book value does not pass salvage
+=DDB(1000,0,2,1)	1000	life 2 factor 2 first period: 1000*2/2, salvage 0

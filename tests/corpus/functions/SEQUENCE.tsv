@@ -1,4 +1,14 @@
 # formula	expected	note
 =SEQUENCE(1)	1	1×1 collapses to scalar
-=SEQUENCE(0)	#NUM!	known difference: zero rows rejected before allocation
+=SEQUENCE(0)	#NUM!	known difference: zero rows rejected before allocation (Excel 365 #CALC!)
 =SEQUENCE(-1)	#NUM!	known difference: negative rows rejected before allocation
+=INDEX(SEQUENCE(3),3)	3	default start 1 step 1
+=SUM(SEQUENCE(2,3))	21	2×3 row-major 1..6
+=INDEX(SEQUENCE(2,2,5,2),2,2)	11	start 5 step 2 → 5,7;9,11
+=SEQUENCE(1,1,0)	0	start 0
+=SEQUENCE(1.9)	1	rows truncated toward zero (Excel), not rounded
+=SEQUENCE(1048577)	#NUM!	known difference: rows exceed MAX_ROWS; rejected before allocation (LibreOffice CSV may return 1)
+=SEQUENCE(1,16385)	#NUM!	known difference: cols exceed MAX_COLS; rejected before allocation (LibreOffice CSV may return 1)
+=SEQUENCE(#N/A)	#N/A	rows error propagates
+=SEQUENCE(1,1,1,0)	1	step 0 repeats start
+=INDEX(SEQUENCE(2,1,10,-3),2)	7	negative step

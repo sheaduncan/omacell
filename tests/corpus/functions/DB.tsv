@@ -1,0 +1,12 @@
+# formula	expected	note
+=DB(1000,100,1,1)	900	life=1: all depreciable amount in year 1 (month default 12)
+=DB(1000,100,5,1,12)	369	rate=1-(salvage/cost)^(1/life) rounded to 3 dp; year1=cost*rate
+=DB(1000,100,5,0)	#NUM!	period < 1 is #NUM!
+=DB(1000,100,5,6)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. period > life is #NUM! when month=12
+=DB(1000,100,0,1)	#NUM!	life 0 is #NUM!
+=DB(#N/A,100,5,1)	#N/A	cost error propagates
+=DB(1000,100,5,1,0)	#NUM!	month 0 is #NUM!
+=DB(1000,100,5,1,13)	#NUM!	month > 12 is #NUM!
+=DB(1000,1000,5,1)	0	cost=salvage → rate 0
+=DB(1000,100,5,#N/A)	#N/A	period error propagates
+=DB(0,0,5,1)	0	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. zero cost

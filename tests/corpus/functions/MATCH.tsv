@@ -1,0 +1,12 @@
+# formula	expected	note
+=MATCH(2,{1,2,3},0)	2	exact match_type 0
+=MATCH(2.5,{1,2,3},1)	2	match_type 1 largest value ≤ lookup (sorted asc)
+=MATCH(2.5,{3,2,1},-1)	1	match_type -1 smallest value ≥ lookup is 3 at position 1
+=MATCH(0,{1,2,3},0)	#N/A	exact miss
+=MATCH("a*",{"ax","by"},0)	1	exact match_type 0 supports * wildcard
+=MATCH("a?",{"ax","by"},0)	1	exact match_type 0 supports ? wildcard
+=MATCH(#N/A,{1,2},0)	#N/A	lookup error propagates
+=MATCH(1,{1,2,3})	1	omitted match_type defaults to 1
+=MATCH(3,{1,3,2},1)	3	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. unsorted match_type 1 uses binary search, not a linear fix
+=MATCH(TRUE,{1,TRUE},0)	2	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. logical does not match the number 1 in exact mode
+=MATCH("B",{"a","b","c"},0)	2	text match is case-insensitive

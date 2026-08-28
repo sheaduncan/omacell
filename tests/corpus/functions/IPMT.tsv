@@ -1,0 +1,12 @@
+# formula	expected	note
+=IPMT(0.1,1,1,-100)	10	single-period interest is rate*|pv| with sign of pmt inverted on pv negative
+=IPMT(0,1,2,-100)	0	zero rate → no interest
+=IPMT(0.1,1,1,100)	-10	positive pv → negative interest (money out)
+=IPMT(0.1,0,1,-100)	#NUM!	per < 1 is #NUM!
+=IPMT(0.1,2,1,-100)	#NUM!	per > nper is #NUM!
+=IPMT(#N/A,1,1,-100)	#N/A	rate error propagates
+=IPMT(0.1,1,1,-100,0,1)	0	type 1: interest of period 1 is 0
+=IPMT(0.1,#N/A,1,-100)	#N/A	per error propagates
+=IPMT(0.1,1,2,-200)-20	0	first-period interest equals rate*pv (pv=-200 → 20)
+=IPMT(0,1,5,-100,50)	0	zero rate still 0 interest with fv
+=IPMT(0.1,1,1,-100,0,0)	10	explicit type 0

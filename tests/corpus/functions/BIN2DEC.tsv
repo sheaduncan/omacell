@@ -1,0 +1,12 @@
+# formula	expected	note
+=BIN2DEC("101")	5	binary 101 is 5
+=BIN2DEC("0")	0	zero
+=BIN2DEC("1111111111")	-1	10-bit two’s complement all-ones
+=BIN2DEC("1000000000")	-512	min 10-bit
+=BIN2DEC(101)	5	numeric binary digits are accepted as text digits
+=BIN2DEC("2")	#NUM!	invalid binary digit
+=BIN2DEC(#N/A)	#N/A	error propagates
+=BIN2DEC("")	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. empty string is #NUM!
+=BIN2DEC("0000000101")	5	leading zeros 10-bit
+=BIN2DEC("11111111111")	#NUM!	more than 10 bits is #NUM!
+=BIN2DEC("1")	1	one

@@ -1,0 +1,13 @@
+# formula	expected	note
+=INDIRECT("B1")		A1-style reference to an empty cell
+=INDIRECT("not a ref")	#REF!	unparseable address is #REF!
+=ROWS(INDIRECT("A1:A3"))	3	range text returns a 3-row reference without circular eval
+=COLUMNS(INDIRECT("A1:C1"))	3	range text returns a 3-column reference
+=INDIRECT("R1C2",FALSE)		R1C1 style (a1=FALSE) to B1 empty
+=INDIRECT("")	#REF!	empty address text is #REF!
+=INDIRECT(#N/A)	#N/A	ref_text error propagates
+=ROW(INDIRECT("C5"))	5	INDIRECT of C5 is row 5
+=COLUMN(INDIRECT("C5"))	3	INDIRECT of C5 is column 3
+=INDIRECT("Sheet1!B2")		known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. sheet-qualified empty cell on the active sheet
+=INDIRECT("R[-1]C",FALSE)	#REF!	R1C1 relative from A1 one row up is out of grid
+=COLUMNS(INDIRECT("B:B"))	1	whole-column address is one column

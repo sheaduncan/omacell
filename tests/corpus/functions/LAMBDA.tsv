@@ -1,0 +1,12 @@
+# formula	expected	note
+=LAMBDA(x,x+1)(5)	6	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. IIFE increment (WP-04 evaluator)
+=LAMBDA(x,y,x/y)(10,2)	5	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. two-parameter IIFE
+=LAMBDA(x,x)(0)	0	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. identity
+=LET(y,10,LAMBDA(x,x+y))(1)	11	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. closure over LET
+=LAMBDA(x,LAMBDA(y,x+y))(3)(4)	7	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. curried nested LAMBDA
+=LAMBDA(x,x)	#CALC!	uncalled LAMBDA stored in a cell is #CALC!
+=LAMBDA(x,y,x+y)(1)	#VALUE!	too few arguments
+=LAMBDA(x,x+1)(1,2)	#VALUE!	too many arguments
+=LAMBDA(x,1/0)(1)	#DIV/0!	body error on application
+=LAMBDA(x,x)("hi")	hi	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. text passthrough
+=LAMBDA(x,ABS(x))(-3)	3	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. body may call registered functions

@@ -1,0 +1,12 @@
+# formula	expected	note
+=SYD(1000,100,4,1)	360	year 1: 4/10 * 900
+=SYD(1000,100,4,4)	90	year 4: 1/10 * 900
+=SYD(1000,100,4,5)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. per > life is #NUM!
+=SYD(1000,100,4,0)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. per < 1 is #NUM!
+=SYD(1000,100,0,1)	#NUM!	life 0 is #NUM!
+=SYD(#N/A,100,4,1)	#N/A	cost error propagates
+=SYD(1000,#N/A,4,1)	#N/A	salvage error propagates
+=SYD(1000,100,#N/A,1)	#N/A	life error propagates
+=SYD(100,100,4,1)	0	cost=salvage
+=SYD(1000,100,4,2)	270	year 2: 3/10 * 900
+=SYD(300,0,2,1)	200	2/3 * 300

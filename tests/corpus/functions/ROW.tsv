@@ -1,0 +1,12 @@
+# formula	expected	note
+=ROW()	1	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. omitted ref is the formula cell (A1) → row 1
+=ROW(C5)	5	single cell row number (1-based)
+=ROW(C5:C7)	5	multi-row ref spills; origin is the first row number
+=SUM(ROW(C5:C7))	18	spilled {5;6;7} sums to 18
+=ROW($A$10)	10	absolute flags do not change the row number
+=ROW(#REF!)	#REF!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. error argument propagates
+=ROWS(ROW(B1:B3))	3	ROW of a 3-row range returns a 3×1 array
+=ROW(A1048576)	1048576	last worksheet row
+=INDEX(ROW(B2:D2),1)	2	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. ROW of a single row is a scalar 2
+=ROW(INDIRECT("Z9"))	9	ROW of an INDIRECT cell
+=COLUMNS(ROW(B1:B2))	1	ROW array is a column vector

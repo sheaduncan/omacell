@@ -1,0 +1,12 @@
+# formula	expected	note
+=PPMT(0.1,1,1,-100)	100	single period: whole principal is repaid
+=PPMT(0,1,2,-100)	50	zero rate: even principal split
+=PPMT(0.1,1,1,100)	-100	sign follows pmt
+=PPMT(0.1,0,1,-100)	#NUM!	per < 1 is #NUM!
+=PPMT(0.1,2,1,-100)	#NUM!	per > nper is #NUM!
+=PPMT(#N/A,1,1,-100)	#N/A	rate error propagates
+=PPMT(0,1,4,-80)	20	zero rate four periods
+=PPMT(0.1,1,1,-100,0,0)+IPMT(0.1,1,1,-100)	110	PPMT+IPMT equals PMT for the period
+=PPMT(0.1,#N/A,1,-100)	#N/A	per error propagates
+=PPMT(0,2,2,-100)	50	second of two zero-rate periods
+=PPMT(0,1,1,-100,0,1)	100	type 1 with nper=1 still repays pv

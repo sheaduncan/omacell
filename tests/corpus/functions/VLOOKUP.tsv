@@ -1,0 +1,13 @@
+# formula	expected	note
+=VLOOKUP(2,{1,10;2,20;3,30},2,FALSE)	20	exact vertical lookup
+=VLOOKUP(2.5,{1,10;2,20;3,30},2,TRUE)	20	approximate: last first-column value ≤ lookup
+=VLOOKUP(0,{1,10;2,20},2,TRUE)	#N/A	approximate below the first key is #N/A
+=VLOOKUP(2,{1,10;2,20},3,FALSE)	#REF!	col_index_num beyond table width is #REF!
+=VLOOKUP(2,{1,10;2,20},0,FALSE)	#VALUE!	col_index_num < 1 is #VALUE!
+=VLOOKUP(9,{1,10;2,20},2,FALSE)	#N/A	exact miss
+=VLOOKUP(#N/A,{1,10;2,20},2,FALSE)	#N/A	lookup_value error propagates
+=VLOOKUP(2,{1,10;2,20},2)	20	omitted range_lookup defaults to TRUE; 2 is an exact key
+=VLOOKUP(2,{3,30;1,10;2,20},2,TRUE)	20	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. unsorted approximate uses binary search (Excel; not linearly fixed)
+=VLOOKUP("a*",{"ax",1;"by",2},2,FALSE)	1	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. exact VLOOKUP supports wildcards
+=VLOOKUP(2,{1,"a";2,"b"},2,FALSE)	b	return column may be text
+=VLOOKUP(TRUE,{FALSE,1;TRUE,2},2,FALSE)	2	logical keys are not coerced to 1/0

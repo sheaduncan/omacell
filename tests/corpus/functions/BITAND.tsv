@@ -1,0 +1,12 @@
+# formula	expected	note
+=BITAND(5,3)	1	101 AND 011 = 001
+=BITAND(0,7)	0	zero
+=BITAND(7,7)	7	identity
+=BITAND(-1,1)	#NUM!	negative is #NUM!
+=BITAND(1.9,1)	1	truncated toward zero
+=BITAND(#N/A,1)	#N/A	error propagates
+=BITAND(1,#N/A)	#N/A	second error propagates
+=BITAND(281474976710656,1)	#NUM!	2^48 is out of range (0..2^48-1)
+=BITAND(281474976710655,1)	1	2^48-1 is in range
+=BITAND(TRUE,3)	1	TRUE coerces to 1
+=BITAND(12,10)	8	1100 AND 1010 = 1000

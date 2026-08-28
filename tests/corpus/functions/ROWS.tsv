@@ -1,0 +1,12 @@
+# formula	expected	note
+=ROWS({1,2;3,4})	2	array height
+=ROWS({1,2,3})	1	row vector height 1
+=ROWS({1;2;3})	3	column vector height 3
+=ROWS(B1)	1	single cell is 1 row
+=ROWS(B1:B10)	10	range height without materializing values
+=ROWS(B:B)	1048576	whole column is MAX_ROWS; must not allocate the column
+=ROWS(3:5)	3	whole-row span 3:5
+=ROWS(#N/A)	#N/A	error argument propagates
+=ROWS(OFFSET(C2,0,0,4,1))	4	ROWS of an OFFSET reference
+=ROWS(SEQUENCE(5))	5	ROWS of a spilled SEQUENCE
+=ROWS({1})	1	1×1 array constant
