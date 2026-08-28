@@ -103,6 +103,11 @@ impl Bus {
         self.events.dropped(id)
     }
 
+    /// Drop an event subscriber.
+    pub fn unsubscribe(&mut self, id: SubscriberId) {
+        self.events.unsubscribe(id);
+    }
+
     /// Execute a single command. Model origins cannot directly mutate.
     pub fn execute(&mut self, origin: Origin, id: &str, args: serde_json::Value) -> Outcome {
         let call = match command_call(id, args) {

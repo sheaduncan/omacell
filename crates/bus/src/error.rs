@@ -20,6 +20,24 @@ pub mod codes {
     pub const CHANGESET_NOT_FOUND: &str = "changeset.not_found";
     /// Changeset lifecycle does not allow this operation.
     pub const CHANGESET_STATE: &str = "changeset.state";
+    /// IPC envelope version is missing or not 1.
+    pub const IPC_VERSION: &str = "ipc.version";
+    /// Frame is oversized, not UTF-8, or not a single JSON line.
+    pub const IPC_FRAME: &str = "ipc.frame";
+    /// Unknown field, op, mode, or mutually exclusive cmd/op.
+    pub const IPC_PROTOCOL: &str = "ipc.protocol";
+    /// `mode` is not allowed for this command.
+    pub const IPC_MODE: &str = "ipc.mode";
+    /// Connection, nesting, or queue limit exceeded.
+    pub const IPC_LIMIT: &str = "ipc.limit";
+    /// Socket path, permissions, owner, or symlink check failed.
+    pub const IPC_SOCKET: &str = "ipc.socket";
+    /// Client request timed out.
+    pub const IPC_TIMEOUT: &str = "ipc.timeout";
+    /// Peer closed the connection.
+    pub const IPC_DISCONNECTED: &str = "ipc.disconnected";
+    /// Per-client event queue overflowed.
+    pub const IPC_OVERFLOW: &str = "ipc.overflow";
 }
 
 pub(crate) fn unknown(id: &str) -> CoreError {
@@ -72,4 +90,41 @@ pub(crate) fn changeset_not_found(id: &str) -> CoreError {
 
 pub(crate) fn changeset_state(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::CHANGESET_STATE, message)
+}
+
+pub(crate) fn ipc_version(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::IPC_VERSION, message).with_hint("IPC v1 requires \"v\":1")
+}
+
+pub(crate) fn ipc_frame(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::IPC_FRAME, message)
+        .with_hint("send one UTF-8 JSON object per line, at most 1 MiB")
+}
+
+pub(crate) fn ipc_protocol(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::IPC_PROTOCOL, message)
+        .with_hint("unknown fields, versions, modes, and ops are rejected")
+}
+
+pub(crate) fn ipc_mode(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::IPC_MODE, message).with_hint(
+        "mutating registry commands default to propose; execute is not allowed on the socket",
+    )
+}
+
+pub(crate) fn ipc_limit(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::IPC_LIMIT, message)
+}
+
+pub(crate) fn ipc_socket(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::IPC_SOCKET, message)
+        .with_hint("runtime dir must be 0700, sockets 0600, owned, and not a symlink")
+}
+
+pub(crate) fn ipc_timeout(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::IPC_TIMEOUT, message)
+}
+
+pub(crate) fn ipc_disconnected() -> CoreError {
+    CoreError::new(codes::IPC_DISCONNECTED, "IPC peer closed the connection")
 }

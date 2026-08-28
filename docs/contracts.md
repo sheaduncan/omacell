@@ -84,6 +84,10 @@ No commands are registered here. WP-07a creates the first versioned command cata
 
 Envelope `{schema: 1, commands[]}` from `omacell_bus::commands_json`. Command ids and public argument schemas freeze when WP-07a merges. Internal restore handlers (`cell.restore`, `style.restore`, `sheet.remove`) are excluded from the catalog. Frozen WP-01 `CommandDescriptor` is unchanged.
 
+## IPC v1 — `docs/schemas/ipc/` (WP-07b)
+
+Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply, event/overflow, and discovery records. Mutating changeset-eligible commands default to `propose`; internal command ids are never addressable on the socket. Limits (`MAX_FRAME_BYTES` 1 MiB, `MAX_JSON_DEPTH` 32, `MAX_CONNECTIONS` 32) are part of the freeze.
+
 ## Changesets — `omacell_core::changeset`
 
 | Type | Source |
