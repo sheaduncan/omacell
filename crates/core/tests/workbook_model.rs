@@ -176,6 +176,22 @@ fn undo_redo_restores_structurally_deleted_cells() {
 }
 
 #[test]
+fn transact_try_rolls_back_partial_mutation() {
+    let mut wb = Workbook::new();
+    let id = wb.active_sheet();
+    wb.set_number(id, 0, 0, 1.0).unwrap();
+    let err = wb
+        .transact_try(|wb| {
+            wb.set_number(id, 0, 1, 2.0)?;
+            Err::<(), _>(omacell_core::error::CoreError::new("test.fail", "boom"))
+        })
+        .unwrap_err();
+    assert_eq!(err.code, "test.fail");
+    assert_eq!(wb.get(id, 0, 0).unwrap().unwrap().value, Value::Number(1.0));
+    assert!(wb.get(id, 0, 1).unwrap().is_none());
+}
+
+#[test]
 fn side_tables_reject_out_of_grid_cells() {
     let mut wb = Workbook::new();
     let id = wb.active_sheet();

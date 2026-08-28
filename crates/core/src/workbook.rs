@@ -9,20 +9,27 @@ use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
+use std::borrow::Cow;
+
 use crate::addr::{CellRef, ParsedRef, RefKind, SheetId, SheetSpec};
 pub use crate::date_system::DateSystem;
 use crate::error::CoreError;
 use crate::intern::{ArrayPayload, FormulaId, Interners};
-use crate::names::{DefinedName, NameRegistry};
+use crate::locale::LocaleId;
+use crate::names::{DefinedName, NameRegistry, NameScope};
+use crate::numfmt;
 use crate::sheet::{
     Comment, Hyperlink, Note, ProtectionState, Sheet, SheetVisibility, ViewState,
     validate_sheet_name,
 };
-use crate::storage::{CellSlot, UsedRange};
-use crate::style::{Color, Style, StyleId};
+use crate::storage::{CellFlags, CellSlot, UsedRange};
+use crate::style::{Color, NumFmtId, Style, StyleId};
 use crate::tables::{Table, TableId, TableRegistry};
 use crate::undo::{AffectedRange, Delta, UndoLog, transaction_affected};
 use crate::value::{ArrayId, StrId, Value};
+
+/// First custom `numFmtId` (Excel custom formats start at 164).
+const CUSTOM_NUM_FMT_START: u32 = 164;
 
 /// Calculation mode (F-1.6).
 ///
@@ -202,6 +209,9 @@ pub struct Workbook {
     undo: UndoLog,
     next_sheet: u32,
     active: SheetId,
+    /// Custom number-format codes keyed by `numFmtId` (≥ 164).
+    num_fmts: IndexMap<u32, String>,
+    next_num_fmt: u32,
 }
 
 impl Default for Workbook {
@@ -248,6 +258,8 @@ impl Workbook {
             undo: UndoLog::new(),
             next_sheet: 1,
             active: id,
+            num_fmts: IndexMap::new(),
+            next_num_fmt: CUSTOM_NUM_FMT_START,
         }
     }
 
@@ -305,6 +317,12 @@ impl Workbook {
     #[must_use]
     pub fn tables(&self) -> &TableRegistry {
         &self.tables
+    }
+
+    /// Undo log (budget, enable/disable, stack queries).
+    #[must_use]
+    pub fn undo_log(&self) -> &UndoLog {
+        &self.undo
     }
 
     /// Undo log (budget, enable/disable).
@@ -555,6 +573,42 @@ impl Workbook {
         r
     }
 
+    /// Run `f` as one undo unit, rolling back the open transaction on error.
+    ///
+    /// Used by the command bus so a live failure after preflight never leaves a
+    /// partial mutation as a successful outcome.
+    pub fn transact_try<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        self.undo.begin();
+        match f(self) {
+            Ok(value) => {
+                self.undo.commit();
+                Ok(value)
+            }
+            Err(err) => {
+                if let Some(tx) = self.undo.abort() {
+                    let undo_on = self.undo.is_enabled();
+                    self.undo.set_enabled(false);
+                    let rolled = self.apply_transaction(&tx, true);
+                    self.undo.set_enabled(undo_on);
+                    if let Err(rollback) = rolled {
+                        return Err(CoreError::new(
+                            "undo.rollback",
+                            format!(
+                                "command failed ({}); rollback also failed ({})",
+                                err.message, rollback.message
+                            ),
+                        )
+                        .with_hint("the workbook may be inconsistent; reload from disk"));
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
+
     /// Undo the last transaction.
     pub fn undo(&mut self) -> Result<Vec<AffectedRange>, CoreError> {
         let tx = self.undo.pop_undo()?;
@@ -724,6 +778,10 @@ impl Workbook {
                         store.set(*row, *col, *slot)?;
                     }
                 }
+                Ok(())
+            }
+            Delta::CalcMode { before, after } => {
+                self.settings.calc_mode = if inverse { *before } else { *after };
                 Ok(())
             }
         }
@@ -916,6 +974,36 @@ impl Workbook {
             name: n,
             before: None,
             after: Some(name),
+        });
+        Ok(())
+    }
+
+    /// Remove a defined name (case-insensitive within `scope`).
+    pub fn remove_name(&mut self, scope: NameScope, name: &str) -> Result<DefinedName, CoreError> {
+        let before = self.names.remove(scope, name).ok_or_else(|| {
+            CoreError::name_defined(format!(
+                "defined name {name:?} does not exist in this scope"
+            ))
+        })?;
+        self.undo.record(Delta::Name {
+            scope,
+            name: before.name.clone(),
+            before: Some(before.clone()),
+            after: None,
+        });
+        Ok(before)
+    }
+
+    /// Set calculation mode (undo-tracked).
+    pub fn set_calc_mode(&mut self, mode: CalcMode) -> Result<(), CoreError> {
+        let before = self.settings.calc_mode;
+        if before == mode {
+            return Ok(());
+        }
+        self.settings.calc_mode = mode;
+        self.undo.record(Delta::CalcMode {
+            before,
+            after: mode,
         });
         Ok(())
     }
@@ -1127,4 +1215,152 @@ impl Workbook {
     pub fn release_array(&mut self, id: ArrayId) {
         self.intern_mut().arrays.release(id);
     }
+
+    /// Intern formula source (refcount +1). Pair with [`Self::release_formula`]
+    /// after the slot holds it.
+    pub fn intern_formula(&mut self, source: &str) -> Result<FormulaId, CoreError> {
+        self.intern_mut().formulas.intern(source)
+    }
+
+    /// Drop an interned-formula refcount.
+    pub fn release_formula(&mut self, id: FormulaId) {
+        self.intern_mut().formulas.release(id);
+    }
+
+    /// Intern a number-format code. Built-in ids 0–49 are reused when the code
+    /// matches the en-US builtin table; otherwise a custom id ≥ 164 is allocated.
+    pub fn intern_num_fmt(&mut self, code: &str) -> Result<NumFmtId, CoreError> {
+        numfmt::parse(code)?;
+        for id in 0..=49 {
+            if numfmt::builtin_format(id, LocaleId::EN_US).as_deref() == Some(code) {
+                return Ok(NumFmtId::new(id));
+            }
+        }
+        if let Some((&id, _)) = self
+            .num_fmts
+            .iter()
+            .find(|(_, existing)| existing.as_str() == code)
+        {
+            return Ok(NumFmtId::new(id));
+        }
+        let id = self.next_num_fmt;
+        self.next_num_fmt = self.next_num_fmt.saturating_add(1);
+        self.num_fmts.insert(id, code.to_string());
+        Ok(NumFmtId::new(id))
+    }
+
+    /// Format code for a stored [`NumFmtId`].
+    #[must_use]
+    pub fn num_fmt_code(&self, id: NumFmtId) -> Option<Cow<'_, str>> {
+        if let Some(code) = numfmt::builtin_format(id.index(), LocaleId::EN_US) {
+            return Some(code);
+        }
+        self.num_fmts
+            .get(&id.index())
+            .map(|code| Cow::Borrowed(code.as_str()))
+    }
+
+    /// Set cell contents from formula-bar text, preserving style.
+    ///
+    /// Leading `=` is stored as formula source. Otherwise a finite number,
+    /// `TRUE`/`FALSE`, or text. Empty input clears contents and keeps style.
+    pub fn set_cell_contents(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        col: u16,
+        input: &str,
+    ) -> Result<Option<CellSlot>, CoreError> {
+        let prev = self.get(id, row, col)?.copied();
+        let style = prev.map(|slot| slot.style).unwrap_or(StyleId::DEFAULT);
+        let flags = content_flags(prev);
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            if prev.is_none() {
+                return Ok(None);
+            }
+            if prev.is_some_and(|slot| {
+                slot.formula.is_none() && slot.value == Value::Empty && slot.style == style
+            }) {
+                return Ok(prev);
+            }
+            return self.replace_slot(
+                id,
+                row,
+                col,
+                Some(CellSlot {
+                    value: Value::Empty,
+                    formula: None,
+                    style,
+                    flags,
+                }),
+            );
+        }
+        let slot = if let Some(stripped) = trimmed.strip_prefix('=') {
+            if stripped.is_empty() {
+                return Err(CoreError::new(
+                    crate::error::codes::FORMULA_LEN,
+                    "formula input is empty after '='",
+                )
+                .with_hint("enter a formula such as =A1+1"));
+            }
+            let fid = self.intern_formula(trimmed)?;
+            let slot = CellSlot {
+                value: Value::Empty,
+                formula: Some(fid),
+                style,
+                flags,
+            };
+            let old = self.replace_slot(id, row, col, Some(slot))?;
+            self.release_formula(fid);
+            return Ok(old);
+        } else if trimmed.eq_ignore_ascii_case("TRUE") {
+            CellSlot {
+                value: Value::Bool(true),
+                formula: None,
+                style,
+                flags,
+            }
+        } else if trimmed.eq_ignore_ascii_case("FALSE") {
+            CellSlot {
+                value: Value::Bool(false),
+                formula: None,
+                style,
+                flags,
+            }
+        } else if let Some(number) = parse_finite_number(trimmed) {
+            CellSlot {
+                value: Value::Number(number),
+                formula: None,
+                style,
+                flags,
+            }
+        } else {
+            let sid = self.intern_text(trimmed);
+            let slot = CellSlot {
+                value: Value::Text(sid),
+                formula: None,
+                style,
+                flags,
+            };
+            let old = self.replace_slot(id, row, col, Some(slot))?;
+            self.release_text(sid);
+            return Ok(old);
+        };
+        self.replace_slot(id, row, col, Some(slot))
+    }
+}
+
+fn content_flags(prev: Option<CellSlot>) -> CellFlags {
+    let mut flags = prev.map(|slot| slot.flags).unwrap_or(CellFlags::DEFAULT);
+    flags = flags.with(CellFlags::DIRTY, false);
+    flags = flags.with(CellFlags::SPILL, false);
+    flags = flags.with(CellFlags::ARRAY, false);
+    flags = flags.with(CellFlags::STALE, false);
+    flags
+}
+
+fn parse_finite_number(text: &str) -> Option<f64> {
+    let number: f64 = text.parse().ok()?;
+    number.is_finite().then_some(number)
 }
