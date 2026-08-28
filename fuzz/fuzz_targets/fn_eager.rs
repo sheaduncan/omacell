@@ -60,11 +60,10 @@ fuzz_target!(|data: &[u8]| {
             if let Some(def) = registry.lookup(spec.name) {
                 if let FnBody::Eager(eval) = def.body {
                     let limit = usize::from(spec.max_args).min(MAX_VALUES);
-                    let count = if limit == 0 {
-                        0
-                    } else {
-                        data.first().copied().unwrap_or(0) as usize % (limit + 1)
-                    };
+                    let minimum = usize::from(spec.min_args).min(limit);
+                    let width = limit.saturating_sub(minimum).saturating_add(1);
+                    let count = minimum
+                        + (data.first().copied().unwrap_or(0) as usize % width);
                     let args: Vec<_> = (0..count)
                         .map(|index| arg_from_bytes(data, index + 1))
                         .collect();

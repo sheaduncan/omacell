@@ -1355,8 +1355,11 @@ fn gcd_lcm(ctx: &EvalCtx<'_>, args: &[ArgVal], gcd: bool) -> Result<f64, ErrorKi
                 _ => return Err(ErrorKind::Value),
             },
         };
+        if n < 0.0 {
+            return Err(ErrorKind::Num);
+        }
         let v = as_nonneg_int(n)?;
-        acc = Some(match acc {
+        let next = match acc {
             None => v,
             Some(a) if gcd => gcd_i(a, v),
             Some(a) => {
@@ -1364,10 +1367,14 @@ fn gcd_lcm(ctx: &EvalCtx<'_>, args: &[ArgVal], gcd: bool) -> Result<f64, ErrorKi
                     0
                 } else {
                     let g = gcd_i(a, v);
-                    a.saturating_mul(v / g)
+                    a.checked_mul(v / g).ok_or(ErrorKind::Num)?
                 }
             }
-        });
+        };
+        if next >= (1u64 << 53) {
+            return Err(ErrorKind::Num);
+        }
+        acc = Some(next);
         Ok(())
     })?;
     Ok(acc.unwrap_or(0) as f64)

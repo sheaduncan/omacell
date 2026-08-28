@@ -1,5 +1,6 @@
 //! Shared walk, coerce, rounding, criteria, and statistics helpers.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use omacell_core::addr::{SheetId, col_to_letters};
@@ -491,10 +492,30 @@ pub fn as_nonneg_int(n: f64) -> Result<u64, ErrorKind> {
         return Err(ErrorKind::Num);
     }
     let t = n.trunc().abs();
-    if t > (1u64 << 53) as f64 {
+    if t >= (1u64 << 53) as f64 {
         return Err(ErrorKind::Num);
     }
     Ok(t as u64)
+}
+
+/// Value, occurrence count, and first position for each distinct finite number.
+///
+/// The returned vector remains in first-seen order; the hash map is lookup-only,
+/// so process-randomized hash seeds cannot affect formula results.
+#[must_use]
+pub fn frequencies(values: &[f64]) -> Vec<(f64, usize, usize)> {
+    let mut items: Vec<(f64, usize, usize)> = Vec::new();
+    let mut positions = HashMap::<u64, usize>::new();
+    for (first, value) in values.iter().copied().enumerate() {
+        let key = if value == 0.0 { 0 } else { value.to_bits() };
+        if let Some(index) = positions.get(&key).copied() {
+            items[index].1 += 1;
+        } else {
+            positions.insert(key, items.len());
+            items.push((value, 1, first));
+        }
+    }
+    items
 }
 
 /// nCk as f64 with overflow → `#NUM!`.
@@ -625,35 +646,28 @@ pub struct Wildcard {
 enum WildTok {
     Any,
     One,
-    Lit(String),
+    Lit(char),
 }
 
 impl Wildcard {
     /// Parse a pattern. `~` escapes the next `*`, `?`, or `~`.
     pub fn parse(pat: &str) -> Self {
         let mut tokens = Vec::new();
-        let mut lit = String::new();
         let mut chars = pat.chars().peekable();
         while let Some(c) = chars.next() {
             if c == '~' {
                 if let Some(n) = chars.next() {
-                    lit.push(n);
+                    tokens.push(WildTok::Lit(n.to_ascii_lowercase()));
                 } else {
-                    lit.push('~');
+                    tokens.push(WildTok::Lit('~'));
                 }
                 continue;
             }
             if c == '*' || c == '?' {
-                if !lit.is_empty() {
-                    tokens.push(WildTok::Lit(std::mem::take(&mut lit)));
-                }
                 tokens.push(if c == '*' { WildTok::Any } else { WildTok::One });
             } else {
-                lit.push(c);
+                tokens.push(WildTok::Lit(c.to_ascii_lowercase()));
             }
-        }
-        if !lit.is_empty() {
-            tokens.push(WildTok::Lit(lit));
         }
         Self { tokens }
     }
@@ -661,33 +675,47 @@ impl Wildcard {
     /// Case-insensitive match.
     #[must_use]
     pub fn matches(&self, text: &str) -> bool {
-        match_tokens(&self.tokens, &text.to_ascii_lowercase())
+        match_tokens(&self.tokens, text)
     }
 }
 
 fn match_tokens(tokens: &[WildTok], hay: &str) -> bool {
-    fn rec(tokens: &[WildTok], hay: &[u8]) -> bool {
-        if tokens.is_empty() {
-            return hay.is_empty();
-        }
-        match &tokens[0] {
-            WildTok::Any => {
-                for i in 0..=hay.len() {
-                    if rec(&tokens[1..], &hay[i..]) {
-                        return true;
-                    }
-                }
-                false
+    let hay = hay
+        .chars()
+        .map(|c| c.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let mut token = 0usize;
+    let mut character = 0usize;
+    let mut star = None;
+    let mut star_character = 0usize;
+    while character < hay.len() {
+        match tokens.get(token) {
+            Some(WildTok::One) => {
+                token += 1;
+                character += 1;
             }
-            WildTok::One => !hay.is_empty() && rec(&tokens[1..], &hay[1..]),
-            WildTok::Lit(s) => {
-                let needle = s.to_ascii_lowercase();
-                let n = needle.len();
-                hay.len() >= n && hay[..n] == needle.as_bytes()[..] && rec(&tokens[1..], &hay[n..])
+            Some(WildTok::Lit(expected)) if *expected == hay[character] => {
+                token += 1;
+                character += 1;
+            }
+            Some(WildTok::Any) => {
+                star = Some(token);
+                token += 1;
+                star_character = character;
+            }
+            _ => {
+                let Some(star_token) = star else {
+                    return false;
+                };
+                star_character += 1;
+                character = star_character;
+                token = star_token + 1;
             }
         }
     }
-    rec(tokens, hay.as_bytes())
+    tokens[token..]
+        .iter()
+        .all(|token| matches!(token, WildTok::Any))
 }
 
 /// Parse a criterion scalar.
@@ -948,5 +976,27 @@ pub fn register_specs(
 ) {
     for spec in specs {
         register_spec(registry, spec);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Wildcard, frequencies};
+
+    #[test]
+    fn frequency_table_handles_large_inputs_in_one_pass() {
+        let values = (0..100_000)
+            .map(|index| f64::from(index % 100))
+            .collect::<Vec<_>>();
+        let records = frequencies(&values);
+        assert_eq!(records.len(), 100);
+        assert!(records.iter().all(|(_, count, _)| *count == 1_000));
+    }
+
+    #[test]
+    fn wildcard_matching_is_non_recursive_and_unicode_scalar_aware() {
+        assert!(Wildcard::parse("?").matches("é"));
+        let pattern = format!("{}b", "*".repeat(10_000));
+        assert!(!Wildcard::parse(&pattern).matches(&"a".repeat(10_000)));
     }
 }

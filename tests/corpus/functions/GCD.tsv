@@ -3,9 +3,10 @@
 =GCD(7,1)	1	coprime-ish
 =GCD(0,5)	5	gcd with 0
 =GCD(0,0)	0	gcd(0,0)=0
-=GCD(-8,12)	4	abs of truncated; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=GCD(-8,12)	#NUM!	negative argument
 =GCD(8.9,12)	4	truncates toward zero
 =GCD(24,36,8)	4	three args
 =GCD(TRUE,3)	1	TRUE is 1
 =GCD(#N/A,1)	#N/A	error
 =GCD("8","12")	4	numeric text
+=GCD(9007199254740992,2)	#NUM!	argument at 2^53 limit; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

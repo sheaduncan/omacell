@@ -66,6 +66,8 @@ Key files:
 
 Key tests: `crates/fn/tests/corpus.rs`, `integration.rs` (`lazy_if_family_*`, `and_or_do_not_short_circuit`, `hidden_row_subtotal_*`, `nested_subtotal_is_ignored`, `random_is_deterministic_across_thread_counts`, `whole_column_sum_sumifs_subtotal`, `criteria_wildcards_on_sheet_ranges`, `fuzz_smoke_eager_functions_do_not_panic`).
 
+Review hardening corrects the Excel `AGGREGATE` option table, including hidden-row/nested-aggregate behavior and `COUNTA`/error handling. `GCD`/`LCM` now reject negative and ≥2^53 inputs/results. Mode calculations use a deterministic first-seen hash index instead of quadratic scans; `FREQUENCY` uses binary-search bins and validates its spill shape before allocation. Criteria wildcards are non-recursive and treat `?` as one Unicode scalar, eliminating adversarial recursion/stack growth.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -87,7 +89,7 @@ Frozen WP-01 types unchanged.
 - **`PERMUTATIONA(0,0)`** returns `1` (empty product); Excel `#NUM!`.
 - **`*IF` array constants** are walked like ranges so one-cell corpora can cover criteria; Excel often `#VALUE!`.
 - **Spilled arrays** in `format_cell` show the origin scalar; corpus expected values follow that (1×1 `MODE.MULT` collapses via `RuntimeValue::array`).
-- **LibreOffice headless** disagrees on importer names, CSV error tokens, `TYPE(TRUE)`, and some array-logical aggregates; tagged `known difference` in corpus notes (166 rows) and summarised in `docs/compat/known-differences.md`.
+- **LibreOffice headless** disagrees on importer names, CSV error tokens, `TYPE(TRUE)`, and some array-logical aggregates; tagged `known difference` in corpus notes and summarised in `docs/compat/known-differences.md`.
 
 ## Measurements
 
@@ -96,10 +98,12 @@ Host: rustc 1.98.0, Linux.
 - `just check` — pass
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — pass
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
+- `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1549** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1554** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
+- Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
   - `whole_column_sum` **8.89 ms**
   - `whole_column_sumifs` **81.5 ms**
@@ -124,4 +128,3 @@ None. WP-01 types unchanged.
 - [x] Baselines recorded (`fn_aggregates` Criterion `--quick --save-baseline wp05a`)
 - [x] No new `TODO(` without a `WP-` reference; no new runtime dependency (`criterion` already a workspace dev-dep)
 - [x] Nothing written outside the repository except documented temp dirs
-

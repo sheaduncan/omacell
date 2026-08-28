@@ -64,11 +64,17 @@ fn hidden_row_subtotal_skips_101_family() {
         .unwrap();
     wb.set_formula_text(s, 2, 1, "=AGGREGATE(9,5,A1:A3)")
         .unwrap();
+    wb.set_formula_text(s, 3, 1, "=AGGREGATE(9,1,A1:A3)")
+        .unwrap();
+    wb.set_formula_text(s, 4, 1, "=AGGREGATE(9,4,A1:A3)")
+        .unwrap();
     let mut eng = engine();
     eng.recalc_full(&mut wb);
     assert_eq!(display(&wb, 0, 1), "60");
     assert_eq!(display(&wb, 1, 1), "40");
     assert_eq!(display(&wb, 2, 1), "40");
+    assert_eq!(display(&wb, 3, 1), "40");
+    assert_eq!(display(&wb, 4, 1), "60");
 }
 
 #[test]
@@ -80,10 +86,16 @@ fn nested_subtotal_is_ignored() {
     wb.set_number(s, 1, 0, 20.0).unwrap();
     wb.set_formula_text(s, 2, 0, "=SUBTOTAL(9,A1:A2)").unwrap();
     wb.set_formula_text(s, 0, 1, "=SUBTOTAL(9,A1:A3)").unwrap();
+    wb.set_formula_text(s, 1, 1, "=AGGREGATE(9,0,A1:A3)")
+        .unwrap();
+    wb.set_formula_text(s, 2, 1, "=AGGREGATE(9,4,A1:A3)")
+        .unwrap();
     let mut eng = engine();
     eng.recalc_full(&mut wb);
     assert_eq!(display(&wb, 2, 0), "30");
     assert_eq!(display(&wb, 0, 1), "30");
+    assert_eq!(display(&wb, 1, 1), "30");
+    assert_eq!(display(&wb, 2, 1), "60");
 }
 
 #[test]
@@ -203,11 +215,9 @@ fn fuzz_smoke_eager_functions_do_not_panic() {
         };
         for seed in 0u8..16 {
             let limit = usize::from(spec.max_args).min(4);
-            let count = if limit == 0 {
-                0
-            } else {
-                (seed as usize) % (limit + 1)
-            };
+            let minimum = usize::from(spec.min_args).min(limit);
+            let width = limit.saturating_sub(minimum).saturating_add(1);
+            let count = minimum + (seed as usize % width);
             let args: Vec<ArgVal> = (0..count)
                 .map(|i| {
                     let scalar = scalar_from_byte(seed.wrapping_add(i as u8));

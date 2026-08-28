@@ -1,14 +1,14 @@
 //! Criteria aggregation, `AGGREGATE`, and `SUBTOTAL` (WP-05a).
 
 use omacell_core::addr::SheetId;
-use omacell_core::coerce::Scalar;
+use omacell_core::coerce::{self, Scalar};
 use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, RuntimeValue};
 
 use crate::common::{
-    Criteria, arg_number, count_args, counta_args, criteria_match, flatten, is_nested_aggregate,
-    median, parse_criteria, percentile_exc, percentile_inc, register_specs, rt_num, sorted, stdev,
-    variance,
+    Criteria, Origin, arg_number, criteria_match, flatten, for_each_value, frequencies,
+    is_nested_aggregate, median, parse_criteria, percentile_exc, percentile_inc, register_specs,
+    rt_num, sorted, stdev, variance,
 };
 use crate::metadata::{ArgKind, ArrayBehavior, FunctionSpec};
 
@@ -502,25 +502,12 @@ fn mode_sngl(values: &[f64]) -> Result<f64, ErrorKind> {
     if values.is_empty() {
         return Err(ErrorKind::Na);
     }
-    let mut best_n = 0usize;
-    let mut best = values[0];
-    for (i, v) in values.iter().enumerate() {
-        let c = values.iter().filter(|x| *x == v).count();
-        if c > best_n {
-            best_n = c;
-            best = *v;
-        } else if c == best_n && c > 1 {
-            let first_best = values.iter().position(|x| *x == best).unwrap_or(0);
-            if i < first_best {
-                best = *v;
-            }
-        }
-    }
-    if best_n < 2 {
-        Err(ErrorKind::Na)
-    } else {
-        Ok(best)
-    }
+    frequencies(values)
+        .into_iter()
+        .max_by_key(|(_, count, first)| (*count, usize::MAX - *first))
+        .filter(|(_, count, _)| *count >= 2)
+        .map(|(value, _, _)| value)
+        .ok_or(ErrorKind::Na)
 }
 
 fn large_small(values: &[f64], k: f64, large: bool) -> Result<f64, ErrorKind> {
@@ -605,30 +592,37 @@ fn subtotal_count(ctx: &EvalCtx<'_>, args: &[ArgVal], opts: AggOpts, counta: boo
                     {
                         return;
                     }
-                    if counta {
-                        if !matches!(s, Scalar::Empty) {
-                            n += 1.0;
-                        }
-                    } else if matches!(s, Scalar::Number(v) if v.is_finite()) {
+                    if countable(&s, Origin::Aggregate, counta, opts.ignore_errors) {
                         n += 1.0;
                     }
                 });
             }
             _ => {
-                let fake = [arg.clone()];
-                let r = if counta {
-                    counta_args(ctx, &fake)
-                } else {
-                    count_args(ctx, &fake)
-                };
-                match r {
-                    Ok(c) => n += c,
-                    Err(e) => return RuntimeValue::error(e),
+                if let Err(e) = for_each_value(ctx, std::slice::from_ref(arg), &mut |s, origin| {
+                    if countable(&s, origin, counta, opts.ignore_errors) {
+                        n += 1.0;
+                    }
+                    Ok(())
+                }) {
+                    return RuntimeValue::error(e);
                 }
             }
         }
     }
     rt_num(n)
+}
+
+fn countable(s: &Scalar, origin: Origin, counta: bool, ignore_errors: bool) -> bool {
+    if matches!(s, Scalar::Error(_)) {
+        return counta && !ignore_errors;
+    }
+    if counta {
+        return !matches!(s, Scalar::Empty);
+    }
+    match origin {
+        Origin::Literal => coerce::to_number(s).is_ok(),
+        Origin::Aggregate => matches!(s, Scalar::Number(n) if n.is_finite()),
+    }
 }
 
 fn aggregate_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -644,19 +638,19 @@ fn aggregate_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         return RuntimeValue::error(ErrorKind::Value);
     }
     let opts = AggOpts {
-        ignore_nested: matches!(options, 0 | 2 | 4 | 6),
-        ignore_hidden: matches!(options, 4..=7),
+        ignore_nested: matches!(options, 0..=3),
+        ignore_hidden: matches!(options, 1 | 3 | 5 | 7),
         ignore_errors: matches!(options, 2 | 3 | 6 | 7),
     };
     let rest = args.get(2..).unwrap_or(&[]);
     let k = if matches!(fn_num, 14..=19) {
-        rest.get(1).and_then(|a| {
-            if a.omitted {
-                None
-            } else {
-                arg_number(ctx, rest, 1).ok()
-            }
-        })
+        if rest.len() != 2 || rest.get(1).is_none_or(|arg| arg.omitted) {
+            return RuntimeValue::error(ErrorKind::Value);
+        }
+        match arg_number(ctx, rest, 1) {
+            Ok(value) => Some(value),
+            Err(e) => return RuntimeValue::error(e),
+        }
     } else {
         None
     };
@@ -668,6 +662,9 @@ fn aggregate_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     } else {
         rest
     };
+    if fn_num == 2 || fn_num == 3 {
+        return subtotal_count(ctx, data_args, opts, fn_num == 3);
+    }
     match collect_filtered(ctx, data_args, opts).and_then(|v| apply_fn_num(fn_num, &v, k)) {
         Ok(n) => rt_num(n),
         Err(e) => RuntimeValue::error(e),

@@ -761,20 +761,9 @@ fn small_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     kth(ctx, args, false)
 }
 
-fn frequencies(values: &[f64]) -> Vec<(f64, usize, usize)> {
-    let mut items: Vec<(f64, usize, usize)> = Vec::new();
-    for (i, v) in values.iter().enumerate() {
-        if let Some(it) = items.iter_mut().find(|(x, _, _)| *x == *v) {
-            it.1 += 1;
-        } else {
-            items.push((*v, 1, i));
-        }
-    }
-    items
-}
 fn mode_sngl_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     map_nums(ctx, args, |v| {
-        let items = frequencies(v);
+        let items = crate::common::frequencies(v);
         let maxc = items.iter().map(|(_, c, _)| *c).max().unwrap_or(0);
         if maxc < 2 {
             return Err(ErrorKind::Na);
@@ -791,7 +780,7 @@ fn mode_mult_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     match nums(ctx, args) {
         Err(e) => RuntimeValue::error(e),
         Ok(v) => {
-            let items = frequencies(&v);
+            let items = crate::common::frequencies(&v);
             let maxc = items.iter().map(|(_, c, _)| *c).max().unwrap_or(0);
             if maxc < 2 {
                 return RuntimeValue::error(ErrorKind::Na);
@@ -1154,24 +1143,23 @@ fn frequency_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     if bins.is_empty() {
         return RuntimeValue::array(1, 1, vec![Scalar::Number(data.len() as f64)]);
     }
-    let mut counts = vec![0.0; bins.len() + 1];
+    let Some(count_len) = bins.len().checked_add(1) else {
+        return RuntimeValue::error(ErrorKind::Num);
+    };
+    let Ok(rows) = u32::try_from(count_len) else {
+        return RuntimeValue::error(ErrorKind::Num);
+    };
+    if omacell_core::eval::RuntimeArray::checked_len(rows, 1).is_err() {
+        return RuntimeValue::error(ErrorKind::Num);
+    }
+    let mut counts = vec![0.0; count_len];
     for x in data {
-        let mut placed = false;
-        for (i, b) in bins.iter().enumerate() {
-            if x <= *b {
-                counts[i] += 1.0;
-                placed = true;
-                break;
-            }
-        }
-        if !placed {
-            if let Some(last) = counts.last_mut() {
-                *last += 1.0;
-            }
+        let bin = bins.partition_point(|bound| *bound < x);
+        if let Some(count) = counts.get_mut(bin) {
+            *count += 1.0;
         }
     }
     let values: Vec<Scalar> = counts.into_iter().map(Scalar::Number).collect();
-    let rows = values.len() as u32;
     RuntimeValue::array(rows, 1, values)
 }
 fn standardize_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
