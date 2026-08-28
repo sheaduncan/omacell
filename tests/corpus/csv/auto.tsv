@@ -1,0 +1,49 @@
+# raw	locale	column_type	kind	would_become	changed	note
+007	en-US	auto	text	007	false	F-9.4 leading zeros stay text under Auto
+02115	en-US	auto	text	02115	false	ZIP code with leading zero
+1234567890123456	en-US	auto	text	1234567890123456	false	16-digit id exceeds IEEE 15-digit exactness
+SEPT1	en-US	auto	text	SEPT1	false	Excel gene-name trap; mixed alphanumeric stays text
+MAR1	en-US	auto	text	MAR1	false	Excel gene-name trap; mixed alphanumeric stays text
+BRCA1	en-US	auto	text	BRCA1	false	gene name mixed alphanumeric
+123	en-US	auto	number	123	true	unambiguous integer
+1,234.5	en-US	auto	number	1234.5	true	en-US thousands + decimal
+1.234,5	de-DE	auto	number	1234.5	true	de-DE thousands + decimal
+TRUE	en-US	auto	bool	TRUE	true	Excel boolean
+FALSE	en-US	auto	bool	FALSE	true	Excel boolean
+true	en-US	auto	bool	TRUE	true	boolean is case-insensitive
+123	en-US	keep_as_text	text	123	false	KeepAsText stores the raw string
+123	en-US	text	text	123	false	Text column stores the raw string
+007	en-US	number	number	7	true	forced Number may drop leading zeros
+TRUE	en-US	boolean	bool	TRUE	true	forced Boolean
+1	en-US	boolean	text	1	false	1 is not TRUE/FALSE even in a Boolean column
+2020-01-02	en-US	auto	date	2020-01-02	true	unambiguous ISO date
+01/02/2020	en-US	auto	date	2020-01-02	true	en-US MDY with 4-digit year
+01/02/2020	en-GB	auto	date	2020-02-01	true	en-GB DMY with 4-digit year
+13/01/2020	en-US	auto	text	13/01/2020	false	month 13 invalid in MDY; no order swap
+13/01/2020	en-GB	auto	date	2020-01-13	true	en-GB DMY 13 January 2020
+01/02/03	en-US	auto	text	01/02/03	false	two-digit year is ambiguous under Auto
+=1+1	en-US	auto	text	=1+1	false	CSV never injects formulas (F-9.6)
+	en-US	auto	empty		false	empty cell
+0	en-US	auto	number	0	true	zero is a number
+0.5	en-US	auto	number	0.5	true	leading-zero decimal is a number
+00.5	en-US	auto	text	00.5	false	integer-part leading zeros stay text
+1	en-US	auto	number	1	true	one is a number, not a bool
+hello	en-US	auto	text	hello	false	plain text
+1.234,56	en-US	auto	text	1.234,56	false	EU number does not parse as en-US
+2020-13-01	en-US	auto	text	2020-13-01	false	invalid ISO month
+29 Feb 2024	en-US	auto	date	2024-02-29	true	unambiguous month-name leap day
+29 Feb 2023	en-US	auto	text	29 Feb 2023	false	invalid civil date stays text
+Jan 2, 2020	en-US	auto	date	2020-01-02	true	month-name + 4-digit year
+01/02/2020	en-US	date:mm/dd/yyyy	date	2020-01-02	true	explicit MDY format
+01/02/03	en-US	date:mm/dd/yy	date	2003-01-02	true	explicit two-digit year (00-29 → 2000s)
+123456789012345	en-US	auto	number	123456789012345	true	15 significant digits is allowed
+ 123	en-US	auto	text	 123	false	leading space is not a number
+13:30:00	en-US	auto	date	13:30:00	true	unambiguous time-only serial
+2020-01-02 13:30:00	en-US	auto	date	2020-01-02 13:30:00	true	ISO datetime
+1 Mrz 2020	de-DE	auto	date	2020-03-01	true	German March abbreviation Mrz
+#DIV/0!	en-US	auto	text	#DIV/0!	false	error display stays text; CSV does not mint errors
+nan	en-US	auto	text	nan	false	IEEE NaN token is not a number
+inf	en-US	auto	text	inf	false	IEEE Inf token is not a number
+1e2	en-US	auto	number	100	true	unambiguous scientific notation
++12	en-US	auto	number	12	true	leading plus sign
+-0	en-US	auto	number	0	true	negative zero normalizes in preview
