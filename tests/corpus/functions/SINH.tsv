@@ -6,6 +6,6 @@
 =SINH("0")	0	numeric text
 =SINH("x")	#VALUE!	bad text
 =SINH(#N/A)	#N/A	error
-=SINH({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=SINH({0,0})	{0,0}	array lift; full spill
 =SIGN(SINH(2))	1	positive
 =SINH(0)+1	1	plus one

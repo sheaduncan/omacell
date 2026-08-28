@@ -6,6 +6,6 @@
 =ATAN("0")	0	numeric text
 =ATAN("x")	#VALUE!	bad text
 =ATAN(#N/A)	#N/A	error
-=ATAN({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=ATAN({0,0})	{0,0}	array lift; full spill
 =SIGN(ATAN(2))	1	positive
 =ATAN(0)+ATAN(0)	0	sum

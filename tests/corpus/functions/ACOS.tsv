@@ -8,4 +8,4 @@
 =ACOS("1")	0	numeric text
 =ACOS("x")	#VALUE!	bad text
 =ACOS(#N/A)	#N/A	error
-=ACOS({1,1})	0	array lift; spilled origin is top-left (format_cell)
+=ACOS({1,1})	{0,0}	array lift; full spill

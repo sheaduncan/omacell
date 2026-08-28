@@ -8,4 +8,4 @@
 =LOG10("100")	2	numeric text
 =LOG10("x")	#VALUE!	bad text
 =LOG10(#N/A)	#N/A	error
-=LOG10({100,10})	2	array lift; spilled origin is top-left (format_cell)
+=LOG10({100,10})	{2,1}	array lift; full spill

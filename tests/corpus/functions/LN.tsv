@@ -8,4 +8,4 @@
 =LN("x")	#VALUE!	bad text
 =LN(#N/A)	#N/A	error
 =LN(EXP(2))	2	round trip
-=LN({1,1})	0	array lift; spilled origin is top-left (format_cell)
+=LN({1,1})	{0,0}	array lift; full spill

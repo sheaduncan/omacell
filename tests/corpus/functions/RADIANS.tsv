@@ -8,4 +8,4 @@
 =RADIANS("x")	#VALUE!	bad text
 =RADIANS(#N/A)	#N/A	error
 =RADIANS(360)/PI()	2	full turn
-=RADIANS({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=RADIANS({0,0})	{0,0}	array lift; full spill

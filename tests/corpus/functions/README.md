@@ -8,7 +8,7 @@ formula<TAB>expected<TAB>note[<TAB>locale][<TAB>date_system]
 ```
 
 - `formula` includes the leading `=`.
-- `expected` is the committed display text (`format_cell`).
+- `expected` is the committed display text (`format_cell` for scalars; `{a,b;c,d}` for unblocked spills).
 - `note` cites the Excel behaviour the row encodes.
 - `locale` (optional) is a BCP-47 tag (`en-US`, `en-GB`, `de-DE`) applied via `RecalcEngine::set_locale`.
 - `date_system` (optional) is `1900` or `1904` and is written to `WorkbookSettings.date_system`.

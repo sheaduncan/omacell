@@ -8,4 +8,4 @@
 =EXP("x")	#VALUE!	bad text
 =EXP(#N/A)	#N/A	error
 =EXP(-1)*EXP(1)	1	reciprocals
-=EXP({0,0})	1	array lift; spilled origin is top-left (format_cell)
+=EXP({0,0})	{1,1}	array lift; full spill

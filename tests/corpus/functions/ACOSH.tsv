@@ -8,4 +8,4 @@
 =ACOSH("x")	#VALUE!	bad text
 =ACOSH(#N/A)	#N/A	error
 =IF(ACOSH(2)>0,1,0)	1	positive
-=ACOSH({1,1})	0	array lift; spilled origin is top-left (format_cell)
+=ACOSH({1,1})	{0,0}	array lift; full spill

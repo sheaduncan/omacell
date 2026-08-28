@@ -8,4 +8,4 @@
 =DEGREES("x")	#VALUE!	bad text
 =DEGREES(#N/A)	#N/A	error
 =DEGREES(2*PI())	360	full turn
-=DEGREES({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=DEGREES({0,0})	{0,0}	array lift; full spill

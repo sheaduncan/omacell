@@ -8,4 +8,4 @@
 =ACOT(#N/A)	#N/A	error
 =SIGN(ACOT(2))	1	positive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =ACOT(0)*0	0	times zero
-=ACOT({0,0})*0	0	array lift; spilled origin is top-left (format_cell)
+=ACOT({0,0})*0	{0,0}	array lift; full spill

@@ -40,10 +40,7 @@ fn text_and_date_corpus_files() {
     );
     for path in files {
         let results = run_corpus_file(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let probe = matches!(
-            path.file_stem().and_then(|s| s.to_str()),
-            Some("SEQUENCE")
-        );
+        let probe = matches!(path.file_stem().and_then(|s| s.to_str()), Some("SEQUENCE"));
         if !probe {
             assert!(
                 results.len() >= 10,

@@ -8,4 +8,4 @@
 =SQRT("x")	#VALUE!	bad text
 =SQRT(#N/A)	#N/A	error
 =SQRT(1)	1	one
-=SQRT({4,9})	2	array lift; spilled origin is top-left (format_cell)
+=SQRT({4,9})	{2,3}	array lift; full spill

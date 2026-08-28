@@ -6,6 +6,6 @@
 =TAN("0")	0	numeric text
 =TAN("x")	#VALUE!	bad text
 =TAN(#N/A)	#N/A	error
-=TAN({0,0})	0	array lift; spilled origin is top-left (format_cell)
+=TAN({0,0})	{0,0}	array lift; full spill
 =TAN(0)+TAN(0)	0	sum
 =IF(ABS(TAN(0))<1,1,0)	1	near zero
