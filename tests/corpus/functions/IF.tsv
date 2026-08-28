@@ -1,0 +1,5 @@
+# formula	expected	note
+=IF(TRUE,1,2)	1	selected true branch
+=IF(FALSE,1,2)	2	selected false branch
+=IF(TRUE,4,1/0)	4	unselected #DIV/0! is not evaluated
+=IF(FALSE,1/0,5)	5	unselected true-branch error skipped

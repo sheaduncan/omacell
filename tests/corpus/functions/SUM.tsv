@@ -1,0 +1,3 @@
+# formula	expected	note
+=SUM(1,2,3)	6	scalar sum
+=SUM(1,TRUE)	2	TRUE coerces to 1 in arithmetic

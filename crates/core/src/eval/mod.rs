@@ -3,7 +3,7 @@
 mod ops;
 mod registry;
 
-pub use registry::{ArrayLift, FnDef, FnRegistry};
+pub use registry::{ArrayLift, FnBody, FnDef, FnRegistry};
 
 use std::sync::Arc;
 
@@ -19,6 +19,8 @@ use crate::formula::{
 use crate::graph::CellCoord;
 use crate::intern::Interners;
 use crate::lambda::{self, Lambda};
+use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::locale::LocaleId;
 use crate::names::{NameReferent, NameScope};
 use crate::recalc::{AsyncRequest, AsyncState, ContentHash};
 use crate::spill::SpillTable;
@@ -114,6 +116,28 @@ pub struct RuntimeArray {
     pub values: Arc<[Scalar]>,
 }
 
+impl RuntimeArray {
+    /// Checked constructor. Rejects zero, out-of-grid, overflowing, or
+    /// payload-mismatched shapes **before** storing the values.
+    pub fn try_new(rows: u32, cols: u32, values: Vec<Scalar>) -> Result<Self, ErrorKind> {
+        if rows == 0 || cols == 0 {
+            return Err(ErrorKind::Num);
+        }
+        if rows > MAX_ROWS || cols > u32::from(MAX_COLS) {
+            return Err(ErrorKind::Num);
+        }
+        let len = rows.checked_mul(cols).ok_or(ErrorKind::Num)?;
+        if values.len() != len as usize {
+            return Err(ErrorKind::Value);
+        }
+        Ok(Self {
+            rows,
+            cols,
+            values: values.into(),
+        })
+    }
+}
+
 /// Runtime value used during evaluation. Commit maps this to interned [`Value`].
 #[derive(Clone, Debug)]
 pub enum RuntimeValue {
@@ -155,19 +179,28 @@ impl RuntimeValue {
         }
     }
 
-    /// Build an array, collapsing 1×1 to a scalar.
+    /// Build an array, collapsing 1×1 to a scalar. Invalid shapes become errors.
     #[must_use]
     pub fn array(rows: u32, cols: u32, values: Vec<Scalar>) -> Self {
-        let rows = rows.max(1);
-        let cols = cols.max(1);
-        if rows == 1 && cols == 1 {
-            return Self::Scalar(values.into_iter().next().unwrap_or(Scalar::Empty));
+        match RuntimeArray::try_new(rows, cols, values) {
+            Ok(array) if array.rows == 1 && array.cols == 1 => {
+                Self::Scalar(array.values.first().cloned().unwrap_or(Scalar::Empty))
+            }
+            Ok(array) => Self::Array(Arc::new(array)),
+            Err(error) => Self::error(error),
         }
-        Self::Array(Arc::new(RuntimeArray {
-            rows,
-            cols,
-            values: values.into(),
-        }))
+    }
+
+    /// Checked array construction (same rules as [`RuntimeArray::try_new`]).
+    pub fn try_array(rows: u32, cols: u32, values: Vec<Scalar>) -> Result<Self, ErrorKind> {
+        let array = RuntimeArray::try_new(rows, cols, values)?;
+        if array.rows == 1 && array.cols == 1 {
+            Ok(Self::Scalar(
+                array.values.first().cloned().unwrap_or(Scalar::Empty),
+            ))
+        } else {
+            Ok(Self::Array(Arc::new(array)))
+        }
     }
 
     /// Map a stored cell value into a runtime scalar (arrays stay arrays).
@@ -209,6 +242,54 @@ pub struct ArgVal {
     pub value: RuntimeValue,
 }
 
+/// Pass-stable calculation environment, sampled once before parallel eval.
+///
+/// Not stored on frozen [`crate::workbook::WorkbookSettings`].
+#[derive(Clone, Copy, Debug)]
+pub struct PassEnv {
+    /// Excel 1900 date serial (including time fraction) for `NOW`/`TODAY`.
+    pub clock: f64,
+    /// Locale for `TEXT` / `VALUE` / `DATEVALUE` (WP-05b).
+    pub locale: LocaleId,
+    /// Seed from which volatile random functions derive per-cell values.
+    pub random_nonce: u64,
+}
+
+impl Default for PassEnv {
+    fn default() -> Self {
+        Self {
+            clock: 0.0,
+            locale: LocaleId::EN_US,
+            random_nonce: 0,
+        }
+    }
+}
+
+impl PassEnv {
+    /// Unit-interval random for `function` at `index` in `cell` on `pass`.
+    #[must_use]
+    pub fn random_unit(self, cell: CellCoord, pass: u32, function: &str, index: u32) -> f64 {
+        let mut h = self.random_nonce;
+        h ^= u64::from(pass).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        h ^= u64::from(cell.sheet.index()).wrapping_shl(32);
+        h ^= u64::from(cell.row);
+        h ^= u64::from(cell.col).wrapping_shl(16);
+        h ^= u64::from(index).wrapping_shl(8);
+        for byte in function.as_bytes() {
+            h = h.wrapping_mul(0x0100_0000_01B3) ^ u64::from(*byte);
+        }
+        let mixed = splitmix64(h);
+        (mixed >> 11) as f64 / ((1u64 << 53) as f64)
+    }
+}
+
+fn splitmix64(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
     binds: Vec<(String, RuntimeValue)>,
@@ -225,6 +306,7 @@ pub struct EvalCtx<'a> {
     depth: u32,
     frames: Vec<ScopeFrame>,
     pass: u32,
+    env: PassEnv,
     pending_async: bool,
     stale: bool,
     async_hint: Option<String>,
@@ -249,6 +331,7 @@ impl<'a> EvalCtx<'a> {
             depth: 0,
             frames: Vec::new(),
             pass,
+            env: PassEnv::default(),
             pending_async: false,
             stale: false,
             async_hint: None,
@@ -264,6 +347,13 @@ impl<'a> EvalCtx<'a> {
         provider: Option<&'a dyn crate::recalc::AsyncNodeProvider>,
     ) -> Self {
         self.async_provider = provider;
+        self
+    }
+
+    /// Attach the pass-stable clock / locale / random environment.
+    #[must_use]
+    pub fn with_pass_env(mut self, env: PassEnv) -> Self {
+        self.env = env;
         self
     }
 
@@ -283,6 +373,36 @@ impl<'a> EvalCtx<'a> {
     #[must_use]
     pub fn coord(&self) -> CellCoord {
         self.cell
+    }
+
+    /// Pass-stable environment for this evaluation.
+    #[must_use]
+    pub fn pass_env(&self) -> PassEnv {
+        self.env
+    }
+
+    /// Injected / sampled `NOW` serial (date + time fraction).
+    #[must_use]
+    pub fn clock(&self) -> f64 {
+        self.env.clock
+    }
+
+    /// Integer date serial for `TODAY`.
+    #[must_use]
+    pub fn today(&self) -> f64 {
+        self.env.clock.trunc()
+    }
+
+    /// Locale for text/date conversion functions.
+    #[must_use]
+    pub fn locale(&self) -> LocaleId {
+        self.env.locale
+    }
+
+    /// Deterministic unit random for this cell, function, and array index.
+    #[must_use]
+    pub fn random_unit(&self, function: &str, index: u32) -> f64 {
+        self.env.random_unit(self.cell, self.pass, function, index)
     }
 
     pub(crate) fn take_flags(&mut self) -> (bool, bool, Option<String>, Vec<Reference>) {
@@ -1113,14 +1233,7 @@ fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> 
         if args.len() < def.min_args as usize || args.len() > def.max_args as usize {
             return RuntimeValue::error(ErrorKind::Value);
         }
-        let argv = eval_args(ctx, args);
-        if def.async_node {
-            return eval_async(ctx, def, &argv);
-        }
-        if def.array_lift == ArrayLift::All {
-            return eval_array_lifted(ctx, def, &argv);
-        }
-        return (def.eval)(ctx, &argv);
+        return dispatch_fn(ctx, def, args);
     }
     // Defined name that is a lambda / formula.
     if let Some(n) = ctx.wb.names().resolve(ctx.cell.sheet, name) {
@@ -1132,7 +1245,27 @@ fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> 
     registry::name_error()
 }
 
-fn eval_array_lifted(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> RuntimeValue {
+fn dispatch_fn(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[Option<Expr>]) -> RuntimeValue {
+    match def.body {
+        FnBody::Lazy(eval) => eval(ctx, args),
+        FnBody::Eager(eval) => {
+            let argv = eval_args(ctx, args);
+            if def.async_node {
+                eval_async(ctx, def, &argv)
+            } else if def.array_lift == ArrayLift::All {
+                eval_array_lifted(ctx, eval, &argv)
+            } else {
+                eval(ctx, &argv)
+            }
+        }
+    }
+}
+
+fn eval_array_lifted(
+    ctx: &mut EvalCtx<'_>,
+    eval: fn(&mut EvalCtx<'_>, &[ArgVal]) -> RuntimeValue,
+    args: &[ArgVal],
+) -> RuntimeValue {
     let args: Vec<ArgVal> = args
         .iter()
         .map(|arg| ArgVal {
@@ -1149,7 +1282,7 @@ fn eval_array_lifted(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> Run
         }
     }
     if rows == 1 && cols == 1 {
-        return (def.eval)(ctx, &args);
+        return eval(ctx, &args);
     }
 
     let mut values = Vec::with_capacity((rows as usize).saturating_mul(cols as usize));
@@ -1162,7 +1295,7 @@ fn eval_array_lifted(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[ArgVal]) -> Run
                     value: RuntimeValue::Scalar(lifted_scalar(&arg.value, row, col)),
                 })
                 .collect();
-            let result = (def.eval)(ctx, &cell_args);
+            let result = eval(ctx, &cell_args);
             values.push(match result {
                 RuntimeValue::Scalar(scalar) => scalar,
                 RuntimeValue::Array(array) if array.rows == 1 && array.cols == 1 => {
@@ -1243,7 +1376,20 @@ pub fn eval_formula(
     ast: &Expr,
     pass: u32,
 ) -> (RuntimeValue, EvalFlags) {
-    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass);
+    eval_formula_in(wb, registry, spill, cell, ast, pass, PassEnv::default())
+}
+
+/// [`eval_formula`] with an explicit pass environment.
+pub fn eval_formula_in(
+    wb: &Workbook,
+    registry: &FnRegistry,
+    spill: &SpillTable,
+    cell: CellCoord,
+    ast: &Expr,
+    pass: u32,
+    env: PassEnv,
+) -> (RuntimeValue, EvalFlags) {
+    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass).with_pass_env(env);
     let raw = eval_expr(&mut ctx, ast);
     let value = prepare_result(&ctx, raw);
     let (pending, stale, hint, dynamic) = ctx.take_flags();
@@ -1328,8 +1474,9 @@ fn format_array(a: &RuntimeArray) -> String {
             if c > 0 {
                 out.push(',');
             }
+            let index = r.saturating_mul(cols).saturating_add(c);
             out.push_str(&format_scalar(
-                a.values.get(r * cols + c).unwrap_or(&Scalar::Empty),
+                a.values.get(index).unwrap_or(&Scalar::Empty),
             ));
         }
     }

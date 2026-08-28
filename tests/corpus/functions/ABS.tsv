@@ -1,0 +1,4 @@
+# formula	expected	note
+=ABS(-3)	3	Excel ABS of negative
+=ABS(0)	0	zero
+=ABS(2.5)	2.5	positive unchanged
