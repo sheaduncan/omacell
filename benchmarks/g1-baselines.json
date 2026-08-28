@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "gate": "G1",
+  "base_commit": "0ad7a046bb26cd93a8e661fb1f721f220a03bebe",
+  "recorded_at": "2026-08-28",
+  "host": "local Linux; rustc 1.98.0",
+  "criterion": [
+    {
+      "id": "geometry/pixel_to_index/1000000",
+      "estimate_ns": 2390,
+      "command": "cargo bench -p omacell-core --bench geometry -- --sample-size 20",
+      "source": "reports/WP-02.md"
+    },
+    {
+      "id": "geometry/index_to_pixel/1000000",
+      "estimate_ns": 158,
+      "command": "cargo bench -p omacell-core --bench geometry -- --sample-size 20",
+      "source": "reports/WP-02.md"
+    },
+    {
+      "id": "parse_formula/mixed_15",
+      "estimate_ns": 13400,
+      "throughput_elements_per_second": 1120000,
+      "minimum_elements_per_second": 100000,
+      "command": "cargo bench -p omacell-core --bench parse_formula -- --warm-up-time 1 --measurement-time 5",
+      "source": "reports/WP-03.md"
+    },
+    {
+      "id": "recalc/full_10k_independent",
+      "estimate_ns": 18000000,
+      "command": "cargo bench -p omacell-core --bench recalc -- --save-baseline default",
+      "source": "reports/WP-04.md"
+    },
+    {
+      "id": "recalc/incremental_100k_typical_one_cell",
+      "estimate_ns": 9480000,
+      "maximum_ns": 50000000,
+      "command": "cargo bench -p omacell-core --bench recalc -- --save-baseline default",
+      "source": "reports/WP-04.md"
+    },
+    {
+      "id": "recalc/incremental_100k_one_edit_star_fanout",
+      "estimate_ns": 228000000,
+      "command": "cargo bench -p omacell-core --bench recalc -- --save-baseline default",
+      "source": "reports/WP-04.md"
+    },
+    {
+      "id": "recalc/full_1m_independent_8t",
+      "estimate_ns": 2800000000,
+      "maximum_ns": 5000000000,
+      "command": "cargo bench -p omacell-core --bench recalc -- --save-baseline default",
+      "source": "reports/WP-04.md"
+    },
+    {
+      "id": "aggregates/whole_column_sum",
+      "estimate_ns": 8890000,
+      "command": "cargo bench -p omacell-fn --bench aggregates -- --quick --save-baseline wp05a",
+      "source": "reports/WP-05a.md"
+    },
+    {
+      "id": "aggregates/whole_column_sumifs",
+      "estimate_ns": 81500000,
+      "command": "cargo bench -p omacell-fn --bench aggregates -- --quick --save-baseline wp05a",
+      "source": "reports/WP-05a.md"
+    },
+    {
+      "id": "aggregates/whole_column_subtotal",
+      "estimate_ns": 8840000,
+      "command": "cargo bench -p omacell-fn --bench aggregates -- --quick --save-baseline wp05a",
+      "source": "reports/WP-05a.md"
+    },
+    {
+      "id": "text_date/textsplit_line",
+      "estimate_ns": 102600,
+      "command": "cargo bench -p omacell-fn --bench text_date -- --quick",
+      "source": "reports/WP-05b.md"
+    },
+    {
+      "id": "text_date/regex_1k",
+      "estimate_ns": 41500000,
+      "command": "cargo bench -p omacell-fn --bench text_date -- --quick",
+      "source": "reports/WP-05b.md"
+    },
+    {
+      "id": "text_date/len_scan_100k",
+      "estimate_ns": 318300000,
+      "command": "cargo bench -p omacell-fn --bench text_date -- --quick",
+      "source": "reports/WP-05b.md"
+    },
+    {
+      "id": "text_date/year_scan_100k",
+      "estimate_ns": 300300000,
+      "command": "cargo bench -p omacell-fn --bench text_date -- --quick",
+      "source": "reports/WP-05b.md"
+    },
+    {
+      "id": "wp05c/unique_1m",
+      "estimate_ns": 469340000,
+      "command": "cargo bench -p omacell-fn --bench lookup_array -- unique_1m --quick --noplot",
+      "source": "reports/WP-05c.md"
+    },
+    {
+      "id": "ipc_roundtrip/ping",
+      "estimate_ns": 10515,
+      "confidence_interval_ns": [10333, 10671],
+      "command": "cargo bench -p omacell-bus --bench ipc_roundtrip -- --noplot",
+      "source": "reports/WP-07b.md"
+    },
+    {
+      "id": "ipc_roundtrip/cell_set_propose",
+      "estimate_ns": 51507,
+      "confidence_interval_ns": [49484, 54041],
+      "command": "cargo bench -p omacell-bus --bench ipc_roundtrip -- --noplot",
+      "source": "reports/WP-07b.md"
+    }
+  ],
+  "memory": [
+    {
+      "id": "storage/1m_by_20_numeric/shrink_to_fit",
+      "bytes_total": 672346792,
+      "bytes_per_cell": 33.62,
+      "maximum_bytes_per_cell": 64.0,
+      "source": "reports/WP-02.md"
+    },
+    {
+      "id": "storage/1m_by_20_numeric/rss",
+      "bytes_total": 691445760,
+      "bytes_per_cell": 34.57,
+      "maximum_bytes_total": 1500000000,
+      "source": "reports/WP-02.md"
+    }
+  ]
+}

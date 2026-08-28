@@ -1,7 +1,7 @@
 # formula	expected	note
 =COLUMN()	1	omitted ref is the formula cell (A1) → column 1
 =COLUMN(C5)	3	single cell column number (C=3)
-=COLUMN(C5:E5)	{3,4,5}	multi-col ref spills; origin is the first column number
+=COLUMN(C5:E5)	{3,4,5}	multi-col ref spills; known difference: LibreOffice implicitly intersects to the first column
 =SUM(COLUMN(C5:E5))	12	spilled {3,4,5} sums to 12
 =COLUMN($Z$1)	26	absolute flags do not change the column number
 =COLUMN(#REF!)	#REF!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. error argument propagates

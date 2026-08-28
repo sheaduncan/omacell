@@ -291,7 +291,7 @@ Two near-critical paths now remain: engine/UI (`WP-00 → WP-01 → WP-02 → WP
 | Agents invent Excel semantics | Corpus rows cite documented behavior; LibreOffice cross-check; G1 human spot-check; `docs/compat/known-differences.md` |
 | Context overflow / spec drift | Each WP names its spec sections; the kickoff prompt forbids reading beyond them |
 | Silent scope creep | *Out of scope* and *Deliverables* are the fence; anything else goes to *Open questions* |
-| Performance regressions | Criterion baselines committed at G1; 10 % budget gate in CI |
+| Performance regressions | Criterion baselines committed at G1; WP-28 adds the 10 % budget gate to CI |
 | Omarchy churn | Integration isolated in `crates/conf`; theme fixtures snapshotted; VM job per channel (WP-28) |
 | Security regressions in parsers | Fuzz targets required by the packages that add parsers; nightly fuzz job from WP-00 |
 
