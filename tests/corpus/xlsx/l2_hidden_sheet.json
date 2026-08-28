@@ -1,0 +1,14 @@
+{
+  "sheets": [
+    {
+      "name": "Hidden",
+      "hidden": true
+    },
+    {
+      "name": "Visible",
+      "hidden": false
+    }
+  ],
+  "active": "Visible",
+  "local_name": "LocalRate"
+}

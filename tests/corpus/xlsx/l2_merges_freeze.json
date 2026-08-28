@@ -1,0 +1,10 @@
+{
+  "merges": [
+    "A1:B1"
+  ],
+  "freeze": {
+    "rows": 1,
+    "cols": 1
+  },
+  "zoom": 1.5
+}

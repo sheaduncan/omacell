@@ -22,6 +22,11 @@ path = "../crates/bus"
 [dependencies.omacell-io]
 path = "../crates/io"
 
+[dependencies.zip]
+version = "2"
+default-features = false
+features = ["deflate"]
+
 [[bin]]
 name = "parse_formula"
 path = "fuzz_targets/parse_formula.rs"
@@ -53,6 +58,20 @@ bench = false
 [[bin]]
 name = "csv_parse"
 path = "fuzz_targets/csv_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xlsx_zip"
+path = "fuzz_targets/xlsx_zip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xlsx_sheet_xml"
+path = "fuzz_targets/xlsx_sheet_xml.rs"
 test = false
 doc = false
 bench = false

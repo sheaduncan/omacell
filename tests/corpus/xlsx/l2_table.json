@@ -1,0 +1,8 @@
+{
+  "tables": [
+    {
+      "name": "Sales",
+      "ref": "A1:B2"
+    }
+  ]
+}

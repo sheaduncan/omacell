@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use crate::addr::{CellRef, ParsedRef, RefKind, SheetId, SheetSpec};
 pub use crate::date_system::DateSystem;
 use crate::error::CoreError;
-use crate::intern::{ArrayPayload, FormulaId, Interners};
+use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
 use crate::locale::LocaleId;
 use crate::names::{DefinedName, NameRegistry, NameScope};
 use crate::numfmt;
@@ -456,6 +456,27 @@ impl Workbook {
         n: f64,
     ) -> Result<Option<CellSlot>, CoreError> {
         self.replace_slot(id, row, col, Some(CellSlot::number(n)))
+    }
+
+    /// Intern rich text and store it as the cell value.
+    pub fn set_rich_text(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        col: u16,
+        text: &str,
+        runs: Vec<RichTextRun>,
+    ) -> Result<StrId, CoreError> {
+        let sid = self.intern_mut().strings.intern_rich(text, runs);
+        let slot = CellSlot {
+            value: Value::Text(sid),
+            formula: None,
+            style: StyleId::DEFAULT,
+            flags: crate::storage::CellFlags::DEFAULT,
+        };
+        self.replace_slot(id, row, col, Some(slot))?;
+        self.intern_mut().strings.release(sid);
+        Ok(sid)
     }
 
     /// Intern `text` and store it as the cell value.
@@ -967,6 +988,53 @@ impl Workbook {
     /// Hide or unhide a row (`SUBTOTAL` / `AGGREGATE` hidden-row semantics).
     pub fn set_row_hidden(&mut self, id: SheetId, row: u32, hidden: bool) -> Result<(), CoreError> {
         self.sheet_mut(id)?.geometry.rows.set_hidden(row, hidden)
+    }
+
+    /// Set a row height in pixels.
+    pub fn set_row_height(&mut self, id: SheetId, row: u32, px: u32) -> Result<(), CoreError> {
+        self.sheet_mut(id)?.geometry.rows.set_size(row, px)
+    }
+
+    /// Hide or unhide a column.
+    pub fn set_col_hidden(&mut self, id: SheetId, col: u16, hidden: bool) -> Result<(), CoreError> {
+        self.sheet_mut(id)?
+            .geometry
+            .cols
+            .set_hidden(u32::from(col), hidden)
+    }
+
+    /// Set a column width in pixels.
+    pub fn set_col_width(&mut self, id: SheetId, col: u16, px: u32) -> Result<(), CoreError> {
+        self.sheet_mut(id)?
+            .geometry
+            .cols
+            .set_size(u32::from(col), px)
+    }
+
+    /// Replace sheet view state while loading a file.
+    pub fn set_sheet_view(&mut self, id: SheetId, view: ViewState) -> Result<(), CoreError> {
+        self.sheet_mut(id)?.view = view;
+        Ok(())
+    }
+
+    /// Replace sheet protection metadata while loading a file.
+    pub fn set_sheet_protection(
+        &mut self,
+        id: SheetId,
+        protection: ProtectionState,
+    ) -> Result<(), CoreError> {
+        self.sheet_mut(id)?.protection = protection;
+        Ok(())
+    }
+
+    /// Replace merged ranges while loading a file.
+    pub fn set_sheet_merges(
+        &mut self,
+        id: SheetId,
+        merges: Vec<crate::addr::RangeRef>,
+    ) -> Result<(), CoreError> {
+        self.sheet_mut(id)?.merges = merges;
+        Ok(())
     }
 
     /// Insert a defined name.
