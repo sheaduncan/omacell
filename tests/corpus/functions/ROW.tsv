@@ -1,7 +1,7 @@
 # formula	expected	note
 =ROW()	1	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. omitted ref is the formula cell (A1) → row 1
 =ROW(C5)	5	single cell row number (1-based)
-=ROW(C5:C7)	5	multi-row ref spills; origin is the first row number
+=ROW(C5:C7)	{5;6;7}	multi-row ref spills; origin is the first row number
 =SUM(ROW(C5:C7))	18	spilled {5;6;7} sums to 18
 =ROW($A$10)	10	absolute flags do not change the row number
 =ROW(#REF!)	#REF!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. error argument propagates

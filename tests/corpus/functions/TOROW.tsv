@@ -9,4 +9,4 @@
 =TOROW({1,2},4)	#VALUE!	ignore other than 0–3 is #VALUE!
 =INDEX(TOROW({1,2;3,4},0,TRUE),1,2)	3	scan_by_column TRUE: 1,3,2,4 so index 2 is 3
 =ROWS(TOROW({1;2;3}))	1	always one row
-=TOROW({1,2},3)	1	ignore=3 skip blanks and errors; origin 1
+=TOROW({1,2},3)	{1,2}	ignore=3 skip blanks and errors; origin 1

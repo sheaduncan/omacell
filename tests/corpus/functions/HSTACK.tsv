@@ -9,4 +9,4 @@
 =COLUMNS(HSTACK({1,2},{3,4}))	4	two rows stacked horizontally
 =INDEX(HSTACK({1;2},{3;4}),2,2)	4	bottom-right
 =ROWS(HSTACK(SEQUENCE(2),SEQUENCE(3)))	3	height is the tallest argument; checked before allocation
-=HSTACK({1,2},{3})	1	result origin is the first value
+=HSTACK({1,2},{3})	{1,2,3}	result origin is the first value

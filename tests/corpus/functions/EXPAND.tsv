@@ -1,7 +1,7 @@
 # formula	expected	note
 =INDEX(EXPAND({1},2,2,0),2,2)	0	pad to 2×2 with 0
 =INDEX(EXPAND({1,2},2,3),2,3)	#N/A	default pad is #N/A
-=EXPAND({1,2},1,2)	1	expand to the same shape is the original origin
+=EXPAND({1,2},1,2)	{1,2}	expand to the same shape is the original origin
 =EXPAND({1,2},0,2)	#VALUE!	rows 0 is #VALUE!
 =EXPAND({1,2},1,0)	#VALUE!	cols 0 is #VALUE!
 =EXPAND({1,2},1,1)	#VALUE!	cannot shrink below the original shape

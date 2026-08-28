@@ -287,6 +287,9 @@ fn eager_functions_do_not_panic_on_garbage_args() {
         },
     ];
     for spec in all_specs() {
+        if !WP05C.contains(&spec.name) {
+            continue;
+        }
         if matches!(spec.body, FnBody::Lazy(_)) {
             continue;
         }

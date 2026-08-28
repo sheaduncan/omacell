@@ -3,7 +3,7 @@
 =ROWS(UNIQUE({1;1;2}))	2	two unique rows
 =INDEX(UNIQUE({1,1,2},FALSE,TRUE),1)	2	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. exactly_once keeps values that appear once
 =ROWS(UNIQUE({1;1;2},FALSE,TRUE))	1	only 2 appears once
-=UNIQUE({1,2,3})	1	already unique vector; spill origin is first
+=UNIQUE({1,2,3})	{1,2,3}	already unique vector; spill origin is first
 =UNIQUE(5)	5	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. scalar is unique
 =UNIQUE(#N/A)	#N/A	error argument propagates
 =ROWS(UNIQUE({1,2;1,2}))	1	duplicate rows collapsed

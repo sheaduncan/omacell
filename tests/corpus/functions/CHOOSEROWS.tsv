@@ -9,4 +9,4 @@
 =CHOOSEROWS({1;2},#N/A)	#N/A	index error propagates
 =SUM(CHOOSEROWS({1;2;3},2,2))	4	duplicate row indices are allowed
 =INDEX(CHOOSEROWS({1,2;3,4},2),1,2)	4	picked row keeps all columns
-=CHOOSEROWS({1,2,3},1)	1	single row of a row vector is that row origin
+=CHOOSEROWS({1,2,3},1)	{1,2,3}	single row of a row vector is that row origin

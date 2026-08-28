@@ -9,4 +9,4 @@
 =CHOOSECOLS({1,2},#N/A)	#N/A	index error propagates
 =SUM(CHOOSECOLS({1,2,3},2,2))	4	duplicate column indices are allowed
 =INDEX(CHOOSECOLS({1,2;3,4},2),2,1)	4	picked column keeps all rows
-=CHOOSECOLS({1;2;3},1)	1	single column of a column vector is that column origin
+=CHOOSECOLS({1;2;3},1)	{1;2;3}	single column of a column vector is that column origin
