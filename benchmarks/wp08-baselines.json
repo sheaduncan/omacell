@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "work_package": "WP-08",
+  "recorded_at": "2026-08-28",
+  "host": "local Linux; rustc 1.98.0",
+  "criterion": [
+    {
+      "id": "csv_parse/utf8_parse_only",
+      "estimate_ns": 26009000,
+      "confidence_interval_ns": [25960000, 26068000],
+      "throughput_bytes_per_second": 430618706,
+      "minimum_bytes_per_second": 100000000,
+      "command": "cargo bench -p omacell-io --bench csv_parse -- --noplot",
+      "source": "reports/WP-08.md"
+    },
+    {
+      "id": "csv_parse/utf8_load_80k_x_20",
+      "estimate_ns": 233240000,
+      "confidence_interval_ns": [232840000, 233640000],
+      "throughput_bytes_per_second": 48018489,
+      "minimum_bytes_per_second": 25000000,
+      "command": "cargo bench -p omacell-io --bench csv_parse -- --noplot",
+      "source": "reports/WP-08.md"
+    }
+  ],
+  "memory": [
+    {
+      "id": "csv_load/stream_1_gib/rss_delta",
+      "bytes_total": 67813376,
+      "maximum_bytes_total": 536870912,
+      "command": "cargo test -p omacell-io --release --test csv_gb -- --ignored --nocapture",
+      "source": "reports/WP-08.md"
+    }
+  ]
+}

@@ -249,6 +249,7 @@ impl BlockCoord {
 struct Block {
     bits: Box<[u64]>,
     slots: Vec<CellSlot>,
+    last_bit: Option<u16>,
 }
 
 impl Block {
@@ -256,6 +257,7 @@ impl Block {
         Self {
             bits: vec![0u64; WORDS].into_boxed_slice(),
             slots: Vec::new(),
+            last_bit: None,
         }
     }
 
@@ -292,6 +294,14 @@ impl Block {
 
     fn set(&mut self, r: u8, c: u8, slot: CellSlot) -> Option<CellSlot> {
         let bit = Self::bit(r, c);
+        if !self.occupied(bit) && self.last_bit.is_none_or(|last| bit > usize::from(last)) {
+            let w = bit / 64;
+            let b = bit % 64;
+            self.bits[w] |= 1u64 << b;
+            self.slots.push(slot);
+            self.last_bit = Some(bit as u16);
+            return None;
+        }
         let i = self.rank(bit);
         if self.occupied(bit) {
             let old = self.slots[i];
@@ -302,6 +312,10 @@ impl Block {
             let b = bit % 64;
             self.bits[w] |= 1u64 << b;
             self.slots.insert(i, slot);
+            self.last_bit = Some(
+                self.last_bit
+                    .map_or(bit as u16, |last| last.max(bit as u16)),
+            );
             None
         }
     }
@@ -315,7 +329,21 @@ impl Block {
         let w = bit / 64;
         let b = bit % 64;
         self.bits[w] &= !(1u64 << b);
-        Some(self.slots.remove(i))
+        let old = self.slots.remove(i);
+        if self.last_bit == Some(bit as u16) {
+            self.last_bit = self
+                .bits
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(word_idx, word)| {
+                    (*word != 0).then(|| {
+                        let high = 63 - word.leading_zeros() as usize;
+                        (word_idx * 64 + high) as u16
+                    })
+                });
+        }
+        Some(old)
     }
 
     fn is_empty(&self) -> bool {
