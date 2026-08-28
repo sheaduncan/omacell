@@ -6,7 +6,7 @@
 | Lane | A — Engine / core |
 | Size | L (≈ 6–10) |
 | Depends on | WP-01 |
-| Unblocks | WP-04, WP-07, WP-09 |
+| Unblocks | WP-04, WP-07a, WP-09 |
 | Spec sections | §6.3 F-3.1, F-3.2, §6.5 F-5.2, §11.3, §14 |
 | Where | `crates/core` (module `formula`: `lexer`, `parser`, `ast`, `printer`, `rewrite`, `deps`) |
 

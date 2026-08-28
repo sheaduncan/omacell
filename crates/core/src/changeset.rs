@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::command::{CommandId, Origin};
 use crate::error::{CoreError, codes};
 
-/// Identifier of a changeset (opaque, non-empty string; WP-07 assigns them).
+/// Identifier of a changeset (opaque, non-empty string; WP-07a assigns them).
 ///
 /// ```
 /// use omacell_core::changeset::ChangesetId;
@@ -82,7 +82,7 @@ pub enum ChangesetStatus {
 pub struct CommandCall {
     /// Command to execute.
     pub id: CommandId,
-    /// JSON arguments, validated against the command’s schema (WP-07).
+    /// JSON arguments, validated against the command’s schema (WP-07a).
     pub args: serde_json::Value,
 }
 
@@ -143,7 +143,7 @@ pub struct Changeset {
     pub forward: Vec<CommandCall>,
     /// Computed inverse commands, executed in listed order when reverting.
     ///
-    /// This is empty while `status` is [`ChangesetStatus::Proposed`]. WP-07
+    /// This is empty while `status` is [`ChangesetStatus::Proposed`]. WP-07a
     /// computes it from trusted workbook state before marking the changeset
     /// applied; agent-supplied inverse commands are never trusted.
     pub inverse: Vec<CommandCall>,

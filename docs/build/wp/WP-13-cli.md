@@ -5,7 +5,7 @@
 | Phase | 3 — Surfaces I — config, CLI, UI core, TUI |
 | Lane | D — Integration (bus, CLI, Lua, MCP, AI, release) |
 | Size | L (≈ 6–10) |
-| Depends on | WP-05a, WP-05b, WP-05c, WP-07, WP-08, WP-10, WP-11, WP-12 |
+| Depends on | WP-05a, WP-05b, WP-05c, WP-07b, WP-08, WP-10, WP-11, WP-12 |
 | Unblocks | WP-15, WP-20, WP-21, WP-28 |
 | Spec sections | §6.10 F-10.5, §7.9, §12.3 |
 | Where | `crates/cli` |
@@ -19,6 +19,7 @@ Every capability of the engine and I/O layer is reachable from a shell, with `--
 - `clap` command tree mirroring spec F-10.5: `convert`, `query`, `set`, `eval`, `recalc`, `run` (stub until WP-20), `fn list|doc`, `config check|edit|reset|show|diff`, `theme show|reload`, `setup omarchy`, `commands`, `ipc`, `changeset list|show|apply|revert|export`, `diff`, `audit` (deterministic checks arrive with WP-19; stub reports 'not yet'), `ai` / `agent` / `mcp` (stubs that explain they arrive in WP-21/22 — must exit non-zero with a hint), `--tui` / GUI dispatch behind features.
 - Global flags: `--json`, `--dry-run`, `--set key=value`, `--config <file>`, `--quiet`, `--verbose`; errors as `{code, message, hint}` on stderr in `--json` mode; documented exit codes in `docs/cli.md`.
 - `omacell query` formats `json|csv|md`; range/sheet selection; formulas or values.
+- Register the deferred `file.open`, `file.save`, and `file.export` command adapters against the real WP-08/10/11 I/O services, with schemas added through WP-07a's extension API. Do not place file business logic in `crates/bus` or duplicate it in the CLI parser.
 - Completions (bash/zsh/fish via `clap_complete`), man page (`clap_mangen`), both generated at build into `target/dist/`.
 - Logging via `tracing` to stderr and `~/.local/state/omacell/logs/` with rotation.
 

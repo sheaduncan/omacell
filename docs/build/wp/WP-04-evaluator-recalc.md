@@ -6,7 +6,7 @@
 | Lane | A — Engine / core |
 | Size | XL (≈ 10–20) |
 | Depends on | WP-02, WP-03 |
-| Unblocks | WP-05a, WP-05b, WP-05c, WP-07, WP-17, WP-19, WP-23 |
+| Unblocks | WP-05F, WP-07a, WP-17, WP-19, WP-23 |
 | Spec sections | §6.3 F-3.3–F-3.8, §8.3 A-3.3, §11.3, §11.5, §12.1 |
 | Where | `crates/core` (modules `eval`, `graph`, `recalc`, `spill`, `lambda`, `coerce`) |
 

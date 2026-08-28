@@ -85,7 +85,7 @@ impl From<CommandId> for String {
     }
 }
 
-/// Registry metadata for one command (WP-07 fills the registry).
+/// Registry metadata for one command (WP-07a fills the registry).
 ///
 /// ```
 /// use omacell_core::command::{CommandDescriptor, CommandId};

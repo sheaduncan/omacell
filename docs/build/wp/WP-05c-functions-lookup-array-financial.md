@@ -5,7 +5,7 @@
 | Phase | 1 — Engine |
 | Lane | A — Engine / core |
 | Size | L (≈ 6–10) |
-| Depends on | WP-01, WP-04 |
+| Depends on | WP-05F |
 | Unblocks | WP-13 |
 | Spec sections | §6.4 Tier 0, §6.3 F-3.3–F-3.4, Appendix D |
 | Where | `crates/fn` (modules `lookup`, `array`, `lambda`, `financial`, `engineering`) |
@@ -16,24 +16,27 @@ The functions that make dynamic-array Excel what it is, plus the financial core.
 
 ## Deliverables
 
-- Lookup & reference (~35): `XLOOKUP`, `XMATCH`, `INDEX`, `MATCH`, `VLOOKUP`, `HLOOKUP`, `LOOKUP`, `CHOOSE`, `OFFSET`, `INDIRECT`, `ROW(S)`, `COLUMN(S)`, `ADDRESS`, `AREAS`, `TRANSPOSE`, `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `TAKE`, `DROP`, `CHOOSEROWS`, `CHOOSECOLS`, `VSTACK`, `HSTACK`, `TOCOL`, `TOROW`, `WRAPROWS`, `WRAPCOLS`, `EXPAND`, `HYPERLINK` (value part), `FORMULATEXT`.
-- Lambda helpers (8): `MAP`, `REDUCE`, `SCAN`, `BYROW`, `BYCOL`, `MAKEARRAY`, `ISOMITTED` (if not in 05a), `LAMBDA`/`LET` evaluator integration tests.
+- Lookup, reference, and arrays: `XLOOKUP`, `XMATCH`, `INDEX`, `MATCH`, `VLOOKUP`, `HLOOKUP`, `LOOKUP`, `CHOOSE`, `OFFSET`, `INDIRECT`, `ROW(S)`, `COLUMN(S)`, `ADDRESS`, `AREAS`, `TRANSPOSE`, `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `SEQUENCE`, `RANDARRAY`, `TAKE`, `DROP`, `CHOOSEROWS`, `CHOOSECOLS`, `VSTACK`, `HSTACK`, `TOCOL`, `TOROW`, `WRAPROWS`, `WRAPCOLS`, `EXPAND`. `HYPERLINK` and `FORMULATEXT` follow Appendix D and are deferred to Tier 1 rather than silently expanding Tier 0.
+- Lambda helpers: implement `MAP`, `REDUCE`, `SCAN`, `BYROW`, `BYCOL`, and `MAKEARRAY`; add integration/metadata coverage for the existing evaluator-owned `LET`, `LAMBDA`, and `ISOMITTED` constructs rather than registering duplicate implementations.
 - Financial (~20): `PMT`, `IPMT`, `PPMT`, `NPV`, `XNPV`, `IRR`, `XIRR`, `MIRR`, `FV`, `PV`, `RATE`, `NPER`, `SLN`, `DB`, `DDB`, `SYD`, `EFFECT`, `NOMINAL`, `CUMIPMT`, `CUMPRINC` — with the iterative solvers' tolerances documented.
 - Engineering basics (12): `CONVERT` (full unit table), `DEC2BIN/OCT/HEX` and inverses, `BITAND/OR/XOR/LSHIFT/RSHIFT`, `DELTA`, `GESTEP`.
 
 ## Implementation notes
 
-- Define functions with a macro that records name, arg count, arg kinds, volatility, and array-lifting behavior; the registry emits `functions.json` used by `omacell fn list --json` and by the autocomplete provider.
+- Use the WP-05F definition macro, checked arrays, deterministic random context, and corpus runner as-is. Every user-controlled output shape is validated before allocation.
 - Every function must return an `ErrorKind`, never panic, for any `Value` input; a fuzz smoke test feeds random values to every registered function.
 - Criteria syntax for `*IF(S)`: comparison prefixes, wildcards `* ? ~`, numeric/text/date matching per Excel.
 - Where Excel behavior is surprising (e.g. `ROUND` half-away-from-zero, `MOD` sign, `TEXT` format codes, `DATEDIF` units), write the corpus case first and cite the documented behavior in a comment. Cross-check with LibreOffice headless when available (`scripts/lo-crosscheck.py`); differences are triaged into `docs/compat/known-differences.md`.
 - Binary search modes and wildcard modes of `XLOOKUP`/`XMATCH` need explicit corpus coverage; `VLOOKUP` approximate-match semantics on unsorted data must mirror Excel, not be 'fixed'.
+- Execution decision: the engineering basics listed here remain Tier 0 according to Appendix D even though the prose summary in §6.4 groups some under Tier 1. Record this known spec inconsistency in the report; do not expand beyond the explicit list.
 
 ## Acceptance criteria
 
-- [ ] Every function in the list has ≥ 10 corpus rows in `tests/corpus/functions/<NAME>.tsv` covering normal, empty, error-propagation, array-lifting, and boundary cases; all pass.
+- [ ] Every function in the list has ≥ 10 corpus rows in `tests/corpus/functions/<NAME>.tsv` covering all applicable categories among normal, empty/omitted, error-propagation, array/reference behavior, lookup modes, shape limits, and boundaries; all pass. Inapplicable categories are identified in metadata.
 - [ ] `functions.json` lists every function with signature and doc; no function panics under the fuzz smoke test.
 - [ ] Cross-check script reports zero unexplained differences (explained ones documented).
+- [ ] `SEQUENCE`, `RANDARRAY`, `MAKEARRAY`, and stacking/wrapping functions reject out-of-grid or overflowed shapes before allocating; lambda-helper recursion/call caps are enforced.
+- [ ] WP-04 recalc gates remain within budget; 1M-row `XLOOKUP`/`XMATCH`, `FILTER`, `SORT`, `UNIQUE`, and representative lambda/financial solver baselines are committed and regressions over 10% fail review.
 
 ## Tests
 

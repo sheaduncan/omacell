@@ -5,7 +5,7 @@
 | Phase | 5 — Scripting, agents, AI |
 | Lane | D — Integration (bus, CLI, Lua, MCP, AI, release) |
 | Size | L (≈ 6–10) |
-| Depends on | WP-12, WP-07, WP-19 |
+| Depends on | WP-12, WP-07a, WP-19 |
 | Unblocks | WP-23 |
 | Spec sections | §8.1, §8.2, §8.7, §8.8 (providers, routing), §11.2 ADR-005, §12.3 |
 | Where | `crates/ai` (modules `provider`, `openai_compat`, `anthropic`, `secrets`, `card`, `redact`, `policy`, `audit`, `record`) |

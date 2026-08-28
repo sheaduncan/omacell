@@ -5,7 +5,7 @@
 | Phase | 3 — Surfaces I — config, CLI, UI core, TUI |
 | Lane | C — Surfaces (conf, UI core, TUI, GUI, charts, print) |
 | Size | L (≈ 6–10) |
-| Depends on | WP-07, WP-12 |
+| Depends on | WP-07a, WP-12 |
 | Unblocks | WP-15, WP-16, WP-23 |
 | Spec sections | §6.5, §9.1 (keys), §10.1, §10.2, Appendix A |
 | Where | `crates/ui` |
@@ -25,7 +25,7 @@ All interaction logic lives once, toolkit-free, so the TUI and GUI are thin rend
 ## Implementation notes
 
 - No `egui`, `ratatui`, or `winit` types may appear in this crate — enforce with a dependency lint in CI.
-- Every keymap entry must resolve to a registered command id; the conformance test is the contract with WP-07.
+- Every keymap entry must resolve to a registered command id; the conformance test is the contract with WP-07a. This package owns and registers `view.freeze`, `view.split`, `view.zoom`, and `view.select` because their state lives in the UI session rather than the workbook command context.
 
 ## Acceptance criteria
 

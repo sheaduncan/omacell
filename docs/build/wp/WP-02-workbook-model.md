@@ -6,7 +6,7 @@
 | Lane | A — Engine / core |
 | Size | L (≈ 6–10) |
 | Depends on | WP-01 |
-| Unblocks | WP-04, WP-07, WP-08, WP-09, WP-11 |
+| Unblocks | WP-04, WP-07a, WP-08, WP-09, WP-11 |
 | Spec sections | §6.1, §6.2, §11.3, §12.1 |
 | Where | `crates/core` (modules `workbook`, `sheet`, `storage`, `intern`, `geometry`, `names`, `tables`, `undo`) |
 

@@ -34,7 +34,7 @@ The spec left several choices as ADRs. Agents need fixed contracts, so this plan
 | Phase | Name | Packages | Gate |
 |---|---|---|---|
 | 0 | Foundations | WP-00, WP-01, WP-S1, WP-S2 | G0 |
-| 1 | Engine | WP-02, WP-03, WP-04, WP-05a, WP-05b, WP-05c, WP-06, WP-07 | G1 |
+| 1 | Engine | WP-02, WP-03, WP-06, WP-04, WP-05F, WP-05a, WP-05b, WP-05c, WP-07a, WP-07b | G1 |
 | 2 | File I/O | WP-08, WP-09, WP-10, WP-11 | G2 |
 | 3 | Surfaces I — config, CLI, UI core, TUI | WP-12, WP-13, WP-14, WP-15 | G3 |
 | 4 | Surfaces II — GUI and data tools | WP-16, WP-17, WP-18, WP-19 | G4 |
@@ -44,11 +44,20 @@ The spec left several choices as ADRs. Agents need fixed contracts, so this plan
 
 Mapping to the spec's milestones: Phases 0–3 deliver M1 (engine + CLI + TUI, `.xlsx` L1/L2). Phase 4 delivers M2 (GUI, daily-driver data tools). Phase 5 delivers the AI and agent parts of M2–M4. Phase 6 delivers M3 and the rest of M4. Phase 7 is 1.0.
 
+### Immediate dispatch point (28 August 2026)
+
+WP-00 through WP-04, WP-06, WP-S1, and WP-S2 are merged. Two packages are ready and may run concurrently:
+
+- **Lane A:** [WP-05F](wp/WP-05F-function-runtime-foundation.md) on `wp/05f-function-runtime-foundation`.
+- **Lane D:** [WP-07a](wp/WP-07a-command-bus-changesets.md) on `wp/07a-command-bus-changesets`.
+
+Do not start WP-05a/b/c until WP-05F is merged. Do not start WP-07b until WP-07a is merged. WP-08, WP-09, and WP-12 are also dependency-ready in their independent lanes if additional non-overlapping capacity is available.
+
 ## 4. Gates (human checkpoints)
 
 | Gate | After | What a human verifies before the next phase starts |
 |---|---|---|
-| G0 | Phase 0 | `docs/contracts.md` reviewed; ADR-001/002 decided; D1–D12 confirmed. **Interface freeze begins.** |
+| G0 | Phase 0 | `docs/contracts.md` reviewed; ADR-001/002 decided; D1–D12 confirmed. **The WP-01 core-contract freeze begins.** Later wire contracts freeze when their owning package first lands. |
 | G1 | Phase 1 | Engine corpora green; perf baselines committed; spot-check 50 random function/eval corpus rows against Excel or LibreOffice by hand. |
 | G2 | Phase 2 | Open ten real-world `.xlsx` files you actually use; `omacell diff` after round-trip is empty; anything that is not becomes a corpus file. |
 | G3 | Phase 3 | Dogfood TUI + CLI for a week on real work (spec use cases 1 and 4). Keymap audit against your Hyprland bindings. |
@@ -61,14 +70,14 @@ Mapping to the spec's milestones: Phases 0–3 deliver M1 (engine + CLI + TUI, `
 
 | Lane | Focus | Packages (in order) |
 |---|---|---|
-| A | Engine / core | WP-00, WP-01, WP-S1, WP-02, WP-03, WP-04, WP-05a, WP-05b, WP-05c, WP-06, WP-17, WP-18, WP-19, WP-24 |
+| A | Engine / core | WP-00, WP-01, WP-S1, WP-02, WP-03, WP-06, WP-04, WP-05F, WP-05a, WP-05b, WP-05c, WP-17, WP-18, WP-19, WP-24 |
 | B | File I/O | WP-08, WP-09, WP-10, WP-11, WP-27 |
 | C | Surfaces (conf, UI core, TUI, GUI, charts, print) | WP-S2, WP-12, WP-14, WP-15, WP-16, WP-25, WP-26 |
-| D | Integration (bus, CLI, Lua, MCP, AI, release) | WP-07, WP-13, WP-20, WP-21, WP-22, WP-23, WP-28 |
+| D | Integration (bus, CLI, Lua, MCP, AI, release) | WP-07a, WP-07b, WP-13, WP-20, WP-21, WP-22, WP-23, WP-28 |
 
 - Run at most one agent per lane at a time, and only on packages whose *Depends on* are all merged.
-- Packages in the same crate but different modules (WP-05a/b/c; WP-17/18/19) can run concurrently **after** the shared scaffolding lands: the `fn` registry macro (first commit of WP-05a) and the `ops` command registration pattern (first commit of WP-17). Merge those small commits early.
-- Lane D's first package (WP-07) waits on Lane A; use that time on WP-12 (Lane C) and WP-08 (Lane B).
+- WP-05a/b/c may run concurrently in non-overlapping modules only after WP-05F lands the shared runtime, registry macro, metadata, and corpus harness. WP-17/18/19 retain their declared dependency order; do not partially merge scaffolding from an unfinished package.
+- WP-07a may run alongside WP-05F after WP-04 and WP-06 are merged, provided it does not alter evaluator/recalc modules; narrowly additive workbook APIs are allowed when required by its listed commands. WP-07b starts after WP-07a.
 
 ## 6. Dependency graph
 
@@ -84,11 +93,13 @@ graph LR
     WP_02["WP-02<br/>workbook-model"]
     WP_03["WP-03<br/>formula-parser"]
     WP_04["WP-04<br/>evaluator-recalc"]
+    WP_05F["WP-05F<br/>function runtime foundation"]
     WP_05a["WP-05a<br/>functions-math-stat-logic"]
     WP_05b["WP-05b<br/>functions-text-date"]
     WP_05c["WP-05c<br/>functions-lookup-array-financial"]
     WP_06["WP-06<br/>number-formats"]
-    WP_07["WP-07<br/>command-bus-ipc"]
+    WP_07a["WP-07a<br/>command bus + changesets"]
+    WP_07b["WP-07b<br/>IPC transport"]
   end
   subgraph P2["Phase 2: File I/O"]
     WP_08["WP-08<br/>csv"]
@@ -130,18 +141,18 @@ graph LR
   WP_01 --> WP_03
   WP_02 --> WP_04
   WP_03 --> WP_04
-  WP_01 --> WP_05a
-  WP_04 --> WP_05a
-  WP_01 --> WP_05b
-  WP_04 --> WP_05b
-  WP_06 --> WP_05b
-  WP_01 --> WP_05c
-  WP_04 --> WP_05c
   WP_01 --> WP_06
-  WP_02 --> WP_07
-  WP_03 --> WP_07
-  WP_04 --> WP_07
-  WP_06 --> WP_07
+  WP_04 --> WP_05F
+  WP_06 --> WP_05F
+  WP_05F --> WP_05a
+  WP_05F --> WP_05b
+  WP_05F --> WP_05c
+  WP_06 --> WP_05b
+  WP_02 --> WP_07a
+  WP_03 --> WP_07a
+  WP_04 --> WP_07a
+  WP_06 --> WP_07a
+  WP_07a --> WP_07b
   WP_02 --> WP_08
   WP_06 --> WP_08
   WP_02 --> WP_09
@@ -150,17 +161,17 @@ graph LR
   WP_09 --> WP_10
   WP_02 --> WP_11
   WP_06 --> WP_11
-  WP_07 --> WP_11
+  WP_07a --> WP_11
   WP_01 --> WP_12
   WP_05a --> WP_13
   WP_05b --> WP_13
   WP_05c --> WP_13
-  WP_07 --> WP_13
+  WP_07b --> WP_13
   WP_08 --> WP_13
   WP_10 --> WP_13
   WP_11 --> WP_13
   WP_12 --> WP_13
-  WP_07 --> WP_14
+  WP_07a --> WP_14
   WP_12 --> WP_14
   WP_14 --> WP_15
   WP_13 --> WP_15
@@ -168,20 +179,20 @@ graph LR
   WP_12 --> WP_16
   WP_S2 --> WP_16
   WP_04 --> WP_17
-  WP_07 --> WP_17
+  WP_07a --> WP_17
   WP_17 --> WP_18
   WP_06 --> WP_18
   WP_04 --> WP_19
   WP_17 --> WP_19
-  WP_07 --> WP_20
+  WP_07a --> WP_20
   WP_12 --> WP_20
   WP_13 --> WP_20
-  WP_07 --> WP_21
+  WP_07a --> WP_21
   WP_13 --> WP_21
   WP_19 --> WP_21
   WP_12 --> WP_21
   WP_12 --> WP_22
-  WP_07 --> WP_22
+  WP_07a --> WP_22
   WP_19 --> WP_22
   WP_22 --> WP_23
   WP_04 --> WP_23
@@ -209,39 +220,41 @@ graph LR
   WP_27 --> WP_28
 ```
 
-**Critical path** (longest chain by estimated effort): WP-00 → WP-01 → WP-02 → WP-04 → WP-07 → WP-14 → WP-16 → WP-25 → WP-26 → WP-28 — roughly 93 agent sessions. Total estimated effort across all 33 packages: about 278 agent sessions (S ≈ 1–2, M ≈ 3–5, L ≈ 6–10, XL ≈ 10–20). Treat these as ordering signals, not commitments; agents vary by an order of magnitude on this kind of work.
+Two near-critical paths now remain: engine/UI (`WP-00 → WP-01 → WP-02 → WP-04 → WP-07a → WP-14 → WP-16 → WP-25 → WP-26 → WP-28`) and functions/CLI/TUI (`WP-04/WP-06 → WP-05F → WP-05a/b/c → WP-13 → WP-15 → WP-25 → WP-26 → WP-28`). WP-07b remains on the CLI path but no longer blocks UI-core work. Session totals should be re-estimated after G1; treat package sizes as ordering signals, not commitments.
 
 ## 7. Work-package index
 
 | ID | Title | Phase | Lane | Size | Depends on | Unblocks |
 |---|---|---|---|---|---|---|
 | [WP-00](wp/WP-00-bootstrap.md) | Repository bootstrap, conventions, and CI | 0 | A | M | — | WP-S1, WP-S2, WP-01 |
-| [WP-01](wp/WP-01-core-contracts.md) | Core contracts: addressing, values, errors, styles, commands, changesets, events | 0 | A | M | WP-00 | WP-02, WP-03, WP-05a, WP-05b, WP-05c, WP-06, WP-12 |
+| [WP-01](wp/WP-01-core-contracts.md) | Core contracts: addressing, values, errors, styles, commands, changesets, events | 0 | A | M | WP-00 | WP-02, WP-03, WP-06, WP-12 |
 | [WP-S1](wp/WP-S1-spike-engine.md) | Spike: build the engine or adopt IronCalc (ADR-002) | 0 | A | S | WP-00 | — |
 | [WP-S2](wp/WP-S2-spike-gui-toolkit.md) | Spike: GUI toolkit (ADR-001) | 0 | C | M | WP-00 | WP-16 |
-| [WP-02](wp/WP-02-workbook-model.md) | Workbook model and storage | 1 | A | L | WP-01 | WP-04, WP-07, WP-08, WP-09, WP-11 |
-| [WP-03](wp/WP-03-formula-parser.md) | Formula lexer, parser, printer, and reference rewriting | 1 | A | L | WP-01 | WP-04, WP-07, WP-09 |
-| [WP-04](wp/WP-04-evaluator-recalc.md) | Evaluator and recalculation engine | 1 | A | XL | WP-02, WP-03 | WP-05a, WP-05b, WP-05c, WP-07, WP-17, WP-19, WP-23 |
-| [WP-05a](wp/WP-05a-functions-math-stat-logic.md) | Functions Tier 0 — math, statistics, logical, information, criteria aggregation | 1 | A | L | WP-01, WP-04 | WP-13 |
-| [WP-05b](wp/WP-05b-functions-text-date.md) | Functions Tier 0 — text, date, and time | 1 | A | L | WP-01, WP-04, WP-06 | WP-13 |
-| [WP-05c](wp/WP-05c-functions-lookup-array-financial.md) | Functions Tier 0 — lookup/reference, dynamic arrays, lambda helpers, financial, engineering basics | 1 | A | L | WP-01, WP-04 | WP-13 |
-| [WP-06](wp/WP-06-number-formats.md) | Number formats, dates, locales, and the General algorithm | 1 | A | M | WP-01 | WP-05b, WP-07, WP-08, WP-09, WP-11, WP-18 |
-| [WP-07](wp/WP-07-command-bus-ipc.md) | Command bus, changesets, events, and IPC | 1 | D | L | WP-02, WP-03, WP-04, WP-06 | WP-11, WP-13, WP-14, WP-17, WP-20, WP-21, WP-22 |
+| [WP-02](wp/WP-02-workbook-model.md) | Workbook model and storage | 1 | A | L | WP-01 | WP-04, WP-07a, WP-08, WP-09, WP-11 |
+| [WP-03](wp/WP-03-formula-parser.md) | Formula lexer, parser, printer, and reference rewriting | 1 | A | L | WP-01 | WP-04, WP-07a, WP-09 |
+| [WP-04](wp/WP-04-evaluator-recalc.md) | Evaluator and recalculation engine | 1 | A | XL | WP-02, WP-03 | WP-05F, WP-07a, WP-17, WP-19, WP-23 |
+| [WP-05F](wp/WP-05F-function-runtime-foundation.md) | Function runtime, metadata, and conformance foundation | 1 | A | M | WP-04, WP-06 | WP-05a, WP-05b, WP-05c |
+| [WP-05a](wp/WP-05a-functions-math-stat-logic.md) | Functions Tier 0 — math, statistics, logical, information, criteria aggregation | 1 | A | L | WP-05F | WP-13 |
+| [WP-05b](wp/WP-05b-functions-text-date.md) | Functions Tier 0 — text, date, and time | 1 | A | L | WP-05F, WP-06 | WP-13 |
+| [WP-05c](wp/WP-05c-functions-lookup-array-financial.md) | Functions Tier 0 — lookup/reference, dynamic arrays, lambda helpers, financial, engineering basics | 1 | A | L | WP-05F | WP-13 |
+| [WP-06](wp/WP-06-number-formats.md) | Number formats, dates, locales, and the General algorithm | 1 | A | M | WP-01 | WP-05F, WP-07a, WP-08, WP-09, WP-11, WP-18 |
+| [WP-07a](wp/WP-07a-command-bus-changesets.md) | In-process command bus, changesets, and events | 1 | D | M | WP-02, WP-03, WP-04, WP-06 | WP-07b, WP-11, WP-14, WP-17, WP-20, WP-21, WP-22 |
+| [WP-07b](wp/WP-07b-ipc.md) | Versioned Unix-socket IPC transport and client | 1 | D | M | WP-07a | WP-13 |
 | [WP-08](wp/WP-08-csv.md) | CSV/TSV import with preview, progressive load, and export | 2 | B | M | WP-02, WP-06 | WP-13, WP-27 |
 | [WP-09](wp/WP-09-xlsx-read.md) | .xlsx reader (L1–L2) with L3 part preservation | 2 | B | XL | WP-02, WP-03, WP-06 | WP-10 |
 | [WP-10](wp/WP-10-xlsx-write.md) | .xlsx writer, round-trip diff tool, atomic save | 2 | B | L | WP-09 | WP-13, WP-23, WP-24, WP-25, WP-27 |
-| [WP-11](wp/WP-11-omc-format.md) | .omc text workbook and change records | 2 | B | M | WP-02, WP-06, WP-07 | WP-13 |
+| [WP-11](wp/WP-11-omc-format.md) | .omc text workbook and change records | 2 | B | M | WP-02, WP-06, WP-07a | WP-13 |
 | [WP-12](wp/WP-12-config-theme-omarchy.md) | Configuration layering, Omarchy theme/font resolution, and `setup omarchy` | 3 | C | L | WP-01 | WP-13, WP-14, WP-16, WP-20, WP-21, WP-22 |
-| [WP-13](wp/WP-13-cli.md) | CLI: the `omacell` binary | 3 | D | L | WP-05a, WP-05b, WP-05c, WP-07, WP-08, WP-10, WP-11, WP-12 | WP-15, WP-20, WP-21, WP-28 |
-| [WP-14](wp/WP-14-ui-core.md) | Shared UI core: modes, keymaps, selection, editing, palette, viewport, clipboard, session | 3 | C | L | WP-07, WP-12 | WP-15, WP-16, WP-23 |
+| [WP-13](wp/WP-13-cli.md) | CLI: the `omacell` binary | 3 | D | L | WP-05a, WP-05b, WP-05c, WP-07b, WP-08, WP-10, WP-11, WP-12 | WP-15, WP-20, WP-21, WP-28 |
+| [WP-14](wp/WP-14-ui-core.md) | Shared UI core: modes, keymaps, selection, editing, palette, viewport, clipboard, session | 3 | C | L | WP-07a, WP-12 | WP-15, WP-16, WP-23 |
 | [WP-15](wp/WP-15-tui.md) | Terminal UI (ratatui) | 3 | C | L | WP-14, WP-13 | WP-25, WP-28 |
 | [WP-16](wp/WP-16-gui-foundation.md) | GUI foundation (eframe/egui on wgpu): window, grid renderer, chrome, theme hot reload | 4 | C | XL | WP-14, WP-12, WP-S2 | WP-25, WP-26, WP-28 |
-| [WP-17](wp/WP-17-editing-structure.md) | Editing and structure operations (data tools I) | 4 | A | L | WP-04, WP-07 | WP-18, WP-19 |
+| [WP-17](wp/WP-17-editing-structure.md) | Editing and structure operations (data tools I) | 4 | A | L | WP-04, WP-07a | WP-18, WP-19 |
 | [WP-18](wp/WP-18-sort-filter-tables-validation-cf.md) | Sort, AutoFilter, tables, data validation, conditional formatting (data tools II) | 4 | A | XL | WP-17, WP-06 | WP-24 |
 | [WP-19](wp/WP-19-auditing-find-audit.md) | Auditing, find/replace, Go To Special, and the deterministic `audit` | 4 | A | M | WP-04, WP-17 | WP-21, WP-22 |
-| [WP-20](wp/WP-20-lua-scripting.md) | Lua scripting, sandbox and trust, macro recorder | 5 | D | L | WP-07, WP-12, WP-13 | WP-23 |
-| [WP-21](wp/WP-21-mcp-skill-agent.md) | MCP server, agent skill, and Omarchy agent hand-off | 5 | D | L | WP-07, WP-13, WP-19, WP-12 | WP-23, WP-28 |
-| [WP-22](wp/WP-22-ai-providers-privacy-card.md) | AI provider layer, privacy and redaction, workbook card, audit log | 5 | D | L | WP-12, WP-07, WP-19 | WP-23 |
+| [WP-20](wp/WP-20-lua-scripting.md) | Lua scripting, sandbox and trust, macro recorder | 5 | D | L | WP-07a, WP-12, WP-13 | WP-23 |
+| [WP-21](wp/WP-21-mcp-skill-agent.md) | MCP server, agent skill, and Omarchy agent hand-off | 5 | D | L | WP-07a, WP-13, WP-19, WP-12 | WP-23, WP-28 |
+| [WP-22](wp/WP-22-ai-providers-privacy-card.md) | AI provider layer, privacy and redaction, workbook card, audit log | 5 | D | L | WP-12, WP-07a, WP-19 | WP-23 |
 | [WP-23](wp/WP-23-ai-features.md) | AI features: cell functions, natural-language plans, formula assist, completion, import assist, AI audit, in-app agent | 5 | D | XL | WP-22, WP-04, WP-14, WP-10, WP-20, WP-21 | WP-28 |
 | [WP-24](wp/WP-24-pivot-goalseek-stats.md) | Pivot tables, Goal Seek, statistics panel | 6 | A | XL | WP-18, WP-10 | WP-28 |
 | [WP-25](wp/WP-25-charts-sparklines.md) | Charts and sparklines: model, vector renderer, `.xlsx` DrawingML core types | 6 | C | XL | WP-16, WP-10, WP-15 | WP-26, WP-28 |
@@ -255,7 +268,7 @@ graph LR
 2. **Kickoff** with `templates/agent-kickoff-prompt.md`, filled in. The agent's context is: `AGENTS.md`, the WP file, the listed spec sections, and the reports of its dependencies. Do not paste the whole spec.
 3. **Plan first.** The agent writes the *Plan* section of `reports/WP-NN.md` before code (files, interfaces, tests-first list, open questions). If the plan reveals a contract change, it stops there.
 4. **Tests first.** Corpora and fixtures named in the WP are written before implementation. Weakening or skipping a test to get green is a PR rejection.
-5. **Interface freeze.** After G0, any change to `crates/core` public types from WP-01, to command schemas, or to the IPC/MCP wire formats requires an `RFC` section in the report and human approval before merge.
+5. **Interface freeze.** WP-01 public core types freeze at G0. A new wire contract freezes when its owning package first lands: command schemas at WP-07a, IPC at WP-07b, and MCP/card schemas in their later packages. Any subsequent change requires an `RFC` section and human approval before merge.
 6. **Report.** `reports/WP-NN.md` is part of the deliverable (template in `templates/wp-report.md`). Its *Interfaces exposed* section is the handoff to dependents.
 7. **Merge rules.** CI green; every acceptance box ticked with evidence; report complete; no new `TODO(` without a `WP-` reference; no new dependency without a justification line and passing `cargo deny`.
 8. **Failure handling.** If an agent cannot meet an acceptance criterion, it says so in *Open questions* with what it tried; a human decides whether to relax the criterion (edit the WP file, commit the edit) or split the package.
@@ -273,7 +286,7 @@ graph LR
 
 | Risk | Control |
 |---|---|
-| Agents redesign shared types mid-build | Interface freeze at G0; RFC rule; `docs/contracts.md` is the reference |
+| Agents redesign shared types mid-build | Each contract has an explicit freeze point; RFC rule; `docs/contracts.md` and versioned schemas are the references |
 | Agents pass tests by weakening them | Tests-first rule; PR review reads the test diff first |
 | Agents invent Excel semantics | Corpus rows cite documented behavior; LibreOffice cross-check; G1 human spot-check; `docs/compat/known-differences.md` |
 | Context overflow / spec drift | Each WP names its spec sections; the kickoff prompt forbids reading beyond them |
@@ -303,4 +316,3 @@ When a GitHub remote exists, protect `main`:
 - status checks required: `check`
 
 Until a remote exists, keep the same discipline locally: one package per branch, merge to `main` only after `just check` is green and the WP report is complete.
-

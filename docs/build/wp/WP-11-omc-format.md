@@ -5,7 +5,7 @@
 | Phase | 2 — File I/O |
 | Lane | B — File I/O |
 | Size | M (≈ 3–5) |
-| Depends on | WP-02, WP-06, WP-07 |
+| Depends on | WP-02, WP-06, WP-07a |
 | Unblocks | WP-13 |
 | Spec sections | §6.9 F-9.3, §8.6 A-6.4, Appendix E |
 | Where | `crates/io` (module `omc`); `docs/formats/omc.md` |

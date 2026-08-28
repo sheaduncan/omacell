@@ -78,7 +78,7 @@ Records are `Eq` + `Hash` (`f64` fields compare by `to_bits`) so WP-02 can inter
 | `Outcome` | same |
 | `UndoUnit`, `UndoUnitId` | same |
 
-No commands are registered here (WP-07).
+No commands are registered here. WP-07a creates the first versioned command catalog and `docs/schemas/commands.schema.json`; those schemas freeze when WP-07a merges, not retroactively at G0.
 
 ## Changesets — `omacell_core::changeset`
 
@@ -89,7 +89,7 @@ No commands are registered here (WP-07).
 | `ChangeSummary` | same |
 | `Changeset` | same |
 
-Proposed changesets carry no inverse commands. WP-07 computes inverses from trusted workbook state before moving a changeset to `Applied`; applied and reverted non-empty changesets must carry those inverses. Agent-supplied inverses are not trusted.
+Proposed changesets carry no inverse commands. WP-07a computes inverses from trusted workbook state before moving a changeset to `Applied`; applied and reverted non-empty changesets must carry those inverses. Agent-supplied inverses are not trusted.
 
 ## Events — `omacell_core::event`
 

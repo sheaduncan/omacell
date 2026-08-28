@@ -5,7 +5,7 @@
 | Phase | 5 — Scripting, agents, AI |
 | Lane | D — Integration (bus, CLI, Lua, MCP, AI, release) |
 | Size | L (≈ 6–10) |
-| Depends on | WP-07, WP-12, WP-13 |
+| Depends on | WP-07a, WP-12, WP-13 |
 | Unblocks | WP-23 |
 | Spec sections | §6.10 F-10.1–F-10.3, §8.8 (Lua hooks), §12.3 |
 | Where | `crates/lua`; `docs/lua-api.md` |

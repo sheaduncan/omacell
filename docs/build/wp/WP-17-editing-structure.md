@@ -5,7 +5,7 @@
 | Phase | 4 — Surfaces II — GUI and data tools |
 | Lane | A — Engine / core |
 | Size | L (≈ 6–10) |
-| Depends on | WP-04, WP-07 |
+| Depends on | WP-04, WP-07a |
 | Unblocks | WP-18, WP-19 |
 | Spec sections | §6.5 F-5.5–F-5.7, §6.6 F-6.6–F-6.10, §13 |
 | Where | `crates/core` (module `ops`), `crates/bus` (commands) |
@@ -16,7 +16,7 @@ The mutating operations of daily spreadsheet work, each as a registered command 
 
 ## Deliverables
 
-- Structure: insert/delete cells (shift right/down), rows, columns with reference rewriting and `#REF!` for removed ranges; hide/unhide; group/outline levels with collapse state; merge, merge-across, unmerge; row height and column width incl. auto-fit via a measurement callback; freeze/split state commands.
+- Structure: sheet remove/reorder with exact restoration; insert/delete cells (shift right/down), rows, columns with reference rewriting and `#REF!` for removed ranges; hide/unhide; group/outline levels with collapse state; merge, merge-across, unmerge; row height and column width incl. auto-fit via a measurement callback. Freeze/split are WP-14 session commands.
 - Fill: series detection (linear, growth, dates, weekdays, months, years, custom lists), fill down/right/up/left, fill options (copy/series/formats only), `Ctrl+Enter` fill-selection.
 - Clipboard semantics: copy adjusts relative references; cut retargets; Paste Special (values, formulas, formats, number formats, column widths, transpose, skip blanks, add/subtract/multiply/divide, paste link); clear variants (contents, formats, comments, all).
 - Comments and notes (legacy notes, threaded comments with replies and resolve), hyperlinks (external/internal), sheet and workbook protection with Excel-compatible legacy hash and allowed-actions list, locked/hidden cell flags.
