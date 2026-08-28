@@ -159,7 +159,9 @@ impl Bus {
         if !MutationPolicy::allow_apply(origin) {
             return Err(bus_error::denied("this origin cannot apply a changeset"));
         }
-        let forward = self.changesets.forward(id)?.to_vec();
+        // Validate the lifecycle before dispatch. Running first and rejecting in
+        // `mark_applied` would let an invalid second apply mutate live state.
+        let forward = self.changesets.forward_for_apply(id)?.to_vec();
         let effect = self.run(origin, &forward, Run::apply())?;
         let changeset = self
             .changesets
@@ -175,7 +177,9 @@ impl Bus {
         if !MutationPolicy::allow_apply(origin) {
             return Err(bus_error::denied("this origin cannot revert a changeset"));
         }
-        let inverse = self.changesets.inverse(id)?.to_vec();
+        // A proposed or already-reverted changeset must fail before any trusted
+        // inverse command reaches the workbook.
+        let inverse = self.changesets.inverse_for_revert(id)?.to_vec();
         let _ = self.run(origin, &inverse, Run::revert())?;
         let changeset = self.changesets.mark_reverted(id)?;
         self.events.emit(Event::ChangesetReverted {

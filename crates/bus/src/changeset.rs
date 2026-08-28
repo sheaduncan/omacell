@@ -85,18 +85,34 @@ impl ChangesetStore {
             .ok_or_else(|| error::changeset_not_found(id.as_str()))
     }
 
-    pub(crate) fn inverse(&self, id: &ChangesetId) -> Result<&[CommandCall], CoreError> {
-        self.entries
+    pub(crate) fn inverse_for_revert(&self, id: &ChangesetId) -> Result<&[CommandCall], CoreError> {
+        let entry = self
+            .entries
             .get(id.as_str())
-            .map(|entry| entry.inverse.as_slice())
-            .ok_or_else(|| error::changeset_not_found(id.as_str()))
+            .ok_or_else(|| error::changeset_not_found(id.as_str()))?;
+        if entry.public.status != ChangesetStatus::Applied {
+            return Err(error::changeset_state(format!(
+                "changeset {} cannot be reverted in status {:?}",
+                id.as_str(),
+                entry.public.status
+            )));
+        }
+        Ok(entry.inverse.as_slice())
     }
 
-    pub(crate) fn forward(&self, id: &ChangesetId) -> Result<&[CommandCall], CoreError> {
-        self.entries
+    pub(crate) fn forward_for_apply(&self, id: &ChangesetId) -> Result<&[CommandCall], CoreError> {
+        let entry = self
+            .entries
             .get(id.as_str())
-            .map(|entry| entry.public.forward.as_slice())
-            .ok_or_else(|| error::changeset_not_found(id.as_str()))
+            .ok_or_else(|| error::changeset_not_found(id.as_str()))?;
+        if entry.public.status != ChangesetStatus::Proposed {
+            return Err(error::changeset_state(format!(
+                "changeset {} cannot be applied in status {:?}",
+                id.as_str(),
+                entry.public.status
+            )));
+        }
+        Ok(entry.public.forward.as_slice())
     }
 
     /// Insertion-order list.

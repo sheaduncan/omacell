@@ -226,15 +226,21 @@ pub struct CellRestoreArgs {
     /// Drop the slot entirely (including style).
     #[serde(default)]
     pub absent: bool,
-    /// Formula-bar text when the slot remains.
+    /// Formula source when the slot remains.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input: Option<String>,
+    pub formula: Option<String>,
+    /// Interner-independent encoded cached or literal value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
     /// Style record (serde of [`omacell_core::style::Style`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<serde_json::Value>,
     /// Custom number format code paired with `style`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    /// Packed [`omacell_core::storage::CellFlags`] bits.
+    #[serde(default)]
+    pub flags: u8,
 }
 
 /// Internal `style.restore`.

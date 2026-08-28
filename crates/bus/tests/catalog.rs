@@ -2,8 +2,15 @@
 
 mod common;
 
+use omacell_bus::args::{
+    CalcModeArgs, CalcRecalcArgs, CellClearArgs, CellSetArgs, EmptyArgs, FormatNumberArgs,
+    NameDefineArgs, NameRemoveArgs, RangeClearArgs, RangeSetArgs, SheetAddArgs, SheetRenameArgs,
+    SheetVisibilityArgs, StyleSetArgs,
+};
 use omacell_bus::{SCHEMA, commands_json};
 use omacell_core::command::Origin;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 
 fn validate_schema(
@@ -186,22 +193,6 @@ fn unknown_command_is_rejected() {
 
 #[test]
 fn public_arg_types_round_trip() {
-    let samples = [
-        json!({"ref": "Sheet1!B2", "input": "=A1+1"}),
-        json!({"ref": "A1"}),
-        json!({"range": "A1:B2", "input": "1"}),
-        json!({"range": "A1:B2"}),
-        json!({"name": "Data"}),
-        json!({"sheet": "Sheet1", "name": "Data"}),
-        json!({"sheet": "Sheet1", "visibility": "hidden"}),
-        json!({"name": "Tax", "referent": {"type": "constant", "value": 0.2}}),
-        json!({"name": "Tax"}),
-        json!({"range": "A1", "format": "0.00"}),
-        json!({"range": "A1", "bold": true}),
-        json!({"mode": "full"}),
-        json!({"mode": "manual"}),
-        json!({}),
-    ];
     let names = [
         "cell.set",
         "cell.clear",
@@ -217,22 +208,43 @@ fn public_arg_types_round_trip() {
         "calc.recalc",
         "calc.mode",
         "edit.undo",
+        "edit.redo",
     ];
     let bus = common::bus();
     let catalog: serde_json::Value = serde_json::from_str(&bus.commands_json().unwrap()).unwrap();
-    for (name, sample) in names.iter().zip(samples.iter()) {
-        let cmd = catalog["commands"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|c| c["id"] == *name)
-            .unwrap();
-        assert!(cmd["arg_schema"].is_object(), "{name}");
-        let _ = sample;
+    for name in names {
+        assert!(
+            catalog["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|command| command["id"] == name && command["arg_schema"].is_object()),
+            "missing typed schema for {name}"
+        );
     }
-    let parsed: omacell_bus::args::CellSetArgs =
-        serde_json::from_value(json!({"ref": "A1", "input": "1"})).unwrap();
-    let back = serde_json::to_value(&parsed).unwrap();
-    assert_eq!(back["ref"], "A1");
-    assert_eq!(back["input"], "1");
+
+    assert_round_trip::<CellSetArgs>(json!({"ref": "Sheet1!B2", "input": "=A1+1"}));
+    assert_round_trip::<CellClearArgs>(json!({"ref": "A1"}));
+    assert_round_trip::<RangeSetArgs>(json!({"range": "A1:B2", "input": "1"}));
+    assert_round_trip::<RangeClearArgs>(json!({"range": "A1:B2"}));
+    assert_round_trip::<SheetAddArgs>(json!({"name": "Data"}));
+    assert_round_trip::<SheetRenameArgs>(json!({"sheet": "Sheet1", "name": "Data"}));
+    assert_round_trip::<SheetVisibilityArgs>(json!({"sheet": "Sheet1", "visibility": "hidden"}));
+    assert_round_trip::<NameDefineArgs>(
+        json!({"name": "Tax", "referent": {"type": "constant", "value": 0.2}}),
+    );
+    assert_round_trip::<NameRemoveArgs>(json!({"name": "Tax"}));
+    assert_round_trip::<FormatNumberArgs>(json!({"range": "A1", "format": "0.00"}));
+    assert_round_trip::<StyleSetArgs>(json!({"range": "A1", "bold": true}));
+    assert_round_trip::<CalcRecalcArgs>(json!({"mode": "full"}));
+    assert_round_trip::<CalcModeArgs>(json!({"mode": "manual"}));
+    assert_round_trip::<EmptyArgs>(json!({}));
+}
+
+fn assert_round_trip<T>(sample: serde_json::Value)
+where
+    T: DeserializeOwned + Serialize,
+{
+    let parsed: T = serde_json::from_value(sample.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), sample);
 }

@@ -64,6 +64,8 @@ Key files:
 
 Key tests: [`crates/bus/tests/catalog.rs`](../crates/bus/tests/catalog.rs), [`commands.rs`](../crates/bus/tests/commands.rs), [`policy.rs`](../crates/bus/tests/policy.rs), [`changeset.rs`](../crates/bus/tests/changeset.rs), [`events.rs`](../crates/bus/tests/events.rs), [`recalc.rs`](../crates/bus/tests/recalc.rs), [`proptest_bus.rs`](../crates/bus/tests/proptest_bus.rs), `transact_try_rolls_back_partial_mutation` in [`workbook_model.rs`](../crates/core/tests/workbook_model.rs).
 
+Review hardening validates changeset lifecycle state before dispatching commands, so repeated apply/revert attempts cannot mutate live state before returning `changeset.state`. Internal cell restore payloads now preserve the exact logical value (including error literals, whitespace text, arrays, flags, style, and number format) without depending on workbook-local intern handles. The catalog test also performs a real serde round trip for all 15 public argument types.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -95,7 +97,7 @@ No CLI. `core ↛ bus`.
 
 ## Measurements
 
-Host: local Linux. `cargo test -p omacell-bus` — catalog 5, changeset 5, commands 11, events 3, policy 6, proptest 3, recalc 3 (all pass). `RUSTDOCFLAGS="-D warnings" cargo doc -p omacell-bus -p omacell-core --no-deps` — pass. Recalc integration: automatic `=A1+10` updates; manual stays empty until `calc.recalc`.
+Host: local Linux. `cargo test -p omacell-bus` — catalog 5, changeset 7, commands 11, events 3, policy 6, proptest 3, recalc 3 (all pass). `RUSTDOCFLAGS="-D warnings" cargo doc -p omacell-bus -p omacell-core --no-deps` — pass. Recalc integration: automatic `=A1+10` updates; manual stays empty until `calc.recalc`.
 
 No new crates.io dependencies. `proptest` is workspace-dev; `omacell-core` / `schemars` / `serde` / `serde_json` / `indexmap` are pre-approved.
 

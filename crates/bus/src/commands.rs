@@ -6,7 +6,9 @@ use omacell_core::event::Event;
 use omacell_core::graph::CellCoord;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::sheet::SheetVisibility;
+use omacell_core::storage::CellSlot;
 use omacell_core::style::NumFmtId;
+use omacell_core::style::StyleId;
 use omacell_core::value::Value;
 use omacell_core::workbook::CalcMode;
 
@@ -19,8 +21,8 @@ use crate::args::{
 use crate::error as bus_error;
 use crate::handler::{CommandContext, Effect};
 use crate::logical::{
-    apply_stored_style, apply_style_patch, call, inverse_contents, inverse_style, slot_input,
-    style_of,
+    apply_stored_style, apply_style_patch, call, decode_cell_flags, inverse_contents,
+    inverse_style, release_root_ref, restore_cell_value, slot_input, style_of,
 };
 use crate::registry::{CommandKind, CommandRegistry, CommandSpec, Exposure};
 use crate::resolve::{
@@ -952,10 +954,28 @@ fn cell_restore(ctx: &mut CommandContext<'_>, args: CellRestoreArgs) -> Result<E
             rebuild: false,
         });
     }
-    if let Some(input) = &args.input {
-        ctx.workbook()
-            .set_cell_contents(cell.sheet, cell.row, cell.col, input)?;
+    let encoded = args
+        .value
+        .ok_or_else(|| bus_error::args("cell.restore requires a stored value"))?;
+    let (value, owned) = restore_cell_value(ctx.workbook(), encoded)?;
+    let formula = match args.formula {
+        Some(source) => Some(ctx.workbook().intern_formula(&source)?),
+        None => None,
+    };
+    let slot = CellSlot {
+        value,
+        formula,
+        style: StyleId::DEFAULT,
+        flags: decode_cell_flags(args.flags)?,
+    };
+    let result = ctx
+        .workbook()
+        .set_slot(cell.sheet, cell.row, cell.col, slot);
+    if let Some(id) = formula {
+        ctx.workbook().release_formula(id);
     }
+    release_root_ref(ctx.workbook(), owned);
+    result?;
     if let Some(style_json) = args.style {
         let style = apply_stored_style(ctx.workbook(), style_json, args.format.as_deref())?;
         ctx.workbook()
