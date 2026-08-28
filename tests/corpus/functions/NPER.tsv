@@ -1,0 +1,12 @@
+# formula	expected	note
+=NPER(0.1,-110,100)	1	one period at 10%
+=NPER(0.1,0,-100,110)	1	one period using fv
+=NPER(0.1,0,-100,121)	2	two compound periods
+=NPER(0,-50,100)	2	zero rate: nper = -(pv+fv)/pmt
+=NPER(0,0,100)	#NUM!	zero rate and zero pmt with leftover pv is #NUM!
+=NPER(#N/A,-110,100)	#N/A	rate error propagates
+=NPER(0.1,#N/A,100)	#N/A	pmt error propagates
+=NPER(0.1,-110,100,0,0)	1	explicit type 0
+=NPER(-1,-110,100)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. rate = -1 is #NUM!
+=NPER(0,-25,100,-50)	2	zero rate with fv
+=NPER(0.1,0,0)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. zero pmt and zero pv with leftover rate has no nper

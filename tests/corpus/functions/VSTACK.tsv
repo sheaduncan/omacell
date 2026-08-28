@@ -1,0 +1,12 @@
+# formula	expected	note
+=INDEX(VSTACK({1,2},{3,4}),2,1)	3	stack rows of two 1×2 arrays
+=ROWS(VSTACK({1},{2},{3}))	3	three scalars stack to 3×1
+=COLUMNS(VSTACK({1,2},{3,4}))	2	width is the max width
+=INDEX(VSTACK({1},{1,2}),1,2)	#N/A	narrower array is padded with #N/A
+=VSTACK(5)	5	single scalar is itself
+=VSTACK(#N/A,{1})	#N/A	argument error propagates before stacking
+=SUM(VSTACK({1,2},{3,4}))	10	stacked values
+=ROWS(VSTACK({1;2},{3;4}))	4	two columns stacked vertically
+=INDEX(VSTACK({1,2},{3,4}),2,2)	4	bottom-right
+=COLUMNS(VSTACK(SEQUENCE(1,2),SEQUENCE(1,3)))	3	width is the widest argument; checked before allocation
+=VSTACK({1,2})	{1,2}	single array origin

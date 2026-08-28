@@ -1,0 +1,12 @@
+# formula	expected	note
+=INDEX(TOROW({1,2;3,4}),1,4)	4	row-major flatten to a row
+=COLUMNS(TOROW({1,2;3,4}))	4	1×4 result
+=INDEX(TOROW({1,2;3,4}),1,2)	2	row-major second value is 2
+=TOROW(5)	5	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. scalar is itself
+=TOROW(#N/A)	#N/A	error argument as scalar propagates
+=COLUMNS(TOROW({1,#N/A,2},2))	2	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. ignore=2 skips errors
+=COLUMNS(TOROW({1,"",2},1))	2	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. ignore=1 skips blanks
+=TOROW({1,2},4)	#VALUE!	ignore other than 0–3 is #VALUE!
+=INDEX(TOROW({1,2;3,4},0,TRUE),1,2)	3	scan_by_column TRUE: 1,3,2,4 so index 2 is 3
+=ROWS(TOROW({1;2;3}))	1	always one row
+=TOROW({1,2},3)	{1,2}	ignore=3 skip blanks and errors; origin 1

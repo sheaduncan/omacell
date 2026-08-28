@@ -29,6 +29,17 @@ encode.
 | LibreOffice `YEARFRAC` reversed dates | Absolute value | Signed (Excel) | WP-05b |
 | LibreOffice `LEN(TRUE)` | 1 (TRUE as number) | 4 (TRUE as text) | WP-05b |
 | LibreOffice `REGEX*` / `ARRAYTOTEXT` / `VALUETOTEXT` / `TEXTSPLIT` | `#NAME?` or no `_xlfn` mapping | Implemented | WP-05b |
+| Invalid `MAKEARRAY` / stacking / wrapping shapes (`0`, out of grid, overflow) | Excel 365 uses `#CALC!` for some zero-size cases | `#NUM!` for all invalid shapes (checked before allocation) | WP-05c |
+| `RANDARRAY` | Non-deterministic | Pass-stable splitmix from the injected or sampled nonce, mixed with cell, pass, call path, and array index | WP-05c |
+| `RATE` / `IRR` / `XIRR` solvers | Excel Newton; 20 iterations (`RATE`/`IRR`); undocumented `XIRR` cap | Newton–Raphson; `RATE`/`IRR` 20 iters; `XIRR` 100 iters; success `\|f\| < 1e-8`; else `#NUM!`; default guess `0.1`. Residuals with `\|rate\| < 1e-12` snap to `0` | WP-05c |
+| Approximate `VLOOKUP`/`HLOOKUP`/`MATCH`/`LOOKUP` on unsorted data | Binary search (may return a “wrong” match) | Same binary search; not replaced with a linear scan | WP-05c |
+| LibreOffice `_xlfn.*` helpers in headless CSV | Computed result | Often `#NAME?` (script classifies as known) | WP-05c |
+| LibreOffice `EFFECT`/`NOMINAL` CSV | `0.1025` | `10.25%` (script compares numerically) | WP-05c |
+| Oversize `SEQUENCE` | `#NUM!` before allocation | LibreOffice CSV may return `1` | WP-05c |
+| `INDEX` of an empty cell | blank | LibreOffice CSV may show `0` | WP-05c |
+| `CONVERT` unknown/incompatible unit | `#N/A` | LibreOffice `Err:502` | WP-05c |
+| `CONVERT` `lbm`→`g` | Microsoft factor `453.59237` | LibreOffice uses a slightly different mass factor | WP-05c |
+| `BITLSHIFT` beyond 48 bits | `#NUM!` (`0..2^48-1`) | LibreOffice may return the untruncated shift | WP-05c |
 
 LibreOffice disagreements discovered by `scripts/lo-crosscheck.py` should be
 appended here rather than papered over in the corpus. Corpus rows for an

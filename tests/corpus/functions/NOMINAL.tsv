@@ -1,0 +1,12 @@
+# formula	expected	note
+=NOMINAL(0.1025,2)	0.1	inverse of EFFECT(0.1,2)
+=NOMINAL(0,12)	0	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. zero effective
+=NOMINAL(0.12,1)	0.12	npery=1 equals the effective rate
+=NOMINAL(-0.1,12)	#NUM!	effective ≤ 0 is #NUM!
+=NOMINAL(0.12,0)	#NUM!	npery < 1 is #NUM!
+=NOMINAL(#N/A,12)	#N/A	effective error propagates
+=NOMINAL(0.12,#N/A)	#N/A	npery error propagates
+=NOMINAL(1,1)	1	100%
+=NOMINAL(0.06,1)	0.06	already nominal
+=NOMINAL(0.21,2)	0.2	(1.21)^(1/2)=1.1 → 2*(0.1)=0.2
+=NOMINAL(0.1025,2.9)	0.1	npery truncated toward zero to 2

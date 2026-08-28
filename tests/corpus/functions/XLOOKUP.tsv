@@ -1,0 +1,13 @@
+# formula	expected	note
+=XLOOKUP(2,{1,2,3},{10,20,30})	20	exact match, first-to-last (Microsoft XLOOKUP)
+=XLOOKUP(9,{1,2,3},{10,20,30})	#N/A	exact miss with omitted if_not_found is #N/A
+=XLOOKUP(9,{1,2,3},{10,20,30},"miss")	miss	if_not_found returned on miss
+=XLOOKUP(2.5,{1,2,3},{10,20,30},,-1)	20	match_mode -1 exact or next smaller
+=XLOOKUP(2.5,{1,2,3},{10,20,30},,1)	30	match_mode 1 exact or next larger
+=XLOOKUP("a*",{"ax","by"},{1,2},,2)	1	match_mode 2 wildcard *
+=XLOOKUP(2,{1,2,2,3},{10,20,30,40},,,-1)	30	search_mode -1 last-to-first
+=XLOOKUP(#N/A,{1,2},{10,20})	#N/A	lookup_value error propagates
+=XLOOKUP(1,{1,2},{10,20},,0,2)	10	search_mode 2 binary ascending exact
+=INDEX(XLOOKUP(1,{1;2},{10,11;20,21}),1,2)	11	column lookup_array returns a row; INDEX col 2
+=XLOOKUP(2,{1;2;3},{10;20;30})	20	column lookup_array / return_array
+=XLOOKUP("",{"a","b"},{1,2})	#N/A	empty text vs "a" is not a match

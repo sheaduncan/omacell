@@ -1,0 +1,13 @@
+# formula	expected	note
+=ADDRESS(1,1)	$A$1	default abs_num 1, A1 style
+=ADDRESS(1,1,4)	A1	abs_num 4 relative
+=ADDRESS(2,3,2)	C$2	abs_num 2: relative col, absolute row
+=ADDRESS(2,3,3)	$C2	abs_num 3: absolute col, relative row
+=ADDRESS(1,1,1,FALSE)	R1C1	a1=FALSE absolute R1C1
+=ADDRESS(5,3,4,FALSE)	R[5]C[3]	a1=FALSE relative prints the numbers in brackets
+=ADDRESS(1,1,1,TRUE,"Data")	Data!$A$1	sheet prefix
+=ADDRESS(1,1,1,TRUE,"My Sheet")	'My Sheet'!$A$1	quoted sheet name with a space
+=ADDRESS(0,1)	#VALUE!	row_num < 1 is #VALUE!
+=ADDRESS(1,0)	#VALUE!	column_num < 1 is #VALUE!
+=ADDRESS(1,16385)	#VALUE!	column_num beyond XFD is #VALUE!
+=ADDRESS(#N/A,1)	#N/A	row_num error propagates

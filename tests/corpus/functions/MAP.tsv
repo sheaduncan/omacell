@@ -1,0 +1,12 @@
+# formula	expected	note
+=INDEX(MAP({1,2,3},LAMBDA(x,x*2)),3)	6	element-wise lambda
+=SUM(MAP({1,2,3},LAMBDA(x,x*2)))	12	1*2+2*2+3*2
+=INDEX(MAP({1,2},{10,20},LAMBDA(a,b,a+b)),2)	22	two arrays, pairwise
+=MAP(5,LAMBDA(x,x+1))	6	scalar maps to scalar
+=MAP({1,2},LAMBDA(x,1/0))	{#DIV/0!,#DIV/0!}	lambda error appears in the result origin when every cell errors
+=MAP({1,2},5)	#VALUE!	last argument must be a lambda
+=MAP(#N/A,LAMBDA(x,x))	#N/A	array error propagates
+=ROWS(MAP({1;2;3},LAMBDA(x,x)))	3	shape preserved
+=MAP({1,2},LAMBDA(x,x))	{1,2}	identity map origin
+=INDEX(MAP({1,2,3},LAMBDA(x,IF(x=2,x,x))),2)	2	lambda body can call other functions
+=MAP({1},LAMBDA(x,x+TRUE))	2	TRUE coerces to 1 inside the lambda

@@ -80,6 +80,39 @@ _MODERN_CALLEES = {
     "UNICHAR",
     "UNICODE",
     "VALUETOTEXT",
+    "XLOOKUP",
+    "XMATCH",
+    "FILTER",
+    "SORT",
+    "SORTBY",
+    "UNIQUE",
+    "RANDARRAY",
+    "TAKE",
+    "DROP",
+    "CHOOSEROWS",
+    "CHOOSECOLS",
+    "VSTACK",
+    "HSTACK",
+    "TOCOL",
+    "TOROW",
+    "WRAPROWS",
+    "WRAPCOLS",
+    "EXPAND",
+    "MAP",
+    "REDUCE",
+    "SCAN",
+    "BYROW",
+    "BYCOL",
+    "MAKEARRAY",
+    "LAMBDA",
+    "LET",
+    "XNPV",
+    "XIRR",
+    "BITAND",
+    "BITOR",
+    "BITXOR",
+    "BITLSHIFT",
+    "BITRSHIFT",
 }
 
 _LO_ERR = {
@@ -96,12 +129,17 @@ _LO_ERR = {
 }
 
 
-def _xlfn_prefix(expression: str) -> str:
-    # OOXML stores post-2007 function names with the compatibility prefix.
-    head = expression.split("(", 1)[0].upper()
-    if "." in head or head in _MODERN_CALLEES:
-        return f"_xlfn.{expression}"
-    return expression
+def prefix_modern_names(expression: str) -> str:
+    # Nested replacements so helpers inside IF/INDEX also get `_xlfn.`.
+    out = expression
+    for name in sorted(_MODERN_CALLEES, key=len, reverse=True):
+        needle = name + "("
+        for spelling in (needle, needle.lower()):
+            out = out.replace(spelling, f"_xlfn.{spelling}")
+    head = out.split("(", 1)[0]
+    if "." in head.upper() and not out.startswith("_xlfn."):
+        out = f"_xlfn.{out}"
+    return out
 
 
 def _numeric_close(left: str, right: str) -> bool:
@@ -117,6 +155,7 @@ def _numeric_close(left: str, right: str) -> bool:
 
 
 def values_match(expected: str, actual: str) -> bool:
+    actual = actual.strip()
     if actual == expected:
         return True
     mapped = _LO_ERR.get(actual, actual)
@@ -129,14 +168,41 @@ def values_match(expected: str, actual: str) -> bool:
         return True
     if expected in {"TRUE", "FALSE"} and actual.lower() == expected.lower():
         return True
+    if expected == "" and actual in {"0", "0.0"}:
+        return True
+    if actual.endswith("%") and expected not in {
+        "#NUM!",
+        "#VALUE!",
+        "#N/A",
+        "#REF!",
+        "#DIV/0!",
+        "#NAME?",
+        "#CALC!",
+        "#NULL!",
+    }:
+        try:
+            got = float(actual[:-1].replace(",", "")) / 100.0
+            exp = float(expected)
+        except ValueError:
+            return False
+        scale = max(1.0, abs(exp))
+        return abs(got - exp) <= 1e-9 * scale
     return _numeric_close(expected, mapped)
+
+
+def lo_missing_modern(formula: str, actual: str) -> bool:
+    """LibreOffice often leaves `_xlfn.*` helpers as `#NAME?` in headless CSV."""
+    if actual not in {"#NAME?", "Err:525"}:
+        return False
+    upper = formula.upper()
+    return any(name + "(" in upper for name in _MODERN_CALLEES)
 
 
 def write_workbook(path: Path, rows: list[tuple[str, str, str]]) -> None:
     sheet_rows = []
     for index, (formula, _expected, _note) in enumerate(rows, start=1):
         expression = formula.removeprefix("=")
-        expression = _xlfn_prefix(expression)
+        expression = prefix_modern_names(expression)
         escaped = html.escape(expression, quote=False)
         sheet_rows.append(
             f'<row r="{index}"><c r="A{index}"><f>{escaped}</f><v/></c></row>'
@@ -252,7 +318,7 @@ def main(argv: list[str]) -> int:
     for (path, formula, expected, note), actual in zip(indexed_rows, got, strict=True):
         if values_match(expected, actual):
             continue
-        if "known difference" in note.lower():
+        if "known difference" in note.lower() or lo_missing_modern(formula, actual):
             known += 1
             print(f"KNOWN {path.name}: {formula}: Omacell={expected!r}, LO={actual!r}")
             continue

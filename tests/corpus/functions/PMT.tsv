@@ -1,0 +1,12 @@
+# formula	expected	note
+=PMT(0.1,1,-100)	110	one period: principal+interest
+=PMT(0,2,-100)	50	zero rate splits principal evenly
+=PMT(0,5,-100,50)	10	zero rate with fv: -(pv+fv)/nper
+=PMT(0.1,1,-100,0,1)	100	type 1 beginning-of-period; interest not accrued before first payment
+=PMT(0.1,1,100)	-110	sign convention: positive pv → negative pmt
+=PMT(#N/A,1,-100)	#N/A	rate error propagates
+=PMT(0.1,0,-100)	#NUM!	nper 0 is #NUM!
+=PMT(0.1,#N/A,-100)	#N/A	nper error propagates
+=PMT(0.08/12,12,-1000)*0+1	1	typical monthly loan evaluates to a finite number (smoke)
+=PMT(0,1,-50,0)	50	single zero-rate period
+=PMT(0.1,1,-100,10)	100	fv 10 with nper=1: -(rate*(pv*1.1+fv))/0.1 = 100

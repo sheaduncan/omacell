@@ -1,0 +1,12 @@
+# formula	expected	note
+=DELTA(1,1)	1	Kronecker delta of equal numbers
+=DELTA(1,2)	0	unequal
+=DELTA(0)	1	omitted n2 defaults to 0; DELTA(0,0)=1
+=DELTA(1)	0	DELTA(1,0)=0
+=DELTA(1.0,1)	1	numeric equality
+=DELTA(#N/A,1)	#N/A	error propagates
+=DELTA(1,#N/A)	#N/A	second error propagates
+=DELTA(TRUE,1)	1	TRUE coerces to 1
+=DELTA("1",1)	1	numeric text coerces in arithmetic context
+=DELTA("a",1)	#VALUE!	non-numeric text is #VALUE!
+=DELTA(-1,-1)	1	equal negatives

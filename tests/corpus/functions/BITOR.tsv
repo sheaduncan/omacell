@@ -1,0 +1,12 @@
+# formula	expected	note
+=BITOR(5,3)	7	101 OR 011 = 111
+=BITOR(0,7)	7	zero identity
+=BITOR(7,7)	7	same value
+=BITOR(-1,1)	#NUM!	negative is #NUM!
+=BITOR(1.9,2)	3	truncated toward zero: 1 OR 2
+=BITOR(#N/A,1)	#N/A	error propagates
+=BITOR(1,#N/A)	#N/A	second error propagates
+=BITOR(281474976710656,1)	#NUM!	2^48 is out of range
+=BITOR(0,0)	0	zeros
+=BITOR(TRUE,2)	3	TRUE coerces to 1
+=BITOR(12,10)	14	1100 OR 1010 = 1110

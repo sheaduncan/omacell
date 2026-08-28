@@ -1,0 +1,12 @@
+# formula	expected	note
+=CHOOSE(1,"a","b","c")	a	index 1 returns the first value
+=CHOOSE(2,10,20,30)	20	index 2
+=CHOOSE(3,10,20,30)	30	index 3 last
+=CHOOSE(0,1,2)	#VALUE!	index < 1 is #VALUE!
+=CHOOSE(4,1,2,3)	#VALUE!	index beyond the value list is #VALUE!
+=CHOOSE(1.9,10,20)	10	index is truncated toward zero
+=CHOOSE(#N/A,1,2)	#N/A	index error propagates
+=CHOOSE(1,,2)		chosen omitted argument is empty
+=SUM(CHOOSE(1,{1,2,3}))	6	CHOOSE can return an array
+=CHOOSE(2,C1,B1)		CHOOSE can return a reference (B1 empty)
+=CHOOSE(TRUE,10,20)	10	TRUE coerces to 1

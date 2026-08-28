@@ -1,0 +1,13 @@
+# formula	expected	note
+=INDEX(SORT({3,1,2}),1)	1	default ascending sort of a vector
+=INDEX(SORT({3,1,2},,-1),1)	3	sort_order -1 descending
+=INDEX(SORT({1,2;3,4},1,-1),1,1)	3	sort 2-D by column 1 descending
+=INDEX(SORT({3,1;4,2},2,1),1,1)	3	sort by column 2 ascending → row (3,1) first
+=INDEX(SORT({1,3;2,4},,1,TRUE),1,2)	3	by_col TRUE sorts columns by row 1: {1;2} then {3;4}
+=SORT(5)	5	scalar is already sorted
+=SORT(#N/A)	#N/A	error argument propagates
+=SUM(SORT({2,1,3}))	6	sort preserves the multiset
+=INDEX(SORT({"b";"a";"c"}),1)	a	text sort is case-insensitive lexicographic
+=SORT({1,2},0)	#VALUE!	sort_index 0 is #VALUE!
+=ROWS(SORT({1;2;3}))	3	shape is preserved
+=INDEX(SORT({TRUE,FALSE}),1)	FALSE	FALSE < TRUE

@@ -1,0 +1,12 @@
+# formula	expected	note
+=HLOOKUP(2,{1,2,3;10,20,30},2,FALSE)	20	exact horizontal lookup
+=HLOOKUP(2.5,{1,2,3;10,20,30},2,TRUE)	20	approximate: last first-row value ≤ lookup
+=HLOOKUP(0,{1,2;10,20},2,TRUE)	#N/A	approximate below the first key is #N/A
+=HLOOKUP(2,{1,2;10,20},3,FALSE)	#REF!	row_index_num beyond table height is #REF!
+=HLOOKUP(2,{1,2;10,20},0,FALSE)	#VALUE!	row_index_num < 1 is #VALUE!
+=HLOOKUP(9,{1,2;10,20},2,FALSE)	#N/A	exact miss
+=HLOOKUP(#N/A,{1,2;10,20},2,FALSE)	#N/A	lookup_value error propagates
+=HLOOKUP(2,{1,2,3;10,20,30},2)	20	omitted range_lookup defaults to TRUE
+=HLOOKUP(2,{3,1,2;30,10,20},2,TRUE)	20	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. unsorted approximate uses binary search (Excel; not linearly fixed)
+=HLOOKUP("a*",{"ax","by";1,2},2,FALSE)	1	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. exact HLOOKUP supports wildcards
+=HLOOKUP(TRUE,{FALSE,TRUE;1,2},2,FALSE)	2	logical keys are not coerced to 1/0

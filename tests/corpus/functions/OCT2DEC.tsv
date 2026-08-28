@@ -1,0 +1,12 @@
+# formula	expected	note
+=OCT2DEC("10")	8	octal 10 is 8
+=OCT2DEC("0")	0	zero
+=OCT2DEC("7777777777")	-1	10-digit two’s complement all-sevens
+=OCT2DEC("4000000000")	-536870912	min 30-bit
+=OCT2DEC(10)	8	numeric octal digits are accepted
+=OCT2DEC("8")	#NUM!	invalid octal digit
+=OCT2DEC(#N/A)	#N/A	error propagates
+=OCT2DEC("")	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. empty string is #NUM!
+=OCT2DEC("7")	7	single digit
+=OCT2DEC("3777777777")	536870911	max positive 30-bit
+=OCT2DEC("77777777777")	#NUM!	more than 10 digits is #NUM!

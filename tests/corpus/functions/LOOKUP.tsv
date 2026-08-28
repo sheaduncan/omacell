@@ -1,0 +1,12 @@
+# formula	expected	note
+=LOOKUP(2,{1,2,3},{10,20,30})	20	vector form exact in a sorted vector
+=LOOKUP(2.5,{1,2,3},{10,20,30})	20	vector form approximate (largest ≤ lookup)
+=LOOKUP(0,{1,2,3},{10,20,30})	#N/A	below first key is #N/A
+=LOOKUP(9,{1,2,3},{10,20,30})	30	above last key returns the last result
+=LOOKUP(2,{1,2,3})	2	array form with a vector returns the matched lookup value
+=LOOKUP(2,{1,2,3;10,20,30})	20	array form: more columns than rows searches first row
+=LOOKUP(#N/A,{1,2},{10,20})	#N/A	lookup_value error propagates
+=LOOKUP(2,{1;2;3},{10;20;30})	20	column vectors
+=LOOKUP(2,{3,1,2},{30,10,20})	20	unsorted vector uses approximate binary search (Excel)
+=LOOKUP(,"")		known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. empty lookup in a 1×1 empty result
+=LOOKUP(2,{1,2},{10})	#N/A	result_vector shorter than lookup_vector: out of range is #N/A

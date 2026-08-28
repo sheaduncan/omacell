@@ -1,0 +1,12 @@
+# formula	expected	note
+=INDEX(HSTACK({1;2},{3;4}),1,2)	3	stack columns of two 2×1 arrays
+=COLUMNS(HSTACK({1},{2},{3}))	3	three scalars stack to 1×3
+=ROWS(HSTACK({1;2},{3;4}))	2	height is the max height
+=INDEX(HSTACK({1},{1;2}),2,1)	#N/A	shorter array is padded with #N/A
+=HSTACK(5)	5	single scalar is itself
+=HSTACK(#N/A,{1})	#N/A	argument error propagates before stacking
+=SUM(HSTACK({1,2},{3,4}))	10	stacked values
+=COLUMNS(HSTACK({1,2},{3,4}))	4	two rows stacked horizontally
+=INDEX(HSTACK({1;2},{3;4}),2,2)	4	bottom-right
+=ROWS(HSTACK(SEQUENCE(2),SEQUENCE(3)))	3	height is the tallest argument; checked before allocation
+=HSTACK({1,2},{3})	{1,2,3}	result origin is the first value

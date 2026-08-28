@@ -1,0 +1,12 @@
+# formula	expected	note
+=RATE(1,-110,100)	0.1	one period: 10%
+=RATE(1,0,-100,110)	0.1	one period using fv
+=RATE(2,0,-100,121)	0.1	two periods compound: 1.1^2=1.21
+=RATE(1,-100,100)	0	zero interest
+=RATE(0,-110,100)	#NUM!	nper 0 is #NUM!
+=RATE(#N/A,-110,100)	#N/A	nper error propagates
+=RATE(1,#N/A,100)	#N/A	pmt error propagates
+=RATE(1,-110,100,0,0,0.1)	0.1	explicit guess 0.1
+=RATE(1,-110,100,0,0,#N/A)	#N/A	guess error propagates
+=RATE(1,0,0,1)	#NUM!	pmt=pv=0 fv=1 has no rate that satisfies the identity → #NUM!
+=RATE(1,0,100,-110)	0.1	pv 100 fv -110 is the inverse of the first row

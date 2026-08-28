@@ -28,3 +28,7 @@ harness = false
 [[bench]]
 name = "text_date"
 harness = false
+
+[[bench]]
+name = "lookup_array"
+harness = false

@@ -15,6 +15,4 @@ formula<TAB>expected<TAB>note[<TAB>locale][<TAB>date_system]
 
 The shared runner is `omacell_fn::run_corpus_file`. It rejects malformed rows, registers `register_all()`, and uses an injected clock (`45000.5`) and nonce. `scripts/lo-crosscheck.py` evaluates the same rows through a temporary headless LibreOffice workbook; notes containing `known difference` must correspond to an entry in `docs/compat/known-differences.md`.
 
-WP-05a fills math/stat/logical/information/criteria-aggregation corpora (≥10 cited rows per function). WP-05b fills text/date corpora. `SEQUENCE` remains a WP-05c probe.
-
-TODO(WP-05c): lookup/array/financial function corpus.
+WP-05a fills math/stat/logical/information/criteria-aggregation corpora (≥10 cited rows per function). WP-05b fills text/date corpora. WP-05c fills lookup, dynamic array, lambda-helper, financial, and engineering corpora.

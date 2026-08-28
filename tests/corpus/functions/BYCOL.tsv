@@ -1,0 +1,12 @@
+# formula	expected	note
+=INDEX(BYCOL({1,2;3,4},LAMBDA(c,SUM(c))),1)	4	col 1 sums to 4
+=INDEX(BYCOL({1,2;3,4},LAMBDA(c,SUM(c))),1,2)	6	col 2 sums to 6
+=COLUMNS(BYCOL({1,2;3,4},LAMBDA(c,SUM(c))))	2	one result per column
+=BYCOL({1;2},LAMBDA(c,SUM(c)))	3	single column collapses to scalar
+=BYCOL({1,2},5)	#VALUE!	last argument must be a lambda
+=BYCOL(#N/A,LAMBDA(c,1))	#N/A	array error propagates
+=INDEX(BYCOL({1,2,3},LAMBDA(c,c*2)),1,3)	6	row is 1×n of 1-row vectors
+=BYCOL({1;2},LAMBDA(c,1/0))	#DIV/0!	lambda error
+=ROWS(BYCOL({1,2;3,4},LAMBDA(c,SUM(c))))	1	scalar-per-col result is 1×n
+=SUM(BYCOL({1,2;3,4},LAMBDA(c,SUM(c))))	10	4+6
+=BYCOL({10;20},LAMBDA(c,INDEX(c,2)))	20	lambda receives an n×1 array

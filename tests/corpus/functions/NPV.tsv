@@ -1,0 +1,12 @@
+# formula	expected	note
+=NPV(0.1,110)	100	one cash flow at t=1: 110/1.1
+=NPV(0,10,20)	30	zero rate sums the flows
+=NPV(0.1,11,12.1)	20	11/1.1 + 12.1/1.21 = 10+10
+=NPV(-1,10)	#NUM!	rate = -1 makes a zero divisor
+=NPV(#N/A,10)	#N/A	rate error propagates
+=NPV(0.1,#N/A)	#N/A	value error propagates
+=NPV(0,{10,20,30})	60	array of flows is accepted
+=NPV(1,2)	1	rate 100%: 2/2 = 1
+=NPV(0.1,-110)	-100	negative flow
+=NPV(0,0,0)	0	all-zero flows
+=NPV(0,TRUE)	1	TRUE coerces to 1 at rate 0

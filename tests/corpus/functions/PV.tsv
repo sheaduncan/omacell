@@ -1,0 +1,12 @@
+# formula	expected	note
+=PV(0.1,1,0,110)	-100	discount fv one period
+=PV(0,5,10,0)	-50	zero rate: -pmt*nper
+=PV(0.1,1,-110,0)	100	one end-of-period payment of 110 at 10%
+=PV(0.1,0,0,100)	-100	nper 0 returns -fv
+=PV(#N/A,1,0,110)	#N/A	rate error propagates
+=PV(0.1,1,0,-110)	100	negative fv → positive pv
+=PV(0,1,-50,0)	50	zero rate one pmt
+=PV(0.1,#N/A,0,110)	#N/A	nper error propagates
+=PV(0,2,0,40)	-40	zero rate no pmt: pv = -fv
+=PV(0.1,1,0,110,0)	-100	explicit type 0
+=PV(0.1,1,0,110,1)	-100	type 1 with pmt=0 equals type 0

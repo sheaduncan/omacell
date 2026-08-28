@@ -1,0 +1,13 @@
+# formula	expected	note
+=DEC2BIN(5)	101	positive integer
+=DEC2BIN(5,8)	00000101	places pads leading zeros
+=DEC2BIN(-1)	1111111111	10-bit two’s complement
+=DEC2BIN(0)	0	zero
+=DEC2BIN(511)	111111111	max positive 9-bit
+=DEC2BIN(512)	#NUM!	above 511 is #NUM!
+=DEC2BIN(-512)	1000000000	min negative 10-bit
+=DEC2BIN(-513)	#NUM!	below -512 is #NUM!
+=DEC2BIN(5,1)	#NUM!	places too small to hold the value
+=DEC2BIN(#N/A)	#N/A	number error propagates
+=DEC2BIN(5.9)	101	non-integer is truncated toward zero
+=DEC2BIN(5,8.9)	00000101	places truncated toward zero

@@ -1,0 +1,12 @@
+# formula	expected	note
+=MIRR({-100,110},0.1,0.1)	0.1	finance=reinvest=10% and a matching inflow
+=MIRR({-100,0,121},0,0)	0.1	two periods, no extra reinvestment: sqrt(1.21)-1
+=MIRR({-100,110},0,0)	0.1	one period MIRR equals the simple ratio-1
+=MIRR({100,110},0.1,0.1)	#DIV/0!	no negative cash flow is #DIV/0! (Excel)
+=MIRR({-100,-10},0.1,0.1)	#DIV/0!	no positive cash flow is #DIV/0!
+=MIRR(#N/A,0.1,0.1)	#N/A	values error propagates
+=MIRR({-100,110},#N/A,0.1)	#N/A	finance_rate error propagates
+=MIRR({-100,110},0.1,#N/A)	#N/A	reinvest_rate error propagates
+=MIRR({-100,110},-1,0.1)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. finance_rate -1 zeros the PV denominator
+=MIRR({-50,-50,121},0,0)	0.1	two outflows at t=0,1 with finance 0: PV=100, TV=121
+=MIRR({-100,121,0},0,0)	0.1	inflow then a trailing zero still uses n=nper-1=2: wait TV at end includes 121 grown 1 period = 121, n=2, sqrt(1.21)-1

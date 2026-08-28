@@ -1,0 +1,12 @@
+# formula	expected	note
+=XMATCH(2,{1,2,3})	2	exact match returns 1-based position
+=XMATCH(9,{1,2,3})	#N/A	exact miss is #N/A
+=XMATCH(2.5,{1,2,3},-1)	2	match_mode -1 next smaller
+=XMATCH(2.5,{1,2,3},1)	3	match_mode 1 next larger
+=XMATCH("b*",{"ax","by"},2)	2	wildcard match_mode 2
+=XMATCH(2,{1,2,2,3},0,-1)	3	search_mode -1 last occurrence
+=XMATCH(#DIV/0!,{1,2})	#DIV/0!	lookup error propagates
+=XMATCH(1,{1,2,3},0,2)	1	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. binary ascending exact
+=XMATCH(3,{3,2,1},0,-2)	1	binary descending exact
+=XMATCH(TRUE,{FALSE,TRUE})	2	logical exact match does not coerce to 1
+=XMATCH(,"")	1	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. empty matches empty string in a 1×1 array constant ""

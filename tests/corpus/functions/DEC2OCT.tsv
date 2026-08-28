@@ -1,0 +1,12 @@
+# formula	expected	note
+=DEC2OCT(8)	10	8 decimal is 10 octal
+=DEC2OCT(8,4)	0010	places pads leading zeros
+=DEC2OCT(-1)	7777777777	30-bit two’s complement (10 octal digits)
+=DEC2OCT(0)	0	zero
+=DEC2OCT(7)	7	single digit
+=DEC2OCT(#N/A)	#N/A	number error propagates
+=DEC2OCT(8,1)	#NUM!	places too small
+=DEC2OCT(8.9)	10	truncated toward zero
+=DEC2OCT(-536870912)	4000000000	minimum 30-bit signed octal
+=DEC2OCT(-536870913)	#NUM!	below min is #NUM!
+=DEC2OCT(536870911)	3777777777	maximum 30-bit signed octal

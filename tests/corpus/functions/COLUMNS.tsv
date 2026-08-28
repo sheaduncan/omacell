@@ -1,0 +1,12 @@
+# formula	expected	note
+=COLUMNS({1,2;3,4})	2	array width
+=COLUMNS({1,2,3})	3	row vector width 3
+=COLUMNS({1;2;3})	1	column vector width 1
+=COLUMNS(B1)	1	single cell is 1 column
+=COLUMNS(B1:D1)	3	range width without materializing values
+=COLUMNS(2:2)	16384	whole row is MAX_COLS; must not allocate the row
+=COLUMNS(B:D)	3	whole-column span B:D
+=COLUMNS(#N/A)	#N/A	error argument propagates
+=COLUMNS(OFFSET(C2,0,0,1,5))	5	COLUMNS of an OFFSET reference
+=COLUMNS(SEQUENCE(2,4))	4	COLUMNS of a spilled SEQUENCE
+=COLUMNS({1})	1	1×1 array constant

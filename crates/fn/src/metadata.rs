@@ -206,6 +206,15 @@ pub fn all_specs() -> Vec<FunctionSpec> {
     specs.extend_from_slice(crate::aggregate::SPECS);
     specs.extend_from_slice(crate::TEXT_SPECS);
     specs.extend_from_slice(crate::DATETIME_SPECS);
+    specs.extend_from_slice(crate::lookup::SPECS);
+    specs.extend_from_slice(crate::array::SPECS);
+    for spec in crate::lambda::SPECS {
+        if spec.name != "ISOMITTED" {
+            specs.push(*spec);
+        }
+    }
+    specs.extend_from_slice(crate::financial::SPECS);
+    specs.extend_from_slice(crate::engineering::SPECS);
     specs
 }
 

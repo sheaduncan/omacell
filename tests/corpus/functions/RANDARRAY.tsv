@@ -1,0 +1,13 @@
+# formula	expected	note
+=RANDARRAY(0)	#NUM!	known difference: zero rows rejected before allocation
+=RANDARRAY(-1)	#NUM!	negative rows rejected before allocation
+=RANDARRAY(1,1,5,5,TRUE)	5	integer min=max is the constant 5
+=RANDARRAY(1,1,2,2)	2	min=max without integer is the constant 2
+=RANDARRAY(1,1,10,10)-10	0	min=max real is exactly that value
+=RANDARRAY(1048577)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. rows exceed MAX_ROWS; rejected before allocation
+=RANDARRAY(1,16385)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. cols exceed MAX_COLS; rejected before allocation
+=RANDARRAY(1)<1	TRUE	unit-interval default is in [0,1)
+=RANDARRAY(1)>=0	TRUE	unit-interval default is ≥ 0
+=RANDARRAY(#N/A)	#N/A	rows error propagates
+=ROWS(RANDARRAY(2,3,0,0))	2	shape is rows×cols even when values are 0
+=RANDARRAY(1,1,3,1,TRUE)	#NUM!	min > max is #NUM!

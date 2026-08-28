@@ -11,9 +11,6 @@ fn corpus_dir() -> PathBuf {
 
 fn owned_specs() -> Vec<FunctionSpec> {
     all_specs()
-        .into_iter()
-        .filter(|s| s.name != "SEQUENCE")
-        .collect()
 }
 
 #[test]
