@@ -640,13 +640,11 @@ fn xnpv_of(rate: f64, values: &[f64], dates: &[f64]) -> Result<f64, ErrorKind> {
         return Err(ErrorKind::Num);
     }
     let d0 = dates[0];
-    let mut last = d0;
     let mut acc = 0.0;
     for (v, d) in values.iter().zip(dates.iter()) {
-        if *d < last {
+        if *d < d0 {
             return Err(ErrorKind::Num);
         }
-        last = *d;
         acc += v / (1.0 + rate).powf((*d - d0) / 365.0);
     }
     Ok(acc)
@@ -912,25 +910,30 @@ fn db_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         } else {
             excel_round3(1.0 - (salvage / cost).powf(1.0 / life))
         };
-        let mut book = cost;
-        let mut dep = 0.0;
         let last = if month_i == 12 { life } else { life + 1.0 };
         if period > last {
             return Err(ErrorKind::Num);
         }
         let periods = args::trunc_i64(period)?;
-        for p in 1..=periods {
-            dep = if p == 1 {
-                cost * rate * (month_i as f64) / 12.0
-            } else if (p as f64) <= life {
-                book * rate
-            } else {
-                (book * rate * (12.0 - month_i as f64) / 12.0).max(0.0)
-            };
-            if dep > book - salvage && salvage < book {
-                dep = (book - salvage).max(0.0);
-            }
-            book -= dep;
+        let mut first_dep = cost * rate * (month_i as f64) / 12.0;
+        if first_dep > cost - salvage && salvage < cost {
+            first_dep = (cost - salvage).max(0.0);
+        }
+        if periods == 1 {
+            return Ok(first_dep);
+        }
+        let first_book = cost - first_dep;
+        let mut book = first_book * (1.0 - rate).powf((periods - 2) as f64);
+        if salvage < first_book {
+            book = book.max(salvage);
+        }
+        let mut dep = if periods as f64 <= life {
+            book * rate
+        } else {
+            (book * rate * (12.0 - month_i as f64) / 12.0).max(0.0)
+        };
+        if dep > book - salvage && salvage < book {
+            dep = (book - salvage).max(0.0);
         }
         Ok(dep)
     })() {
@@ -949,13 +952,18 @@ fn ddb_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         if life <= 0.0 || period < 1.0 || period > life || factor <= 0.0 {
             return Err(ErrorKind::Num);
         }
-        let mut book = cost;
-        let mut dep = 0.0;
         let n = args::trunc_i64(period)?;
-        for _ in 1..=n {
-            dep = (book * factor / life).min((book - salvage).max(0.0));
-            book -= dep;
-        }
+        let rate = factor / life;
+        let first_dep = (cost * rate).min((cost - salvage).max(0.0));
+        let first_book = cost - first_dep;
+        let book = if n == 1 {
+            cost
+        } else if first_book <= salvage || 1.0 - rate <= 0.0 {
+            first_book
+        } else {
+            (first_book * (1.0 - rate).powf((n - 2) as f64)).max(salvage)
+        };
+        let dep = (book * rate).min((book - salvage).max(0.0));
         Ok(dep)
     })() {
         Ok(n) => num(n),
@@ -991,7 +999,7 @@ fn effect_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         if nominal < 0.0 || n < 1 {
             return Err(ErrorKind::Num);
         }
-        Ok((1.0 + nominal / n as f64).powi(n as i32) - 1.0)
+        Ok((n as f64 * (nominal / n as f64).ln_1p()).exp_m1())
     })() {
         Ok(n) => num(n),
         Err(e) => err(e),
@@ -1034,17 +1042,16 @@ fn cum(ctx: &mut EvalCtx<'_>, args: &[ArgVal], interest: bool) -> RuntimeValue {
         }
         let s = args::trunc_i64(start)?;
         let e = args::trunc_i64(end)?;
-        let mut acc = 0.0;
-        for per in s..=e {
-            let ip = ipmt_value(rate, per as f64, nper, pv, 0.0, typ)?;
-            if interest {
-                acc += ip;
-            } else {
-                let pmt = pmt_value(rate, nper, pv, 0.0, typ)?;
-                acc += pmt - ip;
-            }
-        }
-        Ok(acc)
+        let pmt = pmt_value(rate, nper, pv, 0.0, typ)?;
+        let before = fv_value(rate, (s - 1) as f64, pmt, pv, typ)?;
+        let after = fv_value(rate, e as f64, pmt, pv, typ)?;
+        let principal = before - after;
+        let result = if interest {
+            pmt * (e - s + 1) as f64 - principal
+        } else {
+            principal
+        };
+        Ok(if result.abs() < 1e-12 { 0.0 } else { result })
     })() {
         Ok(n) => num(n),
         Err(e) => err(e),

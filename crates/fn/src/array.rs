@@ -1,5 +1,7 @@
 //! Dynamic array functions (WP-05c). Replaces the WP-05F `SEQUENCE` probe.
 
+use std::collections::HashMap;
+
 use omacell_core::coerce::{self, Cmp, Scalar};
 use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeArray, RuntimeValue};
@@ -674,19 +676,16 @@ fn unique_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     } else {
         array.rows as usize
     };
-    let mut first_of: Vec<(Vec<Scalar>, usize, usize)> = Vec::new();
-    for i in 0..n {
-        let rec = record(&array, i, by_col);
-        if let Some(slot) = first_of.iter_mut().find(|(k, _, _)| records_eq(k, &rec)) {
-            slot.2 += 1;
-        } else {
-            first_of.push((rec, i, 1));
-        }
-    }
+    let breadth = if by_col { array.rows } else { array.cols };
+    let first_of = if breadth == 1 {
+        unique_scalar_records(&array, n, by_col)
+    } else {
+        unique_wide_records(&array, n, by_col)
+    };
     let kept: Vec<usize> = first_of
         .into_iter()
-        .filter(|(_, _, c)| !exactly_once || *c == 1)
-        .map(|(_, i, _)| i)
+        .filter(|(_, count)| !exactly_once || *count == 1)
+        .map(|(index, _)| index)
         .collect();
     if kept.is_empty() {
         return args::empty_array();
@@ -694,20 +693,73 @@ fn unique_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     reorder(&array, &kept, by_col)
 }
 
-fn record(array: &RuntimeArray, i: usize, by_col: bool) -> Vec<Scalar> {
-    if by_col {
-        (0..array.rows)
-            .map(|r| args::at(array, r, i as u32))
-            .collect()
-    } else {
-        (0..array.cols)
-            .map(|c| args::at(array, i as u32, c))
-            .collect()
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ScalarKey {
+    Blank,
+    Number(u64),
+    Bool(bool),
+    Text(String),
+    Error(ErrorKind),
+    Nan(usize),
+}
+
+fn scalar_key(value: Scalar, nonce: usize) -> ScalarKey {
+    match value {
+        Scalar::Empty => ScalarKey::Blank,
+        Scalar::Number(number) if number.is_nan() => ScalarKey::Nan(nonce),
+        Scalar::Number(number) => {
+            ScalarKey::Number(if number == 0.0 { 0 } else { number.to_bits() })
+        }
+        Scalar::Bool(value) => ScalarKey::Bool(value),
+        Scalar::Text(value) if value.is_empty() => ScalarKey::Blank,
+        Scalar::Text(value) => ScalarKey::Text(value.to_ascii_lowercase()),
+        Scalar::Error(value) => ScalarKey::Error(value),
     }
 }
 
-fn records_eq(a: &[Scalar], b: &[Scalar]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| args::exact_eq(x, y))
+fn unique_scalar_records(array: &RuntimeArray, n: usize, by_col: bool) -> Vec<(usize, usize)> {
+    let mut seen: HashMap<ScalarKey, usize> = HashMap::with_capacity(n);
+    let mut records: Vec<(usize, usize)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let value = if by_col {
+            args::at(array, 0, i as u32)
+        } else {
+            args::at(array, i as u32, 0)
+        };
+        let key = scalar_key(value, i);
+        if let Some(&entry) = seen.get(&key) {
+            records[entry].1 += 1;
+        } else {
+            seen.insert(key, records.len());
+            records.push((i, 1));
+        }
+    }
+    records
+}
+
+fn unique_wide_records(array: &RuntimeArray, n: usize, by_col: bool) -> Vec<(usize, usize)> {
+    let mut seen: HashMap<Vec<ScalarKey>, usize> = HashMap::with_capacity(n);
+    let mut records: Vec<(usize, usize)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let breadth = if by_col { array.rows } else { array.cols };
+        let key: Vec<ScalarKey> = (0..breadth)
+            .map(|j| {
+                let value = if by_col {
+                    args::at(array, j, i as u32)
+                } else {
+                    args::at(array, i as u32, j)
+                };
+                scalar_key(value, i)
+            })
+            .collect();
+        if let Some(&entry) = seen.get(&key) {
+            records[entry].1 += 1;
+        } else {
+            seen.insert(key, records.len());
+            records.push((i, 1));
+        }
+    }
+    records
 }
 
 fn sequence_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -899,8 +951,8 @@ fn slice_range(n: u32, count: Option<i64>, drop: bool) -> Result<(u32, u32), Err
             }
             Ok((count as u32, n))
         } else {
-            let k = count.abs();
-            if k >= n_i {
+            let k = count.unsigned_abs();
+            if k >= u64::from(n) {
                 return Err(ErrorKind::Calc);
             }
             Ok((0, n - k as u32))
@@ -909,7 +961,7 @@ fn slice_range(n: u32, count: Option<i64>, drop: bool) -> Result<(u32, u32), Err
         let take = count.min(n_i) as u32;
         Ok((0, take))
     } else {
-        let k = count.abs().min(n_i) as u32;
+        let k = count.unsigned_abs().min(u64::from(n)) as u32;
         Ok((n - k, n))
     }
 }
@@ -973,8 +1025,8 @@ fn collect_indices(
             }
             (n as u32) - 1
         } else {
-            let k = n.abs();
-            if k as u32 > limit {
+            let k = n.unsigned_abs();
+            if k > u64::from(limit) {
                 return Err(ErrorKind::Value);
             }
             limit - k as u32
@@ -1085,9 +1137,25 @@ fn flatten(ctx: &mut EvalCtx<'_>, args: &[ArgVal], to_col: bool) -> RuntimeValue
         Ok(b) => b,
         Err(e) => return err(e),
     };
-    let mut values = Vec::new();
     let skip_blanks = ignore == 1 || ignore == 3;
     let skip_err = ignore == 2 || ignore == 3;
+    let count = array
+        .values
+        .iter()
+        .filter(|value| !skip_blanks || !args::is_blank(value))
+        .filter(|value| !skip_err || value.error().is_none())
+        .count();
+    if count == 0 {
+        return args::empty_array();
+    }
+    let Ok(n) = u32::try_from(count) else {
+        return err(ErrorKind::Num);
+    };
+    let shape = if to_col { (n, 1) } else { (1, n) };
+    let Ok(len) = args::check_shape(shape.0, shape.1) else {
+        return err(ErrorKind::Num);
+    };
+    let mut values = Vec::with_capacity(len);
     if by_col {
         for c in 0..array.cols {
             for r in 0..array.rows {
@@ -1101,21 +1169,7 @@ fn flatten(ctx: &mut EvalCtx<'_>, args: &[ArgVal], to_col: bool) -> RuntimeValue
             }
         }
     }
-    if values.is_empty() {
-        return args::empty_array();
-    }
-    let n = values.len() as u32;
-    if to_col {
-        let Ok(_) = args::check_shape(n, 1) else {
-            return err(ErrorKind::Num);
-        };
-        args::array_result(n, 1, values)
-    } else {
-        let Ok(_) = args::check_shape(1, n) else {
-            return err(ErrorKind::Num);
-        };
-        args::array_result(1, n, values)
-    }
+    args::array_result(shape.0, shape.1, values)
 }
 
 fn push_flat(

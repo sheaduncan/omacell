@@ -68,6 +68,8 @@ Key files:
 
 Key tests: `crates/fn/tests/wp05c.rs`, `crates/fn/tests/probes.rs`.
 
+Review hardening replaces quadratic `UNIQUE`/mode-style scans with first-seen hash indexes, preserves deterministic output order, validates output shapes before allocation, and handles extreme integer arguments without panicking. `DB`, `DDB`, `CUMIPMT`, and `CUMPRINC` now use constant-time closed forms instead of user-sized loops; `EFFECT` uses stable `ln_1p`/`exp_m1` compounding. `XNPV` accepts dates in any order provided none precedes the first date, matching Excel.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -101,12 +103,13 @@ Host: rustc 1.98.0, Linux.
 - `just check` — pass
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — pass
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
-- Corpus: **77** function files, **861** rows, all ≥10, all pass (`cargo test -p omacell-fn --test wp05c`)
+- Corpus: **77** function files, **862** rows, all ≥10, all pass (`cargo test -p omacell-fn --test wp05c`; 11 tests after review hardening)
 - Catalog: **82** specs (`all_specs`); **79** registered (`LET`/`LAMBDA`/`ISOMITTED` catalog-only); **5** remaining probes (`ABS`/`SUM`/`IF`/`NOW`/`RAND`)
 - Implemented WP-05c functions: **74** (16 lookup + 18 array + 6 lambda helpers + 20 financial + 14 engineering) + **3** metadata-only language constructs
-- `scripts/lo-crosscheck.py` on the 77 files: 861 evaluated, **0 unexplained**, 186 known (LibreOffice CSV/`_xlfn` gaps)
+- `scripts/lo-crosscheck.py` on the original 77-file set: 861 evaluated, **0 unexplained**, 186 known (LibreOffice CSV/`_xlfn` gaps). Review re-check of updated `XNPV.tsv`: 12 evaluated, 10 known, **0 unexplained**.
 - Eager smoke: `eager_functions_do_not_panic_on_garbage_args` — pass
 - Criterion `crates/fn/benches/lookup_array.rs`: 1M-row `XLOOKUP`/`XMATCH`/`FILTER`/`SORT`/`UNIQUE`, 10k `MAP`, `IRR`/`RATE`. Not part of `just check`. Run `cargo bench -p omacell-fn --bench lookup_array`. Review: regressions over 10% vs this harness fail review.
+- Review measurement: optimized `unique_1m --quick` **469.34 ms** midpoint on the review host.
 
 ## Open questions / decisions needed
 
@@ -126,4 +129,3 @@ None. WP-01 types unchanged.
 - [x] Baselines recorded (criterion bench added; 1M-row harness in `lookup_array.rs`; solver policy documented)
 - [x] No new `TODO(` without a `WP-` reference; no new dependency without justification (`criterion` already workspace-approved)
 - [x] Nothing written outside the repository except documented temp dirs (`lo-crosscheck` tempfile)
-

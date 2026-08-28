@@ -1086,7 +1086,7 @@ fn bitxor_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
 }
 
 fn shift(number: u64, amount: i64, left: bool) -> Result<u64, ErrorKind> {
-    if amount.abs() > 48 {
+    if amount.unsigned_abs() > 48 {
         return Err(ErrorKind::Num);
     }
     let left = if amount < 0 { !left } else { left };

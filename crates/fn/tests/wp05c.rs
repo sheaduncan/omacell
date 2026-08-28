@@ -154,6 +154,14 @@ fn sequence_randarray_makearray_reject_invalid_shapes() {
 }
 
 #[test]
+fn extreme_integer_arguments_fail_closed_without_panicking() {
+    assert_eq!(eval_formula("=BITLSHIFT(1,-1E300)"), "#NUM!");
+    assert_eq!(eval_formula("=DROP({1,2},-1E300)"), "#CALC!");
+    assert_eq!(eval_formula("=TAKE({1,2},-1E300)"), "1");
+    assert_eq!(eval_formula("=CHOOSEROWS({1;2},-1E300)"), "#VALUE!");
+}
+
+#[test]
 fn language_constructs_are_not_registered() {
     let mut registry = FnRegistry::new();
     register_all(&mut registry);
@@ -199,6 +207,28 @@ fn financial_solvers_converge_and_fail_closed() {
     assert_eq!(eval_formula("=XIRR({-100,110},{0,365})"), "0.1");
     assert_eq!(eval_formula("=IRR({10,20})"), "#NUM!");
     assert_eq!(eval_formula("=RATE(1,0,0,1)"), "#NUM!");
+    assert_eq!(eval_formula("=XNPV(0,{-100,50,60},{0,730,365})"), "10");
+}
+
+#[test]
+fn financial_period_calculations_are_constant_time_for_large_inputs() {
+    assert_eq!(
+        eval_formula("=CUMIPMT(0,1000000000,100,1,1000000000,0)"),
+        "0"
+    );
+    assert_eq!(
+        eval_formula("=CUMPRINC(0,1000000000,100,1,1000000000,0)"),
+        "-100"
+    );
+    assert_eq!(eval_formula("=DB(1000,100,1000000000,1000000000)"), "0");
+    assert_eq!(
+        eval_formula("=DDB(1000,100,1000000000,1000000000,1000000000)"),
+        "0"
+    );
+    let effective = eval_formula("=EFFECT(0.1,4294967296)")
+        .parse::<f64>()
+        .expect("numeric EFFECT result");
+    assert!((effective - 0.1f64.exp_m1()).abs() < 1e-9);
 }
 
 #[test]
