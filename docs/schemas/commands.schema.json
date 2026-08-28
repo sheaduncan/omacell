@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omacell.dev/schemas/commands.schema.json",
+  "title": "Omacell command catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "commands"],
+  "properties": {
+    "schema": { "type": "integer", "const": 1 },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "doc",
+          "mutating",
+          "changeset_eligible",
+          "default_keys",
+          "arg_schema"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9]*)+$"
+          },
+          "doc": { "type": "string", "minLength": 1 },
+          "mutating": { "type": "boolean" },
+          "changeset_eligible": { "type": "boolean" },
+          "default_keys": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "arg_schema": { "type": "object" }
+        }
+      }
+    }
+  }
+}
