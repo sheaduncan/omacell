@@ -26,6 +26,9 @@ pub(crate) fn regextest_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeV
         Ok(b) => b,
         Err(e) => return err(e),
     };
+    if s.chars().count() > MAX_EXCEL_TEXT {
+        return err(ErrorKind::Value);
+    }
     match compile_regex(&pat, ins) {
         Ok(re) => boolean(re.is_match(&s)),
         Err(e) => err(e),
@@ -128,23 +131,129 @@ pub(crate) fn regexreplace_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> Runti
         Ok(re) => re,
         Err(e) => return err(e),
     };
-    let mut i = 0i64;
-    let out = re.replace_all(&s, |caps: &regex::Captures<'_>| {
-        i += 1;
-        if occurrence == 0 || i == occurrence {
-            let mut dest = String::new();
-            caps.expand(&repl, &mut dest);
-            dest
-        } else {
-            caps.get(0)
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default()
-        }
-    });
-    if too_long(out.chars().count()).is_err() {
-        return err(ErrorKind::Value);
+    match replace_capped(&re, &s, &repl, occurrence) {
+        Ok(out) => text(out),
+        Err(e) => err(e),
     }
-    text(out.into_owned())
+}
+
+fn replace_capped(
+    re: &regex::Regex,
+    source: &str,
+    replacement: &str,
+    occurrence: i64,
+) -> Result<String, ErrorKind> {
+    let mut out = String::new();
+    let mut char_count = 0usize;
+    let mut last_end = 0usize;
+    let mut seen = 0i64;
+    for captures in re.captures_iter(source) {
+        let Some(matched) = captures.get(0) else {
+            continue;
+        };
+        push_capped(
+            &mut out,
+            source.get(last_end..matched.start()).unwrap_or(""),
+            &mut char_count,
+        )?;
+        seen += 1;
+        if occurrence == 0 || seen == occurrence {
+            push_expanded_capped(&mut out, replacement, &captures, &mut char_count)?;
+        } else {
+            push_capped(&mut out, matched.as_str(), &mut char_count)?;
+        }
+        last_end = matched.end();
+        if occurrence > 0 && seen == occurrence {
+            push_capped(
+                &mut out,
+                source.get(last_end..).unwrap_or(""),
+                &mut char_count,
+            )?;
+            return Ok(out);
+        }
+    }
+    push_capped(
+        &mut out,
+        source.get(last_end..).unwrap_or(""),
+        &mut char_count,
+    )?;
+    Ok(out)
+}
+
+fn push_expanded_capped(
+    out: &mut String,
+    replacement: &str,
+    captures: &regex::Captures<'_>,
+    char_count: &mut usize,
+) -> Result<(), ErrorKind> {
+    let mut rest = replacement;
+    while !rest.is_empty() {
+        let Some(dollar) = rest.find('$') else {
+            return push_capped(out, rest, char_count);
+        };
+        push_capped(out, &rest[..dollar], char_count)?;
+        rest = &rest[dollar..];
+        if rest.as_bytes().get(1) == Some(&b'$') {
+            push_capped(out, "$", char_count)?;
+            rest = &rest[2..];
+            continue;
+        }
+        let Some((reference, end)) = parse_capture_reference(rest) else {
+            push_capped(out, "$", char_count)?;
+            rest = &rest[1..];
+            continue;
+        };
+        let matched = match reference {
+            CaptureReference::Index(index) => captures.get(index),
+            CaptureReference::Name(name) => captures.name(name),
+        };
+        if let Some(matched) = matched {
+            push_capped(out, matched.as_str(), char_count)?;
+        }
+        rest = &rest[end..];
+    }
+    Ok(())
+}
+
+enum CaptureReference<'a> {
+    Index(usize),
+    Name(&'a str),
+}
+
+fn parse_capture_reference(replacement: &str) -> Option<(CaptureReference<'_>, usize)> {
+    let bytes = replacement.as_bytes();
+    if bytes.first() != Some(&b'$') || bytes.len() <= 1 {
+        return None;
+    }
+    let (name, end) = if bytes[1] == b'{' {
+        let close = replacement.get(2..)?.find('}')?;
+        let end = 2usize.checked_add(close)?.checked_add(1)?;
+        (replacement.get(2..end.saturating_sub(1))?, end)
+    } else {
+        let mut end = 1usize;
+        while bytes.get(end).is_some_and(u8::is_ascii_alphanumeric) || bytes.get(end) == Some(&b'_')
+        {
+            end += 1;
+        }
+        if end == 1 {
+            return None;
+        }
+        (replacement.get(1..end)?, end)
+    };
+    let reference = match name.parse::<usize>() {
+        Ok(index) => CaptureReference::Index(index),
+        Err(_) => CaptureReference::Name(name),
+    };
+    Some((reference, end))
+}
+
+fn push_capped(out: &mut String, value: &str, char_count: &mut usize) -> Result<(), ErrorKind> {
+    *char_count = char_count
+        .checked_add(value.chars().count())
+        .ok_or(ErrorKind::Value)?;
+    too_long(*char_count)?;
+    out.push_str(value);
+    Ok(())
 }
 
 fn optional_case(ctx: &mut EvalCtx<'_>, args: &[ArgVal], index: usize) -> Result<bool, ErrorKind> {

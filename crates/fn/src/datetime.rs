@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use omacell_core::coerce::{self, Scalar};
 use omacell_core::dates::{self, CivilDate, DateSystem, MAX_SERIAL_1900, MAX_SERIAL_1904};
 use omacell_core::error::ErrorKind;
-use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeValue};
+use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeArray, RuntimeValue};
 
 use crate::metadata::{ArgKind, ArrayBehavior, FunctionSpec};
 use crate::text::{civil_serial, parse_date_string, parse_time_string};
@@ -794,7 +794,11 @@ fn workday_lifted(
             };
             let rows = start_a.0.max(days_a.0);
             let cols = start_a.1.max(days_a.1);
-            let mut values = Vec::new();
+            let value_count = match RuntimeArray::checked_len(rows, cols) {
+                Ok(len) => len,
+                Err(e) => return err(e),
+            };
+            let mut values = Vec::with_capacity(value_count);
             for r in 0..rows {
                 for c in 0..cols {
                     let s = grid_at(&start_a, r, c);
@@ -1314,9 +1318,12 @@ fn add_workdays(
         return Ok(start);
     }
     let step = if days > 0 { 1 } else { -1 };
-    let mut remaining = days.abs();
+    let mut remaining = days.unsigned_abs();
+    if remaining > 1_000_000 {
+        return Err(ErrorKind::Num);
+    }
     let mut cur = start;
-    let mut guard = 0i64;
+    let mut guard = 0u64;
     while remaining > 0 {
         cur = cur.checked_add(step).ok_or(ErrorKind::Num)?;
         check_serial(cur, system).or_else(|_| {

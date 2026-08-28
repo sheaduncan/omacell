@@ -1,6 +1,7 @@
 //! WP-05b: locale matrix, pass-stable clock, regex limits, fuzz smoke.
 
 use omacell_core::coerce::Scalar;
+use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeValue};
 use omacell_core::graph::CellCoord;
 use omacell_core::locale::LocaleId;
@@ -21,6 +22,27 @@ fn eval_formula(formula: &str, locale: LocaleId, date_system: DateSystem, clock:
     engine.set_locale(locale);
     engine.recalc_full(&mut wb);
     format_cell(&wb, sheet, 0, 0)
+}
+
+fn eval_eager(name: &str, values: Vec<RuntimeValue>) -> RuntimeValue {
+    let mut registry = FnRegistry::new();
+    register_all(&mut registry);
+    let wb = Workbook::new();
+    let spill = SpillTable::new();
+    let cell = CellCoord::new(wb.active_sheet(), 0, 0);
+    let mut ctx = EvalCtx::new(&wb, &registry, &spill, cell, 1);
+    let definition = registry.lookup(name).expect("registered function");
+    let FnBody::Eager(eval) = definition.body else {
+        panic!("expected eager function");
+    };
+    let args = values
+        .into_iter()
+        .map(|value| ArgVal {
+            omitted: false,
+            value,
+        })
+        .collect::<Vec<_>>();
+    eval(&mut ctx, &args)
 }
 
 #[test]
@@ -141,6 +163,81 @@ fn regex_oversized_pattern_is_value_error() {
         ),
         "#VALUE!"
     );
+}
+
+#[test]
+fn extreme_numeric_arguments_do_not_panic() {
+    let eval = |formula| eval_formula(formula, LocaleId::EN_US, DateSystem::Excel1900, 1.0);
+    assert_eq!(eval("=WORKDAY(1,-9223372036854775808)"), "#NUM!");
+    assert_eq!(eval(r#"=REPLACE("abc",2,9223372036854775807,"x")"#), "ax");
+    assert_eq!(eval("=FIXED(1,9223372036854775807)"), "#VALUE!");
+    assert_eq!(eval("=FIXED(1,-9223372036854775808)"), "0");
+}
+
+#[test]
+fn text_limits_are_enforced_during_expansion() {
+    let long = "a".repeat(32_768);
+    assert!(matches!(
+        eval_eager(
+            "REGEXTEST",
+            vec![
+                RuntimeValue::Scalar(Scalar::Text(long.into())),
+                RuntimeValue::Scalar(Scalar::Text("a".into())),
+            ],
+        ),
+        RuntimeValue::Scalar(Scalar::Error(ErrorKind::Value))
+    ));
+
+    let replacement = "$1".repeat(1_000);
+    assert!(matches!(
+        eval_eager(
+            "REGEXREPLACE",
+            vec![
+                RuntimeValue::Scalar(Scalar::Text("a".repeat(200).into())),
+                RuntimeValue::Scalar(Scalar::Text("(.*)".into())),
+                RuntimeValue::Scalar(Scalar::Text(replacement.into())),
+            ],
+        ),
+        RuntimeValue::Scalar(Scalar::Error(ErrorKind::Value))
+    ));
+
+    assert!(matches!(
+        eval_eager(
+            "TEXTSPLIT",
+            vec![
+                RuntimeValue::Scalar(Scalar::Text("a,".repeat(20_000).into())),
+                RuntimeValue::Scalar(Scalar::Text(",".into())),
+            ],
+        ),
+        RuntimeValue::Scalar(Scalar::Error(ErrorKind::Value))
+    ));
+
+    assert!(matches!(
+        eval_eager(
+            "SUBSTITUTE",
+            vec![
+                RuntimeValue::Scalar(Scalar::Text("a".repeat(200).into())),
+                RuntimeValue::Scalar(Scalar::Text("a".into())),
+                RuntimeValue::Scalar(Scalar::Text("b".repeat(1_000).into())),
+            ],
+        ),
+        RuntimeValue::Scalar(Scalar::Error(ErrorKind::Value))
+    ));
+
+    assert!(matches!(
+        eval_eager(
+            "ARRAYTOTEXT",
+            vec![RuntimeValue::array(
+                1,
+                2,
+                vec![
+                    Scalar::Text("a".repeat(20_000).into()),
+                    Scalar::Text("b".repeat(20_000).into()),
+                ],
+            )],
+        ),
+        RuntimeValue::Scalar(Scalar::Error(ErrorKind::Value))
+    ));
 }
 
 #[test]

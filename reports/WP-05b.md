@@ -71,6 +71,8 @@ Key tests:
 - `regex_oversized_pattern_is_value_error`
 - `eager_functions_do_not_panic_on_random_args`
 
+Review hardening enforces the 32,767-character limit while building `SUBSTITUTE`, joined text, regex replacements, and `ARRAYTOTEXT`, rather than after potentially unbounded allocation. Regex replacement expansion is capture-aware and capped incrementally. `TEXTSPLIT` and lifted `WORKDAY` validate output shapes before allocation; extreme `WORKDAY`, `REPLACE`, `FIXED`, and `DOLLAR` arguments fail closed without integer overflow. The fuzz target now honors each function's declared minimum arity.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -101,16 +103,18 @@ No commands, schemas, or CLI. Frozen WP-01 types and `WorkbookSettings` unchange
 Host: rustc 1.98 / Linux.
 
 - Function catalog: **35 text + 25 date/time + 5 remaining probes = 65** names in `functions_json()`.
-- Corpus: **64** TSVs, **734** rows. `cargo test -p omacell-fn --test probes text_and_date_corpus_files` pass. Each WP-05b function has ≥ 10 rows.
+- Corpus: **64** TSVs, **734** rows. `cargo test -p omacell-fn --test probes text_and_date_corpus_files` pass. Each WP-05b function has ≥ 10 rows. Review-specific text/date tests: 8 pass.
 - `just check` — pass (fmt, clippy `-D warnings`, `cargo test --workspace`, `cargo doc --workspace --no-deps`).
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — pass.
 - `cargo deny check` — pass (unused-allowlist warnings only). New dep: `regex` (pre-approved).
+- `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - LibreOffice 26.x `scripts/lo-crosscheck.py`: **734 evaluated, 269 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05b` (`cargo bench -p omacell-fn --bench text_date`):
   - `textsplit_line` **104.7 µs**
   - `regex_1k` **39.7 ms**
   - `len_scan_100k` **297.7 ms**
   - `year_scan_100k` **299.6 ms**
+- Post-review Criterion `--quick`: `textsplit_line` **102.6 µs**, `regex_1k` **41.5 ms**, `len_scan_100k` **318.3 ms**, `year_scan_100k` **300.3 ms**. The safety hardening did not materially change the committed baseline profile.
 - WP-04 recalc benches use an empty `FnRegistry` and were not re-run; this package does not change the `=1+1` formula path.
 
 ## Open questions / decisions needed

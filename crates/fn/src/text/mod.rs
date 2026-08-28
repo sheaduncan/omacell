@@ -644,20 +644,24 @@ fn substitute_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         return text(src);
     }
     let mut out = String::new();
+    let mut char_count = 0usize;
     let mut seen = 0u64;
     let mut rest = src.as_ref();
     while let Some(idx) = rest.find(old.as_ref()) {
         seen += 1;
-        out.push_str(&rest[..idx]);
+        if push_limited(&mut out, &rest[..idx], &mut char_count).is_err() {
+            return util::err(ErrorKind::Value);
+        }
         if instance.is_none() || instance == Some(seen) {
-            out.push_str(&new);
-        } else {
-            out.push_str(&old);
+            if push_limited(&mut out, &new, &mut char_count).is_err() {
+                return util::err(ErrorKind::Value);
+            }
+        } else if push_limited(&mut out, &old, &mut char_count).is_err() {
+            return util::err(ErrorKind::Value);
         }
         rest = &rest[idx + old.len()..];
     }
-    out.push_str(rest);
-    if too_long(out.chars().count()).is_err() {
+    if push_limited(&mut out, rest, &mut char_count).is_err() {
         return util::err(ErrorKind::Value);
     }
     text(out)
@@ -686,12 +690,17 @@ fn replace_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     let chars = chars_of(&src);
     let start_idx = (start as usize).saturating_sub(1);
     let prefix: String = chars.iter().take(start_idx).collect();
-    let suffix: String = chars.iter().skip(start_idx + n as usize).collect();
-    let out = format!("{prefix}{new}{suffix}");
-    if too_long(out.chars().count()).is_err() {
+    let suffix_start = start_idx.saturating_add(n as usize);
+    let suffix: String = chars.iter().skip(suffix_start).collect();
+    let output_chars = prefix
+        .chars()
+        .count()
+        .checked_add(new.chars().count())
+        .and_then(|len| len.checked_add(suffix.chars().count()));
+    if output_chars.is_none_or(|len| too_long(len).is_err()) {
         return util::err(ErrorKind::Value);
     }
-    text(out)
+    text(format!("{prefix}{new}{suffix}"))
 }
 
 fn upper_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -788,7 +797,9 @@ fn join_values(
         Ok(v) => v,
         Err(e) => return util::err(e),
     };
-    let mut parts = Vec::new();
+    let mut out = String::new();
+    let mut char_count = 0usize;
+    let mut emitted = false;
     for s in scalars {
         if let Some(e) = s.error() {
             return util::err(e);
@@ -800,19 +811,24 @@ fn join_values(
         if ignore_empty && t.is_empty() {
             continue;
         }
-        parts.push(t);
-    }
-    let mut out = String::new();
-    for (i, p) in parts.iter().enumerate() {
-        if i > 0 {
-            out.push_str(delim);
-        }
-        out.push_str(p);
-        if out.chars().count() > MAX_EXCEL_TEXT {
+        if emitted && push_limited(&mut out, delim, &mut char_count).is_err() {
             return util::err(ErrorKind::Value);
         }
+        if push_limited(&mut out, &t, &mut char_count).is_err() {
+            return util::err(ErrorKind::Value);
+        }
+        emitted = true;
     }
     text(out)
+}
+
+fn push_limited(out: &mut String, value: &str, char_count: &mut usize) -> Result<(), ErrorKind> {
+    *char_count = char_count
+        .checked_add(value.chars().count())
+        .ok_or(ErrorKind::Value)?;
+    too_long(*char_count)?;
+    out.push_str(value);
+    Ok(())
 }
 
 fn rept_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {

@@ -7,7 +7,8 @@ use omacell_core::locale::LocaleId;
 use omacell_core::numfmt::{self, FormatOptions, FormatValue};
 
 use crate::util::{
-    date_system, err, optional, scalar, text, to_bool, to_number, to_text, trunc_i64,
+    MAX_EXCEL_TEXT, date_system, err, optional, scalar, text, to_bool, to_number, to_text,
+    too_long, trunc_i64,
 };
 
 pub(crate) fn text_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -53,7 +54,10 @@ pub(crate) fn fixed_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue
         },
         None => false,
     };
-    text(format_fixed(n, decimals, no_commas, ctx.locale()))
+    match format_fixed(n, decimals, no_commas, ctx.locale()) {
+        Ok(value) => text(value),
+        Err(e) => err(e),
+    }
 }
 
 pub(crate) fn dollar_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -69,7 +73,10 @@ pub(crate) fn dollar_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValu
         None => 2,
     };
     let currency = ctx.locale().info().currency;
-    let body = format_fixed(n.abs(), decimals, false, ctx.locale());
+    let body = match format_fixed(n.abs(), decimals, false, ctx.locale()) {
+        Ok(value) => value,
+        Err(e) => return err(e),
+    };
     if n < 0.0 {
         text(format!("({currency}{body})"))
     } else {
@@ -100,43 +107,49 @@ pub(crate) fn valuetotext_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> Runtim
 
 fn array_to_text(value: &RuntimeValue, strict: bool) -> Result<String, ErrorKind> {
     match value {
-        RuntimeValue::Scalar(s) => scalar_to_text(s, strict),
+        RuntimeValue::Scalar(s) => {
+            let out = scalar_to_text(s, strict)?;
+            too_long(out.chars().count())?;
+            Ok(out)
+        }
         RuntimeValue::Array(a) => {
             a.validate()?;
             let cols = a.cols as usize;
-            let mut rows = Vec::new();
+            let mut out = String::new();
+            let mut chars = 0usize;
+            let braced = strict && (a.rows != 1 || a.cols != 1);
+            if braced {
+                push_limited(&mut out, "{", &mut chars)?;
+            }
             for r in 0..a.rows as usize {
-                let mut cells = Vec::new();
+                if r > 0 {
+                    push_limited(&mut out, if strict { ";" } else { "; " }, &mut chars)?;
+                }
                 for c in 0..cols {
+                    if c > 0 {
+                        push_limited(&mut out, if strict { "," } else { ", " }, &mut chars)?;
+                    }
                     let idx = r.saturating_mul(cols).saturating_add(c);
-                    cells.push(scalar_to_text(
-                        a.values.get(idx).unwrap_or(&Scalar::Empty),
-                        strict,
-                    )?);
+                    let cell = scalar_to_text(a.values.get(idx).unwrap_or(&Scalar::Empty), strict)?;
+                    push_limited(&mut out, &cell, &mut chars)?;
                 }
-                rows.push(cells);
             }
-            if strict {
-                if a.rows == 1 && a.cols == 1 {
-                    Ok(rows[0][0].clone())
-                } else {
-                    let body = rows
-                        .iter()
-                        .map(|r| r.join(","))
-                        .collect::<Vec<_>>()
-                        .join(";");
-                    Ok(format!("{{{body}}}"))
-                }
-            } else {
-                Ok(rows
-                    .iter()
-                    .map(|r| r.join(", "))
-                    .collect::<Vec<_>>()
-                    .join("; "))
+            if braced {
+                push_limited(&mut out, "}", &mut chars)?;
             }
+            Ok(out)
         }
         RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => Err(ErrorKind::Value),
     }
+}
+
+fn push_limited(out: &mut String, value: &str, chars: &mut usize) -> Result<(), ErrorKind> {
+    *chars = chars
+        .checked_add(value.chars().count())
+        .ok_or(ErrorKind::Value)?;
+    too_long(*chars)?;
+    out.push_str(value);
+    Ok(())
 }
 
 fn scalar_to_text(s: &Scalar, strict: bool) -> Result<String, ErrorKind> {
@@ -165,24 +178,42 @@ fn scalar_to_text(s: &Scalar, strict: bool) -> Result<String, ErrorKind> {
     }
 }
 
-fn format_fixed(n: f64, decimals: i64, no_commas: bool, locale: LocaleId) -> String {
+fn format_fixed(
+    n: f64,
+    decimals: i64,
+    no_commas: bool,
+    locale: LocaleId,
+) -> Result<String, ErrorKind> {
+    let base = if no_commas { "0" } else { "#,##0" };
+    let dec = if decimals > 0 {
+        usize::try_from(decimals).map_err(|_| ErrorKind::Value)?
+    } else {
+        0
+    };
+    let code_len = base
+        .len()
+        .saturating_add(usize::from(dec > 0))
+        .saturating_add(dec);
+    if code_len > numfmt::MAX_FORMAT_LEN || dec > MAX_EXCEL_TEXT {
+        return Err(ErrorKind::Value);
+    }
     let rounded = if decimals >= 0 {
         round_half_away(n, decimals as i32)
     } else {
-        let scale = 10f64.powi((-decimals) as i32);
-        round_half_away(n / scale, 0) * scale
+        let places = decimals.unsigned_abs();
+        if places > 308 {
+            0.0
+        } else {
+            let scale = 10f64.powi(places as i32);
+            round_half_away(n / scale, 0) * scale
+        }
     };
-    let dec = if decimals > 0 { decimals as usize } else { 0 };
-    let mut code = if no_commas {
-        "0".to_string()
-    } else {
-        "#,##0".to_string()
-    };
+    let mut code = base.to_string();
     if dec > 0 {
         code.push('.');
         code.push_str(&"0".repeat(dec));
     }
-    numfmt::format(FormatValue::Number(rounded), &code, locale).text
+    Ok(numfmt::format(FormatValue::Number(rounded), &code, locale).text)
 }
 
 fn round_half_away(n: f64, places: i32) -> f64 {

@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use omacell_core::coerce::Scalar;
 use omacell_core::error::ErrorKind;
-use omacell_core::eval::{ArgVal, EvalCtx, RuntimeValue};
+use omacell_core::eval::{ArgVal, EvalCtx, RuntimeArray, RuntimeValue};
 
 use crate::util::{
-    err, excel_lower, excel_lower_char, number, optional, scalar, text, to_bool, to_number,
-    to_text, trunc_i64,
+    MAX_EXCEL_TEXT, err, excel_lower, excel_lower_char, number, optional, scalar, text, to_bool,
+    to_number, to_text, trunc_i64,
 };
 
 pub(crate) fn search_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -40,6 +40,9 @@ pub(crate) fn textsplit_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeV
     };
     if src.is_empty() {
         return err(ErrorKind::Na);
+    }
+    if src.chars().count() > MAX_EXCEL_TEXT {
+        return err(ErrorKind::Value);
     }
     let col_delim = match optional(args, 1) {
         Some(a) => match to_text(ctx, a) {
@@ -106,14 +109,23 @@ pub(crate) fn textsplit_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeV
     if grid.is_empty() {
         return err(ErrorKind::Na);
     }
-    let mut values = Vec::new();
+    let Ok(row_count) = u32::try_from(grid.len()) else {
+        return err(ErrorKind::Num);
+    };
+    let Ok(column_count) = u32::try_from(max_cols) else {
+        return err(ErrorKind::Num);
+    };
+    let Ok(value_count) = RuntimeArray::checked_len(row_count, column_count) else {
+        return err(ErrorKind::Num);
+    };
+    let mut values = Vec::with_capacity(value_count);
     for row in &mut grid {
         while row.len() < max_cols {
             row.push(pad.clone());
         }
         values.extend(row.iter().cloned());
     }
-    RuntimeValue::array(grid.len() as u32, max_cols as u32, values)
+    RuntimeValue::array(row_count, column_count, values)
 }
 
 pub(crate) fn textbefore_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
