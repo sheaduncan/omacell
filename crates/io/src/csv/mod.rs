@@ -27,7 +27,7 @@ mod writer;
 
 pub use assist::{ImportAssistRequest, import_assist_request};
 pub use clipboard::{ClipboardFormat, ClipboardTable, parse_clipboard};
-pub use encode::{bom_len, decode_all, detect_bom, encode_all, plan_bom_skip, sniff_encoding};
+pub use encode::{bom_len, decode_all, detect_bom, encode_all, sniff_encoding};
 pub use infer::{Converted, ConvertedKind, convert_cell};
 pub use plan::{
     ColumnPlan, ColumnType, DEFAULT_PREVIEW_ROWS, ExportPlan, ImportPlan, LineEnding,

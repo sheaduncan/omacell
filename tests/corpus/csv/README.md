@@ -20,8 +20,8 @@ invalid in the locale order stay text.
 
 ## Sniff — `sniff.tsv`
 
-Columns: `file`, `delimiter`, `encoding`, `bom`, `header`, `decimal`,
-`thousands`, `eol`, `note`.
+Columns: `file`, `delimiter`, `quote`, `encoding`, `bom`, `header`,
+`decimal`, `thousands`, `eol`, `note`.
 
 `file` is a fixture in this directory. `thousands` may be empty (none).
 `eol` is `lf`, `crlf`, or `cr`. `bom` is `true`/`false`.
@@ -38,6 +38,8 @@ Columns: `file`, `delimiter`, `encoding`, `bom`, `header`, `decimal`,
 | `quoted_newline.csv` | RFC 4180 quoted embedded newline |
 | `ragged.csv` | short and long rows |
 | `de_numbers.csv` | semicolon + `1.234,56` |
+| `decimal_comma.csv` | semicolon + ungrouped decimal commas |
+| `single_quote.csv` | comma delimiter + single-quoted fields |
 | `crlf.csv` | CRLF line endings |
 | `cr.csv` | CR line endings |
 | `quotes.csv` | doubled quotes inside a field |

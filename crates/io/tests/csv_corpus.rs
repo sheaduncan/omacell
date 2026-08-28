@@ -20,23 +20,25 @@ fn sniff_corpus() {
     let rows = common::read_tsv(&common::corpus_file("sniff.tsv"));
     assert!(!rows.is_empty());
     for row in &rows {
-        assert!(row.len() >= 9, "{row:?}");
+        assert!(row.len() >= 10, "{row:?}");
         let file = &row[0];
         let delim = parse_delim(&row[1]);
-        let enc = TextEncoding::from_tag(&row[2]).unwrap();
-        let bom = row[3] == "true";
-        let header = row[4] == "true";
-        let decimal = row[5].chars().next().unwrap_or('.');
-        let thousands = if row[6].is_empty() {
+        let quote = parse_delim(&row[2]);
+        let enc = TextEncoding::from_tag(&row[3]).unwrap();
+        let bom = row[4] == "true";
+        let header = row[5] == "true";
+        let decimal = row[6].chars().next().unwrap_or('.');
+        let thousands = if row[7].is_empty() {
             None
         } else {
-            row[6].chars().next()
+            row[7].chars().next()
         };
-        let eol = LineEnding::from_tag(&row[7]).unwrap();
-        let note = &row[8];
+        let eol = LineEnding::from_tag(&row[8]).unwrap();
+        let note = &row[9];
         let sniff =
             sniff_path(&common::corpus_file(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
         assert_eq!(sniff.plan.delimiter, delim, "{file} delimiter ({note})");
+        assert_eq!(sniff.plan.quote, quote, "{file} quote ({note})");
         assert_eq!(sniff.plan.encoding, enc, "{file} encoding ({note})");
         assert_eq!(sniff.plan.bom, bom, "{file} bom ({note})");
         assert_eq!(sniff.plan.has_header, header, "{file} header ({note})");
@@ -169,4 +171,80 @@ fn import_plan_json_round_trip() {
     let json = serde_json::to_string(&plan).unwrap();
     let back: ImportPlan = serde_json::from_str(&json).unwrap();
     assert_eq!(plan, back);
+}
+
+#[test]
+fn semicolon_with_decimal_commas_is_not_split_on_decimal() {
+    let bytes = b"value;amount\n1,5;2,6\n3,5;4,6\n";
+    let sniffed = sniff(bytes).unwrap();
+    assert_eq!(sniffed.plan.delimiter, ';');
+    assert_eq!(sniffed.plan.decimal, ',');
+    assert_eq!(sniffed.plan.thousands, None);
+    assert_eq!(sniffed.sample_rows[1], ["1,5", "2,6"]);
+
+    let (wb, result) = load(bytes, &sniffed.plan, Default::default()).unwrap();
+    assert_eq!(result.cols, 2);
+    assert_eq!(
+        wb.get(wb.active_sheet(), 1, 1).unwrap().unwrap().value,
+        omacell_core::value::Value::Number(2.6)
+    );
+}
+
+#[test]
+fn sniffs_single_quote_quoting() {
+    let bytes = b"'a,b',c\n'd,e',f\n";
+    let sniffed = sniff(bytes).unwrap();
+    assert_eq!(sniffed.plan.delimiter, ',');
+    assert_eq!(sniffed.plan.quote, '\'');
+    assert_eq!(sniffed.sample_rows[0], ["a,b", "c"]);
+}
+
+#[test]
+fn sniff_scoring_does_not_overflow_on_ragged_input() {
+    let mut text = ",".repeat(9_999);
+    text.push('\n');
+    text.push_str(&"x\n".repeat(1_000));
+    let sniffed = sniff(text.as_bytes()).unwrap();
+    assert_eq!(sniffed.plan.delimiter, ',');
+}
+
+#[test]
+fn sniff_accepts_utf8_codepoint_split_at_sample_boundary() {
+    let mut bytes = vec![b'a'; omacell_io::csv::MAX_SNIFF_BYTES - 1];
+    bytes.extend_from_slice("é".as_bytes());
+    let sniffed = sniff(&bytes).unwrap();
+    assert_eq!(sniffed.plan.encoding, TextEncoding::Utf8);
+}
+
+#[test]
+fn load_checks_actual_bom_instead_of_trusting_plan_flag() {
+    let expects_bom = ImportPlan {
+        bom: true,
+        columns: vec![omacell_io::csv::ColumnPlan {
+            name: None,
+            ty: omacell_io::csv::ColumnType::Text,
+        }],
+        ..ImportPlan::default()
+    };
+    let (wb, result) = load(b"abc\n", &expects_bom, Default::default()).unwrap();
+    assert_eq!(result.rows_written, 1);
+    let slot = wb.get(wb.active_sheet(), 0, 0).unwrap().unwrap();
+    let omacell_core::value::Value::Text(id) = slot.value else {
+        panic!("expected text");
+    };
+    assert_eq!(wb.intern().strings.get(id), Some("abc"));
+
+    let mut actual_bom = vec![0xEF, 0xBB, 0xBF];
+    actual_bom.extend_from_slice(b"xyz\n");
+    let ignores_flag = ImportPlan {
+        bom: false,
+        columns: expects_bom.columns,
+        ..ImportPlan::default()
+    };
+    let (wb, _) = load(&actual_bom, &ignores_flag, Default::default()).unwrap();
+    let slot = wb.get(wb.active_sheet(), 0, 0).unwrap().unwrap();
+    let omacell_core::value::Value::Text(id) = slot.value else {
+        panic!("expected text");
+    };
+    assert_eq!(wb.intern().strings.get(id), Some("xyz"));
 }

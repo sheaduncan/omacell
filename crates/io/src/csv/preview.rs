@@ -1,14 +1,15 @@
 //! Import preview: raw vs converted, with a `changed` flag.
 
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use omacell_core::error::CoreError;
 use serde::{Deserialize, Serialize};
 
-use super::encode::{DecodingReader, decode_all};
+use super::encode::{DecodingReader, bom_len};
 use super::infer::{ConvertedKind, convert_cell};
 use super::plan::{DEFAULT_PREVIEW_ROWS, ImportPlan};
-use super::records::{collect_records, reader_builder};
+use super::records::{FieldLimitReader, reader_builder, record_to_row};
 use crate::error;
 
 /// One preview cell.
@@ -56,50 +57,52 @@ impl PreviewCell {
 /// Preview the first `n` data rows of `bytes` (0 means [`DEFAULT_PREVIEW_ROWS`]).
 pub fn preview(bytes: &[u8], plan: &ImportPlan, n: usize) -> Result<PreviewRows, CoreError> {
     plan.validate()?;
-    let text = decode_all(bytes, plan.encoding)?;
-    rows_from_utf8(text.as_bytes(), plan, n)
+    let skip = bom_len(plan.encoding, bytes);
+    let decoded = DecodingReader::new(bytes, plan.encoding, skip);
+    preview_reader(decoded, plan, n)
 }
 
 /// Preview a path.
 pub fn preview_path(path: &Path, plan: &ImportPlan, n: usize) -> Result<PreviewRows, CoreError> {
     plan.validate()?;
     let file = std::fs::File::open(path).map_err(|e| error::parse(e.to_string()))?;
-    let skip = super::encode::plan_bom_skip(plan.encoding, plan.bom);
-    let decoded = DecodingReader::new(file, plan.encoding, skip);
-    let mut rdr = reader_builder(plan)?.from_reader(decoded);
-    let recs = collect_records(&mut rdr)?;
-    build_preview(recs, plan, n)
+    let mut buffered = BufReader::new(file);
+    let skip = bom_len(
+        plan.encoding,
+        buffered
+            .fill_buf()
+            .map_err(|e| error::parse(e.to_string()))?,
+    );
+    let decoded = DecodingReader::new(buffered, plan.encoding, skip);
+    preview_reader(decoded, plan, n)
 }
 
-fn rows_from_utf8(utf8: &[u8], plan: &ImportPlan, n: usize) -> Result<PreviewRows, CoreError> {
-    let mut rdr = reader_builder(plan)?.from_reader(utf8);
-    let recs = collect_records(&mut rdr)?;
-    build_preview(recs, plan, n)
-}
-
-fn build_preview(
-    mut recs: Vec<Vec<String>>,
+fn preview_reader<R: Read>(
+    reader: R,
     plan: &ImportPlan,
     n: usize,
 ) -> Result<PreviewRows, CoreError> {
-    let skip = plan.skip_rows as usize;
-    if skip > recs.len() {
-        recs.clear();
-    } else {
-        recs.drain(..skip);
+    let limited = FieldLimitReader::new(reader, plan)?;
+    let mut rdr = reader_builder(plan)?.from_reader(limited);
+    let mut records = rdr.records();
+    for _ in 0..plan.skip_rows {
+        let Some(rec) = records.next() else {
+            break;
+        };
+        record_to_row(&rec.map_err(super::records::map_csv)?)?;
     }
     let header = if plan.has_header {
-        if recs.is_empty() {
-            Some(Vec::new())
-        } else {
-            Some(recs.remove(0))
+        match records.next() {
+            Some(rec) => Some(record_to_row(&rec.map_err(super::records::map_csv)?)?),
+            None => Some(Vec::new()),
         }
     } else {
         None
     };
     let take = if n == 0 { DEFAULT_PREVIEW_ROWS } else { n };
-    let mut rows = Vec::new();
-    for rec in recs.into_iter().take(take) {
+    let mut rows = Vec::with_capacity(take);
+    for rec in records.take(take) {
+        let rec = record_to_row(&rec.map_err(super::records::map_csv)?)?;
         let mut row = Vec::with_capacity(rec.len());
         for (i, raw) in rec.iter().enumerate() {
             row.push(PreviewCell::from_raw(raw, i, plan));
@@ -117,4 +120,42 @@ pub fn preview_row(fields: &[String], plan: &ImportPlan) -> Vec<PreviewCell> {
         .enumerate()
         .map(|(i, raw)| PreviewCell::from_raw(raw, i, plan))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Read};
+
+    use super::*;
+
+    struct FailAfter {
+        data: Vec<u8>,
+        pos: usize,
+        fail_at: usize,
+    }
+
+    impl Read for FailAfter {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.pos >= self.fail_at {
+                return Err(io::Error::other("preview read past requested rows"));
+            }
+            let end = self.data.len().min(self.fail_at).min(self.pos + buf.len());
+            let len = end - self.pos;
+            buf[..len].copy_from_slice(&self.data[self.pos..end]);
+            self.pos = end;
+            Ok(len)
+        }
+    }
+
+    #[test]
+    fn preview_stops_after_requested_rows() {
+        let data = "1,2\n".repeat(250_000).into_bytes();
+        let reader = FailAfter {
+            data,
+            pos: 0,
+            fail_at: 128 * 1024,
+        };
+        let preview = preview_reader(reader, &ImportPlan::default(), 1).unwrap();
+        assert_eq!(preview.rows.len(), 1);
+    }
 }

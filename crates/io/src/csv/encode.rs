@@ -8,19 +8,6 @@ use omacell_core::error::CoreError;
 use super::plan::TextEncoding;
 use crate::error;
 
-/// How many prefix bytes to skip given a plan's encoding and `bom` flag.
-#[must_use]
-pub fn plan_bom_skip(encoding: TextEncoding, bom: bool) -> usize {
-    if !bom {
-        return 0;
-    }
-    match encoding {
-        TextEncoding::Utf8 => 3,
-        TextEncoding::Utf16Le | TextEncoding::Utf16Be => 2,
-        TextEncoding::Latin1 => 0,
-    }
-}
-
 /// Byte length of a BOM for `encoding` at the start of `bytes`.
 #[must_use]
 pub fn bom_len(encoding: TextEncoding, bytes: &[u8]) -> usize {
@@ -63,19 +50,10 @@ pub fn sniff_encoding(bytes: &[u8]) -> (TextEncoding, bool) {
 }
 
 fn is_utf8(bytes: &[u8]) -> bool {
-    let trimmed = trim_utf8_boundary(bytes);
-    std::str::from_utf8(trimmed).is_ok()
-}
-
-fn trim_utf8_boundary(bytes: &[u8]) -> &[u8] {
-    let mut end = bytes.len();
-    while end > 0 && bytes[end - 1] & 0xC0 == 0x80 {
-        end -= 1;
+    match std::str::from_utf8(bytes) {
+        Ok(_) => true,
+        Err(err) => err.error_len().is_none(),
     }
-    if end > 0 && bytes[end - 1] & 0x80 != 0 {
-        end -= 1;
-    }
-    &bytes[..end]
 }
 
 fn sniff_utf16(bytes: &[u8]) -> Option<TextEncoding> {

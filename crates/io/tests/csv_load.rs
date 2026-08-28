@@ -69,3 +69,27 @@ fn leading_equals_stays_text() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn progress_zero_emits_only_completion() {
+    let calls = Arc::new(AtomicU64::new(0));
+    let calls2 = Arc::clone(&calls);
+    let opts = LoadOptions {
+        progress_every: 0,
+        on_progress: Some(Arc::new(move |p: LoadProgress| {
+            assert!(p.done);
+            calls2.fetch_add(1, Ordering::Relaxed);
+        })),
+        ..Default::default()
+    };
+    load(b"1\n2\n3\n", &Default::default(), opts).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn oversized_field_is_rejected() {
+    let mut csv = vec![b'x'; omacell_io::csv::MAX_FIELD_BYTES + 1];
+    csv.push(b'\n');
+    let err = load(&csv, &Default::default(), Default::default()).unwrap_err();
+    assert_eq!(err.code, codes::CSV_LIMIT);
+}

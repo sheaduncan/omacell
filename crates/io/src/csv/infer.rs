@@ -150,14 +150,20 @@ fn parse_number(raw: &str, decimal: char, thousands: Option<char>, forced: bool)
     {
         return None;
     }
-    let stripped = normalize_number(raw, decimal, thousands)?;
-    if !forced && has_leading_zero(&stripped) {
+    let normalized;
+    let stripped = if decimal == '.' && thousands.is_none_or(|separator| !raw.contains(separator)) {
+        raw
+    } else {
+        normalized = normalize_number(raw, decimal, thousands)?;
+        &normalized
+    };
+    if !forced && has_leading_zero(stripped) {
         return None;
     }
-    if !is_strict_number(&stripped) {
+    if !is_strict_number(stripped) {
         return None;
     }
-    if significant_digits(&stripped) > 15 {
+    if significant_digits(stripped) > 15 {
         return None;
     }
     let n: f64 = stripped.parse().ok()?;
@@ -293,15 +299,23 @@ fn significant_digits(s: &str) -> usize {
         rest = r;
     }
     let mantissa = rest.split_once(['e', 'E']).map(|(m, _)| m).unwrap_or(rest);
-    let digits: String = mantissa.chars().filter(|c| c.is_ascii_digit()).collect();
-    digits
-        .trim_start_matches('0')
-        .len()
-        .max(if digits.chars().all(|c| c == '0') {
-            1
-        } else {
-            0
-        })
+    let mut significant = 0usize;
+    let mut saw_nonzero = false;
+    let mut saw_digit = false;
+    for digit in mantissa.chars().filter(|c| c.is_ascii_digit()) {
+        saw_digit = true;
+        if digit != '0' {
+            saw_nonzero = true;
+        }
+        if saw_nonzero {
+            significant += 1;
+        }
+    }
+    if saw_digit && !saw_nonzero {
+        1
+    } else {
+        significant
+    }
 }
 
 fn format_number(n: f64) -> String {

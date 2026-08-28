@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
-use omacell_io::csv::{ImportPlan, sniff};
+use omacell_io::csv::{ImportPlan, load};
 
 fn numeric_csv(rows: usize, cols: usize) -> Vec<u8> {
     let mut out = String::with_capacity(rows * cols * 8);
@@ -28,25 +28,29 @@ fn parse_records(c: &mut Criterion) {
     group.warm_up_time(Duration::from_millis(300));
     group.measurement_time(Duration::from_secs(3));
     group.throughput(Throughput::Bytes(data.len() as u64));
-    group.bench_function("utf8_80k_x_20", |b| {
-        b.iter(|| {
-            let sniff = sniff(black_box(&data)).expect("sniff");
-            black_box(sniff.sample_rows.len())
-        });
-    });
     group.bench_function("utf8_parse_only", |b| {
-        let plan = ImportPlan::default();
         b.iter(|| {
             let mut rdr = csv::ReaderBuilder::new()
                 .has_headers(false)
                 .flexible(true)
                 .from_reader(black_box(data.as_slice()));
-            let mut n = 0u64;
-            for rec in rdr.records() {
-                n += rec.expect("rec").len() as u64;
+            let mut fields = 0u64;
+            for record in rdr.records() {
+                fields += record.expect("record").len() as u64;
             }
-            black_box(n);
-            black_box(&plan);
+            black_box(fields);
+        });
+    });
+    group.bench_function("utf8_load_80k_x_20", |b| {
+        let plan = ImportPlan::default();
+        b.iter(|| {
+            let (workbook, result) = load(
+                black_box(data.as_slice()),
+                black_box(&plan),
+                Default::default(),
+            )
+            .expect("load");
+            black_box((workbook, result));
         });
     });
     group.finish();

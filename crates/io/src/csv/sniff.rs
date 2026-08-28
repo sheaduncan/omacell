@@ -7,7 +7,7 @@ use omacell_core::error::CoreError;
 use omacell_core::locale::LocaleId;
 use serde::{Deserialize, Serialize};
 
-use super::encode::{decode_all, sniff_encoding};
+use super::encode::{bom_len, decode_all, sniff_encoding};
 use super::infer::convert_cell;
 use super::plan::{ColumnPlan, ColumnType, ImportPlan, LineEnding, MAX_SNIFF_BYTES, TextEncoding};
 use super::records::parse_records;
@@ -56,7 +56,7 @@ fn sniff_with(bytes: &[u8], ext: Option<&str>) -> Result<Sniff, CoreError> {
         bytes
     };
     let (encoding, bom) = sniff_encoding(sample);
-    let text = decode_all(sample, encoding)?;
+    let text = decode_sample(sample, encoding)?;
     let line_ending = sniff_line_ending(&text);
     let (delimiter, quote) = sniff_delimiter(&text, ext);
     let mut plan = ImportPlan {
@@ -89,6 +89,23 @@ fn sniff_with(bytes: &[u8], ext: Option<&str>) -> Result<Sniff, CoreError> {
         plan,
         sample_rows: records,
     })
+}
+
+fn decode_sample(sample: &[u8], encoding: TextEncoding) -> Result<String, CoreError> {
+    if encoding != TextEncoding::Utf8 {
+        return decode_all(sample, encoding);
+    }
+    let skip = bom_len(encoding, sample);
+    let body = &sample[skip..];
+    match std::str::from_utf8(body) {
+        Ok(text) => Ok(text.to_owned()),
+        Err(err) if err.error_len().is_none() => {
+            Ok(std::str::from_utf8(&body[..err.valid_up_to()])
+                .unwrap_or_default()
+                .to_owned())
+        }
+        Err(_) => Err(error::encoding("input is not valid UTF-8")),
+    }
 }
 
 fn fallback_delim(ext: Option<&str>) -> char {
@@ -132,64 +149,105 @@ fn sniff_delimiter(text: &str, ext: Option<&str>) -> (char, char) {
         Some("tsv") | Some("tab") => &['\t', ',', ';', '|'],
         _ => &[',', '\t', ';', '|'],
     };
-    let quote = '"';
-    let mut best = (fallback_delim(ext), i32::MIN);
+    let mut best = (fallback_delim(ext), '"', i64::MIN);
     for &delim in candidates {
-        let mut plan = ImportPlan {
-            delimiter: delim,
-            quote,
-            ..ImportPlan::default()
-        };
-        plan.encoding = TextEncoding::Utf8;
-        let Ok(rows) = parse_records(text.as_bytes(), &plan) else {
-            continue;
-        };
-        if rows.is_empty() {
-            continue;
-        }
-        let score = score_rows(&rows, delim);
-        if score > best.1 {
-            best = (delim, score);
+        for quote in ['"', '\''] {
+            let mut plan = ImportPlan {
+                delimiter: delim,
+                quote,
+                ..ImportPlan::default()
+            };
+            plan.encoding = TextEncoding::Utf8;
+            let Ok(rows) = parse_records(text.as_bytes(), &plan) else {
+                continue;
+            };
+            if rows.is_empty() {
+                continue;
+            }
+            let score = score_rows(&rows, delim) + quote_bonus(text, delim, quote);
+            if score > best.2 {
+                best = (delim, quote, score);
+            }
         }
     }
-    (best.0, quote)
+    (best.0, best.1)
 }
 
-fn score_rows(rows: &[Vec<String>], delim: char) -> i32 {
+fn score_rows(rows: &[Vec<String>], _delim: char) -> i64 {
     let counts: Vec<usize> = rows.iter().map(Vec::len).collect();
     let max = counts.iter().copied().max().unwrap_or(0);
-    if max < 2 && delim != ',' && delim != '\t' {
-        return i32::MIN / 2;
+    if max < 2 {
+        return i64::MIN / 4;
     }
-    let mean = counts.iter().sum::<usize>() as i32;
-    let var: i32 = counts
-        .iter()
-        .map(|c| {
-            let d = *c as i32 * rows.len() as i32 - mean;
-            d * d
-        })
-        .sum::<i32>()
-        / rows.len().max(1) as i32;
-    (max as i32) * 100 + mean - var / 10
+    let mut widths = counts.clone();
+    widths.sort_unstable();
+    let mut mode = widths[0];
+    let mut mode_count = 0usize;
+    let mut run_value = widths[0];
+    let mut run_count = 0usize;
+    for width in widths {
+        if width == run_value {
+            run_count += 1;
+        } else {
+            if run_count > mode_count {
+                mode = run_value;
+                mode_count = run_count;
+            }
+            run_value = width;
+            run_count = 1;
+        }
+    }
+    if run_count > mode_count {
+        mode = run_value;
+        mode_count = run_count;
+    }
+    let deviation: usize = counts.iter().map(|width| width.abs_diff(mode)).sum();
+    let fields: usize = counts.iter().sum();
+    mode_count as i64 * 10_000 + mode as i64 * 100 + fields as i64 - deviation as i64 * 1_000
+}
+
+fn quote_bonus(text: &str, delimiter: char, quote: char) -> i64 {
+    let bytes = text.as_bytes();
+    let quote = quote as u8;
+    let delimiter = delimiter as u8;
+    let mut starts = 0i64;
+    for (idx, byte) in bytes.iter().enumerate() {
+        if *byte == quote
+            && (idx == 0 || matches!(bytes[idx - 1], b'\r' | b'\n') || bytes[idx - 1] == delimiter)
+        {
+            starts += 1;
+        }
+    }
+    starts * 2_000
 }
 
 fn sniff_separators(rows: &[Vec<String>], locale: LocaleId) -> (char, Option<char>) {
     let mut eu = 0u32;
     let mut us = 0u32;
+    let mut eu_grouped = 0u32;
+    let mut us_grouped = 0u32;
     for row in rows {
         for cell in row {
             match number_shape(cell) {
-                NumberShape::Eu => eu += 1,
-                NumberShape::Us => us += 1,
+                NumberShape::Eu => {
+                    eu += 1;
+                    eu_grouped += 1;
+                }
+                NumberShape::Us => {
+                    us += 1;
+                    us_grouped += 1;
+                }
+                NumberShape::CommaDecimal => eu += 1,
+                NumberShape::DotDecimal => us += 1,
                 NumberShape::Other => {}
             }
         }
     }
     let sep = locale.separators();
     if eu > us && eu > 0 {
-        (',', Some('.'))
+        (',', (eu_grouped > 0).then_some('.'))
     } else if us > eu && us > 0 {
-        ('.', Some(','))
+        ('.', (us_grouped > 0).then_some(','))
     } else {
         (sep.decimal, None)
     }
@@ -198,6 +256,8 @@ fn sniff_separators(rows: &[Vec<String>], locale: LocaleId) -> (char, Option<cha
 enum NumberShape {
     Us,
     Eu,
+    DotDecimal,
+    CommaDecimal,
     Other,
 }
 
@@ -210,9 +270,31 @@ fn number_shape(s: &str) -> NumberShape {
         } else {
             NumberShape::Eu
         }
+    } else if has_dot {
+        single_decimal_shape(s, '.').unwrap_or(NumberShape::Other)
+    } else if has_comma {
+        single_decimal_shape(s, ',').unwrap_or(NumberShape::Other)
     } else {
         NumberShape::Other
     }
+}
+
+fn single_decimal_shape(s: &str, separator: char) -> Option<NumberShape> {
+    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let (whole, fraction) = body.split_once(separator)?;
+    if whole.is_empty()
+        || fraction.is_empty()
+        || fraction.len() == 3
+        || !whole.chars().all(|c| c.is_ascii_digit())
+        || !fraction.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(if separator == ',' {
+        NumberShape::CommaDecimal
+    } else {
+        NumberShape::DotDecimal
+    })
 }
 
 fn guess_header(rows: &[Vec<String>]) -> bool {

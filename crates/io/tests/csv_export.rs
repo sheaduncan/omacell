@@ -83,3 +83,15 @@ fn export_import_simple() {
         Value::Number(2.0)
     );
 }
+
+#[test]
+fn never_quote_rejects_ambiguous_fields() {
+    let mut wb = Workbook::new();
+    wb.set_text(wb.active_sheet(), 0, 0, "a,b").unwrap();
+    let plan = ExportPlan {
+        quoting: Quoting::Never,
+        ..ExportPlan::default()
+    };
+    let err = export(&wb, &plan).unwrap_err();
+    assert_eq!(err.code, omacell_io::error::codes::CSV_EXPORT);
+}

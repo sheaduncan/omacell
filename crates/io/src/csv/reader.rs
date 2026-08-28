@@ -1,6 +1,6 @@
 //! Progressive CSV load into a [`Workbook`].
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,10 +14,10 @@ use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use serde::{Deserialize, Serialize};
 
-use super::encode::{CountingReader, DecodingReader};
+use super::encode::{CountingReader, DecodingReader, bom_len};
 use super::infer::{Converted, convert_cell};
-use super::plan::{ImportPlan, TextEncoding};
-use super::records::{map_csv, reader_builder};
+use super::plan::ImportPlan;
+use super::records::{FieldLimitReader, check_record, map_csv, reader_builder};
 use crate::error;
 
 /// Progress callback payload.
@@ -122,17 +122,6 @@ pub fn load_into<R: Read>(
     load_reader(wb, reader, plan, opts)
 }
 
-fn bom_skip(plan: &ImportPlan) -> usize {
-    if !plan.bom {
-        return 0;
-    }
-    match plan.encoding {
-        TextEncoding::Utf8 => 3,
-        TextEncoding::Utf16Le | TextEncoding::Utf16Be => 2,
-        TextEncoding::Latin1 => 0,
-    }
-}
-
 fn load_reader<R: Read>(
     wb: &mut Workbook,
     reader: R,
@@ -141,7 +130,6 @@ fn load_reader<R: Read>(
 ) -> Result<LoadResult, CoreError> {
     plan.validate()?;
     let sheet = resolve_sheet(wb, opts.sheet_name.as_deref())?;
-    let skip = bom_skip(plan);
     let counted = CountingReader::new(reader);
     // CountingReader is moved into DecodingReader; recover bytes via a cell.
     let bytes = std::rc::Rc::new(std::cell::Cell::new(0u64));
@@ -149,8 +137,16 @@ fn load_reader<R: Read>(
         inner: counted,
         tap: bytes.clone(),
     };
-    let decoded = DecodingReader::new(counted, plan.encoding, skip);
-    let mut rdr = reader_builder(plan)?.from_reader(decoded);
+    let mut buffered = BufReader::new(counted);
+    let skip = bom_len(
+        plan.encoding,
+        buffered
+            .fill_buf()
+            .map_err(|e| error::parse(e.to_string()))?,
+    );
+    let decoded = DecodingReader::new(buffered, plan.encoding, skip);
+    let limited = FieldLimitReader::new(decoded, plan)?;
+    let mut rdr = reader_builder(plan)?.from_reader(limited);
 
     let undo_was = wb.undo_log().is_enabled();
     wb.undo_log_mut().set_enabled(false);
@@ -211,6 +207,7 @@ fn load_records<R: Read>(
             break;
         }
         let rec = rec.map_err(map_csv)?;
+        check_record(&rec)?;
         if rec_index < u64::from(plan.skip_rows) {
             rec_index += 1;
             continue;
@@ -283,7 +280,7 @@ fn emit_progress(opts: &LoadOptions, rows: u64, bytes: u64, done: bool) {
     let Some(cb) = opts.on_progress.as_ref() else {
         return;
     };
-    if !done && opts.progress_every > 0 && rows % opts.progress_every != 0 {
+    if !done && (opts.progress_every == 0 || rows % opts.progress_every != 0) {
         return;
     }
     cb(LoadProgress {

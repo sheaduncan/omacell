@@ -74,6 +74,19 @@ fn export_utf8(wb: &Workbook, plan: &ExportPlan) -> Result<Vec<u8>, CoreError> {
             for col in c0..=c1 {
                 rec.push(cell_text(wb, sheet, row, col, plan)?);
             }
+            if plan.quoting == Quoting::Never
+                && let Some((col, field)) = rec.iter().enumerate().find(|(_, field)| {
+                    field.contains(plan.delimiter)
+                        || field.contains(plan.quote)
+                        || field.contains(['\r', '\n'])
+                })
+            {
+                return Err(error::export(format!(
+                    "cell at row {}, column {} requires quoting: {field:?}",
+                    row + 1,
+                    u32::from(c0) + col as u32 + 1
+                )));
+            }
             wtr.write_record(&rec)
                 .map_err(|e| error::export(e.to_string()))?;
         }
