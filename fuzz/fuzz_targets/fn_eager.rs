@@ -3,12 +3,11 @@
 
 use libfuzzer_sys::fuzz_target;
 use omacell_core::coerce::Scalar;
-use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeValue};
+use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeArray, RuntimeValue};
 use omacell_core::graph::CellCoord;
-use omacell_core::recalc::RecalcEngine;
 use omacell_core::spill::SpillTable;
 use omacell_core::workbook::Workbook;
-use omacell_fn::{register_probes, FunctionSpec, PROBE_SPECS};
+use omacell_fn::{PROBE_SPECS, register_probes};
 
 const MAX_VALUES: usize = 16;
 
@@ -16,14 +15,33 @@ fn scalar_from_bytes(bytes: &[u8]) -> Scalar {
     if bytes.is_empty() {
         return Scalar::Empty;
     }
-    match bytes[0] % 5 {
+    match bytes[0] % 6 {
         0 => Scalar::Empty,
         1 => Scalar::Number(f64::from(i8::from_le_bytes([bytes.get(1).copied().unwrap_or(0)]))),
         2 => Scalar::Bool(bytes.get(1).copied().unwrap_or(0) & 1 == 1),
         3 => Scalar::Text(std::sync::Arc::from(
             String::from_utf8_lossy(&bytes.get(1..4.min(bytes.len())).unwrap_or(b"")),
         )),
+        4 => Scalar::Error(omacell_core::error::ErrorKind::Value),
         _ => Scalar::Number(0.0),
+    }
+}
+
+fn arg_from_bytes(data: &[u8], index: usize) -> ArgVal {
+    let byte = data.get(index).copied().unwrap_or(0);
+    let scalar = scalar_from_bytes(data.get(index..).unwrap_or(&[]));
+    let value = match byte % 3 {
+        0 => RuntimeValue::Scalar(scalar),
+        1 => RuntimeValue::array(1, 1, vec![scalar]),
+        _ => RuntimeValue::Array(std::sync::Arc::new(RuntimeArray {
+            rows: 2,
+            cols: 2,
+            values: std::sync::Arc::from([scalar]),
+        })),
+    };
+    ArgVal {
+        omitted: byte & 0x80 != 0,
+        value,
     }
 }
 
@@ -37,22 +55,22 @@ fuzz_target!(|data: &[u8]| {
     let spill = SpillTable::new();
     let cell = CellCoord::new(wb.active_sheet(), 0, 0);
     let mut ctx = EvalCtx::new(&wb, &registry, &spill, cell, 1);
-    let n = (data.first().copied().unwrap_or(0) as usize % MAX_VALUES).max(1);
-    let values: Vec<Scalar> = (0..n)
-        .map(|i| scalar_from_bytes(data.get(i..).unwrap_or(&[])))
-        .collect();
-    let arg = ArgVal {
-        omitted: false,
-        value: RuntimeValue::array(1, n as u32, values),
-    };
     for spec in PROBE_SPECS {
         if matches!(spec.body, FnBody::Eager(_)) {
             if let Some(def) = registry.lookup(spec.name) {
                 if let FnBody::Eager(eval) = def.body {
-                    let _ = eval(&mut ctx, std::slice::from_ref(&arg));
+                    let limit = usize::from(spec.max_args).min(MAX_VALUES);
+                    let count = if limit == 0 {
+                        0
+                    } else {
+                        data.first().copied().unwrap_or(0) as usize % (limit + 1)
+                    };
+                    let args: Vec<_> = (0..count)
+                        .map(|index| arg_from_bytes(data, index + 1))
+                        .collect();
+                    let _ = eval(&mut ctx, &args);
                 }
             }
         }
     }
-    let _ = RecalcEngine::new(registry);
 });

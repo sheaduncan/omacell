@@ -19,31 +19,45 @@ pub struct CorpusRow {
     pub note: String,
 }
 
-/// Parse a functions TSV (columns: formula, expected, note). `#` comments skipped.
-pub fn parse_tsv(text: &str) -> Vec<CorpusRow> {
-    text.lines()
-        .filter(|line| {
-            let t = line.trim();
-            !t.is_empty() && !t.starts_with('#')
-        })
-        .filter_map(|line| {
-            let mut cols = line.split('\t');
-            let formula = cols.next()?.trim().to_string();
-            let expected = cols.next().unwrap_or("").trim().to_string();
-            let note = cols.next().unwrap_or("").trim().to_string();
-            Some(CorpusRow {
-                formula,
-                expected,
-                note,
-            })
-        })
-        .collect()
+fn parse_tsv(text: &str) -> Result<Vec<CorpusRow>, String> {
+    let mut rows = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() != 3 {
+            return Err(format!(
+                "line {}: expected exactly formula, expected, and note columns",
+                index + 1
+            ));
+        }
+        let formula = cols[0].trim();
+        let expected = cols[1].trim();
+        let note = cols[2].trim();
+        if !formula.starts_with('=') || note.is_empty() {
+            return Err(format!(
+                "line {}: formula must start with '=' and note must not be empty",
+                index + 1
+            ));
+        }
+        rows.push(CorpusRow {
+            formula: formula.to_string(),
+            expected: expected.to_string(),
+            note: note.to_string(),
+        });
+    }
+    if rows.is_empty() {
+        return Err("corpus contains no data rows".to_string());
+    }
+    Ok(rows)
 }
 
 /// Evaluate each row in a one-cell workbook using probe registrations.
 pub fn run_corpus_file(path: &Path) -> Result<Vec<(CorpusRow, String)>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let rows = parse_tsv(&text);
+    let rows = parse_tsv(&text)?;
     let mut out = Vec::new();
     for row in rows {
         let mut registry = FnRegistry::new();
@@ -62,14 +76,15 @@ pub fn run_corpus_file(path: &Path) -> Result<Vec<(CorpusRow, String)>, String> 
     Ok(out)
 }
 
-/// Assert every row in `path` matches its expected display.
-pub fn assert_corpus_file(path: &Path) {
-    let results = run_corpus_file(path).unwrap_or_else(|e| panic!("{e}"));
-    for (row, got) in results {
-        assert_eq!(
-            got, row.expected,
-            "{} ({}) got {got} expected {}",
-            row.formula, row.note, row.expected
-        );
+#[cfg(test)]
+mod tests {
+    use super::parse_tsv;
+
+    #[test]
+    fn corpus_requires_three_columns_and_a_citation() {
+        assert!(parse_tsv("=ABS(-1)\t1\tcitation").is_ok());
+        assert!(parse_tsv("=ABS(-1)\t1").is_err());
+        assert!(parse_tsv("=ABS(-1)\t1\t").is_err());
+        assert!(parse_tsv("ABS(-1)\t1\tcitation").is_err());
     }
 }

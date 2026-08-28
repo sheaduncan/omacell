@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::{RecalcEngine, format_cell};
 use omacell_core::workbook::Workbook;
-use omacell_fn::{SCHEMA, assert_corpus_file, functions_json, register_probes};
+use omacell_fn::{
+    FunctionsEnvelope, PROBE_SPECS, SCHEMA, functions_json, register_probes, run_corpus_file,
+};
 
 fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/functions")
@@ -15,14 +17,18 @@ fn corpus_dir() -> PathBuf {
 fn probe_corpus_files() {
     for name in ["ABS", "SUM", "IF", "SEQUENCE"] {
         let path = corpus_dir().join(format!("{name}.tsv"));
-        assert_corpus_file(&path);
+        let results = run_corpus_file(&path).unwrap();
+        for (row, got) in results {
+            assert_eq!(got, row.expected, "{} ({})", row.formula, row.note);
+        }
     }
 }
 
 #[test]
 fn functions_json_is_sorted_and_matches_schema_version() {
-    let json = functions_json();
+    let json = functions_json().unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let envelope: FunctionsEnvelope = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(value["schema"], SCHEMA);
     let names: Vec<String> = value["functions"]
         .as_array()
@@ -39,26 +45,106 @@ fn functions_json_is_sorted_and_matches_schema_version() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/schemas/functions.schema.json");
     let schema: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(schema_path).unwrap()).unwrap();
-    assert_eq!(schema["properties"]["schema"]["const"], SCHEMA);
-    for func in value["functions"].as_array().unwrap() {
-        for key in [
-            "name",
-            "aliases",
-            "tier",
-            "category",
-            "arg_kinds",
-            "min_args",
-            "max_args",
-            "strategy",
-            "volatile",
-            "array",
-            "async_node",
-            "signature",
-            "doc",
-        ] {
-            assert!(func.get(key).is_some(), "missing {key}");
-        }
+    validate_schema(&value, &schema, "$").unwrap();
+    assert_eq!(envelope.functions.len(), PROBE_SPECS.len());
+    for spec in PROBE_SPECS {
+        assert!(
+            spec.min_args <= spec.max_args,
+            "bad arity for {}",
+            spec.name
+        );
+        assert_eq!(spec.strategy(), spec.to_json().strategy);
     }
+}
+
+fn validate_schema(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    path: &str,
+) -> Result<(), String> {
+    if let Some(expected) = schema.get("const")
+        && value != expected
+    {
+        return Err(format!("{path}: expected const {expected}, got {value}"));
+    }
+    if let Some(choices) = schema.get("enum").and_then(serde_json::Value::as_array)
+        && !choices.contains(value)
+    {
+        return Err(format!("{path}: {value} is not in enum"));
+    }
+    match schema.get("type").and_then(serde_json::Value::as_str) {
+        Some("object") => {
+            let object = value
+                .as_object()
+                .ok_or_else(|| format!("{path}: expected object"))?;
+            let properties = schema
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+                .ok_or_else(|| format!("{path}: schema has no properties"))?;
+            if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+                for key in required.iter().filter_map(serde_json::Value::as_str) {
+                    if !object.contains_key(key) {
+                        return Err(format!("{path}: missing {key}"));
+                    }
+                }
+            }
+            if schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {
+                for key in object.keys() {
+                    if !properties.contains_key(key) {
+                        return Err(format!("{path}: unexpected property {key}"));
+                    }
+                }
+            }
+            for (key, child) in object {
+                if let Some(child_schema) = properties.get(key) {
+                    validate_schema(child, child_schema, &format!("{path}.{key}"))?;
+                }
+            }
+        }
+        Some("array") => {
+            let array = value
+                .as_array()
+                .ok_or_else(|| format!("{path}: expected array"))?;
+            if let Some(items) = schema.get("items") {
+                for (index, item) in array.iter().enumerate() {
+                    validate_schema(item, items, &format!("{path}[{index}]"))?;
+                }
+            }
+        }
+        Some("string") => {
+            let string = value
+                .as_str()
+                .ok_or_else(|| format!("{path}: expected string"))?;
+            if let Some(minimum) = schema.get("minLength").and_then(serde_json::Value::as_u64)
+                && string.chars().count() < minimum as usize
+            {
+                return Err(format!("{path}: string is too short"));
+            }
+        }
+        Some("integer") => {
+            let number = value
+                .as_u64()
+                .ok_or_else(|| format!("{path}: expected non-negative integer"))?;
+            if let Some(minimum) = schema.get("minimum").and_then(serde_json::Value::as_u64)
+                && number < minimum
+            {
+                return Err(format!("{path}: below minimum"));
+            }
+            if let Some(maximum) = schema.get("maximum").and_then(serde_json::Value::as_u64)
+                && number > maximum
+            {
+                return Err(format!("{path}: above maximum"));
+            }
+        }
+        Some("boolean") => {
+            if !value.is_boolean() {
+                return Err(format!("{path}: expected boolean"));
+            }
+        }
+        Some(other) => return Err(format!("{path}: unsupported schema type {other}")),
+        None => {}
+    }
+    Ok(())
 }
 
 #[test]

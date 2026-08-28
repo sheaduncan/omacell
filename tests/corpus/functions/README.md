@@ -11,7 +11,7 @@ formula<TAB>expected<TAB>note
 - `expected` is the committed display text (`format_cell`).
 - `note` cites the Excel behaviour the row encodes.
 
-The shared runner is `omacell_fn::run_corpus_file` / `assert_corpus_file`. It registers WP-05F probes (`ABS`, `SUM`, `IF`, `NOW`, `RAND`, `SEQUENCE`) with an injected clock and nonce.
+The shared runner is `omacell_fn::run_corpus_file`. It rejects malformed rows, registers WP-05F probes (`ABS`, `SUM`, `IF`, `NOW`, `RAND`, `SEQUENCE`), and uses an injected clock and nonce. `scripts/lo-crosscheck.py` evaluates the same rows through a temporary headless LibreOffice workbook; notes containing `known difference` must correspond to an entry in `docs/compat/known-differences.md`.
 
 TODO(WP-05a): math/stat/logic function corpus.
 TODO(WP-05b): text/date function corpus.

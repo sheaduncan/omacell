@@ -13,4 +13,6 @@ encode.
 | IEEE `1.005` as `0.00` | May display `1.01` depending on binary rounding | `1.00` (15-digit then round) | WP-06 |
 
 LibreOffice disagreements discovered by `scripts/lo-crosscheck.py` should be
-appended here rather than papered over in the corpus.
+appended here rather than papered over in the corpus. Corpus rows for an
+intentional mismatch use `known difference` in their note so the script reports
+them separately while still failing on every unexplained mismatch.

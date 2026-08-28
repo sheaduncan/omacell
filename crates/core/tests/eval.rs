@@ -703,7 +703,7 @@ fn runtime_formatter_is_safe_for_a_short_array_payload() {
         cols: 2,
         values: std::sync::Arc::from(Vec::new()),
     }));
-    assert_eq!(format_runtime(&value), "{,;,}");
+    assert_eq!(format_runtime(&value), "#VALUE!");
 }
 
 #[test]

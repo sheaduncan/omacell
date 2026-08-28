@@ -6,11 +6,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use omacell_core::coerce::Scalar;
 use omacell_core::error::ErrorKind;
 use omacell_core::eval::{
-    ArgVal, EvalCtx, FnDef, FnRegistry, RuntimeArray, RuntimeValue, format_runtime,
+    ArgVal, EvalCtx, FnDef, FnRegistry, PassEnv, RuntimeArray, RuntimeValue, format_runtime,
 };
 use omacell_core::formula::Expr;
+use omacell_core::graph::CellCoord;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::recalc::RecalcEngine;
+use omacell_core::spill::SpillTable;
 use omacell_core::workbook::Workbook;
 
 fn display(wb: &Workbook, row: u32, col: u16) -> String {
@@ -52,17 +54,29 @@ fn lazy_if_skips_unselected_error_and_volatile_branch() {
         omacell_core::eval::ArrayLift::None,
         boom,
     ));
+    registry.register(FnDef::eager(
+        "ASYNC_PROBE",
+        0,
+        0,
+        false,
+        true,
+        omacell_core::eval::ArrayLift::None,
+        boom,
+    ));
 
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
     wb.set_formula_text(s, 0, 0, "=IF(TRUE,1,1/0)").unwrap();
     wb.set_formula_text(s, 0, 1, "=IF(TRUE,2,BOOM())").unwrap();
     wb.set_formula_text(s, 0, 2, "=IF(FALSE,1/0,3)").unwrap();
+    wb.set_formula_text(s, 0, 3, "=IF(TRUE,4,ASYNC_PROBE())")
+        .unwrap();
     let mut eng = RecalcEngine::new(registry);
     eng.recalc_full(&mut wb);
     assert_eq!(display(&wb, 0, 0), "1");
     assert_eq!(display(&wb, 0, 1), "2");
     assert_eq!(display(&wb, 0, 2), "3");
+    assert_eq!(display(&wb, 0, 3), "4");
     assert_eq!(FALSE_HITS.load(Ordering::SeqCst), 0);
 
     let mut registry = FnRegistry::new();
@@ -114,6 +128,16 @@ fn random_is_deterministic_across_thread_counts_and_changes_per_pass() {
     fn rand(ctx: &mut EvalCtx<'_>, _args: &[ArgVal]) -> RuntimeValue {
         RuntimeValue::Scalar(Scalar::Number(ctx.random_unit("RAND", 0)))
     }
+    fn pair(_ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
+        let values = args
+            .iter()
+            .map(|arg| match &arg.value {
+                RuntimeValue::Scalar(scalar) => scalar.clone(),
+                _ => Scalar::Error(ErrorKind::Value),
+            })
+            .collect();
+        RuntimeValue::array(1, 2, values)
+    }
     let mut registry = FnRegistry::new();
     registry.register(FnDef::eager(
         "RAND",
@@ -124,6 +148,15 @@ fn random_is_deterministic_across_thread_counts_and_changes_per_pass() {
         omacell_core::eval::ArrayLift::None,
         rand,
     ));
+    registry.register(FnDef::eager(
+        "PAIR",
+        2,
+        2,
+        false,
+        false,
+        omacell_core::eval::ArrayLift::None,
+        pair,
+    ));
 
     let build = || {
         let mut wb = Workbook::new();
@@ -131,6 +164,12 @@ fn random_is_deterministic_across_thread_counts_and_changes_per_pass() {
         for i in 0..64u32 {
             wb.set_formula_text(s, i, 0, "=RAND()").unwrap();
         }
+        // These coordinates collided under the old XOR packing because row
+        // bit 16 overlapped column bit 0.
+        wb.set_formula_text(s, 0, 1, "=RAND()").unwrap();
+        wb.set_formula_text(s, 65_536, 0, "=RAND()").unwrap();
+        wb.set_formula_text(s, 0, 2, "=PAIR(RAND(),RAND())")
+            .unwrap();
         wb
     };
 
@@ -149,10 +188,34 @@ fn random_is_deterministic_across_thread_counts_and_changes_per_pass() {
     assert_eq!(s1, snap(&b));
     let unique: std::collections::BTreeSet<_> = s1.iter().cloned().collect();
     assert!(unique.len() > 8, "random cells collided: {unique:?}");
+    assert_ne!(display(&a, 0, 1), display(&a, 65_536, 0));
+    assert_ne!(
+        display(&a, 0, 2),
+        display(&a, 0, 3),
+        "repeated RAND calls need distinct call-site streams"
+    );
+    assert_eq!(display(&a, 0, 2), display(&b, 0, 2));
+    assert_eq!(display(&a, 0, 3), display(&b, 0, 3));
 
     e1.recalc_incremental(&mut a);
     let s2 = snap(&a);
     assert_ne!(s1, s2, "new pass should change RAND");
+}
+
+#[test]
+fn random_array_indices_use_distinct_streams() {
+    let wb = Workbook::new();
+    let registry = FnRegistry::new();
+    let spill = SpillTable::new();
+    let cell = CellCoord::new(wb.active_sheet(), 0, 0);
+    let ctx = EvalCtx::new(&wb, &registry, &spill, cell, 1).with_pass_env(PassEnv {
+        random_nonce: 7,
+        ..PassEnv::default()
+    });
+    let values: std::collections::BTreeSet<_> = (0..32)
+        .map(|index| ctx.random_unit("RANDARRAY", index).to_bits())
+        .collect();
+    assert_eq!(values.len(), 32);
 }
 
 #[test]
@@ -174,6 +237,10 @@ fn array_limits_reject_invalid_shapes_without_panic() {
         ErrorKind::Num
     );
     assert_eq!(
+        RuntimeArray::checked_len(MAX_ROWS, 17).unwrap_err(),
+        ErrorKind::Num
+    );
+    assert_eq!(
         RuntimeArray::try_new(2, 2, vec![Scalar::Empty]).unwrap_err(),
         ErrorKind::Value
     );
@@ -185,7 +252,40 @@ fn array_limits_reject_invalid_shapes_without_panic() {
         cols: 1,
         values: Arc::from(vec![Scalar::Number(1.0)]),
     }));
-    let _ = format_runtime(&malformed);
+    assert_eq!(format_runtime(&malformed), "#VALUE!");
+    let enormous = RuntimeValue::Array(Arc::new(RuntimeArray {
+        rows: u32::MAX,
+        cols: u32::MAX,
+        values: Arc::from(Vec::new()),
+    }));
+    assert_eq!(format_runtime(&enormous), "#NUM!");
+}
+
+#[test]
+fn malformed_function_array_is_rejected_before_spill_iteration() {
+    fn malformed(_ctx: &mut EvalCtx<'_>, _args: &[ArgVal]) -> RuntimeValue {
+        RuntimeValue::Array(Arc::new(RuntimeArray {
+            rows: u32::MAX,
+            cols: u32::MAX,
+            values: Arc::from(Vec::new()),
+        }))
+    }
+    let mut registry = FnRegistry::new();
+    registry.register(FnDef::eager(
+        "MALFORMED",
+        0,
+        0,
+        false,
+        false,
+        omacell_core::eval::ArrayLift::None,
+        malformed,
+    ));
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_formula_text(s, 0, 0, "=MALFORMED()").unwrap();
+    let mut eng = RecalcEngine::new(registry);
+    eng.recalc_full(&mut wb);
+    assert_eq!(display(&wb, 0, 0), "#NUM!");
 }
 
 #[test]

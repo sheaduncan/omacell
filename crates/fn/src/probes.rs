@@ -5,7 +5,7 @@ use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeValue};
 use omacell_core::formula::Expr;
 
-use crate::metadata::{ArgKind, ArrayBehavior, FnStrategy, FunctionSpec};
+use crate::metadata::{ArgKind, ArrayBehavior, FunctionSpec};
 
 /// Probe specs in declaration order (JSON output is re-sorted by name).
 pub const PROBE_SPECS: &[FunctionSpec] = &[ABS, SUM, IF, NOW, RAND, SEQUENCE];
@@ -22,7 +22,8 @@ pub fn register_probes(registry: &mut FnRegistry) {
     }
 }
 
-const ABS: FunctionSpec = FunctionSpec {
+crate::define_fn! {
+const ABS = {
     name: "ABS",
     aliases: &[],
     tier: 0,
@@ -30,7 +31,6 @@ const ABS: FunctionSpec = FunctionSpec {
     arg_kinds: &[ArgKind::Number],
     min_args: 1,
     max_args: 1,
-    strategy: FnStrategy::Eager,
     volatile: false,
     array: ArrayBehavior::LiftAll,
     async_node: false,
@@ -38,8 +38,10 @@ const ABS: FunctionSpec = FunctionSpec {
     doc: "Absolute value of a number.",
     body: FnBody::Eager(abs_impl),
 };
+}
 
-const SUM: FunctionSpec = FunctionSpec {
+crate::define_fn! {
+const SUM = {
     name: "SUM",
     aliases: &[],
     tier: 0,
@@ -47,7 +49,6 @@ const SUM: FunctionSpec = FunctionSpec {
     arg_kinds: &[ArgKind::Any],
     min_args: 1,
     max_args: 255,
-    strategy: FnStrategy::Eager,
     volatile: false,
     array: ArrayBehavior::None,
     async_node: false,
@@ -55,8 +56,10 @@ const SUM: FunctionSpec = FunctionSpec {
     doc: "Adds all numbers in the arguments, walking ranges.",
     body: FnBody::Eager(sum_impl),
 };
+}
 
-const IF: FunctionSpec = FunctionSpec {
+crate::define_fn! {
+const IF = {
     name: "IF",
     aliases: &[],
     tier: 0,
@@ -64,7 +67,6 @@ const IF: FunctionSpec = FunctionSpec {
     arg_kinds: &[ArgKind::Logical, ArgKind::Any, ArgKind::Any],
     min_args: 2,
     max_args: 3,
-    strategy: FnStrategy::Lazy,
     volatile: false,
     array: ArrayBehavior::None,
     async_node: false,
@@ -72,8 +74,10 @@ const IF: FunctionSpec = FunctionSpec {
     doc: "Returns one value if the test is TRUE and another if FALSE. Unselected branches are not evaluated.",
     body: FnBody::Lazy(if_impl),
 };
+}
 
-const NOW: FunctionSpec = FunctionSpec {
+crate::define_fn! {
+const NOW = {
     name: "NOW",
     aliases: &[],
     tier: 0,
@@ -81,7 +85,6 @@ const NOW: FunctionSpec = FunctionSpec {
     arg_kinds: &[],
     min_args: 0,
     max_args: 0,
-    strategy: FnStrategy::Eager,
     volatile: true,
     array: ArrayBehavior::None,
     async_node: false,
@@ -89,8 +92,10 @@ const NOW: FunctionSpec = FunctionSpec {
     doc: "Current date and time as a serial, sampled once per recalc pass.",
     body: FnBody::Eager(now_impl),
 };
+}
 
-const RAND: FunctionSpec = FunctionSpec {
+crate::define_fn! {
+const RAND = {
     name: "RAND",
     aliases: &[],
     tier: 0,
@@ -98,7 +103,6 @@ const RAND: FunctionSpec = FunctionSpec {
     arg_kinds: &[],
     min_args: 0,
     max_args: 0,
-    strategy: FnStrategy::Eager,
     volatile: true,
     array: ArrayBehavior::None,
     async_node: false,
@@ -106,8 +110,10 @@ const RAND: FunctionSpec = FunctionSpec {
     doc: "Uniform random in [0, 1), derived from the pass nonce and cell.",
     body: FnBody::Eager(rand_impl),
 };
+}
 
-const SEQUENCE: FunctionSpec = FunctionSpec {
+crate::define_fn! {
+const SEQUENCE = {
     name: "SEQUENCE",
     aliases: &[],
     tier: 0,
@@ -115,7 +121,6 @@ const SEQUENCE: FunctionSpec = FunctionSpec {
     arg_kinds: &[ArgKind::Number, ArgKind::Number],
     min_args: 1,
     max_args: 2,
-    strategy: FnStrategy::Eager,
     volatile: false,
     array: ArrayBehavior::ReturnsArray,
     async_node: false,
@@ -123,6 +128,7 @@ const SEQUENCE: FunctionSpec = FunctionSpec {
     doc: "Returns a sequence array. Invalid or out-of-grid shapes are `#NUM!`.",
     body: FnBody::Eager(sequence_impl),
 };
+}
 
 fn abs_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     let value = args
@@ -234,16 +240,12 @@ fn sequence_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     }
     let rows_u = u32::try_from(rows).unwrap_or(u32::MAX);
     let cols_u = u32::try_from(cols).unwrap_or(u32::MAX);
-    let Some(len) = rows_u.checked_mul(cols_u) else {
+    let Ok(len) = omacell_core::eval::RuntimeArray::checked_len(rows_u, cols_u) else {
         return RuntimeValue::error(ErrorKind::Num);
     };
-    if rows_u > omacell_core::limits::MAX_ROWS || cols_u > u32::from(omacell_core::limits::MAX_COLS)
-    {
-        return RuntimeValue::error(ErrorKind::Num);
-    }
-    let mut values = Vec::with_capacity(len as usize);
+    let mut values = Vec::with_capacity(len);
     for i in 0..len {
-        values.push(Scalar::Number(f64::from(i + 1)));
+        values.push(Scalar::Number((i + 1) as f64));
     }
     RuntimeValue::array(rows_u, cols_u, values)
 }

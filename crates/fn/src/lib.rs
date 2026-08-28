@@ -10,7 +10,7 @@ mod corpus;
 mod metadata;
 mod probes;
 
-pub use corpus::{CorpusRow, assert_corpus_file, run_corpus_file};
+pub use corpus::{CorpusRow, run_corpus_file};
 pub use metadata::{
     ArgKind, ArrayBehavior, FnStrategy, FunctionJson, FunctionSpec, FunctionsEnvelope, SCHEMA,
     functions_json, spec_to_fn_def,

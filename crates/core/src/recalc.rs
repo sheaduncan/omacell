@@ -857,12 +857,18 @@ fn commit_value(
             commit_scalar(wb, cell, s, flags(stale));
             None
         }
-        RuntimeValue::Array(a) if cse || (a.rows == 1 && a.cols == 1) => {
-            let s = a.values.first().cloned().unwrap_or(Scalar::Empty);
-            commit_scalar(wb, cell, s, flags(stale).with(CellFlags::ARRAY, cse));
-            None
-        }
-        RuntimeValue::Array(a) => spill_array(wb, spill, cell, &a, stale),
+        RuntimeValue::Array(a) => match a.validate() {
+            Err(error) => {
+                commit_scalar(wb, cell, Scalar::Error(error), flags(stale));
+                None
+            }
+            Ok(_) if cse || (a.rows == 1 && a.cols == 1) => {
+                let s = a.values.first().cloned().unwrap_or(Scalar::Empty);
+                commit_scalar(wb, cell, s, flags(stale).with(CellFlags::ARRAY, cse));
+                None
+            }
+            Ok(_) => spill_array(wb, spill, cell, &a, stale),
+        },
         RuntimeValue::Ref(_) => {
             commit_scalar(wb, cell, Scalar::Error(ErrorKind::Value), flags(stale));
             None

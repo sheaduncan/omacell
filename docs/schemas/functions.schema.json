@@ -29,9 +29,9 @@
         ],
         "properties": {
           "name": { "type": "string", "minLength": 1 },
-          "aliases": { "type": "array", "items": { "type": "string" } },
-          "tier": { "type": "integer", "minimum": 0 },
-          "category": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "tier": { "type": "integer", "minimum": 0, "maximum": 2 },
+          "category": { "type": "string", "minLength": 1 },
           "arg_kinds": {
             "type": "array",
             "items": {
@@ -39,8 +39,8 @@
               "enum": ["number", "text", "logical", "any", "range", "array"]
             }
           },
-          "min_args": { "type": "integer", "minimum": 0 },
-          "max_args": { "type": "integer", "minimum": 0 },
+          "min_args": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "max_args": { "type": "integer", "minimum": 0, "maximum": 255 },
           "strategy": { "type": "string", "enum": ["eager", "lazy"] },
           "volatile": { "type": "boolean" },
           "array": {
@@ -48,8 +48,8 @@
             "enum": ["none", "lift_all", "returns_array"]
           },
           "async_node": { "type": "boolean" },
-          "signature": { "type": "string" },
-          "doc": { "type": "string" }
+          "signature": { "type": "string", "minLength": 1 },
+          "doc": { "type": "string", "minLength": 1 }
         }
       }
     }
