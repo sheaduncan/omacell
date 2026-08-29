@@ -76,5 +76,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "omc_parse"
+path = "fuzz_targets/omc_parse.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

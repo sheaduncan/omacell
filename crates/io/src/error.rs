@@ -30,6 +30,12 @@ pub mod codes {
     pub const XLSX_WRITE: &str = "xlsx.write";
     /// A LibreOffice-compatible lock file blocked the save.
     pub const XLSX_LOCK: &str = "xlsx.lock";
+    /// `.omc` text could not be parsed.
+    pub const OMC_PARSE: &str = "omc.parse";
+    /// An `.omc` size or record limit was exceeded.
+    pub const OMC_LIMIT: &str = "omc.limit";
+    /// The `.omc` document is not a readable workbook or changeset.
+    pub const OMC_FORMAT: &str = "omc.format";
 }
 
 /// Encoding error.
@@ -119,4 +125,25 @@ pub fn xlsx_write(message: impl Into<String>) -> CoreError {
 pub fn xlsx_lock(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::XLSX_LOCK, message)
         .with_hint("close the other editor or remove a stale .~lock.*# file")
+}
+
+/// `.omc` parse error.
+#[must_use]
+pub fn omc_parse(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::OMC_PARSE, message)
+        .with_hint("check tabs, quotes, and record kinds in docs/formats/omc.md")
+}
+
+/// `.omc` size or count limit.
+#[must_use]
+pub fn omc_limit(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::OMC_LIMIT, message)
+        .with_hint("split the workbook or raise no limits; the caps exist to bound parsers")
+}
+
+/// `.omc` document shape error.
+#[must_use]
+pub fn omc_format(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::OMC_FORMAT, message)
+        .with_hint("the first record must be 'omc 1'; see docs/formats/omc.md")
 }
