@@ -12,6 +12,94 @@ pub struct DeferredCommand {
 /// Tested deferred-command table. Empty only at the final integration gate.
 pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
     DeferredCommand {
+        id: "edit.cut",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.copy",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.paste",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.pastespecial",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.yank",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.delete",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.change",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.clearrow",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.repeat",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.fillselection",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.filldown",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.fillright",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.autosum",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.insertdate",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.inserttime",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.copyformulaabove",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.copyvalueabove",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.clearcell",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "format.indent",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "format.outdent",
+        wp: "WP-17",
+    },
+    DeferredCommand {
+        id: "edit.searchnext",
+        wp: "WP-19",
+    },
+    DeferredCommand {
+        id: "edit.searchprev",
+        wp: "WP-19",
+    },
+    DeferredCommand {
         id: "file.open",
         wp: "WP-13",
     },
@@ -56,7 +144,7 @@ pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
         wp: "WP-17",
     },
     DeferredCommand {
-        id: "format.number",
+        id: "format.numberstyle",
         wp: "WP-17",
     },
     DeferredCommand {
@@ -93,7 +181,7 @@ pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
     },
     DeferredCommand {
         id: "edit.hyperlink",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "filter.toggle",
@@ -101,31 +189,31 @@ pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
     },
     DeferredCommand {
         id: "edit.insert",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "edit.delcells",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "view.hiderows",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "view.hidecols",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "view.unhiderows",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "view.unhidecols",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "edit.note",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "name.manager",
@@ -141,11 +229,11 @@ pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
     },
     DeferredCommand {
         id: "edit.group",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "edit.ungroup",
-        wp: "WP-18",
+        wp: "WP-17",
     },
     DeferredCommand {
         id: "edit.explainerror",

@@ -2,7 +2,7 @@
 
 use insta::assert_debug_snapshot;
 use omacell_bus::CommandJson;
-use omacell_ui::Palette;
+use omacell_ui::{AiPlanProvider, Palette};
 
 fn cmd(id: &str, doc: &str) -> CommandJson {
     CommandJson {
@@ -33,4 +33,27 @@ fn ranking_is_stable() {
     p.rank(&commands, "?hello");
     assert!(p.prompt.as_ref().unwrap().contains("WP-23"));
     assert_debug_snapshot!((empty, cell));
+}
+
+struct Planner;
+
+impl AiPlanProvider for Planner {
+    fn plan(&self, prompt: &str) -> Option<String> {
+        Some(format!("plan: {prompt}"))
+    }
+}
+
+#[test]
+fn ai_provider_and_schema_prompt_are_reachable() {
+    let mut command = cmd("view.select", "Select a range");
+    command.arg_schema = serde_json::json!({
+        "type": "object",
+        "properties": {"range": {"type": "string"}},
+        "required": ["range"]
+    });
+    let mut palette = Palette::default();
+    palette.rank_with_ai(&[command.clone()], "?select A1", Some(&Planner));
+    assert_eq!(palette.prompt.as_deref(), Some("plan: select A1"));
+    palette.prompt_for(&command);
+    assert_eq!(palette.prompt.as_deref(), Some("range: string"));
 }

@@ -532,6 +532,10 @@ impl RecalcEngine {
             }
         }
 
+        // Cached formula values are derived state, not user edits. Keep every
+        // result commit (including circular/iterative paths) out of undo.
+        let recalc_undo = wb.undo_log_mut().is_enabled();
+        wb.undo_log_mut().set_enabled(false);
         let mut circular = self.graph.circular_set(&dirty);
         let iteration = wb.settings().iteration;
         let mut evaluated = 0u64;
@@ -603,6 +607,7 @@ impl RecalcEngine {
         // Dynamic nodes: record resolved refs for the next dirty pass.
         // (Evaluated as part of generations when they have no static preds.)
 
+        wb.undo_log_mut().set_enabled(recalc_undo);
         RecalcResult {
             cells_evaluated: evaluated,
             elapsed_ms: t0.elapsed().as_millis() as u64,

@@ -15,6 +15,29 @@ pub enum ExtendMode {
     Add,
 }
 
+/// Aggregate values a status line may show for a selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SelectionStats {
+    /// Cells across all selected areas, including blanks.
+    pub cells: u64,
+    /// Selected numeric values.
+    pub numeric: u64,
+    /// Sum of numeric values.
+    pub sum: Option<f64>,
+    /// Average of numeric values.
+    pub average: Option<f64>,
+    /// Minimum numeric value.
+    pub min: Option<f64>,
+    /// Maximum numeric value.
+    pub max: Option<f64>,
+}
+
+/// Selection-statistics hook supplied by a workbook-facing composition root.
+pub trait SelectionStatsProvider {
+    /// Compute the configured statistics without making the UI model own data access.
+    fn stats(&self, selection: &Selection) -> SelectionStats;
+}
+
 /// One rectangular area.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Area {
@@ -49,7 +72,7 @@ impl Area {
     #[must_use]
     pub fn cells(self) -> u64 {
         let (r0, c0, r1, c1) = self.normalized();
-        u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1)
+        (u64::from(r1) - u64::from(r0) + 1).saturating_mul(u64::from(c1) - u64::from(c0) + 1)
     }
 
     /// As a [`RangeRef`].
@@ -99,8 +122,8 @@ impl Selection {
 
     /// Move the cursor, applying [`ExtendMode`].
     pub fn move_by(&mut self, drow: i64, dcol: i64) {
-        let row = clamp_row(i64::from(self.cursor.row) + drow);
-        let col = clamp_col(i64::from(self.cursor.col) + dcol);
+        let row = clamp_row(i64::from(self.cursor.row).saturating_add(drow));
+        let col = clamp_col(i64::from(self.cursor.col).saturating_add(dcol));
         self.cursor.row = row;
         self.cursor.col = col;
         match self.extend {
@@ -143,6 +166,9 @@ impl Selection {
     /// Replace with one area, cursor at `area.start`.
     pub fn replace(&mut self, area: Area) {
         self.cursor = area.start;
+        if let Some(sheet) = area.start.sheet {
+            self.sheet = sheet;
+        }
         self.areas.clear();
         self.areas.push(area);
         self.extend = ExtendMode::Replace;
@@ -151,7 +177,15 @@ impl Selection {
     /// Configurable selection stats: count of cells in all areas.
     #[must_use]
     pub fn cell_count(&self) -> u64 {
-        self.areas.iter().map(|a| a.cells()).sum()
+        self.areas
+            .iter()
+            .fold(0_u64, |total, area| total.saturating_add(area.cells()))
+    }
+
+    /// Ask a workbook-facing provider for selection statistics.
+    #[must_use]
+    pub fn stats(&self, provider: &dyn SelectionStatsProvider) -> SelectionStats {
+        provider.stats(self)
     }
 }
 

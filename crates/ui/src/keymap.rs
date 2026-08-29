@@ -1,9 +1,11 @@
 //! Keymap loader, chord matching, and counts.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
+use omacell_bus::CommandRegistry;
 use omacell_core::command::CommandId;
 use omacell_core::error::CoreError;
 use serde::Deserialize;
@@ -13,6 +15,8 @@ use crate::deferred;
 use crate::error;
 use crate::event::{KeyCode, KeyEvent};
 use crate::mode::{KeyModel, Mode};
+
+const MAX_KEYMAP_BYTES: u64 = 1024 * 1024;
 
 /// Search roots for `Config.keys.file` (composition root supplies these).
 #[derive(Clone, Debug)]
@@ -50,17 +54,42 @@ pub fn resolve_keymap_path(file: &str, roots: &KeymapRoots) -> Result<PathBuf, C
             "keys.file must be a relative path with only normal components",
         ));
     }
-    let candidates = [
-        roots.config_file_parent.as_ref().map(|p| p.join(rel)),
-        Some(roots.user_config.join(rel)),
-        Some(roots.default_dir.join(rel)),
-    ];
-    for path in candidates.into_iter().flatten() {
-        if path.is_file() {
+    let primary = roots
+        .config_file_parent
+        .as_deref()
+        .unwrap_or(roots.user_config.as_path());
+    for root in [primary, roots.default_dir.as_path()] {
+        if let Some(path) = resolve_candidate(root, rel)? {
             return Ok(path);
         }
     }
     Err(error::keymap(format!("keymap not found: {file}")))
+}
+
+fn resolve_candidate(root: &Path, relative: &Path) -> Result<Option<PathBuf>, CoreError> {
+    let candidate = root.join(relative);
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(error::keymap(format!("{}: {err}", candidate.display()))),
+    }
+    let canonical_root = std::fs::canonicalize(root)
+        .map_err(|err| error::keymap(format!("{}: {err}", root.display())))?;
+    let canonical = std::fs::canonicalize(&candidate)
+        .map_err(|err| error::keymap(format!("{}: {err}", candidate.display())))?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(error::keymap(format!(
+            "keymap escaped its search root: {}",
+            candidate.display()
+        )));
+    }
+    if !canonical.is_file() {
+        return Err(error::keymap(format!(
+            "keymap is not a regular file: {}",
+            candidate.display()
+        )));
+    }
+    Ok(Some(canonical))
 }
 
 /// One binding.
@@ -90,6 +119,7 @@ pub struct Keymap {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileMeta {
     #[serde(default)]
     name: Option<String>,
@@ -99,8 +129,29 @@ struct FileMeta {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct KeyFile {
     meta: FileMeta,
+    #[serde(default = "empty_table")]
+    bindings: toml::Value,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverlayMeta {
+    #[serde(default, rename = "name")]
+    _name: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    leader: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverlayFile {
+    #[serde(default)]
+    meta: OverlayMeta,
     #[serde(default = "empty_table")]
     bindings: toml::Value,
 }
@@ -112,6 +163,10 @@ fn empty_table() -> toml::Value {
 impl Keymap {
     /// Parse a keymap TOML document.
     pub fn parse(text: &str) -> Result<Self, CoreError> {
+        Self::parse_with_leader(text, None)
+    }
+
+    fn parse_with_leader(text: &str, leader_override: Option<&str>) -> Result<Self, CoreError> {
         let file: KeyFile =
             toml::from_str(text).map_err(|e| error::keymap(format!("keymap toml: {e}")))?;
         let model = match file.meta.model.as_str() {
@@ -123,31 +178,15 @@ impl Keymap {
                 )));
             }
         };
-        let mut tables = BTreeMap::new();
-        let leader = file.meta.leader.clone();
-        match file.bindings {
-            toml::Value::Table(map) if model == KeyModel::Classic => {
-                tables.insert(
-                    "classic".into(),
-                    parse_table(&toml::Value::Table(map), leader.as_deref())?,
-                );
-            }
-            toml::Value::Table(map) => {
-                for (mode, value) in map {
-                    tables.insert(mode, parse_table(&value, leader.as_deref())?);
-                }
-            }
-            other => {
-                return Err(error::keymap(format!(
-                    "bindings must be a table, got {other}"
-                )));
-            }
-        }
+        let leader = leader_override
+            .map(str::to_string)
+            .or_else(|| file.meta.leader.clone());
+        let tables = parse_tables(file.bindings, model, leader.as_deref())?;
         reject_duplicate_chords(&tables)?;
         Ok(Self {
             name: file.meta.name.unwrap_or_else(|| file.meta.model.clone()),
             model,
-            leader: file.meta.leader,
+            leader,
             tables,
             pending: String::new(),
             count: 0,
@@ -156,19 +195,23 @@ impl Keymap {
 
     /// Load from a resolved path, overlaying an optional user file.
     pub fn load(path: &Path, user_overlay: Option<&Path>) -> Result<Self, CoreError> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| error::keymap(format!("{}: {e}", path.display())))?;
-        let mut map = Self::parse(&text)?;
-        if let Some(user) = user_overlay.filter(|p| p.is_file()) {
-            let overlay = std::fs::read_to_string(user)
-                .map_err(|e| error::keymap(format!("{}: {e}", user.display())))?;
-            let extra = Self::parse(&overlay)?;
-            if extra.model != map.model {
+        let text = read_bounded(path)?;
+        let overlay = user_overlay.map(read_bounded).transpose()?;
+        let parsed_overlay = overlay.as_deref().map(parse_overlay).transpose()?;
+        let leader_override = parsed_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.meta.leader.as_deref());
+        let mut map = Self::parse_with_leader(&text, leader_override)?;
+        if let Some(extra) = parsed_overlay {
+            if let Some(model) = extra.meta.model.as_deref()
+                && model != model_name(map.model)
+            {
                 return Err(error::keymap(
                     "user keymap model must match the package map",
                 ));
             }
-            for (mode, table) in extra.tables {
+            let tables = parse_tables(extra.bindings, map.model, map.leader.as_deref())?;
+            for (mode, table) in tables {
                 let dest = map.tables.entry(mode).or_default();
                 for (chord, binding) in table {
                     dest.insert(chord, binding);
@@ -177,6 +220,18 @@ impl Keymap {
             reject_duplicate_chords(&map.tables)?;
         }
         Ok(map)
+    }
+
+    /// Resolve a configured map and apply a sparse higher-priority override to
+    /// the shipped package map when one exists.
+    pub fn load_from_roots(file: &str, roots: &KeymapRoots) -> Result<Self, CoreError> {
+        let selected = resolve_keymap_path(file, roots)?;
+        let relative = Path::new(file);
+        let package = resolve_candidate(&roots.default_dir, relative)?;
+        match package {
+            Some(package) if package != selected => Self::load(&package, Some(&selected)),
+            _ => Self::load(&selected, None),
+        }
     }
 
     /// Bindings for a mode.
@@ -192,6 +247,19 @@ impl Keymap {
                 .iter()
                 .map(move |(chord, binding)| (mode.as_str(), chord.as_str(), binding))
         })
+    }
+
+    /// Reject bindings that are neither registered nor assigned to a later WP.
+    pub fn validate_commands(&self, registry: &CommandRegistry) -> Result<(), CoreError> {
+        for (mode, chord, binding) in self.iter() {
+            if registry.get_str(&binding.cmd).is_err() && deferred::owner(&binding.cmd).is_none() {
+                return Err(error::keymap(format!(
+                    "unowned command {} for {mode} chord {chord}",
+                    binding.cmd
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Reset pending chord / count.
@@ -231,11 +299,13 @@ impl Keymap {
             let count = if self.count == 0 { 1 } else { self.count };
             let cmd = binding.cmd.clone();
             let mut args = binding.args.clone();
-            if count > 1 {
-                if let Value::Object(map) = &mut args {
-                    map.insert("count".into(), Value::from(count));
-                } else if args.is_null() {
-                    args = serde_json::json!({"count": count});
+            if self.count > 0 && accepts_count_argument(&cmd) {
+                match &mut args {
+                    Value::Null => args = serde_json::json!({"count": count}),
+                    Value::Object(fields) => {
+                        fields.insert("count".into(), Value::from(count));
+                    }
+                    _ => {}
                 }
             }
             self.reset_pending();
@@ -248,11 +318,75 @@ impl Keymap {
             self.pending = candidate;
             return KeyOutcome::Pending;
         }
-        if !self.pending.is_empty() {
-            self.reset_pending();
-        }
+        self.reset_pending();
         KeyOutcome::Unbound
     }
+}
+
+fn accepts_count_argument(command: &str) -> bool {
+    command.starts_with("nav.")
+        || command.starts_with("sel.")
+        || matches!(command, "sheet.next" | "sheet.prev")
+}
+
+fn read_bounded(path: &Path) -> Result<String, CoreError> {
+    let file = std::fs::File::open(path)
+        .map_err(|err| error::keymap(format!("{}: {err}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_KEYMAP_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| error::keymap(format!("{}: {err}", path.display())))?;
+    if bytes.len() as u64 > MAX_KEYMAP_BYTES {
+        return Err(error::keymap(format!(
+            "{} exceeds the {MAX_KEYMAP_BYTES}-byte keymap limit",
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes)
+        .map_err(|err| error::keymap(format!("{} is not UTF-8: {err}", path.display())))
+}
+
+fn parse_overlay(text: &str) -> Result<OverlayFile, CoreError> {
+    toml::from_str(text).map_err(|err| error::keymap(format!("keymap overlay toml: {err}")))
+}
+
+fn model_name(model: KeyModel) -> &'static str {
+    match model {
+        KeyModel::Classic => "classic",
+        KeyModel::Modal => "modal",
+    }
+}
+
+fn parse_tables(
+    bindings: toml::Value,
+    model: KeyModel,
+    leader: Option<&str>,
+) -> Result<BTreeMap<String, IndexMap<String, Binding>>, CoreError> {
+    let mut tables = BTreeMap::new();
+    match bindings {
+        toml::Value::Table(map) if model == KeyModel::Classic => {
+            tables.insert(
+                "classic".into(),
+                parse_table(&toml::Value::Table(map), leader)?,
+            );
+        }
+        toml::Value::Table(map) => {
+            for (mode, value) in map {
+                if !matches!(mode.as_str(), "normal" | "insert" | "visual" | "command") {
+                    return Err(error::keymap(format!(
+                        "unknown modal bindings table {mode}"
+                    )));
+                }
+                tables.insert(mode, parse_table(&value, leader)?);
+            }
+        }
+        other => {
+            return Err(error::keymap(format!(
+                "bindings must be a table, got {other}"
+            )));
+        }
+    }
+    Ok(tables)
 }
 
 /// Result of [`Keymap::dispatch`].
@@ -297,7 +431,11 @@ fn parse_table(
                     .get("cmd")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| error::keymap(format!("{chord}: missing cmd")))?;
-                let args = t.get("args").map(toml_to_json).unwrap_or(Value::Null);
+                let args = t
+                    .get("args")
+                    .map(toml_to_json)
+                    .transpose()?
+                    .unwrap_or(Value::Null);
                 Binding {
                     cmd: cmd.to_string(),
                     args,
@@ -348,36 +486,60 @@ fn normalize_chord(raw: &str) -> String {
     if raw.eq_ignore_ascii_case("<leader>") {
         return "<leader>".into();
     }
-    raw.split('+')
-        .map(|p| {
-            let t = p.trim();
-            match t.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" | "c" => "Ctrl".into(),
-                "alt" | "a" | "mod1" => "Alt".into(),
-                "shift" | "s" => "Shift".into(),
-                "space" => "Space".into(),
-                "esc" | "escape" => "Esc".into(),
-                "return" => "Enter".into(),
-                "pgup" | "pageup" => "PgUp".into(),
-                "pgdn" | "pagedown" => "PgDn".into(),
-                other => {
-                    if other.starts_with('f')
-                        && other.len() > 1
-                        && other[1..].bytes().all(|b| b.is_ascii_digit())
-                    {
-                        format!("F{}", &other[1..])
-                    } else {
-                        t.to_string()
-                    }
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("+")
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut keys = Vec::new();
+    let parts = raw.split('+').collect::<Vec<_>>();
+    for (index, part) in parts.iter().enumerate() {
+        let token = part.trim();
+        let modifier = index + 1 < parts.len();
+        match (modifier, token.to_ascii_lowercase().as_str()) {
+            (true, "ctrl" | "control" | "c") => ctrl = true,
+            (true, "alt" | "a" | "mod1") => alt = true,
+            (true, "shift" | "s") => shift = true,
+            _ => keys.push(normalize_key(token)),
+        }
+    }
+    let mut out = String::new();
+    if ctrl {
+        out.push_str("Ctrl+");
+    }
+    if alt {
+        out.push_str("Alt+");
+    }
+    if shift {
+        out.push_str("Shift+");
+    }
+    let mut key = keys.join("+");
+    if (ctrl || alt) && key.len() == 1 && key.is_ascii() {
+        key.make_ascii_uppercase();
+    }
+    out.push_str(&key);
+    out
 }
 
-fn toml_to_json(v: &toml::Value) -> Value {
-    serde_json::to_value(v).unwrap_or(Value::Null)
+fn normalize_key(token: &str) -> String {
+    match token.to_ascii_lowercase().as_str() {
+        "space" => "Space".into(),
+        "esc" | "escape" => "Esc".into(),
+        "return" => "Enter".into(),
+        "pgup" | "pageup" => "PgUp".into(),
+        "pgdn" | "pagedown" => "PgDn".into(),
+        other
+            if other.starts_with('f')
+                && other.len() > 1
+                && other[1..].bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            format!("F{}", &other[1..])
+        }
+        _ => token.to_string(),
+    }
+}
+
+fn toml_to_json(v: &toml::Value) -> Result<Value, CoreError> {
+    serde_json::to_value(v)
+        .map_err(|err| error::keymap(format!("keymap arguments are not valid JSON: {err}")))
 }
 
 /// True when `id` is registered or listed in the deferred table.

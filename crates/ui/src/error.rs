@@ -16,3 +16,8 @@ pub fn edit(message: impl Into<String>) -> CoreError {
 pub fn session(message: impl Into<String>) -> CoreError {
     CoreError::new("ui.session", message)
 }
+
+/// Clipboard size/encoding error.
+pub fn clipboard(message: impl Into<String>) -> CoreError {
+    CoreError::new("ui.clipboard", message)
+}

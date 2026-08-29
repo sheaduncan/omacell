@@ -66,6 +66,7 @@ impl KeyEvent {
     #[must_use]
     pub fn chord(&self) -> String {
         let named = !matches!(self.code, KeyCode::Char(_));
+        let modified_char = !named && (self.ctrl || self.alt);
         let mut out = String::new();
         if self.ctrl {
             out.push_str("Ctrl+");
@@ -73,11 +74,12 @@ impl KeyEvent {
         if self.alt {
             out.push_str("Alt+");
         }
-        if self.shift && named {
+        if self.shift && (named || modified_char) {
             out.push_str("Shift+");
         }
         match self.code {
             KeyCode::Char(' ') | KeyCode::Space => out.push_str("Space"),
+            KeyCode::Char(c) if modified_char => out.push(c.to_ascii_uppercase()),
             KeyCode::Char(c) => out.push(c),
             KeyCode::F(n) => {
                 out.push('F');

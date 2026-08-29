@@ -1,7 +1,10 @@
 //! Clipboard encode/decode (F-5.6) over WP-08 helpers.
 
 use omacell_core::error::CoreError;
-use omacell_io::csv::{ClipboardFormat, ClipboardTable, parse_clipboard};
+use omacell_io::csv::{
+    ClipboardFormat, ClipboardTable, MAX_CLIPBOARD_BYTES, MAX_CLIPBOARD_CELLS, MAX_CLIPBOARD_ROWS,
+    MAX_FIELD_BYTES, parse_clipboard,
+};
 use serde::{Deserialize, Serialize};
 
 /// Internal MIME payload.
@@ -24,20 +27,34 @@ pub struct ClipboardPayload {
 
 impl ClipboardPayload {
     /// Encode a row-major grid of display strings.
-    #[must_use]
-    pub fn from_rows(rows: &[Vec<String>]) -> Self {
-        let tsv = join_rows(rows, '\t');
-        let csv = csv_escape(rows);
+    pub fn from_rows(rows: &[Vec<String>]) -> Result<Self, CoreError> {
+        validate_rows(rows)?;
+        let tsv = delimited(rows, '\t');
+        let csv = delimited(rows, ',');
         let html = html_table(rows);
         let markdown = markdown_table(rows);
-        let internal = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into());
-        Self {
+        let internal =
+            serde_json::to_string(&rows).map_err(|err| crate::error::clipboard(err.to_string()))?;
+        for (format, payload) in [
+            ("TSV", &tsv),
+            ("CSV", &csv),
+            ("HTML", &html),
+            ("Markdown", &markdown),
+            ("internal", &internal),
+        ] {
+            if payload.len() > MAX_CLIPBOARD_BYTES {
+                return Err(crate::error::clipboard(format!(
+                    "{format} clipboard payload exceeds {MAX_CLIPBOARD_BYTES} bytes"
+                )));
+            }
+        }
+        Ok(Self {
             tsv,
             csv,
             html,
             markdown,
             internal,
-        }
+        })
     }
 
     /// Decode pasted text using WP-08 sniffing.
@@ -46,26 +63,22 @@ impl ClipboardPayload {
     }
 }
 
-fn join_rows(rows: &[Vec<String>], delim: char) -> String {
+fn delimited(rows: &[Vec<String>], delim: char) -> String {
     rows.iter()
-        .map(|r| r.join(&delim.to_string()))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn csv_escape(rows: &[Vec<String>]) -> String {
-    rows.iter()
-        .map(|r| {
-            r.iter()
-                .map(|c| {
-                    if c.contains([',', '"', '\n']) {
-                        format!("\"{}\"", c.replace('"', "\"\""))
+        .map(|row| {
+            row.iter()
+                .map(|cell| {
+                    if cell
+                        .chars()
+                        .any(|ch| ch == delim || matches!(ch, '"' | '\r' | '\n'))
+                    {
+                        format!("\"{}\"", cell.replace('"', "\"\""))
                     } else {
-                        c.clone()
+                        cell.clone()
                     }
                 })
                 .collect::<Vec<_>>()
-                .join(",")
+                .join(&delim.to_string())
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -98,9 +111,63 @@ fn markdown_table(rows: &[Vec<String>]) -> String {
     for row in rows {
         let mut r = row.clone();
         r.resize(cols, String::new());
-        lines.push(format!("|{}|", r.join("|")));
+        lines.push(format!(
+            "|{}|",
+            r.iter()
+                .map(|cell| escape_markdown(cell))
+                .collect::<Vec<_>>()
+                .join("|")
+        ));
     }
     lines.join("\n")
+}
+
+fn escape_markdown(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace("\r\n", "<br>")
+        .replace(['\r', '\n'], "<br>")
+}
+
+fn validate_rows(rows: &[Vec<String>]) -> Result<(), CoreError> {
+    if rows.len() > MAX_CLIPBOARD_ROWS {
+        return Err(crate::error::clipboard(format!(
+            "clipboard has more than {MAX_CLIPBOARD_ROWS} rows"
+        )));
+    }
+    let mut cells = 0_usize;
+    let mut bytes = 0_usize;
+    for row in rows {
+        cells = cells
+            .checked_add(row.len())
+            .ok_or_else(|| crate::error::clipboard("clipboard cell count overflow"))?;
+        if cells > MAX_CLIPBOARD_CELLS {
+            return Err(crate::error::clipboard(format!(
+                "clipboard has more than {MAX_CLIPBOARD_CELLS} cells"
+            )));
+        }
+        for field in row {
+            if field.len() > MAX_FIELD_BYTES {
+                return Err(crate::error::clipboard(format!(
+                    "clipboard field is {} bytes; maximum is {MAX_FIELD_BYTES}",
+                    field.len()
+                )));
+            }
+            bytes = bytes
+                .checked_add(field.len().saturating_add(1))
+                .ok_or_else(|| crate::error::clipboard("clipboard byte count overflow"))?;
+            if bytes > MAX_CLIPBOARD_BYTES {
+                return Err(crate::error::clipboard(format!(
+                    "clipboard source exceeds {MAX_CLIPBOARD_BYTES} bytes"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn escape(s: &str) -> String {

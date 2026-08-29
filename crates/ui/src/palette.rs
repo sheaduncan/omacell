@@ -61,13 +61,25 @@ impl Palette {
 
     /// Fuzzy-rank `commands` for `query`. Recents sort first on an empty query.
     pub fn rank(&mut self, commands: &[CommandJson], query: &str) {
+        self.rank_with_ai(commands, query, None);
+    }
+
+    /// Rank with an optional natural-language planning provider.
+    pub fn rank_with_ai(
+        &mut self,
+        commands: &[CommandJson],
+        query: &str,
+        ai: Option<&dyn AiPlanProvider>,
+    ) {
         self.query = query.to_string();
         if let Some(rest) = query.strip_prefix('?') {
             self.hits.clear();
-            self.prompt = Some(if rest.trim().is_empty() {
+            let request = rest.trim();
+            self.prompt = Some(if request.is_empty() {
                 "AI plans arrive in WP-23".into()
             } else {
-                format!("AI plan for {rest:?} arrives in WP-23")
+                ai.and_then(|provider| provider.plan(request))
+                    .unwrap_or_else(|| format!("AI plan for {request:?} arrives in WP-23"))
             });
             return;
         }
@@ -103,6 +115,33 @@ impl Palette {
             hits.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.id.cmp(&b.id)));
         }
         self.hits = hits;
+    }
+
+    /// Build an inline prompt from a command's JSON Schema required fields.
+    pub fn prompt_for(&mut self, command: &CommandJson) {
+        let required = command
+            .arg_schema
+            .get("required")
+            .and_then(serde_json::Value::as_array);
+        let properties = command
+            .arg_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object);
+        let mut fields = required
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(|name| {
+                let kind = properties
+                    .and_then(|props| props.get(name))
+                    .and_then(|schema| schema.get("type"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("value");
+                format!("{name}: {kind}")
+            })
+            .collect::<Vec<_>>();
+        fields.sort();
+        self.prompt = (!fields.is_empty()).then(|| fields.join(", "));
     }
 }
 
