@@ -11,3 +11,5 @@
 .env
 *.profraw
 /benches/baseline-local
+**/tests/snapshots/**/*.diff.png
+**/tests/snapshots/**/*.new.png

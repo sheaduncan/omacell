@@ -62,10 +62,27 @@ fn stubs_exit_three_with_hint() {
             .stderr(predicate::str::contains("arrives in WP-"));
     }
     let (_home, mut cmd) = home();
-    cmd.arg("book.xlsx")
+    cmd.env_remove("WAYLAND_DISPLAY")
+        .env_remove("DISPLAY")
+        .arg("book.xlsx")
         .assert()
-        .code(3)
-        .stderr(predicate::str::contains("WP-16"));
+        .code(1)
+        .stderr(predicate::str::contains(
+            "requires a Wayland or X11 display",
+        ));
+}
+
+#[test]
+fn gui_rejects_ambiguous_or_ignored_arguments_before_display_setup() {
+    for args in [vec!["one.xlsx", "two.xlsx"], vec!["--dry-run"]] {
+        let (_home, mut cmd) = home();
+        cmd.env_remove("WAYLAND_DISPLAY")
+            .env_remove("DISPLAY")
+            .args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("cli.usage"));
+    }
 }
 
 #[test]
