@@ -24,7 +24,7 @@ use omacell_core::workbook::{CalcMode, DateSystem, Workbook};
 use super::XlsxDocument;
 use super::opc::{OpcPackage, Relationship, open_package};
 use super::warnings::FileWarnings;
-use super::xml::{XmlEvent, XmlReader, attr};
+use super::xml::{XmlEvent, XmlReader, attr, decode_ooxml_text};
 use crate::error;
 
 const REL_WS: &str =
@@ -271,7 +271,7 @@ fn parse_workbook_xml(bytes: &[u8], wb: &mut Workbook) -> Result<WorkbookMeta, C
                         name: nm,
                         local_sheet_index: attr(&name_attrs, "localSheetId")
                             .and_then(|s| s.parse::<usize>().ok()),
-                        referent: parse_name_ref(name_text.trim()),
+                        referent: parse_name_ref(name_text.trim(), wb),
                         comment: attr(&name_attrs, "comment").map(ToOwned::to_owned),
                     });
                 }
@@ -290,7 +290,7 @@ fn parse_workbook_xml(bytes: &[u8], wb: &mut Workbook) -> Result<WorkbookMeta, C
     })
 }
 
-fn parse_name_ref(text: &str) -> NameReferent {
+fn parse_name_ref(text: &str, wb: &mut Workbook) -> NameReferent {
     if let Ok(parsed) = parse_a1(text) {
         match parsed.kind {
             RefKind::Range(r) => return NameReferent::Range(r),
@@ -298,6 +298,22 @@ fn parse_name_ref(text: &str) -> NameReferent {
                 return NameReferent::Range(RangeRef::from_corners(c, c));
             }
         }
+    }
+    if let Some(quoted) = text.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+        let value = quoted.replace("\"\"", "\"");
+        return NameReferent::Constant(Value::Text(wb.intern_text(&value)));
+    }
+    if text.eq_ignore_ascii_case("TRUE") {
+        return NameReferent::Constant(Value::Bool(true));
+    }
+    if text.eq_ignore_ascii_case("FALSE") {
+        return NameReferent::Constant(Value::Bool(false));
+    }
+    if let Some(error) = ErrorKind::from_display(text) {
+        return NameReferent::Constant(Value::Error(error));
+    }
+    if let Some(number) = text.parse::<f64>().ok().filter(|number| number.is_finite()) {
+        return NameReferent::Constant(Value::Number(number));
     }
     NameReferent::Formula(text.to_string())
 }
@@ -374,7 +390,7 @@ fn load_sst(
                     });
                 }
             }
-            XmlEvent::Text(t) if in_t => text.push_str(&t),
+            XmlEvent::Text(t) if in_t => text.push_str(&decode_ooxml_text(&t)),
             _ => {}
         }
     }
@@ -391,7 +407,7 @@ fn apply_font_tag(font: &mut Font, name: &str, attrs: &[(String, String)]) {
                 font.size_pt = v;
             }
         }
-        "name" => {
+        "name" | "rFont" => {
             if let Some(v) = attr(attrs, "val") {
                 font.name = v.to_string();
             }
@@ -529,6 +545,18 @@ fn load_styles(
                         GradientKind::Linear
                     },
                     degree: attr(&attrs, "degree")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    left: attr(&attrs, "left")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    right: attr(&attrs, "right")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    top: attr(&attrs, "top")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0),
+                    bottom: attr(&attrs, "bottom")
                         .and_then(|s| s.parse().ok())
                         .unwrap_or(0.0),
                     ..GradientFill::default()
@@ -937,9 +965,16 @@ fn load_sheet(
             &part.bytes,
         )?;
         match ev {
+            XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
+                if name == "tabColor" =>
+            {
+                wb.set_tab_color(id, Some(parse_color(&attrs, None)))?;
+            }
             XmlEvent::Start { name, .. } if name == "sheetData" => in_sheet_data = true,
             XmlEvent::End { name } if name == "sheetData" => in_sheet_data = false,
-            XmlEvent::Start { name, attrs } if in_sheet_data && name == "row" => {
+            XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
+                if in_sheet_data && name == "row" =>
+            {
                 if let Some(ridx) = attr(&attrs, "r").and_then(|s| s.parse::<u32>().ok()) {
                     if ridx == 0 || ridx > MAX_ROWS {
                         return Err(error::xlsx_limit(format!(
@@ -1141,6 +1176,18 @@ fn load_sheet(
                     view.show_formulas = true;
                     wb.set_sheet_view(id, view)?;
                 }
+                if let Some(cell) =
+                    attr(&attrs, "topLeftCell").and_then(|value| parse_a1_cell(value).ok())
+                {
+                    let mut view = wb
+                        .sheet(id)
+                        .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
+                        .view
+                        .clone();
+                    view.scroll_row = cell.row;
+                    view.scroll_col = cell.col;
+                    wb.set_sheet_view(id, view)?;
+                }
             }
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "selection" =>
@@ -1326,7 +1373,7 @@ fn commit_cell(
         "inlineStr" | "str" => {
             let text = if t == "str" { v } else { inline };
             if !text.is_empty() {
-                wb.set_text(sheet, cell.row, cell.col, text)?;
+                wb.set_text(sheet, cell.row, cell.col, &decode_ooxml_text(text))?;
             }
         }
         "b" => {
@@ -1395,7 +1442,8 @@ fn set_formula_cached_value(
         "e" => Value::Error(ErrorKind::from_display(value.trim()).unwrap_or(ErrorKind::Value)),
         "str" | "inlineStr" => {
             let text = if cell_type == "str" { value } else { inline };
-            let id = wb.intern_text(text);
+            let decoded = decode_ooxml_text(text);
+            let id = wb.intern_text(&decoded);
             held_text = Some(id);
             Value::Text(id)
         }
@@ -1543,6 +1591,8 @@ fn load_tables(
         let mut rf = String::new();
         let mut header = true;
         let mut totals = false;
+        let mut banded_rows = true;
+        let mut banded_cols = false;
         let mut cols: Vec<String> = Vec::new();
         while let Some(ev) = r.next()? {
             match ev {
@@ -1564,6 +1614,12 @@ fn load_tables(
                 {
                     cols.push(attr(&attrs, "name").unwrap_or("Column").to_string());
                 }
+                XmlEvent::Empty { name: n, attrs } | XmlEvent::Start { name: n, attrs }
+                    if n == "tableStyleInfo" =>
+                {
+                    banded_rows = attr(&attrs, "showRowStripes").is_none_or(truthy);
+                    banded_cols = attr(&attrs, "showColumnStripes").is_some_and(truthy);
+                }
                 _ => {}
             }
         }
@@ -1583,6 +1639,8 @@ fn load_tables(
             );
             table.has_header = header;
             table.has_totals = totals;
+            table.banded_rows = banded_rows;
+            table.banded_cols = banded_cols;
             if !cols.is_empty() {
                 table.columns = cols.into_iter().map(|name| TableColumn { name }).collect();
             }
@@ -1644,7 +1702,10 @@ fn load_comments(
                 XmlEvent::End { name } if name == "comment" => {
                     in_comment = false;
                     if let Ok(cell) = parse_a1_cell(&comment_ref) {
-                        let author = authors.get(comment_author).cloned();
+                        let author = authors
+                            .get(comment_author)
+                            .filter(|author| !author.is_empty())
+                            .cloned();
                         let _ = wb.set_note(
                             sheet,
                             cell.row,

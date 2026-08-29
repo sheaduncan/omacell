@@ -7,17 +7,24 @@ use indexmap::IndexMap;
 use omacell_core::addr::col_to_letters;
 use omacell_core::error::CoreError;
 use omacell_core::geometry::DEFAULT_COL_PX;
+use omacell_core::intern::{Interners, RichTextRun};
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::sheet::{Sheet, SheetVisibility};
 use omacell_core::storage::CellSlot;
-use omacell_core::style::{BorderStyle, Color, Fill, Font, PatternType, Style, StyleId, Underline};
+use omacell_core::style::{
+    BorderStyle, Color, Fill, Font, GradientKind, PatternType, Style, StyleId, Underline,
+};
 use omacell_core::tables::Table;
-use omacell_core::value::Value;
+use omacell_core::value::{StrId, Value};
 use omacell_core::workbook::{CalcMode, DateSystem, Workbook};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 use super::WorksheetExtras;
-use super::opc::OpcPackage;
+use super::opc::{
+    MAX_ENTRY_BYTES, MAX_PACKAGE_BYTES, MAX_UNCOMPRESSED_TOTAL, MAX_ZIP_ENTRIES, OpcPackage,
+    sanitize_path,
+};
 use super::{XlsxDocument, xml};
 use crate::error;
 
@@ -49,6 +56,7 @@ const CT_SST: &str =
 const CT_STY: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 const CT_TBL: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 const CT_CMT: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 
 /// Encode `doc` as `.xlsx` bytes (modeled parts regenerated, L3 copied).
 pub fn save_bytes(doc: &XlsxDocument) -> Result<Vec<u8>, CoreError> {
@@ -71,7 +79,12 @@ pub(crate) fn encode(
         return Err(error::xlsx_write("workbook has no sheets"));
     }
 
-    let mut sst: IndexMap<String, u32> = IndexMap::new();
+    if !sheets.iter().any(|sheet| sheet.visibility.is_visible()) {
+        return Err(error::xlsx_write("workbook has no visible sheets"));
+    }
+
+    let mut sst: IndexMap<StrId, u32> = IndexMap::new();
+    let mut sst_count = 0u64;
     let mut fonts: Vec<Font> = vec![Font::default()];
     let mut fills: Vec<Fill> = vec![
         Fill::None,
@@ -89,13 +102,17 @@ pub(crate) fn encode(
     for sheet in &sheets {
         for (_, _, slot) in sheet.store.iter() {
             if let Value::Text(id) = slot.value
-                && let Some(text) = intern.strings.get(id)
-                && !sst.contains_key(text)
+                && slot.formula.is_none()
             {
-                let i = sst.len() as u32;
-                sst.insert(text.to_string(), i);
+                sst_count = sst_count.saturating_add(1);
+                if !sst.contains_key(&id) {
+                    let i = u32::try_from(sst.len())
+                        .map_err(|_| error::xlsx_write("shared string table is too large"))?;
+                    sst.insert(id, i);
+                }
             }
             if let Some(style) = intern.styles.get(slot.style) {
+                validate_style(style)?;
                 xf_index.entry(style.clone()).or_insert_with(|| {
                     ensure_font(&mut fonts, &style.font);
                     ensure_fill(&mut fills, &style.fill);
@@ -113,7 +130,10 @@ pub(crate) fn encode(
     let mut parts: IndexMap<String, Vec<u8>> = IndexMap::new();
     let mut overrides: Vec<(String, String)> = Vec::new();
 
-    parts.insert("xl/sharedStrings.xml".into(), sst_xml(&sst, intern));
+    parts.insert(
+        "xl/sharedStrings.xml".into(),
+        sst_xml(&sst, intern, sst_count)?,
+    );
     overrides.push(("/xl/sharedStrings.xml".into(), CT_SST.into()));
     parts.insert(
         "xl/styles.xml".into(),
@@ -168,7 +188,14 @@ pub(crate) fn encode(
                 continue;
             }
             if is_rewritten(&rel.target) {
-                continue;
+                let custom_is_present = rel.target.to_ascii_lowercase().starts_with("xl/omacell/")
+                    && wb
+                        .custom_parts
+                        .keys()
+                        .any(|name| name.eq_ignore_ascii_case(&rel.target));
+                if !custom_is_present {
+                    continue;
+                }
             }
             let r = format!("rId{rid}");
             rid += 1;
@@ -185,12 +212,26 @@ pub(crate) fn encode(
         "xl/workbook.xml".into(),
         workbook_xml(wb, intern, &sheets, &sheet_rids),
     );
-    overrides.push(("/xl/workbook.xml".into(), CT_WB.into()));
+    let workbook_content_type = package
+        .and_then(|pkg| pkg.workbook_part().ok())
+        .and_then(|part| part.content_type.clone())
+        .unwrap_or_else(|| CT_WB.into());
+    overrides.push(("/xl/workbook.xml".into(), workbook_content_type));
     parts.insert("xl/_rels/workbook.xml.rels".into(), rels_xml(&wb_rels));
 
     for (name, bytes) in &wb.custom_parts {
+        let name = custom_part_name(name)?;
+        if contains_part(&parts, &name) {
+            return Err(error::xlsx_write(format!(
+                "duplicate generated OPC part {name:?}"
+            )));
+        }
+        let content_type = package
+            .and_then(|pkg| pkg.part(&name))
+            .and_then(|part| part.content_type.clone())
+            .unwrap_or_else(|| "application/json".into());
         parts.insert(name.clone(), bytes.clone());
-        overrides.push((format!("/{name}"), "application/json".into()));
+        overrides.push((format!("/{name}"), content_type));
     }
 
     if let Some(pkg) = package {
@@ -198,7 +239,7 @@ pub(crate) fn encode(
             if is_rewritten(name) {
                 continue;
             }
-            if parts.contains_key(name) {
+            if contains_part(&parts, name) {
                 continue;
             }
             parts.insert(name.clone(), part.bytes.clone());
@@ -261,6 +302,27 @@ fn workbook_rel_target(resolved: &str) -> String {
 }
 
 fn zip_parts(parts: &IndexMap<String, Vec<u8>>) -> Result<Vec<u8>, CoreError> {
+    if parts.len() > MAX_ZIP_ENTRIES {
+        return Err(error::xlsx_write(format!(
+            "output has {} entries; maximum is {MAX_ZIP_ENTRIES}",
+            parts.len()
+        )));
+    }
+    let mut total = 0u64;
+    for (name, data) in parts {
+        let len = data.len() as u64;
+        if len > MAX_ENTRY_BYTES {
+            return Err(error::xlsx_write(format!(
+                "output part {name} is {len} bytes; maximum is {MAX_ENTRY_BYTES}"
+            )));
+        }
+        total = total.saturating_add(len);
+        if total > MAX_UNCOMPRESSED_TOTAL {
+            return Err(error::xlsx_write(format!(
+                "uncompressed output exceeds {MAX_UNCOMPRESSED_TOTAL} bytes"
+            )));
+        }
+    }
     let mut buf = Cursor::new(Vec::new());
     {
         let mut z = ZipWriter::new(&mut buf);
@@ -276,7 +338,36 @@ fn zip_parts(parts: &IndexMap<String, Vec<u8>>) -> Result<Vec<u8>, CoreError> {
         }
         z.finish().map_err(|e| error::xlsx_write(e.to_string()))?;
     }
-    Ok(buf.into_inner())
+    let bytes = buf.into_inner();
+    if bytes.len() as u64 > MAX_PACKAGE_BYTES {
+        return Err(error::xlsx_write(format!(
+            "compressed output is {} bytes; maximum is {MAX_PACKAGE_BYTES}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
+}
+
+fn contains_part(parts: &IndexMap<String, Vec<u8>>, name: &str) -> bool {
+    parts
+        .keys()
+        .any(|existing| existing.eq_ignore_ascii_case(name))
+}
+
+fn custom_part_name(name: &str) -> Result<String, CoreError> {
+    let sanitized = sanitize_path(name)?;
+    let normalized = sanitized.replace('\\', "/");
+    if normalized != name || !normalized.to_ascii_lowercase().starts_with("xl/omacell/") {
+        return Err(error::xlsx_write(format!(
+            "custom part {name:?} must be below xl/omacell/"
+        )));
+    }
+    if normalized.ends_with('/') {
+        return Err(error::xlsx_write(format!(
+            "custom part {name:?} must name a file"
+        )));
+    }
+    Ok(normalized)
 }
 
 fn part_order(name: &str) -> u8 {
@@ -307,7 +398,8 @@ fn workbook_xml(
     }
     let active = sheets
         .iter()
-        .position(|sh| sh.id == wb.active_sheet())
+        .position(|sh| sh.id == wb.active_sheet() && sh.visibility.is_visible())
+        .or_else(|| sheets.iter().position(|sh| sh.visibility.is_visible()))
         .unwrap_or(0);
     s.push_str(&format!(
         r#"<bookViews><workbookView activeTab="{active}"/></bookViews>"#
@@ -344,8 +436,13 @@ fn workbook_xml(
                 omacell_core::names::NameReferent::Formula(f) => f.clone(),
                 omacell_core::names::NameReferent::Constant(v) => constant_name_text(intern, *v),
             };
+            let comment = n
+                .comment
+                .as_ref()
+                .map(|value| format!(r#" comment="{}""#, xml::escape(value)))
+                .unwrap_or_default();
             s.push_str(&format!(
-                r#"<definedName name="{}"{local}>{}</definedName>"#,
+                r#"<definedName name="{}"{local}{comment}>{}</definedName>"#,
                 xml::escape(&n.name),
                 xml::escape(&text)
             ));
@@ -376,29 +473,105 @@ fn constant_name_text(intern: &omacell_core::intern::Interners, v: Value) -> Str
     }
 }
 
-fn sst_xml(sst: &IndexMap<String, u32>, intern: &omacell_core::intern::Interners) -> Vec<u8> {
-    let _ = intern;
+fn sst_xml(
+    sst: &IndexMap<StrId, u32>,
+    intern: &Interners,
+    count: u64,
+) -> Result<Vec<u8>, CoreError> {
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="{NS}" count="{}" uniqueCount="{}">"#,
-        sst.len(),
+        count,
         sst.len()
     );
-    let mut items: Vec<(&String, &u32)> = sst.iter().collect();
+    let mut items: Vec<(&StrId, &u32)> = sst.iter().collect();
     items.sort_by_key(|(_, i)| *i);
-    for (text, _) in items {
+    for (id, _) in items {
+        let text = intern
+            .strings
+            .get(*id)
+            .ok_or_else(|| error::xlsx_write("shared string id disappeared"))?;
         s.push_str("<si>");
-        s.push_str(&t_elem(text));
+        if let Some(runs) = intern.strings.get_rich(*id) {
+            s.push_str(&rich_text_xml(text, runs)?);
+        } else {
+            s.push_str(&t_elem(text));
+        }
         s.push_str("</si>");
     }
     s.push_str("</sst>");
-    s.into_bytes()
+    Ok(s.into_bytes())
+}
+
+fn rich_text_xml(text: &str, runs: &[RichTextRun]) -> Result<String, CoreError> {
+    let mut out = String::new();
+    let mut cursor = 0usize;
+    for run in runs {
+        validate_font(&run.font)?;
+        validate_color(run.font.color)?;
+        let start = usize::try_from(run.start)
+            .map_err(|_| error::xlsx_write("rich-text run offset overflow"))?;
+        let len = usize::try_from(run.len)
+            .map_err(|_| error::xlsx_write("rich-text run length overflow"))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| error::xlsx_write("rich-text run range overflow"))?;
+        if start < cursor
+            || end > text.len()
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+        {
+            return Err(error::xlsx_write("invalid rich-text run range"));
+        }
+        if start > cursor {
+            push_rich_run(&mut out, &Font::default(), &text[cursor..start]);
+        }
+        if end > start {
+            push_rich_run(&mut out, &run.font, &text[start..end]);
+        }
+        cursor = end;
+    }
+    if cursor < text.len() {
+        push_rich_run(&mut out, &Font::default(), &text[cursor..]);
+    }
+    Ok(out)
+}
+
+fn push_rich_run(out: &mut String, font: &Font, text: &str) {
+    out.push_str("<r><rPr>");
+    if font.bold {
+        out.push_str("<b/>");
+    }
+    if font.italic {
+        out.push_str("<i/>");
+    }
+    if font.strike {
+        out.push_str("<strike/>");
+    }
+    match font.underline {
+        Underline::None => {}
+        Underline::Single => out.push_str("<u/>"),
+        Underline::Double => out.push_str(r#"<u val="double"/>"#),
+        Underline::SingleAccounting => out.push_str(r#"<u val="singleAccounting"/>"#),
+        Underline::DoubleAccounting => out.push_str(r#"<u val="doubleAccounting"/>"#),
+    }
+    out.push_str(&format!(r#"<sz val="{}"/>"#, font.size_pt));
+    out.push_str(&color_xml(&font.color));
+    if !font.name.is_empty() {
+        out.push_str(&format!(r#"<rFont val="{}"/>"#, xml::escape(&font.name)));
+    }
+    out.push_str("</rPr>");
+    out.push_str(&t_elem(text));
+    out.push_str("</r>");
 }
 
 fn t_elem(text: &str) -> String {
     if text.starts_with(' ') || text.ends_with(' ') || text.contains('\n') || text.contains('\t') {
-        format!(r#"<t xml:space="preserve">{}</t>"#, xml::escape(text))
+        format!(
+            r#"<t xml:space="preserve">{}</t>"#,
+            xml::escape_ooxml_text(text)
+        )
     } else {
-        format!("<t>{}</t>", xml::escape(text))
+        format!("<t>{}</t>", xml::escape_ooxml_text(text))
     }
 }
 
@@ -595,15 +768,22 @@ fn fill_xml(f: &Fill) -> String {
             color_tag("bgColor", bg)
         ),
         Fill::Gradient(g) => {
-            let mut s = format!(r#"<fill><gradientFill degree="{}">"#, g.degree);
+            let attributes = match g.kind {
+                GradientKind::Linear => format!(r#" degree="{}""#, g.degree),
+                GradientKind::Path => format!(
+                    r#" type="path" left="{}" right="{}" top="{}" bottom="{}""#,
+                    g.left, g.right, g.top, g.bottom
+                ),
+            };
+            let mut s = format!("<fill><gradientFill{attributes}>");
             for stop in &g.stops {
+                let color = match stop.color {
+                    Color::Auto => r#"<color auto="1"/>"#.into(),
+                    _ => color_tag("color", &stop.color),
+                };
                 s.push_str(&format!(
-                    r#"<stop position="{}"><color rgb="{:08X}"/></stop>"#,
-                    stop.position,
-                    match stop.color {
-                        Color::Rgb { argb } => argb,
-                        _ => 0xFF00_0000,
-                    }
+                    r#"<stop position="{}">{}</stop>"#,
+                    stop.position, color
                 ));
             }
             s.push_str("</gradientFill></fill>");
@@ -699,12 +879,67 @@ fn ensure_fill(fills: &mut Vec<Fill>, fill: &Fill) {
     }
 }
 
+fn validate_style(style: &Style) -> Result<(), CoreError> {
+    validate_font(&style.font)?;
+    validate_color(style.font.color)?;
+    match &style.fill {
+        Fill::None => {}
+        Fill::Solid { fg } => validate_color(*fg)?,
+        Fill::Pattern { fg, bg, .. } => {
+            validate_color(*fg)?;
+            validate_color(*bg)?;
+        }
+        Fill::Gradient(gradient) => {
+            if !gradient.degree.is_finite()
+                || ![gradient.left, gradient.right, gradient.top, gradient.bottom]
+                    .iter()
+                    .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+            {
+                return Err(error::xlsx_write(
+                    "gradient geometry is not finite or in range",
+                ));
+            }
+            for stop in &gradient.stops {
+                if !stop.position.is_finite() || !(0.0..=1.0).contains(&stop.position) {
+                    return Err(error::xlsx_write("gradient stop is not finite or in range"));
+                }
+                validate_color(stop.color)?;
+            }
+        }
+    }
+    for side in [
+        style.border.left,
+        style.border.right,
+        style.border.top,
+        style.border.bottom,
+    ] {
+        validate_color(side.color)?;
+    }
+    Ok(())
+}
+
+fn validate_font(font: &Font) -> Result<(), CoreError> {
+    if !font.size_pt.is_finite() || font.size_pt <= 0.0 {
+        return Err(error::xlsx_write("font size is not finite and positive"));
+    }
+    Ok(())
+}
+
+fn validate_color(color: Color) -> Result<(), CoreError> {
+    if let Color::Theme { tint, .. } = color
+        && (!tint.is_finite() || !(-1.0..=1.0).contains(&tint))
+    {
+        return Err(error::xlsx_write("theme tint is not finite or in range"));
+    }
+    Ok(())
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn worksheet_xml(
     wb: &Workbook,
     sheet: &Sheet,
     extras: Option<&WorksheetExtras>,
-    sst: &IndexMap<String, u32>,
+    sst: &IndexMap<StrId, u32>,
     xf_index: &HashMap<Style, usize>,
     intern: &omacell_core::intern::Interners,
     sheet_ord: usize,
@@ -717,12 +952,40 @@ fn worksheet_xml(
     ),
     CoreError,
 > {
+    if !sheet.comments.is_empty() {
+        return Err(error::xlsx_write(
+            "threaded comments cannot be regenerated before WP-17",
+        ));
+    }
+    if !sheet.view.zoom.is_finite() || sheet.view.zoom <= 0.0 {
+        return Err(error::xlsx_write("sheet zoom is not finite and positive"));
+    }
+    if sheet.view.freeze.rows >= MAX_ROWS
+        || u32::from(sheet.view.freeze.cols) >= u32::from(MAX_COLS)
+        || sheet.view.scroll_row >= MAX_ROWS
+        || u32::from(sheet.view.scroll_col) >= u32::from(MAX_COLS)
+        || sheet.view.selection.start.row >= MAX_ROWS
+        || u32::from(sheet.view.selection.start.col) >= u32::from(MAX_COLS)
+        || sheet.view.selection.end.row >= MAX_ROWS
+        || u32::from(sheet.view.selection.end.col) >= u32::from(MAX_COLS)
+    {
+        return Err(error::xlsx_write("sheet view is outside the Excel grid"));
+    }
+    if let Some(color) = sheet.tab_color {
+        validate_color(color)?;
+    }
     let mut rels: Vec<(String, String, String, bool)> = Vec::new();
     let mut extra_parts = Vec::new();
     let mut rid = 1u32;
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="{NS}" xmlns:r="{NS_R}">"#
     );
+    if let Some(color) = sheet.tab_color {
+        s.push_str(&format!(
+            "<sheetPr>{}</sheetPr>",
+            color_tag("tabColor", &color)
+        ));
+    }
     s.push_str(&sheet_views_xml(sheet));
     s.push_str(&cols_xml(sheet));
     s.push_str("<sheetData>");
@@ -761,7 +1024,16 @@ fn worksheet_xml(
     }
     s.push_str("</sheetData>");
     if sheet.protection.enabled {
-        s.push_str(r#"<sheetProtection sheet="1"/>"#);
+        let password = sheet
+            .protection
+            .password
+            .as_deref()
+            .map(std::str::from_utf8)
+            .transpose()
+            .map_err(|_| error::xlsx_write("sheet protection verifier is not UTF-8"))?
+            .map(|value| format!(r#" password="{}""#, xml::escape(value)))
+            .unwrap_or_default();
+        s.push_str(&format!(r#"<sheetProtection sheet="1"{password}/>"#));
     }
     if let Some(ex) = extras
         && let Some(af) = &ex.autofilter
@@ -780,10 +1052,15 @@ fn worksheet_xml(
     }
     if let Some(ex) = extras {
         for blob in &ex.conditional_formatting_xml {
-            s.push_str(std::str::from_utf8(blob).unwrap_or(""));
+            push_fragment(
+                &mut s,
+                blob,
+                "conditional formatting",
+                &["conditionalFormatting"],
+            )?;
         }
         for blob in &ex.data_validations_xml {
-            s.push_str(std::str::from_utf8(blob).unwrap_or(""));
+            push_fragment(&mut s, blob, "data validation", &["dataValidations"])?;
         }
     }
     if !sheet.hyperlinks.is_empty() {
@@ -796,29 +1073,53 @@ fn worksheet_xml(
                 col_to_letters(*col).unwrap_or_else(|_| "A".into()),
                 row + 1
             );
-            let id = format!("rId{rid}");
-            rid += 1;
-            rels.push((id.clone(), REL_HYPER.into(), link.target.clone(), true));
             let display = link
                 .display
                 .as_ref()
                 .map(|d| format!(r#" display="{}""#, xml::escape(d)))
                 .unwrap_or_default();
-            s.push_str(&format!(
-                r#"<hyperlink ref="{addr}" r:id="{id}"{display}/>"#
-            ));
+            let tooltip = link
+                .tooltip
+                .as_ref()
+                .map(|value| format!(r#" tooltip="{}""#, xml::escape(value)))
+                .unwrap_or_default();
+            if is_internal_hyperlink(&link.target) {
+                s.push_str(&format!(
+                    r#"<hyperlink ref="{addr}" location="{}"{tooltip}{display}/>"#,
+                    xml::escape(&link.target)
+                ));
+            } else {
+                let id = format!("rId{rid}");
+                rid += 1;
+                rels.push((id.clone(), REL_HYPER.into(), link.target.clone(), true));
+                s.push_str(&format!(
+                    r#"<hyperlink ref="{addr}" r:id="{id}"{tooltip}{display}/>"#
+                ));
+            }
         }
         s.push_str("</hyperlinks>");
     }
     if let Some(ex) = extras {
         for blob in &ex.print_xml {
-            s.push_str(std::str::from_utf8(blob).unwrap_or(""));
+            push_fragment(
+                &mut s,
+                blob,
+                "print settings",
+                &[
+                    "pageSetup",
+                    "pageMargins",
+                    "printOptions",
+                    "headerFooter",
+                    "rowBreaks",
+                    "colBreaks",
+                ],
+            )?;
         }
     }
     let mut drawing_xml = String::new();
     let mut vml_xml = String::new();
     if let Some(pkg) = package
-        && let Ok(orig) = original_sheet_rels(pkg, sheet_ord)
+        && let Ok(orig) = original_sheet_rels(pkg, &sheet.name, sheet_ord)
     {
         for rel in orig {
             if rel.rel_type == REL_HYPER
@@ -842,29 +1143,45 @@ fn worksheet_xml(
             rels.push((id, rel.rel_type, target, rel.external));
         }
     }
+    if !sheet.notes.is_empty() && vml_xml.is_empty() {
+        let id = format!("rId{rid}");
+        rid += 1;
+        let number = sheet_ord + 1;
+        let name = format!("xl/drawings/vmlDrawing{number}.vml");
+        rels.push((
+            id.clone(),
+            REL_VML.into(),
+            format!("../drawings/vmlDrawing{number}.vml"),
+            false,
+        ));
+        extra_parts.push((name, comments_vml_xml(sheet), CT_VML.into()));
+        vml_xml = format!(r#"<legacyDrawing r:id="{id}"/>"#);
+    }
     s.push_str(&drawing_xml);
     s.push_str(&vml_xml);
     let tables: Vec<&Table> = wb.tables().iter().filter(|t| t.sheet == sheet.id).collect();
     if !tables.is_empty() {
         s.push_str(&format!(r#"<tableParts count="{}">"#, tables.len()));
-        for (i, table) in tables.iter().enumerate() {
+        for table in tables {
+            validate_table(table)?;
             let id = format!("rId{rid}");
             rid += 1;
-            let tname = format!("xl/tables/table{}{}.xml", sheet_ord + 1, i + 1);
+            let table_number = table.id.index().saturating_add(1);
+            let tname = format!("xl/tables/table{table_number}.xml");
             rels.push((
                 id.clone(),
                 REL_TABLE.into(),
-                format!("../tables/table{}{}.xml", sheet_ord + 1, i + 1),
+                format!("../tables/table{table_number}.xml"),
                 false,
             ));
-            extra_parts.push((tname, table_xml(table), CT_TBL.into()));
+            extra_parts.push((tname, table_xml(table, table_number), CT_TBL.into()));
             s.push_str(&format!(r#"<tablePart r:id="{id}"/>"#));
         }
         s.push_str("</tableParts>");
     }
     if let Some(ex) = extras {
         for blob in &ex.sparkline_xml {
-            s.push_str(std::str::from_utf8(blob).unwrap_or(""));
+            push_fragment(&mut s, blob, "sparkline", &["sparklineGroups"])?;
         }
     }
     if !sheet.notes.is_empty() {
@@ -883,14 +1200,95 @@ fn worksheet_xml(
     Ok((s.into_bytes(), rels, extra_parts))
 }
 
+fn push_fragment(
+    out: &mut String,
+    bytes: &[u8],
+    kind: &str,
+    allowed_roots: &[&str],
+) -> Result<(), CoreError> {
+    let fragment = std::str::from_utf8(bytes)
+        .map_err(|_| error::xlsx_write(format!("{kind} XML fragment is not UTF-8")))?;
+    if fragment.starts_with('\u{feff}') || fragment.contains("<?xml") {
+        return Err(error::xlsx_write(format!(
+            "{kind} XML fragment contains a document declaration"
+        )));
+    }
+    let mut reader = xml::XmlReader::new(bytes);
+    let mut depth = 0u32;
+    let mut roots = 0u32;
+    while let Some(event) = reader.next()? {
+        match event {
+            xml::XmlEvent::Start { name, .. } => {
+                if depth == 0 {
+                    roots += 1;
+                    if !allowed_roots.contains(&name.as_str()) {
+                        return Err(error::xlsx_write(format!(
+                            "{kind} XML has unexpected root {name:?}"
+                        )));
+                    }
+                }
+                depth += 1;
+            }
+            xml::XmlEvent::Empty { name, .. } => {
+                if depth == 0 {
+                    roots += 1;
+                    if !allowed_roots.contains(&name.as_str()) {
+                        return Err(error::xlsx_write(format!(
+                            "{kind} XML has unexpected root {name:?}"
+                        )));
+                    }
+                }
+            }
+            xml::XmlEvent::End { .. } => depth = depth.saturating_sub(1),
+            xml::XmlEvent::Text(text) if depth == 0 && !text.trim().is_empty() => {
+                return Err(error::xlsx_write(format!(
+                    "{kind} XML has text outside its root"
+                )));
+            }
+            xml::XmlEvent::Text(_) => {}
+        }
+    }
+    if roots != 1 || depth != 0 {
+        return Err(error::xlsx_write(format!(
+            "{kind} XML must contain exactly one complete root"
+        )));
+    }
+    out.push_str(fragment);
+    Ok(())
+}
+
 fn original_sheet_rels(
     pkg: &OpcPackage,
+    sheet_name: &str,
     sheet_ord: usize,
 ) -> Result<Vec<super::opc::Relationship>, CoreError> {
-    let wb = pkg.workbook_part()?;
-    let rels = pkg.rels_for(&wb.name)?;
-    let sheets: Vec<_> = rels.into_iter().filter(|r| r.rel_type == REL_WS).collect();
-    let Some(rel) = sheets.get(sheet_ord) else {
+    let workbook = pkg.workbook_part()?;
+    let rels = pkg.rels_for(&workbook.name)?;
+    let mut reader = xml::XmlReader::new(&workbook.bytes);
+    let mut in_sheets = false;
+    let mut sheet_rids = Vec::new();
+    let mut matching_rid = None;
+    while let Some(event) = reader.next()? {
+        match event {
+            xml::XmlEvent::Start { name, .. } if name == "sheets" => in_sheets = true,
+            xml::XmlEvent::End { name } if name == "sheets" => in_sheets = false,
+            xml::XmlEvent::Start { name, attrs } | xml::XmlEvent::Empty { name, attrs }
+                if in_sheets && name == "sheet" =>
+            {
+                let rid = xml::attr(&attrs, "id").unwrap_or("").to_string();
+                if xml::attr(&attrs, "name").is_some_and(|name| name == sheet_name) {
+                    matching_rid = Some(rid.clone());
+                }
+                sheet_rids.push(rid);
+            }
+            _ => {}
+        }
+    }
+    let rid = matching_rid.or_else(|| sheet_rids.get(sheet_ord).cloned());
+    let Some(rel) = rid.and_then(|rid| {
+        rels.iter()
+            .find(|rel| rel.id == rid && rel.rel_type == REL_WS)
+    }) else {
         return Ok(Vec::new());
     };
     pkg.rels_for(&rel.target)
@@ -922,6 +1320,12 @@ fn sheet_views_xml(sheet: &Sheet) -> String {
     } else {
         ""
     };
+    let top_left = if v.scroll_row > 0 || v.scroll_col > 0 {
+        let col = col_to_letters(v.scroll_col).unwrap_or_else(|_| "A".into());
+        format!(r#" topLeftCell="{col}{}""#, v.scroll_row + 1)
+    } else {
+        String::new()
+    };
     let mut pane = String::new();
     if v.freeze.rows > 0 || v.freeze.cols > 0 {
         let top_left = format!(
@@ -929,8 +1333,14 @@ fn sheet_views_xml(sheet: &Sheet) -> String {
             col_to_letters(v.freeze.cols).unwrap_or_else(|_| "A".into()),
             v.freeze.rows + 1
         );
+        let active_pane = match (v.freeze.rows > 0, v.freeze.cols > 0) {
+            (true, true) => "bottomRight",
+            (true, false) => "bottomLeft",
+            (false, true) => "topRight",
+            (false, false) => "topLeft",
+        };
         pane = format!(
-            r#"<pane xSplit="{}" ySplit="{}" topLeftCell="{top_left}" activePane="bottomRight" state="frozen"/>"#,
+            r#"<pane xSplit="{}" ySplit="{}" topLeftCell="{top_left}" activePane="{active_pane}" state="frozen"/>"#,
             v.freeze.cols, v.freeze.rows
         );
     } else if let Some(split) = v.split {
@@ -939,9 +1349,21 @@ fn sheet_views_xml(sheet: &Sheet) -> String {
             split.x_px, split.y_px
         );
     }
+    let selection = v.selection.to_a1();
+    let active_cell = v.selection.start.to_a1();
     format!(
-        r#"<sheetViews><sheetView workbookViewId="0"{zoom}{grid}{formulas}>{pane}</sheetView></sheetViews>"#
+        r#"<sheetViews><sheetView workbookViewId="0"{zoom}{grid}{formulas}{top_left}>{pane}<selection activeCell="{}" sqref="{}"/></sheetView></sheetViews>"#,
+        xml::escape(&active_cell),
+        xml::escape(&selection)
     )
+}
+
+fn is_internal_hyperlink(target: &str) -> bool {
+    target.starts_with('#')
+        || (!target.contains("://")
+            && !target.starts_with("mailto:")
+            && !target.starts_with("file:")
+            && target.contains('!'))
 }
 
 fn cols_xml(sheet: &Sheet) -> String {
@@ -982,7 +1404,7 @@ fn cell_xml(
     row: u32,
     col: u16,
     slot: &CellSlot,
-    sst: &IndexMap<String, u32>,
+    sst: &IndexMap<StrId, u32>,
     xf_index: &HashMap<Style, usize>,
     intern: &omacell_core::intern::Interners,
 ) -> Result<String, CoreError> {
@@ -1008,6 +1430,11 @@ fn cell_xml(
     }
     match slot.value {
         Value::Number(n) => {
+            if !n.is_finite() {
+                return Err(error::xlsx_write(format!(
+                    "cell {addr} contains a non-finite number"
+                )));
+            }
             inner.push_str(&format!("<v>{n}</v>"));
         }
         Value::Bool(b) => {
@@ -1020,7 +1447,10 @@ fn cell_xml(
         }
         Value::Text(id) => {
             if let Some(text) = intern.strings.get(id) {
-                if let Some(idx) = sst.get(text) {
+                if slot.formula.is_some() {
+                    attrs.push_str(r#" t="str""#);
+                    inner.push_str(&format!("<v>{}</v>", xml::escape_ooxml_text(text)));
+                } else if let Some(idx) = sst.get(&id) {
                     attrs.push_str(r#" t="s""#);
                     inner.push_str(&format!("<v>{idx}</v>"));
                 } else {
@@ -1038,7 +1468,7 @@ fn cell_xml(
     }
 }
 
-fn table_xml(table: &Table) -> Vec<u8> {
+fn table_xml(table: &Table, table_number: u32) -> Vec<u8> {
     let start = format!(
         "{}{}",
         col_to_letters(table.start_col).unwrap_or_else(|_| "A".into()),
@@ -1051,6 +1481,11 @@ fn table_xml(table: &Table) -> Vec<u8> {
     );
     let header = if table.has_header { 1 } else { 0 };
     let totals = if table.has_totals { 1 } else { 0 };
+    let autofilter = if table.has_header {
+        format!(r#"<autoFilter ref="{start}:{end}"/>"#)
+    } else {
+        String::new()
+    };
     let mut cols = String::new();
     for (i, c) in table.columns.iter().enumerate() {
         cols.push_str(&format!(
@@ -1060,12 +1495,31 @@ fn table_xml(table: &Table) -> Vec<u8> {
         ));
     }
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{NS}" id="1" name="{}" displayName="{}" ref="{start}:{end}" headerRowCount="{header}" totalsRowCount="{totals}"><tableColumns count="{}">{cols}</tableColumns></table>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{NS}" id="{table_number}" name="{}" displayName="{}" ref="{start}:{end}" headerRowCount="{header}" totalsRowCount="{totals}">{autofilter}<tableColumns count="{}">{cols}</tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="{}" showColumnStripes="{}"/></table>"#,
         xml::escape(&table.name),
         xml::escape(&table.name),
-        table.columns.len()
+        table.columns.len(),
+        u8::from(table.banded_rows),
+        u8::from(table.banded_cols)
     )
     .into_bytes()
+}
+
+fn validate_table(table: &Table) -> Result<(), CoreError> {
+    let width = u32::from(table.end_col)
+        .checked_sub(u32::from(table.start_col))
+        .and_then(|width| width.checked_add(1));
+    if table.start_row > table.end_row
+        || table.end_row >= MAX_ROWS
+        || u32::from(table.end_col) >= u32::from(MAX_COLS)
+        || width != u32::try_from(table.columns.len()).ok()
+    {
+        return Err(error::xlsx_write(format!(
+            "table {:?} has an invalid range or column count",
+            table.name
+        )));
+    }
+    Ok(())
 }
 
 fn comments_xml(sheet: &Sheet) -> Vec<u8> {
@@ -1091,10 +1545,10 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
             col_to_letters(*col).unwrap_or_else(|_| "A".into()),
             row + 1
         );
-        let aid = n
-            .author
-            .as_ref()
-            .and_then(|a| authors.iter().position(|x| x == a))
+        let author = n.author.as_deref().unwrap_or("");
+        let aid = authors
+            .iter()
+            .position(|candidate| candidate == author)
             .unwrap_or(0);
         s.push_str(&format!(
             r#"<comment ref="{addr}" authorId="{aid}"><text>{}</text></comment>"#,
@@ -1102,6 +1556,25 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
         ));
     }
     s.push_str("</commentList></comments>");
+    s.into_bytes()
+}
+
+fn comments_vml_xml(sheet: &Sheet) -> Vec<u8> {
+    let mut notes: Vec<_> = sheet.notes.keys().copied().collect();
+    notes.sort_unstable();
+    let mut s = String::from(
+        r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>"#,
+    );
+    for (index, (row, col)) in notes.into_iter().enumerate() {
+        let end_col = u32::from(col).saturating_add(2).min(16_383);
+        let end_row = row.saturating_add(4).min(1_048_575);
+        s.push_str(&format!(
+            r##"<v:shape id="_x0000_s{}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:5pt;width:108pt;height:59.25pt;z-index:{};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"/></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{col}, 15, {row}, 2, {end_col}, 15, {end_row}, 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{row}</x:Row><x:Column>{col}</x:Column></x:ClientData></v:shape>"##,
+            index + 1025,
+            index + 1
+        ));
+    }
+    s.push_str("</xml>");
     s.into_bytes()
 }
 
@@ -1116,7 +1589,8 @@ fn rels_xml(rels: &[(String, String, String, bool)]) -> Vec<u8> {
             ""
         };
         s.push_str(&format!(
-            r#"<Relationship Id="{id}" Type="{ty}" Target="{}"{mode}/>"#,
+            r#"<Relationship Id="{id}" Type="{}" Target="{}"{mode}/>"#,
+            xml::escape(ty),
             xml::escape(target)
         ));
     }
