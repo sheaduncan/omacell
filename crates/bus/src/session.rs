@@ -261,11 +261,11 @@ impl Bus {
         }
         if how.scratch_only {
             if how.recalc {
-                apply_recalc(&mut scratch_wb, &mut scratch_engine, &preflight);
+                apply_recalc(&mut scratch_wb, &mut scratch_engine, &preflight, &task)?;
             }
             return Ok(preflight);
         }
-        let live_effect = {
+        let live = {
             let Bus {
                 workbook,
                 engine,
@@ -273,9 +273,9 @@ impl Bus {
                 changesets,
                 ..
             } = self;
-            let mut live_effect = Effect::default();
             workbook.transact_try(|wb| {
-                live_effect = dispatch(registry, wb, engine, origin, calls, false, false, &task)?;
+                let live_effect =
+                    dispatch(registry, wb, engine, origin, calls, false, false, &task)?;
                 if let Some(id) = &how.applied_changeset {
                     changesets.ensure_applied_fits(
                         id,
@@ -283,11 +283,17 @@ impl Bus {
                         &live_effect.summary,
                     )?;
                 }
-                Ok(())
-            })?;
-            live_effect
+                let extra = apply_recalc(wb, engine, &live_effect, &task)?;
+                Ok((live_effect, extra))
+            })
         };
-        let extra = apply_recalc(&mut self.workbook, &mut self.engine, &live_effect);
+        let (live_effect, extra) = match live {
+            Ok(committed) => committed,
+            Err(err) => {
+                self.engine.rebuild_after_rollback(&self.workbook);
+                return Err(err);
+            }
+        };
         if how.emit {
             emit_events(&mut self.events, &live_effect, extra);
         }
@@ -470,7 +476,8 @@ fn apply_recalc(
     workbook: &mut Workbook,
     engine: &mut RecalcEngine,
     effect: &Effect,
-) -> Option<Event> {
+    task: &crate::handler::TaskCtl,
+) -> Result<Option<Event>, CoreError> {
     if effect.rebuild {
         engine.rebuild(workbook);
     }
@@ -478,20 +485,25 @@ fn apply_recalc(
         engine.notify_edit(workbook, *coord);
     }
     if !effect.auto_recalc {
-        return None;
+        return Ok(None);
     }
     if workbook.settings().calc_mode == CalcMode::Manual {
-        return None;
+        return Ok(None);
+    }
+    let result =
+        engine.recalc_incremental_with_ctl(workbook, task.cancel.as_deref(), task.progress.clone());
+    if result.cancelled {
+        return Err(bus_error::task_cancelled());
     }
     let RecalcResult {
         cells_evaluated,
         elapsed_ms,
         ..
-    } = engine.recalc_incremental(workbook);
-    Some(Event::RecalcDone {
+    } = result;
+    Ok(Some(Event::RecalcDone {
         cells: cells_evaluated,
         elapsed_ms,
-    })
+    }))
 }
 
 fn emit_events(bus: &mut EventBus, effect: &Effect, extra_recalc: Option<Event>) {

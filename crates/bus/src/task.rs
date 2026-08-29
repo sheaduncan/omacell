@@ -63,15 +63,24 @@ pub struct TaskState {
 }
 
 /// Cooperative cancellation handle for a task.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CancelHandle {
     id: TaskId,
     flag: Arc<AtomicBool>,
+    on_cancel: Arc<dyn Fn(TaskId) + Send + Sync>,
 }
 
 impl CancelHandle {
-    pub(crate) fn new(id: TaskId, flag: Arc<AtomicBool>) -> Self {
-        Self { id, flag }
+    pub(crate) fn new(
+        id: TaskId,
+        flag: Arc<AtomicBool>,
+        on_cancel: Arc<dyn Fn(TaskId) + Send + Sync>,
+    ) -> Self {
+        Self {
+            id,
+            flag,
+            on_cancel,
+        }
     }
 
     /// Task this handle cancels.
@@ -83,13 +92,24 @@ impl CancelHandle {
     /// Request cooperative cancel. The writer finishes the current transaction
     /// atomically (commit or restore), then marks the task failed.
     pub fn cancel(&self) {
-        self.flag.store(true, Ordering::SeqCst);
+        if !self.flag.swap(true, Ordering::SeqCst) {
+            (self.on_cancel)(self.id);
+        }
     }
 
     /// Whether cancel has been requested.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
+    }
+}
+
+impl std::fmt::Debug for CancelHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CancelHandle")
+            .field("id", &self.id)
+            .field("cancelled", &self.is_cancelled())
+            .finish_non_exhaustive()
     }
 }
 
@@ -141,10 +161,17 @@ pub enum TaskEvent {
     Queued(TaskState),
     /// Worker started the command.
     Running(TaskState),
+    /// Cooperative cancellation was requested.
+    Cancelling(TaskState),
     /// Coalesced progress for the running task.
     Progress(TaskState),
     /// Terminal success.
-    Completed(TaskState),
+    Completed {
+        /// Terminal task snapshot.
+        state: TaskState,
+        /// Command result used by frontends to reconcile dirty state.
+        outcome: omacell_core::command::Outcome,
+    },
     /// Terminal failure or cancel.
     Failed {
         /// Task snapshot.

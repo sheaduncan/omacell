@@ -605,9 +605,9 @@ fn data_edge(
             MAX_ROWS - 1,
             sheet
                 .store
-                .iter()
-                .filter(|(_, col, slot)| *col == cursor.col && cell_has_contents(*slot))
-                .map(|(row, _, _)| row)
+                .iter_col(cursor.col)
+                .filter(|(_, slot)| cell_has_contents(*slot))
+                .map(|(row, _)| row)
                 .collect::<Vec<_>>(),
         )
     } else if dcol != 0 {
@@ -616,9 +616,9 @@ fn data_edge(
             u32::from(MAX_COLS - 1),
             sheet
                 .store
-                .iter()
-                .filter(|(row, _, slot)| *row == cursor.row && cell_has_contents(*slot))
-                .map(|(_, col, _)| u32::from(col))
+                .iter_row(cursor.row)
+                .filter(|(_, slot)| cell_has_contents(*slot))
+                .map(|(col, _)| u32::from(col))
                 .collect::<Vec<_>>(),
         )
     } else {

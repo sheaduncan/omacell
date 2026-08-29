@@ -1,9 +1,9 @@
 //! Single-writer command task runner (spec §10.2, §11.5).
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
 use omacell_core::changeset::{Changeset, ChangesetId, CommandCall};
@@ -39,6 +39,18 @@ enum WorkerMsg {
         id: ChangesetId,
         reply: SyncSender<Result<Changeset, CoreError>>,
     },
+    Revert {
+        origin: Origin,
+        id: ChangesetId,
+        reply: SyncSender<Result<Changeset, CoreError>>,
+    },
+    ListChangesets {
+        reply: SyncSender<Result<Vec<Changeset>, CoreError>>,
+    },
+    GetChangeset {
+        id: ChangesetId,
+        reply: SyncSender<Result<Changeset, CoreError>>,
+    },
     DryRun {
         origin: Origin,
         cmd: String,
@@ -54,8 +66,11 @@ struct Shared {
     cancels: Mutex<BTreeMap<TaskId, Arc<AtomicBool>>>,
     events: Mutex<VecDeque<TaskEvent>>,
     dropped: AtomicU64,
+    task_slots: AtomicUsize,
     running: Mutex<Option<TaskId>>,
+    writer_busy: AtomicBool,
     command_ids: BTreeSet<String>,
+    command_policy: BTreeMap<String, (CommandKind, bool, Exposure)>,
     long_ops: LongOps,
     shutdown: AtomicBool,
 }
@@ -86,14 +101,27 @@ impl TaskRunner {
             .iter()
             .map(|(id, _)| id.to_string())
             .collect();
+        let command_policy = bus
+            .registry()
+            .iter()
+            .map(|(id, command)| {
+                (
+                    id.to_string(),
+                    (command.kind, command.changeset_eligible, command.exposure),
+                )
+            })
+            .collect();
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(snapshot),
             tasks: Mutex::new(BTreeMap::new()),
             cancels: Mutex::new(BTreeMap::new()),
             events: Mutex::new(VecDeque::new()),
             dropped: AtomicU64::new(0),
+            task_slots: AtomicUsize::new(0),
             running: Mutex::new(None),
+            writer_busy: AtomicBool::new(false),
             command_ids,
+            command_policy,
             long_ops,
             shutdown: AtomicBool::new(false),
         });
@@ -134,10 +162,30 @@ impl TaskRunnerHandle {
         TaskId::new(self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
+    fn reserve_task(&self) -> Result<(), CoreError> {
+        self.shared
+            .task_slots
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                (current < MAX_SUBMIT_QUEUE + 1).then_some(current + 1)
+            })
+            .map(|_| ())
+            .map_err(|_| error::task_queue())
+    }
+
     /// Known registry ids at spawn (keymap reload).
     #[must_use]
     pub fn command_ids(&self) -> &BTreeSet<String> {
         &self.shared.command_ids
+    }
+
+    pub(crate) fn ipc_command_policy(&self, id: &str) -> Result<(CommandKind, bool), CoreError> {
+        let Some((kind, eligible, exposure)) = self.shared.command_policy.get(id).copied() else {
+            return Err(error::unknown(id));
+        };
+        if exposure == Exposure::Internal {
+            return Err(error::internal(id));
+        }
+        Ok((kind, eligible))
     }
 
     /// Long-operation classifier used by this runner.
@@ -176,7 +224,7 @@ impl TaskRunnerHandle {
     /// Whether the writer is occupied.
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.running().is_some()
+        self.shared.writer_busy.load(Ordering::SeqCst) || self.tracked_tasks() != 0
     }
 
     /// Cancel handle for the running task, if it is still cancellable.
@@ -189,7 +237,7 @@ impl TaskRunnerHandle {
         ) {
             // Flag lives in the task map via a side table.
             self.cancel_flag(state.id)
-                .map(|flag| CancelHandle::new(state.id, flag))
+                .map(|flag| self.cancel_handle(state.id, flag))
         } else {
             None
         }
@@ -204,8 +252,30 @@ impl TaskRunnerHandle {
     }
 
     fn cancels(&self) -> &Mutex<BTreeMap<TaskId, Arc<AtomicBool>>> {
-        // stored on Shared — add field
         &self.shared.cancels
+    }
+
+    fn cancel_handle(&self, id: TaskId, flag: Arc<AtomicBool>) -> CancelHandle {
+        let shared = Arc::downgrade(&self.shared);
+        CancelHandle::new(
+            id,
+            flag,
+            Arc::new(move |task| {
+                if let Some(shared) = Weak::upgrade(&shared) {
+                    mark_cancelling(&shared, task);
+                }
+            }),
+        )
+    }
+
+    /// Number of queued/running task records retained by the runner.
+    #[must_use]
+    pub fn tracked_tasks(&self) -> usize {
+        self.shared
+            .tasks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len()
     }
 
     /// Events dropped because the UI did not drain.
@@ -227,9 +297,13 @@ impl TaskRunnerHandle {
         cmd: &str,
         args: serde_json::Value,
     ) -> Result<(TaskId, CancelHandle), CoreError> {
+        if self.shared.shutdown.load(Ordering::SeqCst) {
+            return Err(error::task_shutdown());
+        }
+        self.reserve_task()?;
         let id = self.alloc();
         let cancel = Arc::new(AtomicBool::new(false));
-        let handle = CancelHandle::new(id, Arc::clone(&cancel));
+        let handle = self.cancel_handle(id, Arc::clone(&cancel));
         let state = TaskState {
             id,
             command: cmd.to_string(),
@@ -258,31 +332,43 @@ impl TaskRunnerHandle {
         match self.submit.try_send(msg) {
             Ok(()) => Ok((id, handle)),
             Err(TrySendError::Full(_)) => {
-                self.fail_submit(id, "task.queue", "command queue is full")?;
+                self.fail_submit(id, "task.queue", "command queue is full");
                 Err(error::task_queue())
             }
             Err(TrySendError::Disconnected(_)) => {
-                self.fail_submit(id, "task.shutdown", "command worker stopped")?;
+                self.fail_submit(id, "task.shutdown", "command worker stopped");
                 Err(error::task_shutdown())
             }
         }
     }
 
-    fn fail_submit(&self, id: TaskId, code: &str, message: &str) -> Result<(), CoreError> {
+    fn fail_submit(&self, id: TaskId, code: &str, message: &str) {
         let mut tasks = self.shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(state) = tasks.get_mut(&id) {
+        if let Some(mut state) = tasks.remove(&id) {
             state.status = TaskStatus::Failed;
+            drop(tasks);
+            self.shared
+                .cancels
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&id);
             self.push_event(TaskEvent::Failed {
-                state: state.clone(),
+                state,
                 code: code.into(),
                 message: message.into(),
             });
+            self.shared.task_slots.fetch_sub(1, Ordering::SeqCst);
         }
-        Ok(())
     }
 
     /// Queue and wait for the outcome (short commands and IPC).
     pub fn submit_wait(&self, origin: Origin, cmd: &str, args: serde_json::Value) -> Outcome {
+        if self.shared.shutdown.load(Ordering::SeqCst) {
+            return Outcome::failure(error::task_shutdown());
+        }
+        if let Err(err) = self.reserve_task() {
+            return Outcome::failure(err);
+        }
         let id = self.alloc();
         let cancel = Arc::new(AtomicBool::new(false));
         let state = TaskState {
@@ -311,8 +397,16 @@ impl TaskRunnerHandle {
             cancel,
             reply: Some(tx),
         };
-        if self.submit.send(msg).is_err() {
-            return Outcome::failure(error::task_shutdown());
+        match self.submit.try_send(msg) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.fail_submit(id, "task.queue", "command queue is full");
+                return Outcome::failure(error::task_queue());
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.fail_submit(id, "task.shutdown", "command worker stopped");
+                return Outcome::failure(error::task_shutdown());
+            }
         }
         rx.recv()
             .unwrap_or_else(|_| Outcome::failure(error::task_shutdown()))
@@ -348,6 +442,40 @@ impl TaskRunnerHandle {
         rx.recv().map_err(|_| error::task_shutdown())?
     }
 
+    /// Revert a changeset through the writer.
+    pub fn revert(&self, origin: Origin, id: &ChangesetId) -> Result<Changeset, CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::Revert {
+                origin,
+                id: id.clone(),
+                reply: tx,
+            })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
+    /// List changesets through the writer.
+    pub fn list_changesets(&self) -> Result<Vec<Changeset>, CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::ListChangesets { reply: tx })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
+    /// Fetch a changeset through the writer.
+    pub fn get_changeset(&self, id: &ChangesetId) -> Result<Changeset, CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::GetChangeset {
+                id: id.clone(),
+                reply: tx,
+            })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
     /// Dry-run through the writer.
     pub fn dry_run(
         &self,
@@ -369,9 +497,19 @@ impl TaskRunnerHandle {
 
     /// Request worker shutdown. In-flight work finishes or cancels atomically.
     pub fn shutdown(&self) {
-        self.shared.shutdown.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.running_cancel() {
-            handle.cancel();
+        if self.shared.shutdown.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let pending = self
+            .shared
+            .cancels
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .map(|(id, flag)| (*id, Arc::clone(flag)))
+            .collect::<Vec<_>>();
+        for (id, flag) in pending {
+            self.cancel_handle(id, flag).cancel();
         }
         let _ = self.submit.try_send(WorkerMsg::Shutdown);
     }
@@ -392,11 +530,13 @@ fn push_event(shared: &Shared, event: TaskEvent) {
 
 fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
     while let Ok(msg) = rx.recv() {
-        if shared.shutdown.load(Ordering::SeqCst) && matches!(msg, WorkerMsg::Shutdown) {
-            break;
-        }
+        shared.writer_busy.store(true, Ordering::SeqCst);
         match msg {
-            WorkerMsg::Shutdown => break,
+            WorkerMsg::Shutdown => {
+                shared.writer_busy.store(false, Ordering::SeqCst);
+                fail_pending(&rx, &shared);
+                break;
+            }
             WorkerMsg::Execute {
                 id,
                 origin,
@@ -405,14 +545,24 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                 cancel,
                 reply,
             } => {
+                if cancel.load(Ordering::SeqCst) {
+                    mark_cancelling(&shared, id);
+                    let outcome = Outcome::failure(error::task_cancelled());
+                    finish_execute(&shared, id, &outcome);
+                    if let Some(reply) = reply {
+                        let _ = reply.send(outcome);
+                    }
+                    shared.writer_busy.store(false, Ordering::SeqCst);
+                    if shared.shutdown.load(Ordering::SeqCst) {
+                        fail_pending(&rx, &shared);
+                        break;
+                    }
+                    continue;
+                }
                 {
                     let mut tasks = shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
                     if let Some(state) = tasks.get_mut(&id) {
-                        state.status = if cancel.load(Ordering::SeqCst) {
-                            TaskStatus::Cancelling
-                        } else {
-                            TaskStatus::Running
-                        };
+                        state.status = TaskStatus::Running;
                         push_event(&shared, TaskEvent::Running(state.clone()));
                     }
                     *shared.running.lock().unwrap_or_else(|p| p.into_inner()) = Some(id);
@@ -425,34 +575,15 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                         coalesce_progress(&progress_shared, progress_id, done, total, label);
                     })),
                 };
+                let mutating = bus
+                    .registry()
+                    .get_str(&cmd)
+                    .is_ok_and(|command| command.kind == CommandKind::Mutating);
                 let outcome = bus.execute_with_task(origin, &cmd, args, ctl);
-                publish_snapshot(&shared, &bus);
-                let failed = !outcome.ok;
-                {
-                    let mut tasks = shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Some(state) = tasks.get_mut(&id) {
-                        if failed {
-                            state.status = TaskStatus::Failed;
-                            let (code, message) = outcome
-                                .error
-                                .as_ref()
-                                .map(|e| (e.code.clone(), e.message.clone()))
-                                .unwrap_or_else(|| ("task.failed".into(), "command failed".into()));
-                            push_event(
-                                &shared,
-                                TaskEvent::Failed {
-                                    state: state.clone(),
-                                    code,
-                                    message,
-                                },
-                            );
-                        } else {
-                            state.status = TaskStatus::Completed;
-                            push_event(&shared, TaskEvent::Completed(state.clone()));
-                        }
-                    }
-                    *shared.running.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                if outcome.ok && mutating {
+                    publish_snapshot(&shared, &bus);
                 }
+                finish_execute(&shared, id, &outcome);
                 if let Some(reply) = reply {
                     let _ = reply.send(outcome);
                 }
@@ -463,9 +594,6 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                 reply,
             } => {
                 let result = bus.propose(origin, forward);
-                if result.is_ok() {
-                    publish_snapshot(&shared, &bus);
-                }
                 let _ = reply.send(result);
             }
             WorkerMsg::Apply { origin, id, reply } => {
@@ -474,6 +602,19 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                     publish_snapshot(&shared, &bus);
                 }
                 let _ = reply.send(result);
+            }
+            WorkerMsg::Revert { origin, id, reply } => {
+                let result = bus.revert(origin, &id);
+                if result.is_ok() {
+                    publish_snapshot(&shared, &bus);
+                }
+                let _ = reply.send(result);
+            }
+            WorkerMsg::ListChangesets { reply } => {
+                let _ = reply.send(Ok(bus.list_changesets()));
+            }
+            WorkerMsg::GetChangeset { id, reply } => {
+                let _ = reply.send(bus.get_changeset(&id).cloned());
             }
             WorkerMsg::DryRun {
                 origin,
@@ -484,8 +625,93 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                 let _ = reply.send(bus.dry_run(origin, &cmd, args));
             }
         }
+        shared.writer_busy.store(false, Ordering::SeqCst);
         if shared.shutdown.load(Ordering::SeqCst) {
+            fail_pending(&rx, &shared);
             break;
+        }
+    }
+    shared.writer_busy.store(false, Ordering::SeqCst);
+}
+
+fn mark_cancelling(shared: &Shared, id: TaskId) {
+    let mut tasks = shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(state) = tasks.get_mut(&id) else {
+        return;
+    };
+    if !matches!(state.status, TaskStatus::Queued | TaskStatus::Running) {
+        return;
+    }
+    state.status = TaskStatus::Cancelling;
+    let state = state.clone();
+    drop(tasks);
+    push_event(shared, TaskEvent::Cancelling(state));
+}
+
+fn finish_execute(shared: &Shared, id: TaskId, outcome: &Outcome) {
+    *shared.running.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    let mut tasks = shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
+    let Some(state) = tasks.get_mut(&id) else {
+        return;
+    };
+    if outcome.ok {
+        state.status = TaskStatus::Completed;
+        push_event(
+            shared,
+            TaskEvent::Completed {
+                state: state.clone(),
+                outcome: outcome.clone(),
+            },
+        );
+    } else {
+        state.status = TaskStatus::Failed;
+        let (code, message) = outcome
+            .error
+            .as_ref()
+            .map(|e| (e.code.clone(), e.message.clone()))
+            .unwrap_or_else(|| ("task.failed".into(), "command failed".into()));
+        push_event(
+            shared,
+            TaskEvent::Failed {
+                state: state.clone(),
+                code,
+                message,
+            },
+        );
+    }
+    tasks.remove(&id);
+    drop(tasks);
+    shared
+        .cancels
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&id);
+    shared.task_slots.fetch_sub(1, Ordering::SeqCst);
+}
+
+fn fail_pending(rx: &Receiver<WorkerMsg>, shared: &Shared) {
+    while let Ok(msg) = rx.try_recv() {
+        match msg {
+            WorkerMsg::Execute { id, reply, .. } => {
+                let outcome = Outcome::failure(error::task_shutdown());
+                finish_execute(shared, id, &outcome);
+                if let Some(reply) = reply {
+                    let _ = reply.send(outcome);
+                }
+            }
+            WorkerMsg::Propose { reply, .. }
+            | WorkerMsg::Apply { reply, .. }
+            | WorkerMsg::Revert { reply, .. }
+            | WorkerMsg::GetChangeset { reply, .. } => {
+                let _ = reply.send(Err(error::task_shutdown()));
+            }
+            WorkerMsg::ListChangesets { reply } => {
+                let _ = reply.send(Err(error::task_shutdown()));
+            }
+            WorkerMsg::DryRun { reply, .. } => {
+                let _ = reply.send(Err(error::task_shutdown()));
+            }
+            WorkerMsg::Shutdown => {}
         }
     }
 }
@@ -506,7 +732,7 @@ fn coalesce_progress(shared: &Shared, id: TaskId, done: u64, total: Option<u64>,
     state.progress = Some(TaskProgress {
         done,
         total,
-        label: label.to_string(),
+        label: label.chars().take(64).collect(),
     });
     let snapshot = state.clone();
     drop(tasks);

@@ -82,6 +82,7 @@ fn workbook_text_cannot_emit_terminal_control_sequences() {
         )
         .unwrap();
     assert!(outcome.ok, "{:?}", outcome.error);
+    common::wait_tasks(&mut h.tui);
     let text = draw_text(&h.tui, 80, 24);
     assert!(!text.contains('\u{1b}'));
     assert!(!text.contains('\u{7}'));

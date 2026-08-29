@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
-use omacell_bus::{Bus, LongOps, TaskRunner, register_hold_command};
+use omacell_bus::{Bus, LongOps, TaskEvent, TaskRunner, register_hold_command};
 use omacell_core::command::Origin;
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
@@ -101,6 +101,94 @@ fn cancel_hold_leaves_workbook_unchanged() {
     }
     let snap = handle.snapshot();
     assert!(snap.workbook.get(sheet, 0, 0).unwrap().is_none());
+}
+
+#[test]
+fn cancelled_queued_command_is_never_dispatched() {
+    let start = Arc::new(Barrier::new(2));
+    let release = Arc::new(AtomicBool::new(false));
+    let bus = bus_with_hold(Arc::clone(&start), Arc::clone(&release));
+    let sheet = bus.workbook().active_sheet();
+    let runner = TaskRunner::spawn(bus, LongOps::production().with("test.hold")).unwrap();
+    let handle = runner.handle();
+    handle.submit(Origin::User, "test.hold", json!({})).unwrap();
+    start.wait();
+    let (id, cancel) = handle
+        .submit(
+            Origin::User,
+            "cell.set",
+            json!({"ref": "A1", "input": "99"}),
+        )
+        .unwrap();
+    cancel.cancel();
+    assert!(
+        handle
+            .drain_events()
+            .into_iter()
+            .any(|event| matches!(event, TaskEvent::Cancelling(state) if state.id == id))
+    );
+    release.store(true, Ordering::SeqCst);
+    let started = Instant::now();
+    while handle.tracked_tasks() != 0 {
+        assert!(started.elapsed().as_secs() < 1, "tasks did not finish");
+        std::thread::yield_now();
+    }
+    assert!(
+        handle
+            .snapshot()
+            .workbook
+            .get(sheet, 0, 0)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn terminal_task_records_are_released() {
+    let start = Arc::new(Barrier::new(1));
+    let release = Arc::new(AtomicBool::new(true));
+    let bus = bus_with_hold(start, release);
+    let runner = TaskRunner::spawn(bus, LongOps::production()).unwrap();
+    let handle = runner.handle();
+    for row in 0..100 {
+        let outcome = handle.submit_wait(
+            Origin::User,
+            "cell.set",
+            json!({"ref": format!("A{}", row + 1), "input": "1"}),
+        );
+        assert!(outcome.ok, "{:?}", outcome.error);
+    }
+    assert_eq!(handle.tracked_tasks(), 0);
+    assert!(handle.drain_events().len() <= 64);
+}
+
+#[test]
+fn task_state_is_bounded_with_concurrent_queue_capacity() {
+    let start = Arc::new(Barrier::new(2));
+    let release = Arc::new(AtomicBool::new(false));
+    let bus = bus_with_hold(Arc::clone(&start), release);
+    let runner = TaskRunner::spawn(bus, LongOps::production().with("test.hold")).unwrap();
+    let handle = runner.handle();
+    handle.submit(Origin::User, "test.hold", json!({})).unwrap();
+    start.wait();
+    for row in 0..32 {
+        handle
+            .submit(
+                Origin::User,
+                "cell.set",
+                json!({"ref": format!("A{}", row + 1), "input": "1"}),
+            )
+            .unwrap();
+    }
+    let err = handle
+        .submit(
+            Origin::User,
+            "cell.set",
+            json!({"ref": "A33", "input": "1"}),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "task.queue");
+    assert_eq!(handle.tracked_tasks(), 33);
 }
 
 #[test]

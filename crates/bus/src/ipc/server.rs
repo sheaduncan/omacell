@@ -350,43 +350,98 @@ fn dispatch_runner(runner: &TaskRunnerHandle, request: Request) -> Reply {
             cmd,
             args,
             mode,
-        } => match mode.unwrap_or(Mode::Execute) {
-            Mode::Execute => outcome_reply(id, runner.submit_wait(Origin::Ipc, &cmd, args)),
-            Mode::DryRun => match runner.dry_run(Origin::Ipc, &cmd, args) {
-                Ok(dry) if dry.outcome.ok => Reply::ok(
+        } => {
+            let (kind, eligible) = match runner.ipc_command_policy(&cmd) {
+                Ok(policy) => policy,
+                Err(err) => return Reply::err(id, err),
+            };
+            let mode = mode.unwrap_or(match kind {
+                CommandKind::Query => Mode::Execute,
+                CommandKind::Mutating if eligible => Mode::Propose,
+                CommandKind::Mutating => Mode::Execute,
+            });
+            if kind == CommandKind::Mutating && eligible && mode == Mode::Execute {
+                return Reply::err(
                     id,
-                    serde_json::json!({
-                        "dry_run": true,
-                        "summary": dry.summary,
-                        "result": dry.outcome.result,
-                    }),
-                ),
-                Ok(dry) => Reply::err(
-                    id,
-                    dry.outcome.error.unwrap_or_else(|| {
-                        error::ipc_protocol("dry-run failed without an error payload")
-                    }),
-                ),
+                    error::ipc_mode("changeset-eligible mutating commands cannot use mode execute"),
+                );
+            }
+            match mode {
+                Mode::Execute => outcome_reply(id, runner.submit_wait(Origin::Ipc, &cmd, args)),
+                Mode::DryRun => match runner.dry_run(Origin::Ipc, &cmd, args) {
+                    Ok(dry) if dry.outcome.ok => Reply::ok(
+                        id,
+                        serde_json::json!({
+                            "dry_run": true,
+                            "summary": dry.summary,
+                            "result": dry.outcome.result,
+                        }),
+                    ),
+                    Ok(dry) => Reply::err(
+                        id,
+                        dry.outcome.error.unwrap_or_else(|| {
+                            error::ipc_protocol("dry-run failed without an error payload")
+                        }),
+                    ),
+                    Err(err) => Reply::err(id, err),
+                },
+                Mode::Propose => match command_call(&cmd, args) {
+                    Ok(call) => match runner.propose(Origin::Ipc, vec![call]) {
+                        Ok(cs) => match serde_json::to_value(&cs) {
+                            Ok(v) => Reply::ok(id, v),
+                            Err(err) => Reply::err(
+                                id,
+                                error::ipc_frame(format!("serialize changeset: {err}")),
+                            ),
+                        },
+                        Err(err) => Reply::err(id, err),
+                    },
+                    Err(err) => Reply::err(id, err),
+                },
+            }
+        }
+        Request::Control {
+            id, op, changeset, ..
+        } => match op {
+            ControlOp::Ping => Reply::ok(id, serde_json::json!({"pong": true})),
+            ControlOp::ChangesetList => match runner.list_changesets() {
+                Ok(changesets) => match serde_json::to_value(changesets) {
+                    Ok(value) => Reply::ok(id, value),
+                    Err(err) => {
+                        Reply::err(id, error::ipc_frame(format!("serialize changesets: {err}")))
+                    }
+                },
                 Err(err) => Reply::err(id, err),
             },
-            Mode::Propose => match command_call(&cmd, args) {
-                Ok(call) => match runner.propose(Origin::Ipc, vec![call]) {
-                    Ok(cs) => match serde_json::to_value(&cs) {
-                        Ok(v) => Reply::ok(id, v),
+            operation @ (ControlOp::ChangesetGet
+            | ControlOp::ChangesetApply
+            | ControlOp::ChangesetRevert) => {
+                let Some(changeset) = changeset else {
+                    return Reply::err(id, error::ipc_protocol("changeset id is required"));
+                };
+                let changeset = match ChangesetId::new(changeset) {
+                    Ok(changeset) => changeset,
+                    Err(err) => return Reply::err(id, err),
+                };
+                let result = match operation {
+                    ControlOp::ChangesetGet => runner.get_changeset(&changeset),
+                    ControlOp::ChangesetApply => runner.apply(Origin::Ipc, &changeset),
+                    ControlOp::ChangesetRevert => runner.revert(Origin::Ipc, &changeset),
+                    _ => unreachable!(),
+                };
+                match result {
+                    Ok(changeset) => match serde_json::to_value(changeset) {
+                        Ok(value) => Reply::ok(id, value),
                         Err(err) => {
                             Reply::err(id, error::ipc_frame(format!("serialize changeset: {err}")))
                         }
                     },
                     Err(err) => Reply::err(id, err),
-                },
-                Err(err) => Reply::err(id, err),
-            },
-        },
-        Request::Control { id, op, .. } => match op {
-            ControlOp::Ping => Reply::ok(id, serde_json::json!({"pong": true})),
-            _ => Reply::err(
+                }
+            }
+            ControlOp::Subscribe | ControlOp::Unsubscribe => Reply::err(
                 id,
-                error::ipc_protocol("this control op is not available on the UI task runner"),
+                error::ipc_protocol("event subscriptions are not available on the UI task runner"),
             ),
         },
     }

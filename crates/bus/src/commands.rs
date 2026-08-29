@@ -814,6 +814,9 @@ fn style_set(ctx: &mut CommandContext<'_>, args: StyleSetArgs) -> Result<Effect,
 }
 
 fn calc_recalc(ctx: &mut CommandContext<'_>, args: CalcRecalcArgs) -> Result<Effect, CoreError> {
+    if ctx.is_preflight() && !ctx.is_dry_run() {
+        return Ok(Effect::query(serde_json::json!({"queued": true})));
+    }
     let manual = ctx.workbook_ref().settings().calc_mode == CalcMode::Manual;
     let result = match args.mode.as_deref() {
         None | Some("full") => ctx.recalc_full(),

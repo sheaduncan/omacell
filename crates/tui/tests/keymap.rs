@@ -97,6 +97,7 @@ fn modal_count_does_not_corrupt_the_frozen_undo_schema() {
         outcome,
         KeyOutcome::Command { ref cmd, count: 3, .. } if cmd == "edit.undo"
     ));
+    common::wait_tasks(&mut h.tui);
     assert!(h.tui.message().is_none(), "{:?}", h.tui.message());
     assert!(!draw_text(&h.tui, 80, 24).contains("#DIV/0!"));
 }
@@ -293,6 +294,7 @@ fn hidden_sheets_do_not_appear_as_tabs() {
             .unwrap()
             .ok
     );
+    common::wait_tasks(&mut h.tui);
     assert_eq!(h.tui.ui().selection().sheet, active);
 }
 
@@ -308,5 +310,6 @@ fn sheet_navigation_does_not_mark_the_workbook_dirty() {
             .unwrap()
             .ok
     );
+    common::wait_tasks(&mut h.tui);
     assert!(!h.tui.is_dirty());
 }

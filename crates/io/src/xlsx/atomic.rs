@@ -162,7 +162,29 @@ pub fn release_lock(xlsx: &Path) -> Result<(), CoreError> {
 /// Save `doc` to `path` (temp + fsync + rename).
 pub fn save(doc: &XlsxDocument, path: &Path, opts: SaveOptions) -> Result<(), CoreError> {
     let bytes = write::save_bytes(doc)?;
-    atomic_write(path, &bytes, opts.keep_backups, opts.lock, false)
+    atomic_write(path, &bytes, opts.keep_backups, opts.lock, false, None)
+}
+
+/// Save `doc` atomically, aborting before destination replacement when cancelled.
+pub fn save_with_cancel(
+    doc: &XlsxDocument,
+    path: &Path,
+    opts: SaveOptions,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), CoreError> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err(CoreError::new("task.cancelled", "operation cancelled")
+            .with_hint("the destination file was left unchanged"));
+    }
+    let bytes = write::save_bytes(doc)?;
+    atomic_write(
+        path,
+        &bytes,
+        opts.keep_backups,
+        opts.lock,
+        false,
+        Some(cancel),
+    )
 }
 
 /// Save a raw workbook (no preserved L3 package).
@@ -172,13 +194,35 @@ pub fn save_workbook(
     opts: SaveOptions,
 ) -> Result<(), CoreError> {
     let bytes = write::save_workbook_bytes(wb)?;
-    atomic_write(path, &bytes, opts.keep_backups, opts.lock, false)
+    atomic_write(path, &bytes, opts.keep_backups, opts.lock, false, None)
+}
+
+/// Save a raw workbook atomically, aborting before replacement when cancelled.
+pub fn save_workbook_with_cancel(
+    wb: &omacell_core::workbook::Workbook,
+    path: &Path,
+    opts: SaveOptions,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), CoreError> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err(CoreError::new("task.cancelled", "operation cancelled")
+            .with_hint("the destination file was left unchanged"));
+    }
+    let bytes = write::save_workbook_bytes(wb)?;
+    atomic_write(
+        path,
+        &bytes,
+        opts.keep_backups,
+        opts.lock,
+        false,
+        Some(cancel),
+    )
 }
 
 /// Test helper: write a temp file then abort before rename.
 #[cfg(test)]
 pub fn save_fail_before_rename(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
-    atomic_write(path, bytes, 0, false, true)
+    atomic_write(path, bytes, 0, false, true, None)
 }
 
 pub(crate) fn atomic_write(
@@ -187,6 +231,7 @@ pub(crate) fn atomic_write(
     keep_backups: u32,
     lock: bool,
     fail_before_rename: bool,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(), CoreError> {
     let dir = path
         .parent()
@@ -205,6 +250,10 @@ pub(crate) fn atomic_write(
             .sync_all()
             .map_err(|e| error::xlsx_write(e.to_string()))?;
         drop(temp_file);
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err(CoreError::new("task.cancelled", "operation cancelled")
+                .with_hint("the destination file was left unchanged"));
+        }
         if fail_before_rename {
             return Err(error::xlsx_write("injected failure before rename"));
         }
@@ -602,10 +651,10 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("book.xlsx");
         fs::write(&path, b"V1").unwrap();
-        atomic_write(&path, b"V2", 2, false, false).unwrap();
+        atomic_write(&path, b"V2", 2, false, false, None).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"V2");
         assert_eq!(fs::read(dir.join("book.xlsx.bak.1")).unwrap(), b"V1");
-        atomic_write(&path, b"V3", 2, false, false).unwrap();
+        atomic_write(&path, b"V3", 2, false, false, None).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"V3");
         assert_eq!(fs::read(dir.join("book.xlsx.bak.1")).unwrap(), b"V2");
         assert_eq!(fs::read(dir.join("book.xlsx.bak.2")).unwrap(), b"V1");

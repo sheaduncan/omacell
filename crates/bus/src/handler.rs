@@ -82,6 +82,15 @@ impl<'a> CommandContext<'a> {
         )
     }
 
+    /// Rebuild and recalculate a staged workbook before atomically installing it.
+    pub fn recalc_staged(&mut self, workbook: &mut Workbook) -> RecalcResult {
+        self.engine.recalc_rebuild_with_ctl(
+            workbook,
+            self.task.cancel.as_deref(),
+            self.task.progress.clone(),
+        )
+    }
+
     /// Incremental recalculation of the dirty set.
     pub fn recalc_incremental(&mut self) -> RecalcResult {
         self.engine.recalc_incremental_with_ctl(
@@ -132,6 +141,12 @@ impl<'a> CommandContext<'a> {
         if let Some(progress) = &self.task.progress {
             progress(done, total, label);
         }
+    }
+
+    /// Clone the progress sink for an adapter callback that must be `'static`.
+    #[must_use]
+    pub fn progress_sink(&self) -> Option<Arc<omacell_core::recalc::RecalcProgress>> {
+        self.task.progress.clone()
     }
 }
 

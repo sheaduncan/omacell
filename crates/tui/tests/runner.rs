@@ -38,7 +38,7 @@ fn tui_with_hold(start: Arc<Barrier>, release: Arc<AtomicBool>) -> (tempfile::Te
             bus,
             ui,
             roots,
-            long_ops: LongOps::production().with("test.hold"),
+            long_ops: LongOps::production(),
         },
         false,
     )
@@ -98,7 +98,31 @@ fn esc_cancels_without_closing_help_panel() {
     start.wait();
     tui.step_key(KeyEvent::new(KeyCode::Esc)).unwrap();
     assert_eq!(tui.ui().panel().visible.as_deref(), Some("keys"));
+    common::wait_tasks(&mut tui);
+    assert_eq!(tui.message(), Some("operation cancelled"));
     release.store(true, Ordering::SeqCst);
+}
+
+#[test]
+fn completed_and_failed_tasks_reconcile_status() {
+    let start = Arc::new(Barrier::new(1));
+    let release = Arc::new(AtomicBool::new(true));
+    let (_dir, mut tui) = tui_with_hold(start, release);
+    let queued = tui
+        .execute_cmd("cell.set", json!({"ref": "A1", "input": "7"}))
+        .unwrap();
+    assert!(queued.ok);
+    assert!(tui.has_pending_tasks());
+    common::wait_tasks(&mut tui);
+    assert!(tui.message().is_none());
+    assert!(tui.is_dirty());
+
+    tui.execute_cmd("does.not.exist", json!({})).unwrap();
+    common::wait_tasks(&mut tui);
+    assert!(
+        tui.message()
+            .is_some_and(|message| message.contains("unknown"))
+    );
 }
 
 #[test]

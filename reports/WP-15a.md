@@ -29,9 +29,11 @@
 
 ## What was built
 
-A single-writer command worker (`TaskRunner`) owns the live `Bus`. Front-ends and runner-backed IPC (`serve_runner`) submit work; they paint from `Arc<ReaderSnapshot>` published after each commit. Long operations are listed in composition-layer `LongOps`, not frozen command metadata. While the writer is busy, session-local navigation/selection/zoom/palette/panel run through `omacell_ui::apply_local_command` against the last snapshot.
+A single-writer command worker (`TaskRunner`) owns the live `Bus`. Front-ends and runner-backed IPC (`serve_runner`) submit work; they paint from `Arc<ReaderSnapshot>` published after each successful mutation. TUI commands outside the session-local set are always submitted asynchronously because even a nominally short edit can trigger a long automatic recalc. Long operations remain explicitly listed in composition-layer `LongOps`, not frozen command metadata. Session-local navigation/selection/zoom/edit-mode/palette/panel actions run through `omacell_ui::apply_local_command` against the last snapshot.
 
-`Esc` cancels the running task without dismissing unrelated panels. Dropping `TaskRunner` requests cancel and joins the worker. Recalc cooperative-cancels between generations and restores a pre-pass workbook clone. CSV `file.open` loads into a scratch workbook (WP-08 `LoadOptions.cancel`); the live book is replaced only on success. CSV export writes a temp file and renames only if not cancelled.
+`Esc` cancels the focused queued/running task without dismissing unrelated panels. Dropping `TaskRunner` cancels accepted work, resolves queued replies, and joins the worker. Queued cancellation prevents handler dispatch. Terminal task records and cancel flags are released, accepted task state is capped at the channel capacity plus the writer, progress labels/events are bounded, and terminal events carry the `Outcome` needed by toolkits to reconcile dirty state.
+
+Recalc checks cancellation before/within generation commits, circular iteration, spill-follow waves, and stale-flag commits. Cancellation restores the pre-pass workbook/spill state; automatic recalc now runs inside the outer command transaction, so a cancelled edit and its derived values roll back together. CSV `file.open` loads and recalculates a staged workbook, then installs it only on success. CSV/OMC/XLSX save/export serialize to a unique same-directory temporary file and check cancellation before atomic destination replacement. `:wq` waits for save completion rather than immediately shutting down and cancelling the save.
 
 `Bus::execute` remains for CLI one-shots. `test.hold` is a test-only barrier command.
 
@@ -42,15 +44,15 @@ Key files: `crates/bus/src/{task,runner}.rs`, `crates/ui/src/local.rs`, TUI `app
 | Item | Notes |
 |---|---|
 | `TaskRunner::spawn(bus, LongOps)` | Worker owns `Bus`. Drop = cancel in-flight + join |
-| `TaskRunnerHandle` | `submit` / `submit_wait` / `propose` / `apply` / `dry_run` / `snapshot` / `drain_events` / `running_cancel` / `command_ids` |
+| `TaskRunnerHandle` | `submit` / `submit_wait` / changeset propose/apply/revert/list/get / `dry_run` / `snapshot` / `drain_events` / `running_cancel` / `command_ids` |
 | `ReaderSnapshot` | `{ workbook, spill }` behind `Arc`; clone of Arc is O(1) per frame |
-| `TaskState` / `TaskStatus` / `TaskProgress` / `TaskEvent` / `CancelHandle` | Additive; not frozen `Event` or IPC |
+| `TaskState` / `TaskStatus` / `TaskProgress` / `TaskEvent` / `CancelHandle` | Additive; terminal success includes `Outcome`; not frozen `Event` or IPC |
 | `LongOps::production()` | `calc.recalc`, `file.open`, `file.save`, `file.export` |
 | `register_hold_command` | Test-only `test.hold` |
-| `omacell_ui::{is_local_command, apply_local_command}` | Busy-path session commands |
+| `omacell_ui::{is_local_command, apply_local_command}` | Snapshot-backed session commands; toolkits call these before queueing |
 | `UiSession::apply_config_ids` | Keymap reload against captured command ids |
 | `ipc::serve_runner` | IPC execute/propose/dry-run through the same writer |
-| `CommandContext::{cancel_flag, is_cancelled, report_progress}` | Adapters (file/recalc) |
+| `CommandContext::{cancel_flag, is_cancelled, report_progress, progress_sink, recalc_staged}` | Adapters (file/recalc) |
 | `RecalcEngine::recalc_*_with_ctl` / `RecalcResult.cancelled` | Cooperative cancel + restore |
 
 WP-16: spawn `TaskRunner` after registering commands; do not put `Bus` behind a toolkit mutex. See updated WP-16 binding notes.
@@ -59,23 +61,24 @@ WP-16: spawn `TaskRunner` after registering commands; do not put `Bus` behind a 
 
 - **Snapshot clone is O(cells) at commit**, not per frame or progress tick. Making `Workbook` internally `Arc` per sheet would be a larger core change; Arc publication still meets the per-frame requirement.
 - **Debug paint bound is 100 ms**; release/CI-style 16 ms is the spec gate (`cfg!(debug_assertions)` in the TUI runner test). Criterion `tui_redraw_200x60_1m` remains the empty-sheet paint budget.
-- **IPC subscribe/changeset control** on `serve_runner` is ping + registry commands only. Full changeset control stays on bus-backed `serve()` used by CLI one-shots.
+- **IPC event subscribe/unsubscribe** is not yet available on `serve_runner`; registry commands plus changeset apply/revert/list/get use the runner and preserve the frozen IPC mutation policy. Bus-backed `serve()` still provides event subscriptions.
 - **CSV load_into into a caller-owned workbook** still writes partial rows then `csv.cancelled` (WP-08). The *command* path is atomic because `file.open` assigns the scratch book only on success.
 
 ## Measurements
 
-Host: local Linux. `CARGO_TARGET_DIR=$HOME/.cache/omacell/target`.
+Host: local Linux. Build artifacts were kept in the repository-local review scratch directory.
 
 - `just check` — pass
-- `cargo test -p omacell-bus --test runner` — 5 pass
-- `cargo test -p omacell-tui --test runner` — 3 pass (debug paint 17 ms, asserted < 100 ms)
-- `cargo test -p omacell-cli --test cancel_atomic` — 3 pass
+- `cargo test -p omacell-bus --test runner` — 8 pass
+- `cargo test -p omacell-bus --test ipc_server` — runner-backed mutation policy/apply test passes with the existing IPC suite
+- `cargo test -p omacell-tui --test runner` — 4 pass (debug uses the documented 100 ms CI-safe bound; release remains 16 ms)
+- `cargo test -p omacell-cli --test cancel_atomic` — 4 pass, including real command-path import/export and mid-auto-recalc rollback
 - Existing TUI keymap/reload/snapshot suites still pass
 - `cargo deny check` — pass (no new crates.io deps)
 
 ## Open questions / decisions needed
 
-1. Whether `serve_runner` should grow subscribe/changeset list RPCs before G3 dogfooding of `omacell ipc` against a live TUI.
+1. Whether `serve_runner` should grow event subscribe/unsubscribe before G3 dogfooding of `omacell ipc` against a live TUI.
 2. Per-cell stale hatching during an in-progress recalc still waits on a committed snapshot (busy chrome only).
 
 ## RFC (only if a frozen contract changed)
@@ -94,7 +97,7 @@ None. Frozen WP-01 `Event`, WP-07a command schemas, and WP-07b IPC envelope are 
 
 - [x] Deterministic mock long command: 200×60 paint stays off the writer; nav < 50 ms — `crates/tui/tests/runner.rs`
 - [x] TUI-started and IPC-started longs share one writer; mutation order under concurrent submit — `crates/bus/tests/runner.rs`; `serve_runner` uses `submit_wait`
-- [x] Recalc/import/export cancel leaves no partial live transaction or dest replace — `crates/cli/tests/cancel_atomic.rs`
-- [x] Bounded task-event queue; stalled consumer cannot block worker; progress coalesced — `crates/bus/tests/runner.rs`
+- [x] Recalc/import/export cancel leaves no partial live transaction or destination replacement — real command paths in `crates/cli/tests/cancel_atomic.rs`
+- [x] Bounded task/event queues and retained state; stalled consumer cannot block worker; progress coalesced — `crates/bus/tests/runner.rs`
 - [x] TUI running/completed/failed/cancelled, Esc, continued input, resize, shutdown with in-flight task — `crates/tui/tests/runner.rs`
 - [x] WP-16 package names this runner as required input — `docs/build/wp/WP-16-gui-foundation.md`

@@ -13,7 +13,9 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use omacell_bus::ipc::{IpcHandle, default_runtime_dir};
-use omacell_bus::{Bus, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskRunner};
+use omacell_bus::{
+    Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskId, TaskRunner,
+};
 use omacell_conf::{ConfigStore, Paths, ReloadEvent};
 use omacell_core::addr::SheetId;
 use omacell_core::command::{Origin, Outcome};
@@ -62,6 +64,9 @@ pub struct Tui {
     dirty: bool,
     quit_armed: bool,
     quit_requested: bool,
+    last_queued: Option<TaskId>,
+    focused_cancel: Option<CancelHandle>,
+    quit_after: Option<TaskId>,
     _ipc: Option<IpcHandle>,
 }
 
@@ -107,6 +112,9 @@ impl Tui {
             dirty: false,
             quit_armed: false,
             quit_requested: false,
+            last_queued: None,
+            focused_cancel: None,
+            quit_after: None,
             _ipc: ipc_handle,
         })
     }
@@ -145,6 +153,12 @@ impl Tui {
     #[must_use]
     pub fn quit_requested(&self) -> bool {
         self.quit_requested
+    }
+
+    /// Whether commands are queued or currently using the writer.
+    #[must_use]
+    pub fn has_pending_tasks(&self) -> bool {
+        self.runner.handle().tracked_tasks() != 0
     }
 
     /// Apply pending filesystem/theme reloads without resetting the session.
@@ -229,7 +243,10 @@ impl Tui {
         }
         self.quit_armed = false;
         if event.code == KeyCode::Esc
-            && let Some(handle) = self.runner.handle().running_cancel()
+            && let Some(handle) = self
+                .focused_cancel
+                .clone()
+                .or_else(|| self.runner.handle().running_cancel())
         {
             handle.cancel();
             self.message = Some("cancelling…".into());
@@ -257,40 +274,38 @@ impl Tui {
         args: serde_json::Value,
     ) -> Result<Outcome, CoreError> {
         let handle = self.runner.handle();
-        if handle.long_ops().contains(cmd) {
-            handle.submit(Origin::User, cmd, args)?;
-            self.message = Some("working…".into());
-            return Ok(Outcome::success(serde_json::json!({"queued": true})));
-        }
-        if handle.is_busy()
-            && let Some(local) =
-                apply_local_command(&self.ui, &handle.snapshot().workbook, cmd, &args)
+        self.last_queued = None;
+        if let Some(local) = apply_local_command(&self.ui, &handle.snapshot().workbook, cmd, &args)
         {
-            local?;
+            if let Err(err) = local {
+                self.message = Some(err.message.clone());
+                return Ok(Outcome::failure(err));
+            }
+            self.ui.remember_command(cmd);
+            self.message = None;
             if cmd == "palette.open" {
                 self.refresh_palette("")?;
             }
             return Ok(Outcome::success(serde_json::json!({"ok": true})));
         }
-        let result = handle.submit_wait(Origin::User, cmd, args);
-        self.adopt_snapshot();
-        if !result.ok {
-            if let Some(err) = &result.error {
+        let (id, cancel) = match handle.submit(Origin::User, cmd, args) {
+            Ok(task) => task,
+            Err(err) => {
                 self.message = Some(err.message.clone());
+                return Ok(Outcome::failure(err));
             }
+        };
+        self.last_queued = Some(id);
+        self.focused_cancel = Some(cancel);
+        self.message = Some(if handle.long_ops().contains(cmd) {
+            "working…".into()
         } else {
-            self.ui.remember_command(cmd);
-            self.message = None;
-            if cmd == "file.open" || cmd == "file.save" {
-                self.dirty = false;
-            } else if command_changes_workbook(cmd, &result, true) {
-                self.dirty = true;
-            }
-            if cmd == "palette.open" {
-                self.refresh_palette("")?;
-            }
-        }
-        Ok(result)
+            "queued…".into()
+        });
+        Ok(Outcome::success(serde_json::json!({
+            "queued": true,
+            "task": id.get(),
+        })))
     }
 
     fn adopt_snapshot(&mut self) {
@@ -305,16 +320,47 @@ impl Tui {
     fn poll_tasks(&mut self) {
         for event in self.runner.handle().drain_events() {
             match event {
-                TaskEvent::Completed(state) => {
+                TaskEvent::Completed { state, outcome } => {
+                    if self
+                        .focused_cancel
+                        .as_ref()
+                        .is_some_and(|cancel| cancel.id() == state.id)
+                    {
+                        self.focused_cancel = None;
+                    }
                     self.message = None;
                     if state.command == "file.open" || state.command == "file.save" {
                         self.dirty = false;
+                    } else {
+                        let mutating = self
+                            .catalog
+                            .iter()
+                            .find(|command| command.id == state.command)
+                            .is_some_and(|command| command.mutating);
+                        if command_changes_workbook(&state.command, &outcome, mutating) {
+                            self.dirty = true;
+                        }
                     }
+                    self.ui.remember_command(&state.command);
                     self.adopt_snapshot();
+                    if self.quit_after == Some(state.id) {
+                        self.quit_after = None;
+                        self.request_quit(true);
+                    }
                 }
-                TaskEvent::Failed { message, .. } => {
+                TaskEvent::Failed { state, message, .. } => {
+                    if self
+                        .focused_cancel
+                        .as_ref()
+                        .is_some_and(|cancel| cancel.id() == state.id)
+                    {
+                        self.focused_cancel = None;
+                    }
                     self.message = Some(message);
                     self.adopt_snapshot();
+                    if self.quit_after == Some(state.id) {
+                        self.quit_after = None;
+                    }
                 }
                 TaskEvent::Progress(state) => {
                     if let Some(progress) = state.progress {
@@ -326,7 +372,7 @@ impl Tui {
                         });
                     }
                 }
-                TaskEvent::Running(_) | TaskEvent::Queued(_) => {}
+                TaskEvent::Cancelling(_) | TaskEvent::Running(_) | TaskEvent::Queued(_) => {}
             }
         }
     }
@@ -551,7 +597,7 @@ impl Tui {
             }
             "wq" | "x" => {
                 if self.execute_cmd("file.save", serde_json::json!({}))?.ok {
-                    self.request_quit(true);
+                    self.quit_after = self.last_queued;
                 }
             }
             _ => {

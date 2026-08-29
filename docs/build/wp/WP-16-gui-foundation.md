@@ -39,7 +39,7 @@ The native Wayland front-end: the same state machines as the TUI, rendered with 
 
 - Consume `omacell_bus::{TaskRunner, TaskRunnerHandle, ReaderSnapshot, TaskState, CancelHandle, LongOps, TaskEvent}`. Spawn the runner after command registration; the egui app must not wrap or directly expose `Bus` through a toolkit-owned mutex.
 - Paint from `handle.snapshot()` (`Arc` clone is O(1) per frame). Session-local nav/sel/view/palette/panel use `omacell_ui::apply_local_command` against that snapshot while `handle.is_busy()`.
-- Submit long ops (`LongOps::production()`: `calc.recalc`, `file.open`, `file.save`, `file.export`) with `submit`; short mutations with `submit_wait`. Drain `TaskEvent`s on the UI thread. `Esc` calls `running_cancel()`.
+- Submit every non-local UI command with non-blocking `submit`; a nominally short edit may trigger a long automatic recalc. Reserve `submit_wait` for non-UI callers that are explicitly allowed to block. Run `omacell_ui::apply_local_command` directly against the latest snapshot for navigation/view state. `LongOps::production()` still classifies recalc and file I/O for progress presentation. Drain `TaskEvent`s (including the terminal `Outcome`) on the UI thread; `Esc` calls `running_cancel()`.
 - Dropping `TaskRunner` cancels the in-flight task and joins the worker so a closed window never abandons a partial workbook transaction.
 
 ## Acceptance criteria
