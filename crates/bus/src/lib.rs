@@ -22,7 +22,9 @@ mod logical;
 mod policy;
 mod registry;
 mod resolve;
+mod runner;
 mod session;
+mod task;
 
 pub use catalog::{CommandJson, CommandsEnvelope, SCHEMA, commands_json};
 pub use changeset::{
@@ -32,8 +34,12 @@ pub use changeset::{
 pub use commands::register_core;
 pub use error::codes;
 pub use event::{EventBus, SubscriberId};
-pub use handler::{CommandContext, Effect};
+pub use handler::{CommandContext, Effect, TaskCtl};
 pub use policy::MutationPolicy;
 pub use registry::{CommandKind, CommandRegistry, CommandSpec, Exposure, RegisteredCommand};
 pub use resolve::MAX_RANGE_CELLS;
+pub use runner::{TaskRunner, TaskRunnerHandle, register_hold_command};
 pub use session::{Bus, DryRun};
+pub use task::{
+    CancelHandle, LongOps, ReaderSnapshot, TaskEvent, TaskId, TaskProgress, TaskState, TaskStatus,
+};

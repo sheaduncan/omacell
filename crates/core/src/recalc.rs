@@ -23,6 +23,9 @@ use crate::workbook::{CalcMode, Workbook};
 /// Recalculation modes (F-3.6). Alias of workbook settings.
 pub type RecalcMode = CalcMode;
 
+/// Progress callback `(done, total, label)` used by the UI task runner.
+pub type RecalcProgress = dyn Fn(u64, Option<u64>, &str) + Send + Sync;
+
 /// Content-addressed key for async nodes (A-3.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ContentHash(pub u64);
@@ -242,6 +245,8 @@ pub struct RecalcResult {
     pub stale: Vec<CellCoord>,
     /// Provider hints (cell, hint).
     pub async_hints: Vec<(CellCoord, String)>,
+    /// Cooperative cancel restored the pre-pass workbook.
+    pub cancelled: bool,
 }
 
 #[derive(Default)]
@@ -467,8 +472,18 @@ impl RecalcEngine {
 
     /// Full recalc of every formula cell.
     pub fn recalc_full(&mut self, wb: &mut Workbook) -> RecalcResult {
+        self.recalc_full_with_ctl(wb, None, None)
+    }
+
+    /// Full recalc with cooperative cancel. On cancel the workbook is restored.
+    pub fn recalc_full_with_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<std::sync::Arc<RecalcProgress>>,
+    ) -> RecalcResult {
         self.rebuild(wb);
-        self.run(wb, true)
+        self.run_ctl(wb, true, cancel, progress.as_deref())
     }
 
     /// Rebuild graph then full recalc.
@@ -476,8 +491,28 @@ impl RecalcEngine {
         self.recalc_full(wb)
     }
 
+    /// Rebuild with cooperative cancel.
+    pub fn recalc_rebuild_with_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<std::sync::Arc<RecalcProgress>>,
+    ) -> RecalcResult {
+        self.recalc_full_with_ctl(wb, cancel, progress)
+    }
+
     /// Incremental recalc of the dirty set (no-op in manual mode).
     pub fn recalc_incremental(&mut self, wb: &mut Workbook) -> RecalcResult {
+        self.recalc_incremental_with_ctl(wb, None, None)
+    }
+
+    /// Incremental recalc with cooperative cancel.
+    pub fn recalc_incremental_with_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<std::sync::Arc<RecalcProgress>>,
+    ) -> RecalcResult {
         match wb.settings().calc_mode {
             CalcMode::Manual => RecalcResult::default(),
             CalcMode::Automatic | CalcMode::AutomaticExceptTables => {
@@ -487,7 +522,7 @@ impl RecalcEngine {
                 for v in self.graph.volatiles() {
                     self.dirty.insert(v);
                 }
-                self.run(wb, false)
+                self.run_ctl(wb, false, cancel, progress.as_deref())
             }
         }
     }
@@ -500,7 +535,14 @@ impl RecalcEngine {
         }
     }
 
-    fn run(&mut self, wb: &mut Workbook, full: bool) -> RecalcResult {
+    fn run_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        full: bool,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<&RecalcProgress>,
+    ) -> RecalcResult {
+        let backup = cancel.map(|_| wb.clone());
         let t0 = Instant::now();
         self.pass = self.pass.saturating_add(1);
         self.pass_env = self.sample_pass_env();
@@ -549,8 +591,24 @@ impl RecalcEngine {
         }
 
         let gens = self.graph.generations(&dirty);
+        let total = gens.iter().map(Vec::len).sum::<usize>() as u64;
         for generation in gens {
+            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
+                if let Some(backup) = backup {
+                    *wb = backup;
+                    self.rebuild(wb);
+                }
+                return RecalcResult {
+                    cells_evaluated: evaluated,
+                    elapsed_ms: u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    cancelled: true,
+                    ..RecalcResult::default()
+                };
+            }
             evaluated += self.eval_generation(wb, &generation, &mut accum) as u64;
+            if let Some(progress) = progress {
+                progress(evaluated, Some(total.max(1)), "recalc");
+            }
         }
 
         let circular_nodes = circular.clone();
@@ -616,6 +674,7 @@ impl RecalcEngine {
             pending_async: accum.pending_async,
             stale: accum.stale,
             async_hints: accum.async_hints,
+            cancelled: false,
         }
     }
 

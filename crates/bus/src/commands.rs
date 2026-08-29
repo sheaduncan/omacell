@@ -832,6 +832,14 @@ fn calc_recalc(ctx: &mut CommandContext<'_>, args: CalcRecalcArgs) -> Result<Eff
             )));
         }
     };
+    if result.cancelled {
+        return Err(crate::error::task_cancelled());
+    }
+    ctx.report_progress(
+        result.cells_evaluated,
+        Some(result.cells_evaluated),
+        "recalc",
+    );
     Ok(Effect {
         inverse: Vec::new(),
         events: vec![Event::RecalcDone {

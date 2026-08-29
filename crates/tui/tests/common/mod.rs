@@ -1,7 +1,7 @@
 //! Shared TUI test harness (no second config load; no watcher).
 #![allow(dead_code)]
 
-use omacell_bus::Bus;
+use omacell_bus::{Bus, LongOps};
 use omacell_conf::{ConfigStore, LoadOptions, Paths};
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
@@ -100,6 +100,7 @@ fn harness_opts_with_workbook(
             bus,
             ui,
             roots,
+            long_ops: LongOps::production().with("test.hold"),
         },
         false,
     )

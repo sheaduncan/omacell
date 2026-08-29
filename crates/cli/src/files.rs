@@ -141,7 +141,13 @@ fn file_open(
     args: FileOpenArgs,
 ) -> Result<Effect, CoreError> {
     let path = PathBuf::from(&args.path);
-    let opened = open_any(&path)?;
+    if ctx.is_cancelled() {
+        return Err(cancelled());
+    }
+    let opened = open_any_with_cancel(&path, ctx)?;
+    if ctx.is_cancelled() {
+        return Err(cancelled());
+    }
     if !ctx.is_preflight() {
         session.attach(&path, &opened);
     }
@@ -197,6 +203,9 @@ fn file_save(
             "path": path.display().to_string(),
             "dry_run": true,
         })));
+    }
+    if ctx.is_cancelled() {
+        return Err(cancelled());
     }
     write_kind(
         ctx.workbook_ref(),
@@ -263,7 +272,17 @@ fn file_export(
             }
             let bytes = csv::export(ctx.workbook_ref(), &plan)?;
             if !ctx.is_preflight() {
-                std::fs::write(&path, bytes)
+                if ctx.is_cancelled() {
+                    return Err(cancelled());
+                }
+                let tmp = path.with_extension("omacell-export-tmp");
+                std::fs::write(&tmp, bytes)
+                    .map_err(|e| CoreError::new("file.export", e.to_string()))?;
+                if ctx.is_cancelled() {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(cancelled());
+                }
+                std::fs::rename(&tmp, &path)
                     .map_err(|e| CoreError::new("file.export", e.to_string()))?;
             }
         }
@@ -305,6 +324,25 @@ pub(crate) struct Opened {
     extras: HashMap<String, WorksheetExtras>,
 }
 
+fn cancelled() -> CoreError {
+    CoreError::new("task.cancelled", "operation cancelled")
+        .with_hint("the live workbook and destination file were left unchanged")
+}
+
+fn open_any_with_cancel(path: &Path, ctx: &CommandContext<'_>) -> Result<Opened, CoreError> {
+    let cancel = ctx.cancel_flag().cloned();
+    if let Some(kind) = kind_from_path(path) {
+        return open_kind(path, kind, None, cancel);
+    }
+    if let Ok(opened) = open_kind(path, FileKind::Xlsx, None, cancel.clone()) {
+        return Ok(opened);
+    }
+    if let Ok(opened) = open_kind(path, FileKind::Omc, None, cancel.clone()) {
+        return Ok(opened);
+    }
+    open_kind(path, FileKind::Csv, None, cancel)
+}
+
 /// Open a workbook by extension, then content sniff.
 pub fn open_any(path: &Path) -> Result<Opened, CoreError> {
     open_any_with_plan(path, None)
@@ -315,24 +353,25 @@ pub(crate) fn open_any_with_plan(
     plan: Option<&csv::ImportPlan>,
 ) -> Result<Opened, CoreError> {
     if plan.is_some() {
-        return open_kind(path, FileKind::Csv, plan);
+        return open_kind(path, FileKind::Csv, plan, None);
     }
     if let Some(kind) = kind_from_path(path) {
-        return open_kind(path, kind, None);
+        return open_kind(path, kind, None, None);
     }
-    if let Ok(opened) = open_kind(path, FileKind::Xlsx, None) {
+    if let Ok(opened) = open_kind(path, FileKind::Xlsx, None, None) {
         return Ok(opened);
     }
-    if let Ok(opened) = open_kind(path, FileKind::Omc, None) {
+    if let Ok(opened) = open_kind(path, FileKind::Omc, None, None) {
         return Ok(opened);
     }
-    open_kind(path, FileKind::Csv, None)
+    open_kind(path, FileKind::Csv, None, None)
 }
 
 fn open_kind(
     path: &Path,
     kind: FileKind,
     import_plan: Option<&csv::ImportPlan>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Opened, CoreError> {
     match kind {
         FileKind::Xlsx => {
@@ -362,7 +401,11 @@ fn open_kind(
                 &sniffed.plan
             };
             plan.validate()?;
-            let (workbook, _) = csv::load_path(path, plan, csv::LoadOptions::default())?;
+            let opts = csv::LoadOptions {
+                cancel,
+                ..csv::LoadOptions::default()
+            };
+            let (workbook, _) = csv::load_path(path, plan, opts)?;
             Ok(Opened {
                 workbook,
                 kind,

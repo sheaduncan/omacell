@@ -1,7 +1,7 @@
 //! TUI session over the WP-13 composition objects.
 
 use std::io::{self, IsTerminal, stdout};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crossterm::ExecutableCommand;
@@ -12,16 +12,16 @@ use crossterm::event::{
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use omacell_bus::ipc::{IpcHandle, default_runtime_dir, serve};
-use omacell_bus::{Bus, CommandJson, CommandsEnvelope, SubscriberId};
+use omacell_bus::ipc::{IpcHandle, default_runtime_dir};
+use omacell_bus::{Bus, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskRunner};
 use omacell_conf::{ConfigStore, Paths, ReloadEvent};
 use omacell_core::addr::SheetId;
-use omacell_core::command::{CommandId, Origin, Outcome};
+use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
-use omacell_core::event::Event;
-use omacell_core::spill::SpillTable;
 use omacell_core::workbook::Workbook;
-use omacell_ui::{Area, ExtendMode, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, UiSession};
+use omacell_ui::{
+    Area, ExtendMode, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_local_command,
+};
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
 
@@ -41,13 +41,15 @@ pub struct Launch {
     pub ui: UiSession,
     /// Keymap search roots used on reload.
     pub roots: KeymapRoots,
+    /// Long-operation classifier (composition layer).
+    pub long_ops: LongOps,
 }
 
 /// Running TUI. Tests drive [`Self::draw`] / [`Self::step_key`].
 pub struct Tui {
     paths: Paths,
     store: ConfigStore,
-    bus: Arc<Mutex<Bus>>,
+    runner: TaskRunner,
     ui: UiSession,
     roots: KeymapRoots,
     truecolor: bool,
@@ -55,28 +57,12 @@ pub struct Tui {
     palette_index: usize,
     palette_command: Option<String>,
     last_grid: Mutex<Option<render::GridHitMap>>,
-    fallback: Mutex<RenderSnapshot>,
+    catalog: Vec<CommandJson>,
     active_sheet: SheetId,
     dirty: bool,
     quit_armed: bool,
     quit_requested: bool,
-    event_subscriber: SubscriberId,
     _ipc: Option<IpcHandle>,
-}
-
-#[derive(Clone)]
-struct RenderSnapshot {
-    workbook: Workbook,
-    spill: SpillTable,
-}
-
-impl RenderSnapshot {
-    fn from_bus(bus: &Bus) -> Self {
-        Self {
-            workbook: bus.workbook().clone(),
-            spill: bus.engine().spill().clone(),
-        }
-    }
 }
 
 impl Tui {
@@ -84,26 +70,31 @@ impl Tui {
     pub fn new(launch: Launch, ipc: bool) -> Result<Self, CoreError> {
         let loaded = launch.store.snapshot();
         let truecolor = truecolor_enabled(&loaded.config.tui.truecolor);
-        let (bus, ipc_handle) = if ipc {
-            let handle = serve(default_runtime_dir(), launch.bus)?;
-            let bus = handle.bus().clone();
-            (bus, Some(handle))
+        let catalog = {
+            let text = launch
+                .bus
+                .commands_json()
+                .map_err(|err| CoreError::new("tui.palette", err.to_string()))?;
+            serde_json::from_str::<CommandsEnvelope>(&text)
+                .map(|envelope| envelope.commands)
+                .map_err(|err| CoreError::new("tui.palette", err.to_string()))?
+        };
+        let runner = TaskRunner::spawn(launch.bus, launch.long_ops)?;
+        let ipc_handle = if ipc {
+            Some(omacell_bus::ipc::serve_runner(
+                default_runtime_dir(),
+                runner.handle(),
+            )?)
         } else {
-            (Arc::new(Mutex::new(launch.bus)), None)
+            None
         };
-        let (fallback, active_sheet, event_subscriber) = {
-            let mut bus = bus.lock().unwrap_or_else(|p| p.into_inner());
-            (
-                RenderSnapshot::from_bus(&bus),
-                bus.workbook().active_sheet(),
-                bus.subscribe(256),
-            )
-        };
-        apply_sheet_view(&launch.ui, &fallback.workbook, active_sheet);
+        let snapshot = runner.handle().snapshot();
+        let active_sheet = snapshot.workbook.active_sheet();
+        apply_sheet_view(&launch.ui, &snapshot.workbook, active_sheet);
         Ok(Self {
             paths: launch.paths,
             store: launch.store,
-            bus,
+            runner,
             ui: launch.ui,
             roots: launch.roots,
             truecolor,
@@ -111,12 +102,11 @@ impl Tui {
             palette_index: 0,
             palette_command: None,
             last_grid: Mutex::new(None),
-            fallback: Mutex::new(fallback),
+            catalog,
             active_sheet,
             dirty: false,
             quit_armed: false,
             quit_requested: false,
-            event_subscriber,
             _ipc: ipc_handle,
         })
     }
@@ -159,7 +149,7 @@ impl Tui {
 
     /// Apply pending filesystem/theme reloads without resetting the session.
     pub fn poll_reload(&mut self) -> Result<(), CoreError> {
-        self.poll_bus_events();
+        self.poll_tasks();
         let events = self.store.drain_events();
         if events.is_empty() {
             self.sync_active_sheet();
@@ -172,8 +162,11 @@ impl Tui {
                     self.message = Some(message.clone());
                 }
                 ReloadEvent::Applied { .. } | ReloadEvent::ThemeChanged { .. } => {
-                    let bus = self.bus.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Err(err) = self.ui.apply_config(&snapshot, &self.roots, bus.registry()) {
+                    if let Err(err) = self.ui.apply_config_ids(
+                        &snapshot,
+                        &self.roots,
+                        self.runner.handle().command_ids(),
+                    ) {
                         self.message = Some(format!("{}: {}", err.code, err.message));
                         continue;
                     }
@@ -192,68 +185,36 @@ impl Tui {
     pub fn draw<B: Backend>(&self, terminal: &mut Terminal<B>) -> io::Result<()> {
         let loaded = self.store.snapshot();
         let unicode = loaded.config.tui.unicode_borders;
-        let mut hit_map = None;
-        match self.bus.try_lock() {
-            Ok(bus) => {
-                terminal.draw(|frame| {
-                    hit_map = Some(render::draw(
-                        frame,
-                        render::FrameInput {
-                            wb: bus.workbook(),
-                            spill: bus.engine().spill(),
-                            ui: &self.ui,
-                            theme_name: &loaded.theme.name,
-                            truecolor: self.truecolor,
-                            unicode_borders: unicode,
-                            message: self.message.as_deref(),
-                            palette_index: self.palette_index,
-                            dirty: self.dirty,
-                            busy: false,
-                        },
-                    ));
-                })?;
-            }
-            Err(TryLockError::Poisoned(poisoned)) => {
-                let bus = poisoned.into_inner();
-                terminal.draw(|frame| {
-                    hit_map = Some(render::draw(
-                        frame,
-                        render::FrameInput {
-                            wb: bus.workbook(),
-                            spill: bus.engine().spill(),
-                            ui: &self.ui,
-                            theme_name: &loaded.theme.name,
-                            truecolor: self.truecolor,
-                            unicode_borders: unicode,
-                            message: self.message.as_deref(),
-                            palette_index: self.palette_index,
-                            dirty: self.dirty,
-                            busy: false,
-                        },
-                    ));
-                })?;
-            }
-            Err(TryLockError::WouldBlock) => {
-                let fallback = self.fallback.lock().unwrap_or_else(|p| p.into_inner());
-                terminal.draw(|frame| {
-                    hit_map = Some(render::draw(
-                        frame,
-                        render::FrameInput {
-                            wb: &fallback.workbook,
-                            spill: &fallback.spill,
-                            ui: &self.ui,
-                            theme_name: &loaded.theme.name,
-                            truecolor: self.truecolor,
-                            unicode_borders: unicode,
-                            message: self.message.as_deref(),
-                            palette_index: self.palette_index,
-                            dirty: self.dirty,
-                            busy: true,
-                        },
-                    ));
-                })?;
-            }
+        let snapshot = self.runner.handle().snapshot();
+        let busy = self.runner.handle().is_busy();
+        let mut progress_msg = self.message.clone();
+        if let Some(task) = self.runner.handle().running()
+            && let Some(progress) = task.progress
+        {
+            let label = match progress.total {
+                Some(total) => format!("{} {}/{}", progress.label, progress.done, total),
+                None => format!("{} {}", progress.label, progress.done),
+            };
+            progress_msg = Some(label);
         }
+        let mut hit_map = None;
+        terminal.draw(|frame| {
+            hit_map = Some(render::draw(
+                frame,
+                render::FrameInput {
+                    wb: &snapshot.workbook,
+                    spill: &snapshot.spill,
+                    ui: &self.ui,
+                    theme_name: &loaded.theme.name,
+                    truecolor: self.truecolor,
+                    unicode_borders: unicode,
+                    message: progress_msg.as_deref(),
+                    palette_index: self.palette_index,
+                    dirty: self.dirty,
+                    busy,
+                },
+            ));
+        })?;
         *self.last_grid.lock().unwrap_or_else(|p| p.into_inner()) = hit_map;
         Ok(())
     }
@@ -267,6 +228,13 @@ impl Tui {
             return Ok(KeyOutcome::Pending);
         }
         self.quit_armed = false;
+        if event.code == KeyCode::Esc
+            && let Some(handle) = self.runner.handle().running_cancel()
+        {
+            handle.cancel();
+            self.message = Some("cancelling…".into());
+            return Ok(KeyOutcome::Pending);
+        }
         if self.ui.palette().open {
             return self.step_palette(event);
         }
@@ -288,21 +256,24 @@ impl Tui {
         cmd: &str,
         args: serde_json::Value,
     ) -> Result<Outcome, CoreError> {
-        let (result, next_sheet, next_snapshot, workbook_changed) = {
-            let mut bus = self.bus.lock().unwrap_or_else(|p| p.into_inner());
-            let registered_mutating = CommandId::new(cmd)
-                .ok()
-                .and_then(|id| bus.registry().get(&id))
-                .is_some_and(|command| command.descriptor.mutating);
-            let result = bus.execute(Origin::User, cmd, args);
-            let next_sheet = bus.workbook().active_sheet();
-            let workbook_changed =
-                result.ok && command_changes_workbook(cmd, &result, registered_mutating);
-            let snapshot = (result.ok
-                && (next_sheet != self.active_sheet || workbook_changed || cmd == "file.open"))
-                .then(|| RenderSnapshot::from_bus(&bus));
-            (result, next_sheet, snapshot, workbook_changed)
-        };
+        let handle = self.runner.handle();
+        if handle.long_ops().contains(cmd) {
+            handle.submit(Origin::User, cmd, args)?;
+            self.message = Some("working…".into());
+            return Ok(Outcome::success(serde_json::json!({"queued": true})));
+        }
+        if handle.is_busy()
+            && let Some(local) =
+                apply_local_command(&self.ui, &handle.snapshot().workbook, cmd, &args)
+        {
+            local?;
+            if cmd == "palette.open" {
+                self.refresh_palette("")?;
+            }
+            return Ok(Outcome::success(serde_json::json!({"ok": true})));
+        }
+        let result = handle.submit_wait(Origin::User, cmd, args);
+        self.adopt_snapshot();
         if !result.ok {
             if let Some(err) = &result.error {
                 self.message = Some(err.message.clone());
@@ -312,21 +283,52 @@ impl Tui {
             self.message = None;
             if cmd == "file.open" || cmd == "file.save" {
                 self.dirty = false;
-            } else if workbook_changed {
+            } else if command_changes_workbook(cmd, &result, true) {
                 self.dirty = true;
-            }
-            if let Some(snapshot) = next_snapshot {
-                if next_sheet != self.active_sheet || cmd == "file.open" {
-                    apply_sheet_view(&self.ui, &snapshot.workbook, next_sheet);
-                    self.active_sheet = next_sheet;
-                }
-                *self.fallback.lock().unwrap_or_else(|p| p.into_inner()) = snapshot;
             }
             if cmd == "palette.open" {
                 self.refresh_palette("")?;
             }
         }
         Ok(result)
+    }
+
+    fn adopt_snapshot(&mut self) {
+        let snapshot = self.runner.handle().snapshot();
+        let sheet = snapshot.workbook.active_sheet();
+        if sheet != self.active_sheet {
+            apply_sheet_view(&self.ui, &snapshot.workbook, sheet);
+            self.active_sheet = sheet;
+        }
+    }
+
+    fn poll_tasks(&mut self) {
+        for event in self.runner.handle().drain_events() {
+            match event {
+                TaskEvent::Completed(state) => {
+                    self.message = None;
+                    if state.command == "file.open" || state.command == "file.save" {
+                        self.dirty = false;
+                    }
+                    self.adopt_snapshot();
+                }
+                TaskEvent::Failed { message, .. } => {
+                    self.message = Some(message);
+                    self.adopt_snapshot();
+                }
+                TaskEvent::Progress(state) => {
+                    if let Some(progress) = state.progress {
+                        self.message = Some(match progress.total {
+                            Some(total) => {
+                                format!("{} {}/{}", progress.label, progress.done, total)
+                            }
+                            None => format!("{} {}", progress.label, progress.done),
+                        });
+                    }
+                }
+                TaskEvent::Running(_) | TaskEvent::Queued(_) => {}
+            }
+        }
     }
 
     fn step_palette(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
@@ -450,15 +452,7 @@ impl Tui {
     }
 
     fn command_catalog(&self) -> Result<Vec<CommandJson>, CoreError> {
-        let text = self
-            .bus
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .commands_json()
-            .map_err(|err| CoreError::new("tui.palette", err.to_string()))?;
-        serde_json::from_str::<CommandsEnvelope>(&text)
-            .map(|envelope| envelope.commands)
-            .map_err(|err| CoreError::new("tui.palette", err.to_string()))
+        Ok(self.catalog.clone())
     }
 
     fn refresh_palette(&mut self, query: &str) -> Result<(), CoreError> {
@@ -749,65 +743,7 @@ impl Tui {
     }
 
     fn sync_active_sheet(&mut self) {
-        let snapshot = match self.bus.try_lock() {
-            Ok(bus) if bus.workbook().active_sheet() != self.active_sheet => Some((
-                bus.workbook().active_sheet(),
-                RenderSnapshot::from_bus(&bus),
-            )),
-            Err(TryLockError::Poisoned(poisoned)) => {
-                let bus = poisoned.into_inner();
-                (bus.workbook().active_sheet() != self.active_sheet).then(|| {
-                    (
-                        bus.workbook().active_sheet(),
-                        RenderSnapshot::from_bus(&bus),
-                    )
-                })
-            }
-            _ => None,
-        };
-        if let Some((sheet, snapshot)) = snapshot {
-            apply_sheet_view(&self.ui, &snapshot.workbook, sheet);
-            self.active_sheet = sheet;
-            *self.fallback.lock().unwrap_or_else(|p| p.into_inner()) = snapshot;
-        }
-    }
-
-    fn poll_bus_events(&mut self) {
-        let update = match self.bus.try_lock() {
-            Ok(mut bus) => {
-                let events = bus.drain(self.event_subscriber);
-                (!events.is_empty()).then(|| (events, RenderSnapshot::from_bus(&bus)))
-            }
-            Err(TryLockError::Poisoned(poisoned)) => {
-                let mut bus = poisoned.into_inner();
-                let events = bus.drain(self.event_subscriber);
-                (!events.is_empty()).then(|| (events, RenderSnapshot::from_bus(&bus)))
-            }
-            Err(TryLockError::WouldBlock) => None,
-        };
-        let Some((events, snapshot)) = update else {
-            return;
-        };
-        let mut opened = false;
-        for event in events {
-            match event {
-                Event::WorkbookOpened { .. } => {
-                    opened = true;
-                    self.dirty = false;
-                }
-                Event::FileSaved { .. } => self.dirty = false,
-                Event::CellChanged { .. }
-                | Event::ChangesetApplied { .. }
-                | Event::ChangesetReverted { .. } => self.dirty = true,
-                _ => {}
-            }
-        }
-        let sheet = snapshot.workbook.active_sheet();
-        if opened || sheet != self.active_sheet {
-            apply_sheet_view(&self.ui, &snapshot.workbook, sheet);
-            self.active_sheet = sheet;
-        }
-        *self.fallback.lock().unwrap_or_else(|p| p.into_inner()) = snapshot;
+        self.adopt_snapshot();
     }
 }
 

@@ -1,11 +1,23 @@
 //! Handler context and typed effect records.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
 use omacell_core::changeset::{ChangeSummary, CommandCall};
 use omacell_core::command::Origin;
 use omacell_core::event::Event;
 use omacell_core::graph::CellCoord;
 use omacell_core::recalc::{RecalcEngine, RecalcResult};
 use omacell_core::workbook::Workbook;
+
+/// Cooperative cancel / progress hooks supplied by the task runner.
+#[derive(Clone, Default)]
+pub struct TaskCtl {
+    /// Cooperative cancel flag.
+    pub cancel: Option<Arc<AtomicBool>>,
+    /// Progress sink `(done, total, label)`.
+    pub progress: Option<Arc<omacell_core::recalc::RecalcProgress>>,
+}
 
 /// Per-invocation borrow of the workbook, engine, and origin.
 pub struct CommandContext<'a> {
@@ -14,15 +26,17 @@ pub struct CommandContext<'a> {
     origin: Origin,
     preflight: bool,
     dry_run: bool,
+    task: TaskCtl,
 }
 
 impl<'a> CommandContext<'a> {
-    pub(crate) fn new(
+    pub(crate) fn with_task(
         workbook: &'a mut Workbook,
         engine: &'a mut RecalcEngine,
         origin: Origin,
         preflight: bool,
         dry_run: bool,
+        task: TaskCtl,
     ) -> Self {
         Self {
             workbook,
@@ -30,6 +44,7 @@ impl<'a> CommandContext<'a> {
             origin,
             preflight,
             dry_run,
+            task,
         }
     }
 
@@ -51,17 +66,29 @@ impl<'a> CommandContext<'a> {
 
     /// Full recalculation (explicit `calc.recalc`).
     pub fn recalc_full(&mut self) -> RecalcResult {
-        self.engine.recalc_full(self.workbook)
+        self.engine.recalc_full_with_ctl(
+            self.workbook,
+            self.task.cancel.as_deref(),
+            self.task.progress.clone(),
+        )
     }
 
     /// Rebuild graph then full recalculation.
     pub fn recalc_rebuild(&mut self) -> RecalcResult {
-        self.engine.recalc_rebuild(self.workbook)
+        self.engine.recalc_rebuild_with_ctl(
+            self.workbook,
+            self.task.cancel.as_deref(),
+            self.task.progress.clone(),
+        )
     }
 
     /// Incremental recalculation of the dirty set.
     pub fn recalc_incremental(&mut self) -> RecalcResult {
-        self.engine.recalc_incremental(self.workbook)
+        self.engine.recalc_incremental_with_ctl(
+            self.workbook,
+            self.task.cancel.as_deref(),
+            self.task.progress.clone(),
+        )
     }
 
     /// Trusted origin for this invocation.
@@ -83,6 +110,28 @@ impl<'a> CommandContext<'a> {
     #[must_use]
     pub fn is_preflight(&self) -> bool {
         self.preflight
+    }
+
+    /// Cooperative cancel flag from the task runner, if any.
+    #[must_use]
+    pub fn cancel_flag(&self) -> Option<&Arc<AtomicBool>> {
+        self.task.cancel.as_ref()
+    }
+
+    /// Whether the runner has requested cancel.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.task
+            .cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    /// Report coalesced progress for the running task.
+    pub fn report_progress(&self, done: u64, total: Option<u64>, label: &str) {
+        if let Some(progress) = &self.task.progress {
+            progress(done, total, label);
+        }
     }
 }
 

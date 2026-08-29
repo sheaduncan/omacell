@@ -40,6 +40,12 @@ pub mod codes {
     pub const IPC_DISCONNECTED: &str = "ipc.disconnected";
     /// Per-client event queue overflowed.
     pub const IPC_OVERFLOW: &str = "ipc.overflow";
+    /// Task-runner submit queue is full.
+    pub const TASK_QUEUE: &str = "task.queue";
+    /// Task-runner worker is shut down.
+    pub const TASK_SHUTDOWN: &str = "task.shutdown";
+    /// Cooperative cancel completed without committing.
+    pub const TASK_CANCELLED: &str = "task.cancelled";
 }
 
 pub(crate) fn unknown(id: &str) -> CoreError {
@@ -134,4 +140,18 @@ pub(crate) fn ipc_timeout(message: impl Into<String>) -> CoreError {
 
 pub(crate) fn ipc_disconnected() -> CoreError {
     CoreError::new(codes::IPC_DISCONNECTED, "IPC peer closed the connection")
+}
+
+pub(crate) fn task_queue() -> CoreError {
+    CoreError::new(codes::TASK_QUEUE, "command queue is full")
+        .with_hint("wait for the current long operation to finish")
+}
+
+pub(crate) fn task_shutdown() -> CoreError {
+    CoreError::new(codes::TASK_SHUTDOWN, "command worker stopped")
+}
+
+pub(crate) fn task_cancelled() -> CoreError {
+    CoreError::new(codes::TASK_CANCELLED, "operation cancelled")
+        .with_hint("the live workbook and destination file were left unchanged")
 }

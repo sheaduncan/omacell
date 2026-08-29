@@ -37,9 +37,10 @@ The native Wayland front-end: the same state machines as the TUI, rendered with 
 
 ### Binding handoff from WP-15a
 
-- Consume WP-15a's command task runner, reader snapshots, progress stream, and cancellation handles. The egui app must not wrap or directly expose `Bus` through a toolkit-owned mutex.
-- Keep navigation, selection, scroll, zoom, resize, and paint usable while the writer executes recalc/import/export. Publish task progress through the shared status model and reconcile completed snapshots on the UI thread.
-- Reuse the runner shutdown and bounded-queue behavior. Closing a window cancels or detaches its owned tasks according to WP-15a policy and never abandons a partially applied workbook transaction.
+- Consume `omacell_bus::{TaskRunner, TaskRunnerHandle, ReaderSnapshot, TaskState, CancelHandle, LongOps, TaskEvent}`. Spawn the runner after command registration; the egui app must not wrap or directly expose `Bus` through a toolkit-owned mutex.
+- Paint from `handle.snapshot()` (`Arc` clone is O(1) per frame). Session-local nav/sel/view/palette/panel use `omacell_ui::apply_local_command` against that snapshot while `handle.is_busy()`.
+- Submit long ops (`LongOps::production()`: `calc.recalc`, `file.open`, `file.save`, `file.export`) with `submit`; short mutations with `submit_wait`. Drain `TaskEvent`s on the UI thread. `Esc` calls `running_cancel()`.
+- Dropping `TaskRunner` cancels the in-flight task and joins the worker so a closed window never abandons a partial workbook transaction.
 
 ## Acceptance criteria
 

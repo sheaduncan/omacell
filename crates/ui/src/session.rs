@@ -94,6 +94,41 @@ impl UiSession {
         Ok(())
     }
 
+    /// Apply config using a captured command-id set (task runner).
+    pub fn apply_config_ids(
+        &self,
+        config: &LoadedConfig,
+        roots: &KeymapRoots,
+        known: &std::collections::BTreeSet<String>,
+    ) -> Result<(), CoreError> {
+        let next = load_inner(config, roots)?;
+        for (_mode, chord, binding) in next.keymap.iter() {
+            if !known.contains(&binding.cmd) && crate::deferred::owner(&binding.cmd).is_none() {
+                return Err(error::keymap(format!(
+                    "unowned command {} for chord {chord}",
+                    binding.cmd
+                )));
+            }
+        }
+        let mut g = self.lock();
+        if next.model != g.model {
+            g.mode = if !g.edit.is_idle() && next.model == KeyModel::Modal {
+                Mode::Insert
+            } else {
+                next.mode
+            };
+        }
+        g.model = next.model;
+        g.keymap = next.keymap;
+        g.reference_colors = next.reference_colors;
+        g.enter_moves = next.enter_moves;
+        g.status_ids = next.status_ids;
+        g.panel.side = next.panel.side;
+        g.panel.width = next.panel.width;
+        g.config = next.config;
+        Ok(())
+    }
+
     /// Current mode.
     #[must_use]
     pub fn mode(&self) -> Mode {
