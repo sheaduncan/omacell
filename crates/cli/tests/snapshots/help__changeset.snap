@@ -1,0 +1,25 @@
+---
+source: crates/cli/tests/help.rs
+expression: "help(&[\"changeset\", \"--help\"])"
+---
+Changesets on a running instance
+
+Usage: omacell changeset [OPTIONS] <COMMAND>
+
+Commands:
+  list    List stored changesets
+  show    Show one changeset
+  apply   Apply a proposed changeset
+  revert  Revert an applied changeset
+  export  Export a changeset as `.omc`
+
+Options:
+      --json                  Machine-readable stdout (and stderr errors)
+      --dry-run               Validate writes without changing files
+      --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
+      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
+      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+  -q, --quiet                 Suppress non-error human output
+  -v, --verbose...            Increase log verbosity
+      --from-workbook <FILE>  Workbook whose frozen settings overlay configuration
+  -h, --help                  Print help

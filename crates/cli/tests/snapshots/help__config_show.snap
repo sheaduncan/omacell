@@ -1,0 +1,23 @@
+---
+source: crates/cli/tests/help.rs
+expression: "help(&[\"config\", \"show\", \"--help\"])"
+---
+Show one key or the full effective config
+
+Usage: omacell config show [OPTIONS] [KEY]
+
+Arguments:
+  [KEY]  Dotted key (`appearance.grid_lines`)
+
+Options:
+      --all                   Dump every key, theme, shell, and provenance
+      --json                  Machine-readable stdout (and stderr errors)
+      --dry-run               Validate writes without changing files
+      --explain               Include winning layer and source
+      --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
+      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
+      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+  -q, --quiet                 Suppress non-error human output
+  -v, --verbose...            Increase log verbosity
+      --from-workbook <FILE>  Workbook whose frozen settings overlay configuration
+  -h, --help                  Print help

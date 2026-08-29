@@ -32,6 +32,31 @@ pub enum ReloadEvent {
     },
 }
 
+/// Cloneable, `Send + Sync` reload target for SIGUSR1 and `theme.reload`.
+#[derive(Clone)]
+pub struct ReloadHandle {
+    paths: Paths,
+    options: LoadOptions,
+    inner: Arc<Mutex<LoadedConfig>>,
+}
+
+impl ReloadHandle {
+    /// Re-read files using the retained [`LoadOptions`].
+    pub fn reload(&self) -> Result<(), omacell_core::error::CoreError> {
+        let next = load_with_options(&self.paths, &self.options)?;
+        if let Ok(mut g) = self.inner.lock() {
+            *g = next;
+        }
+        Ok(())
+    }
+
+    /// Current last-good snapshot.
+    #[must_use]
+    pub fn snapshot(&self) -> LoadedConfig {
+        self.inner.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+}
+
 /// Live configuration with last-good snapshot.
 pub struct ConfigStore {
     paths: Paths,
@@ -44,7 +69,14 @@ pub struct ConfigStore {
 impl ConfigStore {
     /// Load once without watching.
     pub fn load(paths: Paths) -> Result<Self, omacell_core::error::CoreError> {
-        let options = LoadOptions::from_process();
+        Self::load_with(paths, LoadOptions::from_process())
+    }
+
+    /// Load once, retaining workbook / CLI / env overlays, without watching.
+    pub fn load_with(
+        paths: Paths,
+        options: LoadOptions,
+    ) -> Result<Self, omacell_core::error::CoreError> {
         let loaded = load_with_options(&paths, &options)?;
         let (_tx, rx) = mpsc::channel();
         Ok(Self {
@@ -107,11 +139,17 @@ impl ConfigStore {
 
     /// Re-read files (SIGUSR1 / theme hook).
     pub fn reload(&self) -> Result<(), omacell_core::error::CoreError> {
-        let next = load_with_options(&self.paths, &self.options)?;
-        if let Ok(mut g) = self.inner.lock() {
-            *g = next;
+        self.handle().reload()
+    }
+
+    /// Shareable reload target for commands and signal adapters.
+    #[must_use]
+    pub fn handle(&self) -> ReloadHandle {
+        ReloadHandle {
+            paths: self.paths.clone(),
+            options: self.options.clone(),
+            inner: self.inner.clone(),
         }
-        Ok(())
     }
 
     /// Whether filesystem live reload is active.

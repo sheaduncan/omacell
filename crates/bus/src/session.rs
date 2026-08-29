@@ -230,6 +230,7 @@ impl Bus {
             &mut scratch_engine,
             origin,
             calls,
+            how.scratch_only,
         )?;
         if let Some(id) = &how.applied_changeset {
             self.changesets
@@ -251,7 +252,7 @@ impl Bus {
             } = self;
             let mut live_effect = Effect::default();
             workbook.transact_try(|wb| {
-                live_effect = dispatch(registry, wb, engine, origin, calls)?;
+                live_effect = dispatch(registry, wb, engine, origin, calls, false)?;
                 if let Some(id) = &how.applied_changeset {
                     changesets.ensure_applied_fits(
                         id,
@@ -396,6 +397,7 @@ fn dispatch(
     engine: &mut RecalcEngine,
     origin: Origin,
     calls: &[CommandCall],
+    dry_run: bool,
 ) -> Result<Effect, CoreError> {
     let mut combined = Effect {
         auto_recalc: false,
@@ -405,7 +407,7 @@ fn dispatch(
         let cmd = registry
             .get(&call.id)
             .ok_or_else(|| bus_error::unknown(call.id.as_str()))?;
-        let mut ctx = CommandContext::new(workbook, engine, origin);
+        let mut ctx = CommandContext::new(workbook, engine, origin, dry_run);
         let effect = cmd.invoke(&mut ctx, call.args.clone())?;
         ensure_effect_fits(&effect)?;
         combined.append(effect);

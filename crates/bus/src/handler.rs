@@ -12,6 +12,7 @@ pub struct CommandContext<'a> {
     workbook: &'a mut Workbook,
     engine: &'a mut RecalcEngine,
     origin: Origin,
+    dry_run: bool,
 }
 
 impl<'a> CommandContext<'a> {
@@ -19,11 +20,13 @@ impl<'a> CommandContext<'a> {
         workbook: &'a mut Workbook,
         engine: &'a mut RecalcEngine,
         origin: Origin,
+        dry_run: bool,
     ) -> Self {
         Self {
             workbook,
             engine,
             origin,
+            dry_run,
         }
     }
 
@@ -62,6 +65,14 @@ impl<'a> CommandContext<'a> {
     #[must_use]
     pub fn origin(&self) -> Origin {
         self.origin
+    }
+
+    /// Whether this invocation is a dry-run or changeset proposal scratch pass.
+    ///
+    /// File adapters must not write the filesystem when this is true.
+    #[must_use]
+    pub fn is_dry_run(&self) -> bool {
+        self.dry_run
     }
 }
 

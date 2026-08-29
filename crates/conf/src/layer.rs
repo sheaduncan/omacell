@@ -629,6 +629,55 @@ pub fn reset_user_file(
     paths: &Paths,
     stamp: &str,
 ) -> Result<Option<std::path::PathBuf>, omacell_core::error::CoreError> {
+    reset_user_rel(paths, stamp, "config.toml")
+}
+
+/// Reset a file beneath [`Paths::user_config`] using the same backup policy as
+/// [`reset_user_file`]. `relative` must contain only normal path components.
+pub fn reset_user_rel(
+    paths: &Paths,
+    stamp: &str,
+    relative: &str,
+) -> Result<Option<std::path::PathBuf>, omacell_core::error::CoreError> {
+    validate_backup_stamp(stamp)?;
+    let relative = Path::new(relative);
+    if relative.is_absolute()
+        || relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err(error::schema(
+            "reset path must be a relative file under the user config directory",
+        ));
+    }
+    let src = paths.user_config.join(relative);
+    if !src.starts_with(&paths.user_config) {
+        return Err(error::schema(
+            "reset path escaped the user config directory",
+        ));
+    }
+    if !src.is_file() {
+        return Ok(None);
+    }
+    let dir = paths.backup_dir(stamp);
+    std::fs::create_dir_all(&dir).map_err(|e| error::io(e.to_string()))?;
+    let dest = dir.join(
+        relative
+            .file_name()
+            .ok_or_else(|| error::schema("reset path has no file name"))?,
+    );
+    if dest.exists() {
+        return Err(error::io(format!(
+            "backup already exists: {}",
+            dest.display()
+        )));
+    }
+    std::fs::rename(&src, &dest).map_err(|e| error::io(e.to_string()))?;
+    Ok(Some(dest))
+}
+
+fn validate_backup_stamp(stamp: &str) -> Result<(), omacell_core::error::CoreError> {
     let mut components = Path::new(stamp).components();
     if !matches!(components.next(), Some(std::path::Component::Normal(_)))
         || components.next().is_some()
@@ -638,19 +687,5 @@ pub fn reset_user_file(
     {
         return Err(error::schema("backup stamp contains unsafe characters"));
     }
-    let src = paths.user_config_toml();
-    if !src.is_file() {
-        return Ok(None);
-    }
-    let dir = paths.backup_dir(stamp);
-    std::fs::create_dir_all(&dir).map_err(|e| error::io(e.to_string()))?;
-    let dest = dir.join("config.toml");
-    if dest.exists() {
-        return Err(error::io(format!(
-            "backup already exists: {}",
-            dest.display()
-        )));
-    }
-    std::fs::rename(&src, &dest).map_err(|e| error::io(e.to_string()))?;
-    Ok(Some(dest))
+    Ok(())
 }

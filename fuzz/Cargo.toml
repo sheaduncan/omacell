@@ -22,6 +22,9 @@ path = "../crates/bus"
 [dependencies.omacell-io]
 path = "../crates/io"
 
+[dependencies.omacell-cli]
+path = "../crates/cli"
+
 [dependencies.zip]
 version = "2"
 default-features = false
@@ -79,6 +82,13 @@ bench = false
 [[bin]]
 name = "omc_parse"
 path = "fuzz_targets/omc_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cli_args"
+path = "fuzz_targets/cli_args.rs"
 test = false
 doc = false
 bench = false

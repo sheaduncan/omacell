@@ -1,0 +1,24 @@
+---
+source: crates/cli/tests/help.rs
+expression: "help(&[\"convert\", \"--help\"])"
+---
+Convert a workbook between `.xlsx`, CSV, and `.omc`
+
+Usage: omacell convert [OPTIONS] <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input path
+  <OUTPUT>  Output path (extension selects format)
+
+Options:
+      --json                  Machine-readable stdout (and stderr errors)
+      --sheet <SHEET>         Sheet name
+      --dry-run               Validate writes without changing files
+      --range <RANGE>         A1 range to export
+      --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
+      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
+      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+  -q, --quiet                 Suppress non-error human output
+  -v, --verbose...            Increase log verbosity
+      --from-workbook <FILE>  Workbook whose frozen settings overlay configuration
+  -h, --help                  Print help

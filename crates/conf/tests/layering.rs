@@ -220,3 +220,26 @@ fn workbook_settings_have_one_canonical_config_overlay() {
     assert_eq!(loaded.config.calc.max_change, 0.25);
     assert_eq!(loaded.explain("calc.mode").unwrap().layer, Layer::Workbook);
 }
+
+#[test]
+fn named_user_reset_stays_under_user_config() {
+    use omacell_conf::reset_user_rel;
+
+    let (_t, paths) = temp_paths();
+    let profile = paths.user_config.join("profiles/work.toml");
+    std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+    std::fs::write(&profile, "[layout]\npanel_width = 9\n").unwrap();
+
+    assert!(reset_user_rel(&paths, "stamp1", "../escape.toml").is_err());
+    assert!(reset_user_rel(&paths, "stamp1", "/etc/passwd").is_err());
+    let dest = reset_user_rel(&paths, "stamp1", "profiles/work.toml")
+        .unwrap()
+        .unwrap();
+    assert!(!profile.is_file());
+    assert!(dest.starts_with(&paths.state_dir));
+    assert!(
+        std::fs::read_to_string(&dest)
+            .unwrap()
+            .contains("panel_width")
+    );
+}

@@ -1,0 +1,376 @@
+//! `file.open` / `file.save` / `file.export` adapters over `omacell-io`.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use omacell_bus::{Bus, CommandContext, CommandKind, CommandSpec, Effect, Exposure};
+use omacell_core::error::CoreError;
+use omacell_core::event::Event;
+use omacell_core::workbook::Workbook;
+use omacell_io::csv::{self, ExportPlan};
+use omacell_io::omc::{self, OmcDocument};
+use omacell_io::xlsx::{self, OpcPackage, SaveOptions, WorksheetExtras, XlsxDocument};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Kind of the currently opened file.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileKind {
+    Xlsx,
+    Csv,
+    Omc,
+}
+
+#[derive(Default)]
+struct FileState {
+    path: Option<PathBuf>,
+    kind: Option<FileKind>,
+    package: Option<OpcPackage>,
+    extras: HashMap<String, WorksheetExtras>,
+}
+
+/// Sidecar retained by file command closures (package bytes live outside `Workbook`).
+#[derive(Clone, Default)]
+pub struct FileSession {
+    inner: Arc<Mutex<FileState>>,
+}
+
+impl FileSession {
+    /// Empty session.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, FileState> {
+        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Remember path and preserved package after a composition-root open.
+    pub(crate) fn attach(&self, path: &Path, opened: &Opened) {
+        let mut state = self.lock();
+        state.path = Some(path.to_path_buf());
+        state.kind = Some(opened.kind);
+        state.package = opened.package.clone();
+        state.extras = opened.extras.clone();
+    }
+}
+
+/// `file.open`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileOpenArgs {
+    /// Path to open.
+    pub path: String,
+}
+
+/// `file.save`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileSaveArgs {
+    /// Destination; default is the path from `file.open`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// `file.export`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileExportArgs {
+    /// Destination path (extension selects format).
+    pub path: String,
+    /// Sheet name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+    /// A1 range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+}
+
+/// Register file adapters on an existing bus.
+pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(), CoreError> {
+    let open_session = session.clone();
+    bus.registry_mut().register::<FileOpenArgs, _>(
+        CommandSpec {
+            id: "file.open",
+            doc: "Open a workbook from disk",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        move |ctx, args| file_open(ctx, &open_session, args),
+    )?;
+    let save_session = session.clone();
+    bus.registry_mut().register::<FileSaveArgs, _>(
+        CommandSpec {
+            id: "file.save",
+            doc: "Save the open workbook",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+S"],
+        },
+        move |ctx, args| file_save(ctx, &save_session, args),
+    )?;
+    let export_session = session.clone();
+    bus.registry_mut().register::<FileExportArgs, _>(
+        CommandSpec {
+            id: "file.export",
+            doc: "Export the open workbook to another format",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        move |ctx, args| file_export(ctx, &export_session, args),
+    )?;
+    Ok(())
+}
+
+fn file_open(
+    ctx: &mut CommandContext<'_>,
+    session: &FileSession,
+    args: FileOpenArgs,
+) -> Result<Effect, CoreError> {
+    let path = PathBuf::from(&args.path);
+    let opened = open_any(&path)?;
+    *ctx.workbook() = opened.workbook;
+    ctx.recalc_rebuild();
+    {
+        let mut state = session.lock();
+        state.path = Some(path.clone());
+        state.kind = Some(opened.kind);
+        state.package = opened.package;
+        state.extras = opened.extras;
+    }
+    Ok(Effect {
+        events: vec![Event::WorkbookOpened {
+            path: Some(path.display().to_string()),
+        }],
+        result: serde_json::json!({"path": path.display().to_string()}),
+        auto_recalc: false,
+        rebuild: true,
+        ..Effect::default()
+    })
+}
+
+fn file_save(
+    ctx: &mut CommandContext<'_>,
+    session: &FileSession,
+    args: FileSaveArgs,
+) -> Result<Effect, CoreError> {
+    let state = session.lock();
+    let path = args
+        .path
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(|| state.path.clone())
+        .ok_or_else(|| {
+            omacell_core::error::CoreError::new("file.path", "no path; pass file.save path")
+        })?;
+    let kind = kind_from_path(&path)
+        .or(state.kind)
+        .unwrap_or(FileKind::Xlsx);
+    if ctx.is_dry_run() {
+        return Ok(Effect::query(serde_json::json!({
+            "path": path.display().to_string(),
+            "dry_run": true,
+        })));
+    }
+    write_kind(
+        ctx.workbook_ref(),
+        &path,
+        kind,
+        state.package.as_ref(),
+        &state.extras,
+    )?;
+    Ok(Effect {
+        events: vec![
+            Event::BeforeSave {
+                path: path.display().to_string(),
+            },
+            Event::FileSaved {
+                path: path.display().to_string(),
+            },
+        ],
+        result: serde_json::json!({"path": path.display().to_string()}),
+        auto_recalc: false,
+        ..Effect::default()
+    })
+}
+
+fn file_export(
+    ctx: &mut CommandContext<'_>,
+    session: &FileSession,
+    args: FileExportArgs,
+) -> Result<Effect, CoreError> {
+    let path = PathBuf::from(&args.path);
+    let kind = kind_from_path(&path).ok_or_else(|| {
+        CoreError::new(
+            "file.format",
+            format!("cannot infer export format from {}", path.display()),
+        )
+        .with_hint("use a .xlsx, .csv, .tsv, or .omc destination")
+    })?;
+    if ctx.is_dry_run() {
+        return Ok(Effect::query(serde_json::json!({
+            "path": path.display().to_string(),
+            "dry_run": true,
+        })));
+    }
+    let state = session.lock();
+    match kind {
+        FileKind::Csv => {
+            let mut plan = ExportPlan {
+                sheet: args.sheet,
+                range: args.range,
+                ..ExportPlan::default()
+            };
+            if path.extension().and_then(|e| e.to_str()) == Some("tsv") {
+                plan.delimiter = '\t';
+            }
+            let bytes = csv::export(ctx.workbook_ref(), &plan)?;
+            std::fs::write(&path, bytes)
+                .map_err(|e| CoreError::new("file.export", e.to_string()))?;
+        }
+        FileKind::Xlsx | FileKind::Omc => {
+            write_kind(
+                ctx.workbook_ref(),
+                &path,
+                kind,
+                state.package.as_ref(),
+                &state.extras,
+            )?;
+        }
+    }
+    Ok(Effect {
+        events: vec![Event::FileSaved {
+            path: path.display().to_string(),
+        }],
+        result: serde_json::json!({"path": path.display().to_string()}),
+        auto_recalc: false,
+        ..Effect::default()
+    })
+}
+
+pub(crate) struct Opened {
+    pub(crate) workbook: Workbook,
+    kind: FileKind,
+    package: Option<OpcPackage>,
+    extras: HashMap<String, WorksheetExtras>,
+}
+
+/// Open a workbook by extension, then content sniff.
+pub fn open_any(path: &Path) -> Result<Opened, CoreError> {
+    if let Some(kind) = kind_from_path(path) {
+        return open_kind(path, kind);
+    }
+    if let Ok(opened) = open_kind(path, FileKind::Xlsx) {
+        return Ok(opened);
+    }
+    if let Ok(opened) = open_kind(path, FileKind::Omc) {
+        return Ok(opened);
+    }
+    open_kind(path, FileKind::Csv)
+}
+
+fn open_kind(path: &Path, kind: FileKind) -> Result<Opened, CoreError> {
+    match kind {
+        FileKind::Xlsx => {
+            let doc = xlsx::open(path)?;
+            Ok(Opened {
+                workbook: doc.workbook,
+                kind,
+                package: Some(doc.package),
+                extras: doc.extras,
+            })
+        }
+        FileKind::Omc => {
+            let doc = omc::open(path)?;
+            Ok(Opened {
+                workbook: doc.workbook,
+                kind,
+                extras: doc.extras,
+                package: None,
+            })
+        }
+        FileKind::Csv => {
+            let sniffed = csv::sniff_path(path)?;
+            let (workbook, _) = csv::load_path(path, &sniffed.plan, csv::LoadOptions::default())?;
+            Ok(Opened {
+                workbook,
+                kind,
+                package: None,
+                extras: HashMap::new(),
+            })
+        }
+    }
+}
+
+fn write_kind(
+    wb: &Workbook,
+    path: &Path,
+    kind: FileKind,
+    package: Option<&OpcPackage>,
+    extras: &HashMap<String, WorksheetExtras>,
+) -> Result<(), CoreError> {
+    match kind {
+        FileKind::Xlsx => {
+            if let Some(package) = package {
+                let doc = XlsxDocument {
+                    workbook: wb.clone(),
+                    warnings: Default::default(),
+                    package: package.clone(),
+                    extras: extras.clone(),
+                };
+                xlsx::save(
+                    &doc,
+                    path,
+                    SaveOptions {
+                        keep_backups: 0,
+                        lock: false,
+                    },
+                )?;
+            } else {
+                xlsx::save_workbook(
+                    wb,
+                    path,
+                    SaveOptions {
+                        keep_backups: 0,
+                        lock: false,
+                    },
+                )?;
+            }
+        }
+        FileKind::Omc => {
+            let doc = OmcDocument {
+                workbook: wb.clone(),
+                extras: extras.clone(),
+                changeset: None,
+            };
+            omc::write_to_path(&doc, path)?;
+        }
+        FileKind::Csv => {
+            let bytes = csv::export(wb, &ExportPlan::default())?;
+            std::fs::write(path, bytes)
+                .map_err(|e| CoreError::new("file.export", e.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+fn kind_from_path(path: &Path) -> Option<FileKind> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xlsx" | "xlsm") => Some(FileKind::Xlsx),
+        Some("csv" | "tsv" | "txt") => Some(FileKind::Csv),
+        Some("omc") => Some(FileKind::Omc),
+        _ => None,
+    }
+}
