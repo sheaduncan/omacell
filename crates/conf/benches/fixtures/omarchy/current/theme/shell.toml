@@ -1,0 +1,8 @@
+[font]
+base-size = 12
+
+[spacing]
+scale = 1.0
+
+[window]
+corner-style = "rounded"

@@ -1,0 +1,1092 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "Root configuration (`schema = 1`).",
+  "type": "object",
+  "properties": {
+    "ai": {
+      "description": "AI.",
+      "$ref": "#/$defs/Ai"
+    },
+    "appearance": {
+      "description": "Appearance.",
+      "$ref": "#/$defs/Appearance"
+    },
+    "behavior": {
+      "description": "Editing behaviour.",
+      "$ref": "#/$defs/Behavior"
+    },
+    "calc": {
+      "description": "Calculation defaults.",
+      "$ref": "#/$defs/Calc"
+    },
+    "charts": {
+      "description": "Charts.",
+      "$ref": "#/$defs/Charts"
+    },
+    "config": {
+      "description": "Live-reload (library extension of Appendix B).",
+      "$ref": "#/$defs/ConfigMeta",
+      "default": {
+        "debounce_ms": 50,
+        "live_reload": true
+      }
+    },
+    "files": {
+      "description": "File I/O.",
+      "$ref": "#/$defs/Files"
+    },
+    "integrations": {
+      "description": "Host integrations.",
+      "$ref": "#/$defs/Integrations"
+    },
+    "keys": {
+      "description": "Keymap pointer.",
+      "$ref": "#/$defs/Keys"
+    },
+    "layout": {
+      "description": "Chrome layout.",
+      "$ref": "#/$defs/Layout"
+    },
+    "locale": {
+      "description": "Locale.",
+      "$ref": "#/$defs/Locale"
+    },
+    "network": {
+      "description": "Network gate.",
+      "$ref": "#/$defs/Network"
+    },
+    "schema": {
+      "description": "Schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "enum": [
+        1
+      ],
+      "minimum": 0
+    },
+    "scripting": {
+      "description": "Lua.",
+      "$ref": "#/$defs/Scripting"
+    },
+    "session": {
+      "description": "Session restore.",
+      "$ref": "#/$defs/Session"
+    },
+    "tui": {
+      "description": "TUI.",
+      "$ref": "#/$defs/Tui"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "appearance",
+    "behavior",
+    "calc",
+    "locale",
+    "files",
+    "session",
+    "layout",
+    "integrations",
+    "network",
+    "scripting",
+    "ai",
+    "charts",
+    "tui",
+    "keys"
+  ],
+  "$defs": {
+    "Ai": {
+      "description": "`[ai]`.",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "description": "In-app agent.",
+          "$ref": "#/$defs/AiAgent"
+        },
+        "completion": {
+          "description": "Completion.",
+          "$ref": "#/$defs/AiCompletion"
+        },
+        "enabled": {
+          "description": "Master switch.",
+          "type": "boolean"
+        },
+        "functions": {
+          "description": "Cell functions.",
+          "$ref": "#/$defs/AiFunctions"
+        },
+        "models": {
+          "description": "Task slots.",
+          "$ref": "#/$defs/AiModels"
+        },
+        "privacy": {
+          "description": "Privacy.",
+          "$ref": "#/$defs/AiPrivacy"
+        },
+        "providers": {
+          "description": "Named providers.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AiProvider"
+          },
+          "default": {}
+        },
+        "status_segment": {
+          "description": "Status-line segment.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "status_segment",
+        "models",
+        "privacy",
+        "functions",
+        "completion",
+        "agent"
+      ]
+    },
+    "AiAgent": {
+      "description": "`[ai.agent]`.",
+      "type": "object",
+      "properties": {
+        "autopilot_max_ops": {
+          "description": "Cap.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "autopilot_scope": {
+          "description": "`sheet` / `range` / `workbook`.",
+          "type": "string",
+          "enum": [
+            "sheet",
+            "range",
+            "workbook"
+          ]
+        },
+        "diagnose_offers": {
+          "description": "Diagnose offers.",
+          "type": "boolean"
+        },
+        "panel": {
+          "description": "Agent panel.",
+          "type": "boolean"
+        },
+        "review": {
+          "description": "`always` / `autopilot_opt_in`.",
+          "type": "string",
+          "enum": [
+            "always",
+            "autopilot_opt_in"
+          ]
+        },
+        "skills_dir": {
+          "description": "Skills directory.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "review",
+        "autopilot_scope",
+        "autopilot_max_ops",
+        "diagnose_offers",
+        "panel",
+        "skills_dir"
+      ]
+    },
+    "AiCompletion": {
+      "description": "`[ai.completion]`.",
+      "type": "object",
+      "properties": {
+        "debounce": {
+          "description": "Debounce ms.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "mode": {
+          "description": "`auto` / `on` / `off`.",
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "debounce"
+      ]
+    },
+    "AiFunctions": {
+      "description": "`[ai.functions]`.",
+      "type": "object",
+      "properties": {
+        "auto": {
+          "description": "Re-query on input change.",
+          "type": "boolean"
+        },
+        "batch_size": {
+          "description": "Batch size.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "keep_stale": {
+          "description": "Keep stale values.",
+          "type": "boolean"
+        },
+        "max_cells_per_recalc": {
+          "description": "Confirm above this many cells.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "max_requests_per_minute": {
+          "description": "Rate limit.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "refresh_on_full_recalc": {
+          "description": "Refresh on full recalc.",
+          "type": "boolean"
+        },
+        "xlsx_export": {
+          "description": "`formulas` / `values`.",
+          "type": "string",
+          "enum": [
+            "formulas",
+            "values"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "auto",
+        "batch_size",
+        "max_cells_per_recalc",
+        "max_requests_per_minute",
+        "keep_stale",
+        "refresh_on_full_recalc",
+        "xlsx_export"
+      ]
+    },
+    "AiModels": {
+      "description": "`[ai.models]`.",
+      "type": "object",
+      "properties": {
+        "agent": {
+          "description": "Agent slot.",
+          "type": "string",
+          "default": ""
+        },
+        "default": {
+          "description": "Default slot.",
+          "type": "string"
+        },
+        "fast": {
+          "description": "Fast slot.",
+          "type": "string"
+        },
+        "strong": {
+          "description": "Strong slot.",
+          "type": "string",
+          "default": ""
+        },
+        "vision": {
+          "description": "Vision slot.",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fast",
+        "default"
+      ]
+    },
+    "AiPrivacy": {
+      "description": "`[ai.privacy]`.",
+      "type": "object",
+      "properties": {
+        "local_full": {
+          "description": "Local providers send full.",
+          "type": "boolean"
+        },
+        "log_content": {
+          "description": "Log payloads.",
+          "type": "boolean"
+        },
+        "send": {
+          "description": "`schema` / `sample` / `full`.",
+          "type": "string",
+          "enum": [
+            "schema",
+            "sample",
+            "full"
+          ]
+        },
+        "suggest_redaction": {
+          "description": "Suggest redaction.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "send",
+        "local_full",
+        "suggest_redaction",
+        "log_content"
+      ]
+    },
+    "AiProvider": {
+      "description": "One AI provider block.",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "description": "Endpoint URL.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Wire kind.",
+          "type": "string"
+        },
+        "local": {
+          "description": "Loopback.",
+          "type": "boolean",
+          "default": false
+        },
+        "secret_cmd": {
+          "description": "Secret command.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "secret_env": {
+          "description": "Secret env var.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "endpoint"
+      ]
+    },
+    "Appearance": {
+      "description": "`[appearance]`.",
+      "type": "object",
+      "properties": {
+        "animation": {
+          "description": "`system` / `on` / `off`.",
+          "type": "string",
+          "enum": [
+            "system",
+            "on",
+            "off"
+          ]
+        },
+        "cell_font": {
+          "description": "Cell fontconfig alias.",
+          "type": "string"
+        },
+        "cell_font_size": {
+          "description": "Cell size in pt.",
+          "type": "number",
+          "format": "double",
+          "minimum": 1e-6
+        },
+        "cell_padding": {
+          "description": "Padding px at 1×.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "column_width": {
+          "description": "Default column width in characters.",
+          "type": "number",
+          "format": "double",
+          "minimum": 1e-6
+        },
+        "corner_style": {
+          "description": "`system` / `rounded` / `sharp`.",
+          "type": "string",
+          "enum": [
+            "system",
+            "rounded",
+            "sharp"
+          ]
+        },
+        "cursor_style": {
+          "description": "`outline` / `block` / `underline`.",
+          "type": "string",
+          "enum": [
+            "outline",
+            "block",
+            "underline"
+          ]
+        },
+        "enforce_contrast": {
+          "description": "WCAG nudge.",
+          "type": "boolean"
+        },
+        "grid_line_style": {
+          "description": "`solid` / `dotted` / `none`.",
+          "type": "string",
+          "enum": [
+            "solid",
+            "dotted",
+            "none"
+          ]
+        },
+        "grid_lines": {
+          "description": "Draw grid lines.",
+          "type": "boolean"
+        },
+        "row_height": {
+          "description": "`\"auto\"` or pt.",
+          "$ref": "#/$defs/AutoNum"
+        },
+        "selection_style": {
+          "description": "`fill` / `outline`.",
+          "type": "string",
+          "enum": [
+            "fill",
+            "outline"
+          ]
+        },
+        "sheet_tabs_position": {
+          "description": "`top` / `bottom`.",
+          "type": "string",
+          "enum": [
+            "top",
+            "bottom"
+          ]
+        },
+        "show_formula_bar": {
+          "description": "Formula bar visible.",
+          "type": "boolean"
+        },
+        "show_sheet_tabs": {
+          "description": "Sheet tabs visible.",
+          "type": "boolean"
+        },
+        "show_status_line": {
+          "description": "Status line visible.",
+          "type": "boolean"
+        },
+        "ui_font": {
+          "description": "UI fontconfig alias.",
+          "type": "string"
+        },
+        "ui_font_size": {
+          "description": "`\"system\"` or pt.",
+          "$ref": "#/$defs/AutoNum"
+        },
+        "zebra_rows": {
+          "description": "Alternate row fill.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cell_font",
+        "cell_font_size",
+        "ui_font",
+        "ui_font_size",
+        "grid_lines",
+        "grid_line_style",
+        "row_height",
+        "column_width",
+        "cell_padding",
+        "cursor_style",
+        "selection_style",
+        "show_formula_bar",
+        "show_status_line",
+        "show_sheet_tabs",
+        "sheet_tabs_position",
+        "corner_style",
+        "zebra_rows",
+        "enforce_contrast",
+        "animation"
+      ]
+    },
+    "AutoNum": {
+      "description": "Number or the sentinel `\"system\"` / `\"auto\"`.",
+      "anyOf": [
+        {
+          "description": "Numeric value.",
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "description": "`\"system\"`, `\"auto\"`, or a named token.",
+          "type": "string"
+        }
+      ]
+    },
+    "Behavior": {
+      "description": "`[behavior]`.",
+      "type": "object",
+      "properties": {
+        "autocomplete": {
+          "description": "Formula autocomplete.",
+          "type": "boolean"
+        },
+        "autocorrect": {
+          "description": "Autocorrect.",
+          "type": "boolean"
+        },
+        "date_system": {
+          "description": "1900 or 1904.",
+          "type": "integer",
+          "format": "uint32",
+          "enum": [
+            1900,
+            1904
+          ],
+          "minimum": 0
+        },
+        "default_sheets": {
+          "description": "New-workbook sheet count.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "enter_moves": {
+          "description": "`down` / `right` / `none`.",
+          "type": "string",
+          "enum": [
+            "down",
+            "right",
+            "none"
+          ]
+        },
+        "fill_prompt": {
+          "description": "Fill-options prompt.",
+          "type": "boolean"
+        },
+        "formula_hints": {
+          "description": "Formula hints.",
+          "type": "boolean"
+        },
+        "precision_as_displayed": {
+          "description": "Precision as displayed.",
+          "type": "boolean"
+        },
+        "reference_style": {
+          "description": "`A1` / `R1C1`.",
+          "type": "string",
+          "enum": [
+            "A1",
+            "R1C1"
+          ]
+        },
+        "smart_paste": {
+          "description": "Detect delimited paste.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enter_moves",
+        "autocomplete",
+        "autocorrect",
+        "formula_hints",
+        "reference_style",
+        "default_sheets",
+        "date_system",
+        "precision_as_displayed",
+        "smart_paste",
+        "fill_prompt"
+      ]
+    },
+    "Calc": {
+      "description": "`[calc]`.",
+      "type": "object",
+      "properties": {
+        "iterative": {
+          "description": "Iterative calc.",
+          "type": "boolean"
+        },
+        "max_change": {
+          "description": "Max change.",
+          "type": "number",
+          "format": "double",
+          "minimum": 0.0
+        },
+        "max_iterations": {
+          "description": "Max iterations.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "mode": {
+          "description": "`automatic` / `automatic_except_tables` / `manual`.",
+          "type": "string",
+          "enum": [
+            "automatic",
+            "automatic_except_tables",
+            "manual"
+          ]
+        },
+        "threads": {
+          "description": "`\"auto\"` or a thread count.",
+          "$ref": "#/$defs/AutoNum"
+        },
+        "volatile_on_open": {
+          "description": "Volatiles on open.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "threads",
+        "iterative",
+        "max_iterations",
+        "max_change",
+        "volatile_on_open"
+      ]
+    },
+    "Charts": {
+      "description": "`[charts]`.",
+      "type": "object",
+      "properties": {
+        "default_type": {
+          "description": "Default chart type.",
+          "type": "string"
+        },
+        "font": {
+          "description": "`ui` or a font alias.",
+          "type": "string"
+        },
+        "line_width": {
+          "description": "Line width.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "palette": {
+          "description": "`theme` or a named palette.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "palette",
+        "default_type",
+        "line_width",
+        "font"
+      ]
+    },
+    "ConfigMeta": {
+      "description": "Live-reload knobs.",
+      "type": "object",
+      "properties": {
+        "debounce_ms": {
+          "description": "Debounce milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 50,
+          "maximum": 60000,
+          "minimum": 1
+        },
+        "live_reload": {
+          "description": "Watch user files.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "Files": {
+      "description": "`[files]`.",
+      "type": "object",
+      "properties": {
+        "autosave_interval": {
+          "description": "Autosave seconds; 0 disables.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "csv": {
+          "description": "CSV defaults.",
+          "$ref": "#/$defs/FilesCsv"
+        },
+        "default_format": {
+          "description": "`xlsx` / `omc`.",
+          "type": "string",
+          "enum": [
+            "xlsx",
+            "omc"
+          ]
+        },
+        "follow_external_links": {
+          "description": "Follow external links.",
+          "type": "boolean"
+        },
+        "keep_backups": {
+          "description": "Numbered backups.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "xlsx": {
+          "description": "Xlsx defaults.",
+          "$ref": "#/$defs/FilesXlsx"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "default_format",
+        "autosave_interval",
+        "keep_backups",
+        "follow_external_links",
+        "csv",
+        "xlsx"
+      ]
+    },
+    "FilesCsv": {
+      "description": "`[files.csv]`.",
+      "type": "object",
+      "properties": {
+        "delimiter": {
+          "description": "`auto` or a delimiter.",
+          "type": "string"
+        },
+        "encoding": {
+          "description": "`auto` or an encoding.",
+          "type": "string"
+        },
+        "type_inference": {
+          "description": "`conservative` / `aggressive` / `none`.",
+          "type": "string",
+          "enum": [
+            "conservative",
+            "aggressive",
+            "none"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "delimiter",
+        "encoding",
+        "type_inference"
+      ]
+    },
+    "FilesXlsx": {
+      "description": "`[files.xlsx]`.",
+      "type": "object",
+      "properties": {
+        "preserve_unknown_parts": {
+          "description": "Preserve L3 parts.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "preserve_unknown_parts"
+      ]
+    },
+    "Integrations": {
+      "description": "`[integrations]`.",
+      "type": "object",
+      "properties": {
+        "libreoffice_fallback": {
+          "description": "soffice `.xls` bridge.",
+          "type": "boolean"
+        },
+        "menu_entries": {
+          "description": "Offer menu rows.",
+          "type": "boolean"
+        },
+        "notifications": {
+          "description": "`all` / `recovery_only` / `off`.",
+          "type": "string",
+          "enum": [
+            "all",
+            "recovery_only",
+            "off"
+          ]
+        },
+        "ocr_paste": {
+          "description": "OCR paste.",
+          "type": "boolean"
+        },
+        "omarchy": {
+          "description": "`auto` / `on` / `off`.",
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "omarchy",
+        "notifications",
+        "menu_entries",
+        "libreoffice_fallback",
+        "ocr_paste"
+      ]
+    },
+    "Keys": {
+      "description": "`[keys]`.",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "Keymap file name under the config dir or package defaults.",
+          "type": "string",
+          "pattern": "^[^/\\\\.][^\\\\]*$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file"
+      ]
+    },
+    "Layout": {
+      "description": "`[layout]`.",
+      "type": "object",
+      "properties": {
+        "compact_below_width": {
+          "description": "Compact-chrome width.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "formula_bar_lines": {
+          "description": "Formula bar rows.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "menu_bar": {
+          "description": "Menu bar.",
+          "type": "boolean"
+        },
+        "panel_side": {
+          "description": "`right` / `left` / `bottom`.",
+          "type": "string",
+          "enum": [
+            "right",
+            "left",
+            "bottom"
+          ]
+        },
+        "panel_width": {
+          "description": "Panel width px.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "status_line": {
+          "description": "Status-line segments.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "panel_side",
+        "panel_width",
+        "formula_bar_lines",
+        "compact_below_width",
+        "status_line",
+        "menu_bar"
+      ]
+    },
+    "Locale": {
+      "description": "`[locale]`.",
+      "type": "object",
+      "properties": {
+        "currency": {
+          "description": "Currency or `system`.",
+          "type": "string"
+        },
+        "date_format": {
+          "description": "Date format or `system`.",
+          "type": "string"
+        },
+        "decimal_separator": {
+          "description": "Decimal separator or `system`.",
+          "type": "string"
+        },
+        "first_weekday": {
+          "description": "First weekday or `system`.",
+          "type": "string"
+        },
+        "language": {
+          "description": "Language tag or `system`.",
+          "type": "string"
+        },
+        "list_separator": {
+          "description": "List separator or `system`.",
+          "type": "string"
+        },
+        "localized_function_names": {
+          "description": "Localized function names.",
+          "type": "boolean"
+        },
+        "thousands_separator": {
+          "description": "Thousands separator or `system`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "language",
+        "decimal_separator",
+        "thousands_separator",
+        "list_separator",
+        "date_format",
+        "currency",
+        "first_weekday",
+        "localized_function_names"
+      ]
+    },
+    "Network": {
+      "description": "`[network]`.",
+      "type": "object",
+      "properties": {
+        "allow_functions": {
+          "description": "Function allowlist.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "description": "Off by default.",
+          "type": "boolean"
+        },
+        "proxy": {
+          "description": "Proxy URL.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "allow_functions",
+        "proxy"
+      ]
+    },
+    "Scripting": {
+      "description": "`[scripting]`.",
+      "type": "object",
+      "properties": {
+        "embedded_scripts": {
+          "description": "`sandbox` / `ask` / `deny`.",
+          "type": "string",
+          "enum": [
+            "sandbox",
+            "ask",
+            "deny"
+          ]
+        },
+        "enabled": {
+          "description": "Lua enabled.",
+          "type": "boolean"
+        },
+        "trusted_dirs": {
+          "description": "Trusted directories.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "trusted_dirs",
+        "embedded_scripts"
+      ]
+    },
+    "Session": {
+      "description": "`[session]`.",
+      "type": "object",
+      "properties": {
+        "recent_files": {
+          "description": "Recent-file count.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "restore": {
+          "description": "Restore windows.",
+          "type": "boolean"
+        },
+        "workspace_binding": {
+          "description": "Remember Hyprland workspace.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "restore",
+        "recent_files",
+        "workspace_binding"
+      ]
+    },
+    "Tui": {
+      "description": "`[tui]`.",
+      "type": "object",
+      "properties": {
+        "graphics": {
+          "description": "`auto` / `sixel` / `kitty` / `off`.",
+          "type": "string",
+          "enum": [
+            "auto",
+            "sixel",
+            "kitty",
+            "off"
+          ]
+        },
+        "mouse": {
+          "description": "Mouse.",
+          "type": "boolean"
+        },
+        "truecolor": {
+          "description": "`auto` / `on` / `off`.",
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ]
+        },
+        "unicode_borders": {
+          "description": "Unicode box drawing.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "unicode_borders",
+        "truecolor",
+        "mouse",
+        "graphics"
+      ]
+    }
+  }
+}

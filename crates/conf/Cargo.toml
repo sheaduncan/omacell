@@ -10,3 +10,22 @@ description = "Layered configuration, theme resolution, and Omarchy adapters for
 
 [lints]
 workspace = true
+
+[dependencies]
+fontdb = "0.23"
+notify = "6"
+omacell-core = { path = "../core", version = "0.0.0" }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+tracing = "0.1"
+zbus = "5"
+
+[dev-dependencies]
+criterion = { workspace = true }
+tempfile = "3"
+
+[[bench]]
+name = "theme_reload"
+harness = false
