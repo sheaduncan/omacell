@@ -1,3 +1,50 @@
-# TODO(WP-14): Vim-modal keymap from spec Appendix A.2.
+# Modal (Vim-style) keymap from spec Appendix A.2.
 [meta]
 name = "modal"
+model = "modal"
+leader = "Space"
+
+[bindings.normal]
+h = "nav.left"
+j = "nav.down"
+k = "nav.up"
+l = "nav.right"
+gg = "nav.top"
+G = "nav.bottom"
+"0" = "nav.first_col"
+"$" = "nav.last_col"
+w = "nav.next_edge"
+b = "nav.prev_edge"
+i = "edit.cell"
+a = "edit.append"
+"=" = "edit.formula"
+Enter = "edit.cell"
+x = "cell.clear"
+dd = "edit.clear_row"
+u = "edit.undo"
+"Ctrl+r" = "edit.redo"
+"." = "edit.repeat"
+v = "sel.visual"
+V = "sel.visual_row"
+"Ctrl+v" = "sel.visual_col"
+"/" = "edit.search"
+n = "edit.search_next"
+N = "edit.search_prev"
+gt = "sheet.next"
+gT = "sheet.prev"
+zf = "view.freeze"
+zs = "view.split"
+zz = "view.center"
+":" = "command.line"
+"Ctrl+f" = "nav.page_down"
+"Ctrl+b" = "nav.page_up"
+
+[bindings.visual]
+d = "edit.delete"
+y = "edit.yank"
+c = "edit.change"
+
+[bindings.insert]
+Esc = "mode.normal"
+"Ctrl+[" = "mode.normal"
+Enter = "edit.commit"

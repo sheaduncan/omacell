@@ -16,6 +16,9 @@ ignore = [
     # Remove when calamine ≥ 0.36 is allowed by the workspace MSRV.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # Transitive via pre-approved `fontdb` 0.23 (WP-12). Remove when fontdb
+    # switches to skrifa.
+    "RUSTSEC-2026-0192",
 ]
 
 [licenses]

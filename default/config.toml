@@ -1,2 +1,162 @@
-# TODO(WP-12): full config.toml from spec Appendix B.
+# Omacell package defaults (spec Appendix B). User files are sparse overlays.
 schema = 1
+
+[appearance]
+cell_font        = "monospace"   # fontconfig alias; Omarchy points it at Style > Font
+cell_font_size   = 11            # pt; cells scale with zoom
+ui_font          = "monospace"
+ui_font_size     = "system"      # follows Omarchy display text size; or a number in pt
+grid_lines       = true
+grid_line_style  = "solid"       # solid | dotted | none
+row_height       = "auto"        # or a number in pt
+column_width     = 8.43          # Excel default, in characters
+cell_padding     = 3             # px at 1x
+cursor_style     = "outline"     # outline | block | underline
+selection_style  = "fill"        # fill | outline
+show_formula_bar = true
+show_status_line = true
+show_sheet_tabs  = true
+sheet_tabs_position = "top"      # top | bottom
+corner_style     = "system"      # system | rounded | sharp
+zebra_rows       = false
+enforce_contrast = true
+animation        = "system"      # system | on | off
+
+[behavior]
+enter_moves            = "down"  # down | right | none
+autocomplete           = true
+autocorrect            = false
+formula_hints          = true
+reference_style        = "A1"    # A1 | R1C1
+default_sheets         = 1
+date_system            = 1900    # 1900 | 1904 (new workbooks)
+precision_as_displayed = false
+smart_paste            = true    # detect delimited text on paste
+fill_prompt            = true    # show fill-options after a fill
+
+[calc]
+mode             = "automatic"   # automatic | automatic_except_tables | manual
+threads          = "auto"
+iterative        = false
+max_iterations   = 100
+max_change       = 0.001
+volatile_on_open = true
+
+[locale]
+language                 = "system"
+decimal_separator        = "system"
+thousands_separator      = "system"
+list_separator           = "system"
+date_format              = "system"
+currency                 = "system"
+first_weekday            = "system"
+localized_function_names = false
+
+[files]
+default_format        = "xlsx"   # xlsx | omc
+autosave_interval     = 60       # seconds; 0 disables
+keep_backups          = 0
+follow_external_links = false
+[files.csv]
+delimiter      = "auto"
+encoding       = "auto"
+type_inference = "conservative"  # conservative | aggressive | none
+[files.xlsx]
+preserve_unknown_parts = true
+
+[session]
+restore           = true
+recent_files      = 20
+workspace_binding = false        # remember which Hyprland workspace each window was on
+
+[layout]
+panel_side          = "right"    # right | left | bottom
+panel_width         = 360        # px at 1x
+formula_bar_lines   = 1
+compact_below_width = 720        # px; collapse chrome below this
+status_line         = ["mode", "cell", "stats", "calc", "dirty", "theme", "zoom"]
+menu_bar            = false
+
+[integrations]
+omarchy              = "auto"    # auto | on | off
+notifications        = "recovery_only"  # all | recovery_only | off
+menu_entries         = true      # offered by `omacell setup omarchy`
+libreoffice_fallback = true      # .xls conversion via soffice --headless
+ocr_paste            = true
+
+[network]
+enabled         = false
+allow_functions = []             # e.g. ["WEBSERVICE"]
+proxy           = ""
+
+[scripting]
+enabled          = true
+trusted_dirs     = ["~/.config/omacell"]
+embedded_scripts = "sandbox"     # sandbox | ask | deny
+
+[ai]
+enabled        = false           # nothing runs and nothing is sent until this is true
+status_segment = true
+
+# Providers are wire protocols, not vendors (ADR-005). Cloud blocks never hold a plaintext key.
+[ai.providers.ollama]
+kind     = "openai_compatible"
+endpoint = "http://localhost:11434/v1"
+local    = true
+[ai.providers.lmstudio]
+kind     = "openai_compatible"
+endpoint = "http://localhost:1234/v1"
+local    = true
+
+[ai.models]
+fast    = "ollama:qwen2.5-coder:7b"
+default = "ollama:qwen2.5:14b"
+strong  = ""
+agent   = ""
+vision  = ""
+
+[ai.privacy]
+send              = "schema"     # schema | sample | full
+local_full        = true
+suggest_redaction = true
+log_content       = false
+
+[ai.functions]
+auto                    = true
+batch_size              = 50
+max_cells_per_recalc    = 500
+max_requests_per_minute = 60
+keep_stale              = true
+refresh_on_full_recalc  = false
+xlsx_export             = "formulas"   # formulas | values
+
+[ai.completion]
+mode     = "auto"
+debounce = 250                   # ms
+
+[ai.agent]
+review            = "always"     # always | autopilot_opt_in
+autopilot_scope   = "sheet"      # sheet | range | workbook
+autopilot_max_ops = 200
+diagnose_offers   = true
+panel             = true
+skills_dir        = "~/.config/omacell/ai/skills"
+
+[charts]
+palette      = "theme"
+default_type = "column"
+line_width   = 2
+font         = "ui"
+
+[tui]
+unicode_borders = true
+truecolor       = "auto"
+mouse           = true
+graphics        = "auto"         # auto | sixel | kitty | off
+
+[config]
+live_reload = true
+debounce_ms = 50
+
+[keys]
+file = "keys.toml"
