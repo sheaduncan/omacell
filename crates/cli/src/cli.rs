@@ -36,7 +36,7 @@ pub struct Cli {
     /// Increase log verbosity.
     #[arg(short, long, global = true, action = ArgAction::Count)]
     pub verbose: u8,
-    /// Open the terminal UI (WP-15).
+    /// Open the terminal UI.
     #[arg(long)]
     pub tui: bool,
     /// Workbook whose frozen settings overlay configuration.

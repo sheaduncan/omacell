@@ -145,6 +145,11 @@ impl UiSession {
         self.lock().palette.clone()
     }
 
+    /// Replace the command-palette model after frontend typing or dismissal.
+    pub fn set_palette(&self, palette: Palette) {
+        self.lock().palette = palette;
+    }
+
     /// Current panel state.
     #[must_use]
     pub fn panel(&self) -> PanelState {

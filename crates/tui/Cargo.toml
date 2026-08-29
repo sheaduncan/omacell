@@ -10,3 +10,23 @@ description = "Terminal front-end for Omacell."
 
 [lints]
 workspace = true
+
+[dependencies]
+crossterm = "0.28"
+omacell-bus = { path = "../bus", version = "0.0.0" }
+omacell-conf = { path = "../conf", version = "0.0.0" }
+omacell-core = { path = "../core", version = "0.0.0" }
+omacell-ui = { path = "../ui", version = "0.0.0" }
+ratatui = "0.29"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+omacell-fn = { path = "../fn", version = "0.0.0" }
+omacell-io = { path = "../io", version = "0.0.0" }
+criterion = { workspace = true }
+insta = "1"
+tempfile = "3"
+
+[[bench]]
+name = "redraw"
+harness = false
