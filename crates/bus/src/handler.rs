@@ -12,6 +12,7 @@ pub struct CommandContext<'a> {
     workbook: &'a mut Workbook,
     engine: &'a mut RecalcEngine,
     origin: Origin,
+    preflight: bool,
     dry_run: bool,
 }
 
@@ -20,12 +21,14 @@ impl<'a> CommandContext<'a> {
         workbook: &'a mut Workbook,
         engine: &'a mut RecalcEngine,
         origin: Origin,
+        preflight: bool,
         dry_run: bool,
     ) -> Self {
         Self {
             workbook,
             engine,
             origin,
+            preflight,
             dry_run,
         }
     }
@@ -67,12 +70,19 @@ impl<'a> CommandContext<'a> {
         self.origin
     }
 
-    /// Whether this invocation is a dry-run or changeset proposal scratch pass.
-    ///
-    /// File adapters must not write the filesystem when this is true.
+    /// Whether the caller requested a dry-run or changeset proposal.
     #[must_use]
     pub fn is_dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    /// Whether this is the non-committing preflight invocation.
+    ///
+    /// Handlers with effects outside the workbook must perform those effects
+    /// only when this returns false.
+    #[must_use]
+    pub fn is_preflight(&self) -> bool {
+        self.preflight
     }
 }
 

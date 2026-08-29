@@ -129,10 +129,70 @@ fn config_reset_named_and_default() {
 #[test]
 fn config_edit_dry_run_prints_path() {
     let dir = TempDir::new().unwrap();
+    let explicit = dir.path().join("missing/profile.toml");
     bin()
         .env("HOME", dir.path())
-        .args(["--dry-run", "config", "edit"])
+        .args([
+            "--dry-run",
+            "--config",
+            explicit.to_str().unwrap(),
+            "config",
+            "edit",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("config.toml"));
+        .stdout(predicate::str::contains("profile.toml"));
+    assert!(!explicit.exists());
+}
+
+#[test]
+fn invalid_config_can_still_be_reset() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join(".config/omacell/config.toml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    fs::write(&config, "[[[invalid").unwrap();
+
+    bin()
+        .env("HOME", dir.path())
+        .args(["config", "reset"])
+        .assert()
+        .success();
+    assert!(!config.exists());
+    let backups = dir.path().join(".local/state/omacell/backups");
+    assert!(backups.read_dir().unwrap().next().is_some());
+}
+
+#[test]
+fn config_reset_dry_run_still_rejects_an_unsafe_path() {
+    let dir = TempDir::new().unwrap();
+    bin()
+        .env("HOME", dir.path())
+        .args(["--dry-run", "config", "reset", "../escape.toml"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("relative file"));
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn config_diff_uses_the_explicit_config_path() {
+    let dir = TempDir::new().unwrap();
+    let explicit = dir.path().join("profiles/work.toml");
+    fs::create_dir_all(explicit.parent().unwrap()).unwrap();
+    fs::write(&explicit, "[layout]\npanel_width = 444\n").unwrap();
+
+    bin()
+        .env("HOME", dir.path())
+        .args([
+            "--json",
+            "--config",
+            explicit.to_str().unwrap(),
+            "config",
+            "diff",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("layout.panel_width"))
+        .stdout(predicate::str::contains("444"))
+        .stdout(predicate::str::contains("profiles/work.toml"));
 }

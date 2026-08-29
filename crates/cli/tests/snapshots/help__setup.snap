@@ -1,16 +1,17 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"setup\", \"omarchy\", \"--help\"])"
+expression: "help(&[\"setup\", \"--help\"])"
 ---
-Install the Omarchy theme template, hook, and skill links
+Omarchy integration
 
-Usage: omacell setup omarchy [OPTIONS]
+Usage: omacell setup [OPTIONS] <COMMAND>
+
+Commands:
+  omarchy  Install the Omarchy theme template, hook, and skill links
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)
-      --show-hyprland         Print the Hyprland snippet and exit
       --dry-run               Validate writes without changing files
-      --menu                  Write Omarchy menu rows (otherwise skipped unless confirmed on a TTY)
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
       --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`

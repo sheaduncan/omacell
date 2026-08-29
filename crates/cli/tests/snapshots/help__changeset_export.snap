@@ -1,16 +1,17 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"keys\", \"--help\"])"
+expression: "help(&[\"changeset\", \"export\", \"--help\"])"
 ---
-Keymap / Hyprland conflict check
+Export a changeset as `.omc`
 
-Usage: omacell keys [OPTIONS] <COMMAND>
+Usage: omacell changeset export [OPTIONS] --omc <FILE> <ID>
 
-Commands:
-  check  Compare classic chords to Hyprland `bindings.lua`
+Arguments:
+  <ID>  Changeset id
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)
+      --omc <FILE>            Destination `.omc` path
       --dry-run               Validate writes without changing files
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`

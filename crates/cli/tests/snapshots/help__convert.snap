@@ -15,6 +15,7 @@ Options:
       --sheet <SHEET>         Sheet name
       --dry-run               Validate writes without changing files
       --range <RANGE>         A1 range to export
+      --plan <FILE>           Shared WP-08 CSV import plan JSON
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
       --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`

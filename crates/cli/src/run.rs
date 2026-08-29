@@ -1,17 +1,19 @@
 //! Subcommand dispatch.
 
-use std::ffi::OsString;
-use std::io::{self, IsTerminal, Write};
+use std::ffi::{OsStr, OsString};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use omacell_bus::ipc::{
-    ControlOp, IpcClient, default_runtime_dir, discovered_socket, list_live_instances,
+    ControlOp, IpcClient, Mode, default_runtime_dir, discovered_socket, list_live_instances,
 };
+use omacell_conf::schema::package_defaults;
 use omacell_conf::{
-    HYPRLAND_SNIPPET, LoadedConfig, SetupOptions, keys, reset_user_file, reset_user_rel,
-    setup_omarchy, show_all_json,
+    HYPRLAND_SNIPPET, Layer, LoadOptions, LoadedConfig, Paths, SetupOptions, keys,
+    load_with_options, reset_user_file, reset_user_rel, setup_omarchy, show_all_json,
+    validate_user_rel,
 };
 use omacell_core::addr::{RefKind, parse_a1};
 use omacell_core::command::Outcome;
@@ -22,6 +24,7 @@ use omacell_core::spill::SpillTable;
 use omacell_core::value::Value;
 use omacell_core::{PRODUCT_NAME, error::CoreError};
 use omacell_fn::{all_specs, functions_json};
+use omacell_io::csv::ImportPlan;
 use omacell_io::xlsx;
 
 use crate::app::App;
@@ -38,27 +41,31 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    match run_inner(args) {
+    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+    let json = args.iter().any(|arg| arg == OsStr::new("--json"));
+    match run_inner(args, json) {
         Ok(code) => code,
         Err(err) => {
-            let output = Output {
-                json: std::env::args_os().any(|a| a == "--json"),
-                quiet: false,
-            };
+            let output = Output { json, quiet: false };
             let _ = output.error(&err);
             err.exit
         }
     }
 }
 
-fn run_inner<I, T>(args: I) -> Result<i32, CliError>
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
-{
+fn run_inner(args: Vec<OsString>, json_requested: bool) -> Result<i32, CliError> {
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(err) => {
+            if err.use_stderr() && json_requested {
+                let err = CliError::from(err);
+                let _ = (Output {
+                    json: true,
+                    quiet: false,
+                })
+                .error(&err);
+                return Ok(err.exit);
+            }
             let _ = err.print();
             return Ok(if err.use_stderr() {
                 EXIT_USAGE
@@ -127,6 +134,7 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
             *all,
             *quiet || cli.quiet,
             socket.as_ref(),
+            cli.dry_run,
             output,
         ),
         Commands::Changeset { cmd } => cmd_changeset(cmd, cli.dry_run, output),
@@ -136,7 +144,16 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
             output: dest,
             sheet,
             range,
-        } => cmd_convert(cli, input, dest, sheet.as_deref(), range.as_deref(), output),
+            plan,
+        } => cmd_convert(
+            cli,
+            input,
+            dest,
+            sheet.as_deref(),
+            range.as_deref(),
+            plan.as_deref(),
+            output,
+        ),
         Commands::Query {
             book,
             range,
@@ -161,14 +178,24 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
 
 fn init_app(cli: &Cli) -> Result<App, CliError> {
     let app = App::bootstrap(cli)?;
-    log::init(&app.paths, cli.verbose, cli.quiet);
+    log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
     Ok(app)
 }
 
 fn init_app_book(cli: &Cli, book: &Path) -> Result<App, CliError> {
-    let app = App::with_workbook(cli, book)?;
-    log::init(&app.paths, cli.verbose, cli.quiet);
+    init_app_book_plan(cli, book, None)
+}
+
+fn init_app_book_plan(cli: &Cli, book: &Path, plan: Option<&ImportPlan>) -> Result<App, CliError> {
+    let app = App::with_workbook_plan(cli, book, plan)?;
+    log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
     Ok(app)
+}
+
+fn init_paths(cli: &Cli) -> Result<Paths, CliError> {
+    let paths = Paths::from_env()?;
+    log::init(&paths, cli.verbose, cli.quiet, !cli.dry_run);
+    Ok(paths)
 }
 
 fn cmd_fn(cmd: &FnCmd, output: Output) -> Result<(), CliError> {
@@ -178,7 +205,15 @@ fn cmd_fn(cmd: &FnCmd, output: Output) -> Result<(), CliError> {
                 &functions_json().map_err(|e| CliError::new("fn.catalog", e.to_string()))?,
             )
             .map_err(|e| CliError::new("fn.catalog", e.to_string()))?;
-            output.success(json, "ok")?;
+            let human = json
+                .get("functions")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|function| function.get("name").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            output.success(json, &human)?;
             Ok(())
         }
         FnCmd::Doc { name } => {
@@ -218,9 +253,9 @@ fn cmd_commands(cli: &Cli, output: Output) -> Result<(), CliError> {
 }
 
 fn cmd_config(cli: &Cli, cmd: &ConfigCmd, output: Output) -> Result<(), CliError> {
-    let app = init_app(cli)?;
     match cmd {
         ConfigCmd::Check => {
+            let app = init_app(cli)?;
             let loaded = app.loaded();
             let json = serde_json::json!({
                 "ok": true,
@@ -235,11 +270,11 @@ fn cmd_config(cli: &Cli, cmd: &ConfigCmd, output: Output) -> Result<(), CliError
             Ok(())
         }
         ConfigCmd::Edit => {
-            let path = app
-                .options
-                .config_file
+            let paths = init_paths(cli)?;
+            let path = cli
+                .config
                 .clone()
-                .unwrap_or_else(|| app.paths.user_config_toml());
+                .unwrap_or_else(|| paths.user_config_toml());
             if cli.dry_run {
                 output.success(
                     serde_json::json!({"path": path.display().to_string(), "dry_run": true}),
@@ -267,14 +302,18 @@ fn cmd_config(cli: &Cli, cmd: &ConfigCmd, output: Output) -> Result<(), CliError
             Ok(())
         }
         ConfigCmd::Reset { file } => {
+            let paths = init_paths(cli)?;
             if cli.dry_run {
+                if let Some(relative) = file {
+                    let _ = validate_user_rel(relative)?;
+                }
                 output.success(serde_json::json!({"dry_run": true}), "dry-run")?;
                 return Ok(());
             }
             let stamp = backup_stamp()?;
             let dest = match file.as_deref() {
-                None => reset_user_file(&app.paths, &stamp)?,
-                Some(rel) => reset_user_rel(&app.paths, &stamp, rel)?,
+                None => reset_user_file(&paths, &stamp)?,
+                Some(rel) => reset_user_rel(&paths, &stamp, rel)?,
             };
             output.success(
                 serde_json::json!({"backup": dest.as_ref().map(|p| p.display().to_string())}),
@@ -285,10 +324,13 @@ fn cmd_config(cli: &Cli, cmd: &ConfigCmd, output: Output) -> Result<(), CliError
             Ok(())
         }
         ConfigCmd::Show { key, all, explain } => {
+            let app = init_app(cli)?;
             let loaded = app.loaded();
             if *all {
                 let json = show_all_json(&loaded);
-                output.success(json, "ok")?;
+                let human = serde_json::to_string_pretty(&json)
+                    .map_err(|err| CliError::new("cli.json", err.to_string()))?;
+                output.success(json, &human)?;
                 return Ok(());
             }
             let Some(key) = key else {
@@ -321,20 +363,59 @@ fn cmd_config(cli: &Cli, cmd: &ConfigCmd, output: Output) -> Result<(), CliError
             Ok(())
         }
         ConfigCmd::Diff => {
-            let user = app.paths.user_config_toml();
-            let text = if user.is_file() {
-                std::fs::read_to_string(&user)
-                    .map_err(|e| CliError::new("config.io", e.to_string()))?
-            } else {
-                String::new()
-            };
-            output.success(
-                serde_json::json!({"user": text, "path": user.display().to_string()}),
-                &text,
+            let paths = init_paths(cli)?;
+            let user = cli
+                .config
+                .clone()
+                .unwrap_or_else(|| paths.user_config_toml());
+            let loaded = load_with_options(
+                &paths,
+                &LoadOptions {
+                    config_file: cli.config.clone(),
+                    ..LoadOptions::default()
+                },
             )?;
+            let defaults = serde_json::to_value(package_defaults()?)
+                .map_err(|err| CliError::new("config.json", err.to_string()))?;
+            let changes = loaded
+                .provenance
+                .iter()
+                .filter(|(_, provenance)| provenance.layer == Layer::User)
+                .filter_map(|(key, _)| {
+                    let user = loaded.get_json(key)?;
+                    let package = json_at_dotted(&defaults, key);
+                    (package.as_ref() != Some(&user))
+                        .then(|| serde_json::json!({"key": key, "package": package, "user": user}))
+                })
+                .collect::<Vec<_>>();
+            let human = changes
+                .iter()
+                .map(|change| {
+                    format!(
+                        "{}: {} -> {}",
+                        change["key"].as_str().unwrap_or("?"),
+                        change["package"],
+                        change["user"]
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let json = serde_json::json!({
+                "path": user.display().to_string(),
+                "changes": changes,
+            });
+            output.success(json, &human)?;
             Ok(())
         }
     }
+}
+
+fn json_at_dotted(value: &serde_json::Value, dotted: &str) -> Option<serde_json::Value> {
+    let mut current = value;
+    for part in dotted.split('.') {
+        current = current.get(part)?;
+    }
+    Some(current.clone())
 }
 
 fn cmd_theme(cli: &Cli, cmd: &ThemeCmd, output: Output) -> Result<(), CliError> {
@@ -372,12 +453,12 @@ fn theme_show(loaded: &LoadedConfig, output: Output) -> Result<(), CliError> {
 }
 
 fn cmd_keys(cli: &Cli, cmd: &KeysCmd, output: Output) -> Result<(), CliError> {
-    let app = init_app(cli)?;
+    let paths = init_paths(cli)?;
     match cmd {
         KeysCmd::Check { hyprland } => {
             let path = hyprland
                 .clone()
-                .unwrap_or_else(|| app.paths.home.join(".config/hypr/bindings.lua"));
+                .unwrap_or_else(|| paths.home.join(".config/hypr/bindings.lua"));
             let conflicts = keys::check_hyprland(&path, keys::CLASSIC_CHORDS)?;
             let json = serde_json::json!({
                 "path": path.display().to_string(),
@@ -402,7 +483,6 @@ fn cmd_keys(cli: &Cli, cmd: &KeysCmd, output: Output) -> Result<(), CliError> {
 }
 
 fn cmd_setup(cli: &Cli, cmd: &SetupCmd, output: Output) -> Result<(), CliError> {
-    let app = init_app(cli)?;
     match cmd {
         SetupCmd::Omarchy {
             show_hyprland,
@@ -415,20 +495,21 @@ fn cmd_setup(cli: &Cli, cmd: &SetupCmd, output: Output) -> Result<(), CliError> 
                 )?;
                 return Ok(());
             }
+            let paths = init_paths(cli)?;
             if cli.dry_run {
                 output.success(serde_json::json!({"dry_run": true}), "dry-run")?;
                 return Ok(());
             }
             let confirm_menu = *menu || prompt_menu();
             let report = setup_omarchy(
-                &app.paths,
+                &paths,
                 SetupOptions {
                     confirm_menu,
                     link_skill: true,
                 },
             )?;
             let _ = keys::check_hyprland(
-                &app.paths.home.join(".config/hypr/bindings.lua"),
+                &paths.home.join(".config/hypr/bindings.lua"),
                 keys::CLASSIC_CHORDS,
             )?;
             let json = serde_json::json!({
@@ -460,9 +541,11 @@ fn cmd_convert(
     dest: &Path,
     sheet: Option<&str>,
     range: Option<&str>,
+    plan: Option<&Path>,
     output: Output,
 ) -> Result<(), CliError> {
-    let mut app = init_app_book(cli, input)?;
+    let plan = plan.map(read_import_plan).transpose()?;
+    let mut app = init_app_book_plan(cli, input, plan.as_ref())?;
     let args = serde_json::json!({
         "path": dest.display().to_string(),
         "sheet": sheet,
@@ -475,6 +558,27 @@ fn cmd_convert(
         app.execute("file.export", args)
     };
     finish_outcome(outcome, output)
+}
+
+fn read_import_plan(path: &Path) -> Result<ImportPlan, CliError> {
+    const MAX_PLAN_BYTES: u64 = 1024 * 1024;
+
+    let file = std::fs::File::open(path)
+        .map_err(|err| CliError::new("csv.plan", format!("{}: {err}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_PLAN_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| CliError::new("csv.plan", format!("{}: {err}", path.display())))?;
+    if bytes.len() as u64 > MAX_PLAN_BYTES {
+        return Err(CliError::new(
+            "csv.plan",
+            format!("import plan exceeds {MAX_PLAN_BYTES} bytes"),
+        ));
+    }
+    let plan: ImportPlan = serde_json::from_slice(&bytes)
+        .map_err(|err| CliError::new("csv.plan", format!("{}: {err}", path.display())))?;
+    plan.validate()?;
+    Ok(plan)
 }
 
 fn cmd_query(
@@ -535,16 +639,12 @@ fn cmd_query(
     }
     match format {
         QueryFormat::Json => {
-            output.success(serde_json::json!({"rows": rows}), "ok")?;
+            let human = serde_json::to_string_pretty(&rows)
+                .map_err(|err| CliError::new("cli.json", err.to_string()))?;
+            output.success(serde_json::json!({"rows": rows}), &human)?;
         }
         QueryFormat::Csv => {
-            let mut buf = String::new();
-            for (i, row) in rows.iter().enumerate() {
-                if i > 0 {
-                    buf.push('\n');
-                }
-                buf.push_str(&row.join(","));
-            }
+            let buf = encode_csv_rows(&rows);
             output.success(serde_json::json!({"csv": buf}), &buf)?;
         }
         QueryFormat::Md => {
@@ -560,13 +660,47 @@ fn cmd_query(
             buf.push_str("|\n");
             for row in &rows {
                 buf.push('|');
-                buf.push_str(&row.join("|"));
+                buf.push_str(
+                    &row.iter()
+                        .map(|value| escape_markdown_cell(value))
+                        .collect::<Vec<_>>()
+                        .join("|"),
+                );
                 buf.push_str("|\n");
             }
             output.success(serde_json::json!({"markdown": buf}), &buf)?;
         }
     }
     Ok(())
+}
+
+fn encode_csv_rows(rows: &[Vec<String>]) -> String {
+    rows.iter()
+        .map(|row| {
+            row.iter()
+                .map(|value| {
+                    if value
+                        .chars()
+                        .any(|ch| matches!(ch, ',' | '"' | '\r' | '\n'))
+                    {
+                        format!("\"{}\"", value.replace('"', "\"\""))
+                    } else {
+                        value.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn escape_markdown_cell(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace("\r\n", "<br>")
+        .replace(['\r', '\n'], "<br>")
 }
 
 fn format_value(wb: &omacell_core::workbook::Workbook, value: &Value) -> String {
@@ -606,16 +740,17 @@ fn cmd_set(
         serde_json::json!({"range": range, "input": value})
     };
     let outcome = if cli.dry_run {
-        let dry = app.dry_run(id, args)?;
-        return finish_outcome(dry.outcome, output);
+        app.dry_run(id, args)?.outcome
     } else {
         app.execute(id, args)
     };
-    if !cli.dry_run && outcome.ok {
-        let save = app.execute(
-            "file.save",
-            serde_json::json!({"path": book.display().to_string()}),
-        );
+    if outcome.ok {
+        let save_args = serde_json::json!({"path": book.display().to_string()});
+        let save = if cli.dry_run {
+            app.dry_run("file.save", save_args)?.outcome
+        } else {
+            app.execute("file.save", save_args)
+        };
         return finish_outcome(save, output);
     }
     finish_outcome(outcome, output)
@@ -644,8 +779,7 @@ fn cmd_recalc(cli: &Cli, book: &Path, write: bool, output: Output) -> Result<(),
     let mut app = init_app_book(cli, book)?;
     let args = serde_json::json!({"mode": "rebuild"});
     let outcome = if cli.dry_run {
-        let dry = app.dry_run("calc.recalc", args)?;
-        return finish_outcome(dry.outcome, output);
+        app.dry_run("calc.recalc", args)?.outcome
     } else {
         app.execute("calc.recalc", args)
     };
@@ -682,6 +816,7 @@ fn cmd_ipc(
     all: bool,
     quiet: bool,
     socket: Option<&PathBuf>,
+    dry_run: bool,
     output: Output,
 ) -> Result<(), CliError> {
     let args = match json {
@@ -689,6 +824,18 @@ fn cmd_ipc(
             .map_err(|e| CliError::new("cli.json", e.to_string()).exit(EXIT_USAGE))?,
         None => serde_json::json!({}),
     };
+    if dry_run
+        && matches!(
+            control_op(command),
+            Some(ControlOp::ChangesetApply | ControlOp::ChangesetRevert)
+        )
+    {
+        output.success(
+            serde_json::json!({"command": command, "dry_run": true}),
+            "dry-run",
+        )?;
+        return Ok(());
+    }
     if all {
         let dir = default_runtime_dir();
         let instances = list_live_instances(&dir)?;
@@ -699,20 +846,42 @@ fn cmd_ipc(
             ));
         }
         let mut results = Vec::new();
+        let mut failed = 0_usize;
+        let mut first_error = None;
         for inst in &instances {
             let path = discovered_socket(&dir, inst);
-            let reply = ipc_one(&path, command, &args)?;
+            let reply = ipc_one(&path, command, &args, dry_run)?;
+            if !reply.ok {
+                failed += 1;
+                if first_error.is_none() {
+                    first_error = reply.error.clone();
+                }
+            }
             results.push(serde_json::json!({
                 "pid": inst.pid,
                 "ok": reply.ok,
                 "result": reply.result,
                 "error": reply.error,
             }));
-            if !quiet && !output.json {
-                println!("{}: ok={}", inst.pid, reply.ok);
+        }
+        if failed > 0 {
+            let first = first_error
+                .map(|err| format!("{}: {}", err.code, err.message))
+                .unwrap_or_else(|| "remote command failed without an error payload".into());
+            return Err(CliError::new(
+                "ipc.command",
+                format!("{failed} of {} instances failed; {first}", instances.len()),
+            ));
+        }
+        if !quiet && !output.json {
+            for inst in &instances {
+                println!("{}: ok=true", inst.pid);
             }
         }
-        output.success(serde_json::json!({"instances": results}), "ok")?;
+        let json = serde_json::json!({"instances": results});
+        let human = serde_json::to_string_pretty(&json)
+            .map_err(|err| CliError::new("cli.json", err.to_string()))?;
+        output.success(json, &human)?;
         return Ok(());
     }
     let mut client = if let Some(socket) = socket {
@@ -720,7 +889,7 @@ fn cmd_ipc(
     } else {
         IpcClient::connect_default()?
     };
-    let reply = ipc_command(&mut client, command, args)?;
+    let reply = ipc_command(&mut client, command, args, dry_run)?;
     if !reply.ok {
         let err = reply
             .error
@@ -728,7 +897,10 @@ fn cmd_ipc(
             .unwrap_or_else(|| CoreError::new("ipc.command", "command failed"));
         return Err(err.into());
     }
-    output.success(reply.result.clone().unwrap_or(serde_json::json!({})), "ok")?;
+    let result = reply.result.clone().unwrap_or(serde_json::json!({}));
+    let human = serde_json::to_string_pretty(&result)
+        .map_err(|err| CliError::new("cli.json", err.to_string()))?;
+    output.success(result, &human)?;
     Ok(())
 }
 
@@ -736,21 +908,24 @@ fn ipc_one(
     path: &Path,
     command: &str,
     args: &serde_json::Value,
+    dry_run: bool,
 ) -> Result<omacell_bus::ipc::Reply, CliError> {
     let mut client = IpcClient::connect(path)?;
-    ipc_command(&mut client, command, args.clone())
+    ipc_command(&mut client, command, args.clone(), dry_run)
 }
 
 fn ipc_command(
     client: &mut IpcClient,
     command: &str,
     args: serde_json::Value,
+    dry_run: bool,
 ) -> Result<omacell_bus::ipc::Reply, CliError> {
     if let Some(op) = control_op(command) {
         let changeset = args.get("id").and_then(|v| v.as_str());
         Ok(client.control(op, &[], changeset)?)
     } else {
-        Ok(client.command(command, args, None)?)
+        let mode = dry_run.then_some(Mode::DryRun);
+        Ok(client.command(command, args, mode)?)
     }
 }
 
@@ -776,13 +951,14 @@ fn cmd_changeset(cmd: &ChangesetCmd, dry_run: bool, output: Output) -> Result<()
         return Ok(());
     }
     match cmd {
-        ChangesetCmd::List => cmd_ipc("changeset.list", None, false, true, None, output),
+        ChangesetCmd::List => cmd_ipc("changeset.list", None, false, true, None, false, output),
         ChangesetCmd::Show { id } => cmd_ipc(
             "changeset.get",
             Some(&serde_json::json!({"id": id}).to_string()),
             false,
             true,
             None,
+            false,
             output,
         ),
         ChangesetCmd::Apply { id } => cmd_ipc(
@@ -791,6 +967,7 @@ fn cmd_changeset(cmd: &ChangesetCmd, dry_run: bool, output: Output) -> Result<()
             false,
             true,
             None,
+            false,
             output,
         ),
         ChangesetCmd::Revert { id } => cmd_ipc(
@@ -799,6 +976,7 @@ fn cmd_changeset(cmd: &ChangesetCmd, dry_run: bool, output: Output) -> Result<()
             false,
             true,
             None,
+            false,
             output,
         ),
         ChangesetCmd::Export { id, omc } => {

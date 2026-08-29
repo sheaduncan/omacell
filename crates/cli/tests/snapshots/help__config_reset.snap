@@ -1,13 +1,13 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"keys\", \"--help\"])"
+expression: "help(&[\"config\", \"reset\", \"--help\"])"
 ---
-Keymap / Hyprland conflict check
+Restore package defaults (backup first)
 
-Usage: omacell keys [OPTIONS] <COMMAND>
+Usage: omacell config reset [OPTIONS] [FILE]
 
-Commands:
-  check  Compare classic chords to Hyprland `bindings.lua`
+Arguments:
+  [FILE]  Relative file under `~/.config/omacell` (default `config.toml`)
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)

@@ -12,8 +12,8 @@ use omacell_conf::Paths;
 
 const MAX_LOG_BYTES: u64 = 1024 * 1024;
 
-/// Install stderr + rotating file logging.
-pub fn init(paths: &Paths, verbose: u8, quiet: bool) {
+/// Install stderr logging and, when enabled, rotating file logging.
+pub fn init(paths: &Paths, verbose: u8, quiet: bool, write_file: bool) {
     let level = if quiet {
         "warn"
     } else {
@@ -27,12 +27,15 @@ pub fn init(paths: &Paths, verbose: u8, quiet: bool) {
     let stderr = tracing_subscriber::fmt::layer()
         .with_writer(io::stderr)
         .with_target(false);
-    let file_layer = open_log_file(paths).map(|file| {
-        tracing_subscriber::fmt::layer()
-            .with_ansi(false)
-            .with_writer(Mutex::new(file))
-            .with_target(true)
-    });
+    let file_layer = write_file
+        .then(|| open_log_file(paths))
+        .flatten()
+        .map(|file| {
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(Mutex::new(file))
+                .with_target(true)
+        });
     let registry = tracing_subscriber::registry().with(filter).with(stderr);
     if let Some(file_layer) = file_layer {
         let _ = registry.with(file_layer).try_init();

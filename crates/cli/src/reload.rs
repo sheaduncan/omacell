@@ -30,7 +30,15 @@ pub fn register_theme_reload(bus: &mut Bus, handle: ReloadHandle) -> Result<(), 
             exposure: Exposure::Public,
             default_keys: &[],
         },
-        move |_ctx, _args| {
+        move |ctx, _args| {
+            if ctx.is_preflight() {
+                if ctx.is_dry_run() {
+                    handle.check()?;
+                }
+                return Ok(Effect::query(
+                    serde_json::json!({"dry_run": ctx.is_dry_run()}),
+                ));
+            }
             handle.reload()?;
             let loaded = handle.snapshot();
             let name = loaded.theme.name.clone();
@@ -48,10 +56,14 @@ pub fn register_theme_reload(bus: &mut Bus, handle: ReloadHandle) -> Result<(), 
 pub struct Sigusr1Guard {
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+    signal_id: Option<signal_hook::SigId>,
 }
 
 impl Drop for Sigusr1Guard {
     fn drop(&mut self) {
+        if let Some(signal_id) = self.signal_id.take() {
+            signal_hook::low_level::unregister(signal_id);
+        }
         self.stop.store(true, Ordering::SeqCst);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -62,7 +74,7 @@ impl Drop for Sigusr1Guard {
 /// Bind SIGUSR1 to [`ReloadHandle::reload`] without `unsafe` in this crate.
 pub fn spawn_sigusr1_reloader(handle: ReloadHandle) -> Result<Sigusr1Guard, CoreError> {
     let flag = Arc::new(AtomicBool::new(false));
-    flag::register(SIGUSR1, Arc::clone(&flag)).map_err(|err| {
+    let signal_id = flag::register(SIGUSR1, Arc::clone(&flag)).map_err(|err| {
         CoreError::new("cli.signal", format!("register SIGUSR1: {err}"))
             .with_hint("theme reload still works via omacell theme reload and ipc")
     })?;
@@ -71,7 +83,9 @@ pub fn spawn_sigusr1_reloader(handle: ReloadHandle) -> Result<Sigusr1Guard, Core
     let join = thread::spawn(move || {
         while !thread_stop.load(Ordering::Relaxed) {
             if flag.swap(false, Ordering::SeqCst) {
-                let _ = handle.reload();
+                if let Err(err) = handle.reload() {
+                    tracing::warn!(code = %err.code, error = %err.message, "SIGUSR1 reload failed");
+                }
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -79,5 +93,6 @@ pub fn spawn_sigusr1_reloader(handle: ReloadHandle) -> Result<Sigusr1Guard, Core
     Ok(Sigusr1Guard {
         stop,
         join: Some(join),
+        signal_id: Some(signal_id),
     })
 }

@@ -1,13 +1,10 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"keys\", \"--help\"])"
+expression: "help(&[\"config\", \"check\", \"--help\"])"
 ---
-Keymap / Hyprland conflict check
+Validate the effective configuration
 
-Usage: omacell keys [OPTIONS] <COMMAND>
-
-Commands:
-  check  Compare classic chords to Hyprland `bindings.lua`
+Usage: omacell config check [OPTIONS]
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)

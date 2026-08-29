@@ -30,6 +30,20 @@ fn version_and_usage() {
         .success()
         .stdout(predicate::str::contains("omacell"));
     bin().arg("--not-a-flag").assert().code(2);
+
+    let output = bin().args(["--json", "--not-a-flag"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["code"], "cli.usage");
+    assert!(error["message"].as_str().unwrap().contains("not-a-flag"));
+}
+
+#[test]
+fn ipc_all_and_socket_are_mutually_exclusive() {
+    bin()
+        .args(["ipc", "ping", "--all", "--socket", "/does/not/matter.sock"])
+        .assert()
+        .code(2);
 }
 
 #[test]
@@ -121,6 +135,12 @@ fn query_eval_set_recalc_convert() {
 
     let mut cmd = bin();
     cmd.env("HOME", dir.path())
+        .args(["set", book.to_str().unwrap(), "Z2", "-1"])
+        .assert()
+        .success();
+
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
         .args(["recalc", book.to_str().unwrap()])
         .assert()
         .success();
@@ -132,6 +152,75 @@ fn query_eval_set_recalc_convert() {
         .assert()
         .success();
     assert!(out.is_file());
+}
+
+#[test]
+fn query_human_csv_and_markdown_outputs_escape_cells() {
+    let dir = TempDir::new().unwrap();
+    let book = dir.path().join("book.csv");
+    std::fs::write(
+        &book,
+        "\"a,b\",\"quote\"\"here\",\"pipe|slash\\\",\"line\nbreak\"\n",
+    )
+    .unwrap();
+
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args(["query", book.to_str().unwrap(), "A1:D1", "--format", "csv"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a,b\""))
+        .stdout(predicate::str::contains("\"quote\"\"here\""))
+        .stdout(predicate::str::contains("\"line\nbreak\""));
+
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args(["query", book.to_str().unwrap(), "A1:D1", "--format", "md"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pipe\\|slash\\\\"))
+        .stdout(predicate::str::contains("line<br>break"));
+
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args(["query", book.to_str().unwrap(), "A1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("["))
+        .stdout(predicate::str::contains("a,b"));
+}
+
+#[test]
+fn convert_accepts_the_shared_csv_import_plan() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("input.csv");
+    let plan = dir.path().join("plan.json");
+    let output = dir.path().join("output.xlsx");
+    std::fs::write(&input, "00123\n").unwrap();
+    std::fs::write(
+        &plan,
+        r#"{"delimiter":",","columns":[{"ty":{"kind":"text"}}]}"#,
+    )
+    .unwrap();
+
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args([
+            "convert",
+            input.to_str().unwrap(),
+            output.to_str().unwrap(),
+            "--plan",
+            plan.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args(["--json", "query", output.to_str().unwrap(), "A1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("00123"));
 }
 
 #[test]

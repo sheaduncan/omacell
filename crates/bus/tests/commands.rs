@@ -2,6 +2,11 @@
 
 mod common;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use omacell_bus::args::EmptyArgs;
+use omacell_bus::{CommandKind, CommandSpec, Effect, Exposure};
 use omacell_core::command::Origin;
 use omacell_core::event::Event;
 use omacell_core::value::Value;
@@ -9,6 +14,41 @@ use serde_json::json;
 
 fn subscribe(bus: &mut omacell_bus::Bus) -> omacell_bus::SubscriberId {
     bus.subscribe(64)
+}
+
+#[test]
+fn external_effects_run_once_after_preflight_and_never_on_dry_run() {
+    let mut bus = common::bus();
+    let writes = Arc::new(AtomicUsize::new(0));
+    let handler_writes = Arc::clone(&writes);
+    bus.registry_mut()
+        .register::<EmptyArgs, _>(
+            CommandSpec {
+                id: "test.external",
+                doc: "Test-only external effect",
+                kind: CommandKind::Mutating,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            move |ctx, _args| {
+                if !ctx.is_preflight() {
+                    handler_writes.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(Effect::query(json!({})))
+            },
+        )
+        .unwrap();
+
+    assert!(bus.execute(Origin::User, "test.external", json!({})).ok);
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    assert!(
+        bus.dry_run(Origin::User, "test.external", json!({}))
+            .unwrap()
+            .outcome
+            .ok
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
 }
 
 #[test]

@@ -1,13 +1,10 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"keys\", \"--help\"])"
+expression: "help(&[\"theme\", \"reload\", \"--help\"])"
 ---
-Keymap / Hyprland conflict check
+Re-read theme and config files
 
-Usage: omacell keys [OPTIONS] <COMMAND>
-
-Commands:
-  check  Compare classic chords to Hyprland `bindings.lua`
+Usage: omacell theme reload [OPTIONS]
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)

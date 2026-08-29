@@ -1,17 +1,16 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"keys\", \"--help\"])"
+expression: "help(&[\"setup\", \"omarchy\", \"--help\"])"
 ---
-Keymap / Hyprland conflict check
+Install the Omarchy theme template, hook, and skill links
 
-Usage: omacell keys [OPTIONS] <COMMAND>
-
-Commands:
-  check  Compare classic chords to Hyprland `bindings.lua`
+Usage: omacell setup omarchy [OPTIONS]
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)
+      --show-hyprland         Print the Hyprland snippet and exit
       --dry-run               Validate writes without changing files
+      --menu                  Write Omarchy menu rows (otherwise skipped unless confirmed on a TTY)
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
       --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`

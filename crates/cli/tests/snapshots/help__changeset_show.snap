@@ -1,13 +1,13 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"keys\", \"--help\"])"
+expression: "help(&[\"changeset\", \"show\", \"--help\"])"
 ---
-Keymap / Hyprland conflict check
+Show one changeset
 
-Usage: omacell keys [OPTIONS] <COMMAND>
+Usage: omacell changeset show [OPTIONS] <ID>
 
-Commands:
-  check  Compare classic chords to Hyprland `bindings.lua`
+Arguments:
+  <ID>  Changeset id
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)

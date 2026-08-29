@@ -64,6 +64,9 @@ pub enum Commands {
         /// A1 range to export.
         #[arg(long)]
         range: Option<String>,
+        /// Shared WP-08 CSV import plan JSON.
+        #[arg(long, value_name = "FILE")]
+        plan: Option<PathBuf>,
     },
     /// Print a range as json, csv, or markdown.
     Query {
@@ -85,6 +88,7 @@ pub enum Commands {
         /// A1 cell or range.
         range: String,
         /// Formula-bar text.
+        #[arg(allow_hyphen_values = true)]
         value: String,
     },
     /// Evaluate a formula in a workbook.
@@ -144,13 +148,13 @@ pub enum Commands {
         /// JSON object arguments.
         payload: Option<String>,
         /// Send to every live owned instance.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "socket")]
         all: bool,
         /// Suppress per-instance human output.
         #[arg(long)]
         quiet: bool,
         /// Socket path (default: newest live instance).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all")]
         socket: Option<PathBuf>,
     },
     /// Changesets on a running instance.

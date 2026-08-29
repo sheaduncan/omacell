@@ -237,9 +237,29 @@ fn named_user_reset_stays_under_user_config() {
         .unwrap();
     assert!(!profile.is_file());
     assert!(dest.starts_with(&paths.state_dir));
+    assert!(dest.ends_with("backups/stamp1/profiles/work.toml"));
     assert!(
         std::fs::read_to_string(&dest)
             .unwrap()
             .contains("panel_width")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn named_user_reset_rejects_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    use omacell_conf::reset_user_rel;
+
+    let (dir, paths) = temp_paths();
+    let outside = dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let victim = outside.join("victim.toml");
+    std::fs::write(&victim, "keep me").unwrap();
+    std::fs::create_dir_all(&paths.user_config).unwrap();
+    symlink(&outside, paths.user_config.join("profiles")).unwrap();
+
+    assert!(reset_user_rel(&paths, "stamp1", "profiles/victim.toml").is_err());
+    assert_eq!(std::fs::read_to_string(victim).unwrap(), "keep me");
 }

@@ -11,13 +11,6 @@ fn generate_completions_and_man() {
     omacell_cli::write_dist(&dir).expect("write dist");
     for name in ["omacell.bash", "omacell.fish", "_omacell", "omacell.1"] {
         let path = dir.join(name);
-        assert!(
-            path.is_file()
-                || dir.join("omacell.zsh").is_file()
-                || path.with_file_name("_omacell").is_file(),
-            "missing {name} in {}",
-            dir.display()
-        );
+        assert!(path.is_file(), "missing {name} in {}", dir.display());
     }
-    assert!(dir.join("omacell.1").is_file());
 }

@@ -11,6 +11,7 @@ use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
+use omacell_io::csv::ImportPlan;
 
 use crate::cli::Cli;
 use crate::files::{self, FileSession};
@@ -20,8 +21,6 @@ use crate::reload;
 pub struct App {
     /// Resolved XDG paths.
     pub paths: Paths,
-    /// Retained load sources.
-    pub options: LoadOptions,
     /// Last-good configuration.
     pub store: ConfigStore,
     /// Command bus.
@@ -46,10 +45,14 @@ impl App {
         Self::from_parts(paths, options, Workbook::new(), FileSession::new())
     }
 
-    /// Bootstrap, then open `book` and retain its settings overlay.
-    pub fn with_workbook(cli: &Cli, book: &Path) -> Result<Self, CoreError> {
+    /// Bootstrap with an optional shared CSV import plan.
+    pub fn with_workbook_plan(
+        cli: &Cli,
+        book: &Path,
+        plan: Option<&ImportPlan>,
+    ) -> Result<Self, CoreError> {
         let paths = Paths::from_env()?;
-        let opened = files::open_any(book)?;
+        let opened = files::open_any_with_plan(book, plan)?;
         let mut options = LoadOptions::from_process();
         options.config_file = cli.config.clone();
         options.theme_override = cli.theme.clone();
@@ -67,6 +70,7 @@ impl App {
         file_session: FileSession,
     ) -> Result<Self, CoreError> {
         let store = ConfigStore::load_with(paths.clone(), options.clone())?;
+        file_session.attach_config(store.handle());
         let mut registry = FnRegistry::new();
         register_all(&mut registry);
         let mut engine = RecalcEngine::new(registry);
@@ -76,7 +80,6 @@ impl App {
         reload::register_theme_reload(&mut bus, store.handle())?;
         Ok(Self {
             paths,
-            options,
             store,
             bus,
             files: file_session,

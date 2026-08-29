@@ -1,15 +1,13 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"keys\", \"--help\"])"
+expression: "help(&[\"keys\", \"check\", \"--help\"])"
 ---
-Keymap / Hyprland conflict check
+Compare classic chords to Hyprland `bindings.lua`
 
-Usage: omacell keys [OPTIONS] <COMMAND>
-
-Commands:
-  check  Compare classic chords to Hyprland `bindings.lua`
+Usage: omacell keys check [OPTIONS]
 
 Options:
+      --hyprland <HYPRLAND>   Path to `bindings.lua` (default `~/.config/hypr/bindings.lua`)
       --json                  Machine-readable stdout (and stderr errors)
       --dry-run               Validate writes without changing files
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
