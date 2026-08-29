@@ -1,5 +1,8 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
+# rust-lld SIGBUS: /tmp is tmpfs. Keep artifacts on /home (see AGENTS.md).
+export CARGO_TARGET_DIR := env("CARGO_TARGET_DIR", home_directory() / ".cache" / "omacell" / "target")
+
 # fmt, clippy, tests, docs — the gate every PR must pass
 check:
     cargo fmt --check

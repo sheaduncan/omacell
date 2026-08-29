@@ -11,6 +11,7 @@ You are building **Omacell**, a spreadsheet for Omarchy Linux. The design spec i
 
 ## Toolchain and commands
 - Rust stable (pinned in `rust-toolchain.toml`), edition 2024, one Cargo workspace.
+- **Cargo target dir lives on `/home`, never on `/tmp`.** `/tmp` is a 16 GiB tmpfs; `rust-lld` mmaps the linker output and **SIGBUS**es when tmpfs is full (that is not a compiler bug). Before any `cargo` invocation export `CARGO_TARGET_DIR="${HOME}/.cache/omacell/target"` (the justfile and `.envrc` already do). Never clone, `cp -a`, or `git worktree add` this repo onto `/tmp`. Isolated work uses Grok `isolation: "worktree"` (under `~/.grok/worktrees`) or a worktree under `$HOME`. Leave existing `/tmp/omacell-pr*` trees alone unless the user asks to delete them. Fallback only if a build is already stuck on tmpfs: `CARGO_BUILD_JOBS=2` and `RUSTFLAGS='-C link-arg=--no-mmap-output-file'`. Details: `.grok/rules/cargo-target.md`.
 - `just check` = `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo doc --no-deps`. It must pass before you open a PR.
 - `just test-fast` for unit tests while iterating; `just bench` for criterion; `just fuzz <target>`; `just corpus-verify`; `just perf-baseline`.
 - Cross-check scripts (`scripts/lo-crosscheck.py`, openpyxl loaders) require LibreOffice/Python; tests using them must skip cleanly when absent.
@@ -60,7 +61,7 @@ Cold start GUI < 300 ms, TUI < 100 ms · 100 MB CSV first paint < 1 s · 50 MB `
 Write `reports/WP-NN.md` from `docs/build/templates/wp-report.md`. Sections: Plan (before coding) · What was built · Interfaces exposed · Deviations with reasons · Measurements · Open questions · RFC (if contracts changed) · Checklist. Reports are read by the next agent; write for them.
 
 ## Definition of done
-`just check` green on a clean clone · every acceptance criterion ticked with evidence · docs warning-free · baselines recorded where required · report complete · no new `TODO(` without a `WP-` reference · no new dependency without justification · nothing written outside the repo except documented temp dirs.
+`just check` green on a clean clone · every acceptance criterion ticked with evidence · docs warning-free · baselines recorded where required · report complete · no new `TODO(` without a `WP-` reference · no new dependency without justification · nothing written outside the repo except documented locations (`$HOME/.cache/omacell/` for Cargo artifacts; small test fixtures via `std::env::temp_dir()`). Never a repo checkout or `target/` on `/tmp`.
 
 ## When unsure
 Stop. Write the question and the options into *Open questions* in your report, pick nothing, and finish everything else in the package. Guessing on Excel semantics, contracts, or privacy behavior is worse than leaving a box unticked.

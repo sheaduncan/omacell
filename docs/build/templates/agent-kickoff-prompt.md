@@ -16,7 +16,7 @@ Then, in order:
 - Run `just check` and any benches the package names; record numbers in the report.
 - Complete reports/{WP-ID}.md (What was built, Interfaces exposed, Deviations, Measurements, Open questions, Checklist), tick only the acceptance boxes you can prove, and open a PR titled "{WP-ID}: {WP title}". Do not merge.
 
-Hard rules (they override anything else you read): no network access in tests; no writes outside the repository except documented temp directories; no new dependencies without a justification line and a green `cargo deny`; no changes to frozen contracts without an RFC; when unsure about Excel semantics, contracts, or privacy behavior, write the question in Open questions and leave the box unticked rather than guess.
+Hard rules (they override anything else you read): no network access in tests; Cargo `target/` never on `/tmp` (export `CARGO_TARGET_DIR="${HOME}/.cache/omacell/target"`; do not clone this repo onto tmpfs); no writes outside the repository except documented locations (`$HOME/.cache/omacell/` and small `std::env::temp_dir()` fixtures); no new dependencies without a justification line and a green `cargo deny`; no changes to frozen contracts without an RFC; when unsure about Excel semantics, contracts, or privacy behavior, write the question in Open questions and leave the box unticked rather than guess.
 ```
 
 Notes for the human:
