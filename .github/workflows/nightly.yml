@@ -37,8 +37,8 @@ jobs:
       - name: Fuzz targets (10 minutes each)
         run: |
           if [[ -f fuzz/Cargo.toml ]]; then
-            for t in $(cargo fuzz list); do
-              cargo fuzz run "$t" -- -max_total_time=600
+            for t in $(cargo +nightly fuzz list); do
+              cargo +nightly fuzz run "$t" -- -max_total_time=600
             done
           else
             echo "No fuzz targets yet; skip."
