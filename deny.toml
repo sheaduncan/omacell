@@ -19,6 +19,10 @@ ignore = [
     # Transitive via pre-approved `fontdb` 0.23 (WP-12). Remove when fontdb
     # switches to skrifa.
     "RUSTSEC-2026-0192",
+    # Transitive via pre-approved `ratatui` 0.29 (WP-15). `paste` is unmaintained
+    # (RUSTSEC-2024-0436). ratatui ≥ 0.30 needs rustc 1.88, above the workspace
+    # MSRV 1.85. Remove when MSRV allows the upgrade.
+    "RUSTSEC-2024-0436",
 ]
 
 [licenses]

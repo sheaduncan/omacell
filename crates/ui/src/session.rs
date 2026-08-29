@@ -145,6 +145,11 @@ impl UiSession {
         self.lock().palette.clone()
     }
 
+    /// Replace the command-palette model after frontend typing or dismissal.
+    pub fn set_palette(&self, palette: Palette) {
+        self.lock().palette = palette;
+    }
+
     /// Current panel state.
     #[must_use]
     pub fn panel(&self) -> PanelState {
@@ -216,6 +221,11 @@ impl UiSession {
     #[must_use]
     pub fn show_formulas(&self) -> bool {
         self.lock().show_formulas
+    }
+
+    /// Replace formula-source display after a frontend activates a saved sheet view.
+    pub fn set_show_formulas(&self, show: bool) {
+        self.lock().show_formulas = show;
     }
 
     /// Replace the toolkit-independent clipboard snapshot.

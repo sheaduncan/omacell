@@ -36,7 +36,7 @@ The spec left several choices as ADRs. Agents need fixed contracts, so this plan
 | 0 | Foundations | WP-00, WP-01, WP-S1, WP-S2 | G0 |
 | 1 | Engine | WP-02, WP-03, WP-06, WP-04, WP-05F, WP-05a, WP-05b, WP-05c, WP-07a, WP-07b | G1 |
 | 2 | File I/O | WP-08, WP-09, WP-10, WP-11 | G2 |
-| 3 | Surfaces I — config, CLI, UI core, TUI | WP-12, WP-13, WP-14, WP-15 | G3 |
+| 3 | Surfaces I — config, CLI, UI core, TUI | WP-12, WP-13, WP-14, WP-15, WP-15a | G3 |
 | 4 | Surfaces II — GUI and data tools | WP-16, WP-17, WP-18, WP-19 | G4 |
 | 5 | Scripting, agents, AI | WP-20, WP-21, WP-22, WP-23 | G5 |
 | 6 | Analysis and output | WP-24, WP-25, WP-26, WP-27 | G6 |
@@ -72,7 +72,7 @@ Do not start WP-05a/b/c until WP-05F is merged. Do not start WP-07b until WP-07a
 |---|---|---|
 | A | Engine / core | WP-00, WP-01, WP-S1, WP-02, WP-03, WP-06, WP-04, WP-05F, WP-05a, WP-05b, WP-05c, WP-17, WP-18, WP-19, WP-24 |
 | B | File I/O | WP-08, WP-09, WP-10, WP-11, WP-27 |
-| C | Surfaces (conf, UI core, TUI, GUI, charts, print) | WP-S2, WP-12, WP-14, WP-15, WP-16, WP-25, WP-26 |
+| C | Surfaces (conf, UI core, TUI, GUI, charts, print) | WP-S2, WP-12, WP-14, WP-15, WP-15a, WP-16, WP-25, WP-26 |
 | D | Integration (bus, CLI, Lua, MCP, AI, release) | WP-07a, WP-07b, WP-13, WP-20, WP-21, WP-22, WP-23, WP-28 |
 
 - Run at most one agent per lane at a time, and only on packages whose *Depends on* are all merged.
@@ -112,6 +112,7 @@ graph LR
     WP_13["WP-13<br/>cli"]
     WP_14["WP-14<br/>ui-core"]
     WP_15["WP-15<br/>tui"]
+    WP_15a["WP-15a<br/>ui-task-runner"]
   end
   subgraph P4["Phase 4: Surfaces II — GUI and data tools"]
     WP_16["WP-16<br/>gui-foundation"]
@@ -175,9 +176,12 @@ graph LR
   WP_12 --> WP_14
   WP_14 --> WP_15
   WP_13 --> WP_15
+  WP_08 --> WP_15a
+  WP_15 --> WP_15a
   WP_14 --> WP_16
   WP_12 --> WP_16
   WP_S2 --> WP_16
+  WP_15a --> WP_16
   WP_04 --> WP_17
   WP_07a --> WP_17
   WP_17 --> WP_18
@@ -211,6 +215,7 @@ graph LR
   WP_10 --> WP_27
   WP_13 --> WP_28
   WP_15 --> WP_28
+  WP_15a --> WP_28
   WP_16 --> WP_28
   WP_21 --> WP_28
   WP_23 --> WP_28
@@ -220,7 +225,7 @@ graph LR
   WP_27 --> WP_28
 ```
 
-Two near-critical paths now remain: engine/UI (`WP-00 → WP-01 → WP-02 → WP-04 → WP-07a → WP-14 → WP-16 → WP-25 → WP-26 → WP-28`) and functions/CLI/TUI (`WP-04/WP-06 → WP-05F → WP-05a/b/c → WP-13 → WP-15 → WP-25 → WP-26 → WP-28`). After WP-12 lands, WP-13 and WP-14 may start in parallel using their binding handoff sections: WP-13 owns process composition/config reload IPC, while WP-14 consumes snapshots and owns toolkit-free state transitions. Start WP-15 only after both; WP-16 follows WP-14 and reuses the same reload contract. WP-07b remains on the CLI path but no longer blocks UI-core work. Session totals should be re-estimated after G1; treat package sizes as ordering signals, not commitments.
+Two near-critical paths now remain: engine/UI (`WP-00 → WP-01 → WP-02 → WP-04 → WP-07a → WP-14 → WP-15 → WP-15a → WP-16 → WP-25 → WP-26 → WP-28`) and functions/CLI/TUI (`WP-04/WP-06 → WP-05F → WP-05a/b/c → WP-13 → WP-15 → WP-15a → WP-16/WP-25`). WP-15a closes the §10.2/§11.5 single-writer task-runner gap found in WP-15 review before the GUI builds a second frontend lifecycle. WP-16 must consume that runner rather than own a toolkit lock around `Bus`. Session totals should be re-estimated after G1; treat package sizes as ordering signals, not commitments.
 
 ## 7. Work-package index
 
@@ -240,15 +245,16 @@ Two near-critical paths now remain: engine/UI (`WP-00 → WP-01 → WP-02 → WP
 | [WP-06](wp/WP-06-number-formats.md) | Number formats, dates, locales, and the General algorithm | 1 | A | M | WP-01 | WP-05F, WP-07a, WP-08, WP-09, WP-11, WP-18 |
 | [WP-07a](wp/WP-07a-command-bus-changesets.md) | In-process command bus, changesets, and events | 1 | D | M | WP-02, WP-03, WP-04, WP-06 | WP-07b, WP-11, WP-14, WP-17, WP-20, WP-21, WP-22 |
 | [WP-07b](wp/WP-07b-ipc.md) | Versioned Unix-socket IPC transport and client | 1 | D | M | WP-07a | WP-13 |
-| [WP-08](wp/WP-08-csv.md) | CSV/TSV import with preview, progressive load, and export | 2 | B | M | WP-02, WP-06 | WP-13, WP-27 |
+| [WP-08](wp/WP-08-csv.md) | CSV/TSV import with preview, progressive load, and export | 2 | B | M | WP-02, WP-06 | WP-13, WP-15a, WP-27 |
 | [WP-09](wp/WP-09-xlsx-read.md) | .xlsx reader (L1–L2) with L3 part preservation | 2 | B | XL | WP-02, WP-03, WP-06 | WP-10 |
 | [WP-10](wp/WP-10-xlsx-write.md) | .xlsx writer, round-trip diff tool, atomic save | 2 | B | L | WP-09 | WP-13, WP-23, WP-24, WP-25, WP-27 |
 | [WP-11](wp/WP-11-omc-format.md) | .omc text workbook and change records | 2 | B | M | WP-02, WP-06, WP-07a | WP-13 |
 | [WP-12](wp/WP-12-config-theme-omarchy.md) | Configuration layering, Omarchy theme/font resolution, and `setup omarchy` | 3 | C | L | WP-01 | WP-13, WP-14, WP-16, WP-20, WP-21, WP-22 |
 | [WP-13](wp/WP-13-cli.md) | CLI: the `omacell` binary | 3 | D | L | WP-05a, WP-05b, WP-05c, WP-07b, WP-08, WP-10, WP-11, WP-12 | WP-15, WP-20, WP-21, WP-28 |
 | [WP-14](wp/WP-14-ui-core.md) | Shared UI core: modes, keymaps, selection, editing, palette, viewport, clipboard, session | 3 | C | L | WP-07a, WP-12 | WP-15, WP-16, WP-23 |
-| [WP-15](wp/WP-15-tui.md) | Terminal UI (ratatui) | 3 | C | L | WP-14, WP-13 | WP-25, WP-28 |
-| [WP-16](wp/WP-16-gui-foundation.md) | GUI foundation (eframe/egui on wgpu): window, grid renderer, chrome, theme hot reload | 4 | C | XL | WP-14, WP-12, WP-S2 | WP-25, WP-26, WP-28 |
+| [WP-15](wp/WP-15-tui.md) | Terminal UI (ratatui) | 3 | C | L | WP-14, WP-13 | WP-15a, WP-25, WP-28 |
+| [WP-15a](wp/WP-15a-ui-task-runner.md) | Non-blocking UI command task runner | 3 | C | M | WP-08, WP-15 | WP-16, WP-28, G3 |
+| [WP-16](wp/WP-16-gui-foundation.md) | GUI foundation (eframe/egui on wgpu): window, grid renderer, chrome, theme hot reload | 4 | C | XL | WP-14, WP-12, WP-S2, WP-15a | WP-25, WP-26, WP-28 |
 | [WP-17](wp/WP-17-editing-structure.md) | Editing and structure operations (data tools I) | 4 | A | L | WP-04, WP-07a | WP-18, WP-19 |
 | [WP-18](wp/WP-18-sort-filter-tables-validation-cf.md) | Sort, AutoFilter, tables, data validation, conditional formatting (data tools II) | 4 | A | XL | WP-17, WP-06 | WP-24 |
 | [WP-19](wp/WP-19-auditing-find-audit.md) | Auditing, find/replace, Go To Special, and the deterministic `audit` | 4 | A | M | WP-04, WP-17 | WP-21, WP-22 |

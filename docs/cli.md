@@ -23,9 +23,11 @@ The `omacell` binary is a thin adapter over the command bus, file I/O, and confi
 
 ## Commands
 
-See `omacell --help` and the per-command help snapshots. Stubs that exit 3:
+See `omacell --help` and the per-command help snapshots. `omacell --tui [file]` launches the terminal UI (WP-15). Without a TTY it exits 1 with `tui.tty` rather than hanging. Bare `omacell [file...]` still opens the GUI (WP-16).
 
-- `omacell --tui` and `omacell [file...]` (WP-15 / WP-16)
+Stubs that exit 3:
+
+- `omacell [file...]` (WP-16)
 - `omacell run` (WP-20)
 - `omacell audit` (WP-19)
 - `omacell ai` (WP-22)

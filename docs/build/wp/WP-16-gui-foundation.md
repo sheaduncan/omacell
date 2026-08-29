@@ -5,7 +5,7 @@
 | Phase | 4 — Surfaces II — GUI and data tools |
 | Lane | C — Surfaces (conf, UI core, TUI, GUI, charts, print) |
 | Size | XL (≈ 10–20) |
-| Depends on | WP-14, WP-12, WP-S2 |
+| Depends on | WP-14, WP-12, WP-S2, WP-15a |
 | Unblocks | WP-25, WP-26, WP-28 |
 | Spec sections | §7.1–§7.3, §10, §11.4, §12.1, §12.4 |
 | Where | `crates/gui` |
@@ -34,6 +34,12 @@ The native Wayland front-end: the same state machines as the TUI, rendered with 
 - On `ReloadEvent::Applied`, update only affected tunables. On `ThemeChanged`, rebuild renderer resources and emit/map `core::Event::ThemeChanged`, but retain the complete WP-14 interaction/session model. Do not reconstruct the app, workbook, edit buffer or viewport and do not parse theme files in `gui`.
 - Reuse WP-13's registered `theme.reload` command for IPC/`--all` and its SIGUSR1 adapter. Filesystem watcher, hook, IPC and signal must converge on `ConfigStore::reload` and one render invalidation path.
 - WP-12's full config/theme derivation baseline is about 12 ms. Measure the end-to-end mid-edit swap separately; the remaining work (font upload, visuals/cache invalidation and repaint) must keep the total below 100 ms. Retint chart defaults only; never alter explicit file-authored cell/chart colors.
+
+### Binding handoff from WP-15a
+
+- Consume WP-15a's command task runner, reader snapshots, progress stream, and cancellation handles. The egui app must not wrap or directly expose `Bus` through a toolkit-owned mutex.
+- Keep navigation, selection, scroll, zoom, resize, and paint usable while the writer executes recalc/import/export. Publish task progress through the shared status model and reconcile completed snapshots on the UI thread.
+- Reuse the runner shutdown and bounded-queue behavior. Closing a window cancels or detaches its owned tasks according to WP-15a policy and never abandons a partially applied workbook transaction.
 
 ## Acceptance criteria
 

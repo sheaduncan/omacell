@@ -27,6 +27,8 @@ use omacell_fn::{all_specs, functions_json};
 use omacell_io::csv::ImportPlan;
 use omacell_io::xlsx;
 
+use omacell_tui::Launch;
+
 use crate::app::App;
 use crate::cli::{
     ChangesetCmd, Cli, Commands, ConfigCmd, FnCmd, KeysCmd, QueryFormat, SetupCmd, ThemeCmd,
@@ -89,7 +91,8 @@ fn run_inner(args: Vec<OsString>, json_requested: bool) -> Result<i32, CliError>
 
 fn dispatch(cli: &Cli, output: Output) -> Result<(), CliError> {
     if cli.tui {
-        return Err(CliError::nyi("omacell --tui", "WP-15"));
+        let _ = output;
+        return cmd_tui(cli);
     }
     match &cli.command {
         None => {
@@ -174,6 +177,50 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
         | Commands::Agent { .. }
         | Commands::Mcp { .. } => unreachable!("stubs handled earlier"),
     }
+}
+
+fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
+    if cli.command.is_some() {
+        return Err(
+            CliError::new("cli.usage", "--tui cannot be combined with a subcommand")
+                .hint("use omacell --tui [FILE] or run the subcommand without --tui")
+                .exit(EXIT_USAGE),
+        );
+    }
+    if cli.files.len() > 1 {
+        return Err(
+            CliError::new("cli.usage", "--tui accepts at most one workbook")
+                .hint("run a separate Omacell instance for each workbook")
+                .exit(EXIT_USAGE),
+        );
+    }
+    if cli.dry_run {
+        return Err(
+            CliError::new("cli.usage", "--dry-run is not valid for an interactive TUI")
+                .hint("use --dry-run with a CLI or IPC command")
+                .exit(EXIT_USAGE),
+        );
+    }
+    if !io::stdout().is_terminal() {
+        return Err(
+            CliError::new("tui.tty", "omacell --tui requires a terminal")
+                .hint("run from a TTY or omit --tui"),
+        );
+    }
+    let book = cli.files.first().map(PathBuf::as_path);
+    let mut app = App::bootstrap_live(cli, book)?;
+    log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
+    let _sig = crate::reload::spawn_sigusr1_reloader(app.reload_handle())?;
+    let (ui, roots) = app.attach_session(cli.config.as_deref())?;
+    let launch = Launch {
+        paths: app.paths,
+        store: app.store,
+        bus: app.bus,
+        ui,
+        roots,
+    };
+    omacell_tui::run(launch)?;
+    Ok(())
 }
 
 fn init_app(cli: &Cli) -> Result<App, CliError> {

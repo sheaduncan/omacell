@@ -12,6 +12,7 @@ use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
 use omacell_io::csv::ImportPlan;
+use omacell_ui::{KeymapRoots, UiSession, register_ui_commands};
 
 use crate::cli::Cli;
 use crate::files::{self, FileSession};
@@ -42,7 +43,7 @@ impl App {
             let opened = files::open_any(path)?;
             options.workbook = Some(workbook_settings_overlay(opened.workbook.settings()));
         }
-        Self::from_parts(paths, options, Workbook::new(), FileSession::new())
+        Self::from_parts(paths, options, Workbook::new(), FileSession::new(), false)
     }
 
     /// Bootstrap with an optional shared CSV import plan.
@@ -60,7 +61,59 @@ impl App {
         options.workbook = Some(workbook_settings_overlay(opened.workbook.settings()));
         let file_session = FileSession::new();
         file_session.attach(book, &opened);
-        Self::from_parts(paths, options, opened.workbook, file_session)
+        Self::from_parts(paths, options, opened.workbook, file_session, false)
+    }
+
+    /// Live TUI/GUI composition: watcher-enabled [`ConfigStore`].
+    pub fn bootstrap_live(cli: &Cli, book: Option<&Path>) -> Result<Self, CoreError> {
+        match book {
+            Some(path) => {
+                let paths = Paths::from_env()?;
+                let opened = files::open_any(path)?;
+                let mut options = LoadOptions::from_process();
+                options.config_file = cli.config.clone();
+                options.theme_override = cli.theme.clone();
+                options.cli_sets = cli.sets.clone();
+                options.workbook = if let Some(settings_path) = &cli.from_workbook {
+                    let settings_book = files::open_any(settings_path)?;
+                    Some(workbook_settings_overlay(settings_book.workbook.settings()))
+                } else {
+                    Some(workbook_settings_overlay(opened.workbook.settings()))
+                };
+                let file_session = FileSession::new();
+                file_session.attach(path, &opened);
+                Self::from_parts(paths, options, opened.workbook, file_session, true)
+            }
+            None => {
+                let paths = Paths::from_env()?;
+                let mut options = LoadOptions::from_process();
+                options.config_file = cli.config.clone();
+                options.theme_override = cli.theme.clone();
+                options.cli_sets = cli.sets.clone();
+                if let Some(settings_path) = &cli.from_workbook {
+                    let settings_book = files::open_any(settings_path)?;
+                    options.workbook =
+                        Some(workbook_settings_overlay(settings_book.workbook.settings()));
+                }
+                Self::from_parts(paths, options, Workbook::new(), FileSession::new(), true)
+            }
+        }
+    }
+
+    /// Bind a WP-14 session onto this composition root (call once, after core commands).
+    pub fn attach_session(
+        &mut self,
+        config_file: Option<&Path>,
+    ) -> Result<(UiSession, KeymapRoots), CoreError> {
+        let loaded = self.store.snapshot();
+        let roots = KeymapRoots::new(
+            self.paths.user_config.clone(),
+            self.paths.default_dir.clone(),
+            config_file,
+        );
+        let ui = UiSession::new(&loaded, &roots)?;
+        register_ui_commands(self.bus.registry_mut(), &ui)?;
+        Ok((ui, roots))
     }
 
     fn from_parts(
@@ -68,8 +121,13 @@ impl App {
         options: LoadOptions,
         mut workbook: Workbook,
         file_session: FileSession,
+        watch: bool,
     ) -> Result<Self, CoreError> {
-        let store = ConfigStore::load_with(paths.clone(), options.clone())?;
+        let store = if watch {
+            ConfigStore::load_and_watch_with(paths.clone(), options.clone())?
+        } else {
+            ConfigStore::load_with(paths.clone(), options.clone())?
+        };
         file_session.attach_config(store.handle());
         let mut registry = FnRegistry::new();
         register_all(&mut registry);
@@ -94,7 +152,6 @@ impl App {
 
     /// Shared reload target for SIGUSR1 / WP-15.
     #[must_use]
-    #[allow(dead_code)]
     pub fn reload_handle(&self) -> ReloadHandle {
         self.store.handle()
     }

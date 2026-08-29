@@ -49,7 +49,6 @@ fn ipc_all_and_socket_are_mutually_exclusive() {
 #[test]
 fn stubs_exit_three_with_hint() {
     for args in [
-        vec!["--tui"],
         vec!["run", "x.lua", "x.xlsx"],
         vec!["audit", "x.xlsx"],
         vec!["ai", "setup"],
@@ -67,6 +66,30 @@ fn stubs_exit_three_with_hint() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("WP-16"));
+}
+
+#[test]
+fn tui_without_tty_exits_error() {
+    let (_home, mut cmd) = home();
+    cmd.args(["--tui"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("requires a terminal"));
+}
+
+#[test]
+fn tui_rejects_ambiguous_or_ignored_arguments_before_tty_setup() {
+    for args in [
+        vec!["--tui", "one.xlsx", "two.xlsx"],
+        vec!["--tui", "config", "check"],
+        vec!["--tui", "--dry-run"],
+    ] {
+        let (_home, mut cmd) = home();
+        cmd.args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("cli.usage"));
+    }
 }
 
 #[test]
