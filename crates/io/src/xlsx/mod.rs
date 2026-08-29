@@ -21,7 +21,10 @@ mod warnings;
 mod write;
 mod xml;
 
-pub use atomic::{SaveOptions, acquire_lock, lock_path, release_lock, save, save_workbook};
+pub use atomic::{
+    SaveOptions, acquire_lock, lock_path, release_lock, save, save_with_cancel, save_workbook,
+    save_workbook_with_cancel,
+};
 pub use diff::{DiffReport, diff};
 pub use opc::{
     MAX_COMPRESSION_RATIO, MAX_ENTRY_BYTES, MAX_PACKAGE_BYTES, MAX_UNCOMPRESSED_TOTAL,

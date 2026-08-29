@@ -1,7 +1,7 @@
 //! Shared TUI test harness (no second config load; no watcher).
 #![allow(dead_code)]
 
-use omacell_bus::Bus;
+use omacell_bus::{Bus, LongOps};
 use omacell_conf::{ConfigStore, LoadOptions, Paths};
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
@@ -100,6 +100,7 @@ fn harness_opts_with_workbook(
             bus,
             ui,
             roots,
+            long_ops: LongOps::production().with("test.hold"),
         },
         false,
     )
@@ -121,6 +122,20 @@ pub fn seed_demo(tui: &mut Tui) {
             .unwrap();
         assert!(result.ok, "{cell}: {:?}", result.error);
     }
+    wait_tasks(tui);
+}
+
+pub fn wait_tasks(tui: &mut Tui) {
+    let started = std::time::Instant::now();
+    while tui.has_pending_tasks() {
+        tui.poll_reload().unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "TUI command task did not finish"
+        );
+        std::thread::yield_now();
+    }
+    tui.poll_reload().unwrap();
 }
 
 pub fn draw_text(tui: &Tui, width: u16, height: u16) -> String {

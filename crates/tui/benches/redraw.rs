@@ -2,6 +2,7 @@
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use omacell_bus::Bus;
+use omacell_bus::LongOps;
 use omacell_conf::{ConfigStore, LoadOptions, Paths};
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
@@ -32,6 +33,7 @@ fn setup() -> (tempfile::TempDir, Tui, Terminal<TestBackend>) {
             bus,
             ui,
             roots,
+            long_ops: LongOps::production(),
         },
         false,
     )

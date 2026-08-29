@@ -23,6 +23,9 @@ use crate::workbook::{CalcMode, Workbook};
 /// Recalculation modes (F-3.6). Alias of workbook settings.
 pub type RecalcMode = CalcMode;
 
+/// Progress callback `(done, total, label)` used by the UI task runner.
+pub type RecalcProgress = dyn Fn(u64, Option<u64>, &str) + Send + Sync;
+
 /// Content-addressed key for async nodes (A-3.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ContentHash(pub u64);
@@ -242,6 +245,8 @@ pub struct RecalcResult {
     pub stale: Vec<CellCoord>,
     /// Provider hints (cell, hint).
     pub async_hints: Vec<(CellCoord, String)>,
+    /// Cooperative cancel restored the pre-pass workbook.
+    pub cancelled: bool,
 }
 
 #[derive(Default)]
@@ -285,7 +290,30 @@ pub struct RecalcEngine {
     orphaned_spills: FxHashSet<CellCoord>,
 }
 
+#[derive(Clone)]
+struct RecalcState {
+    spill: SpillTable,
+    pass: u32,
+    pass_env: PassEnv,
+}
+
 impl RecalcEngine {
+    fn state(&self) -> RecalcState {
+        RecalcState {
+            spill: self.spill.clone(),
+            pass: self.pass,
+            pass_env: self.pass_env,
+        }
+    }
+
+    fn restore_state(&mut self, state: &RecalcState, workbook: &Workbook) {
+        self.spill = state.spill.clone();
+        self.pass = state.pass;
+        self.pass_env = state.pass_env;
+        self.orphaned_spills.clear();
+        self.rebuild(workbook);
+    }
+
     /// Engine with the given registry (empty = every unknown fn is `#NAME?`).
     #[must_use]
     pub fn new(registry: FnRegistry) -> Self {
@@ -380,6 +408,12 @@ impl RecalcEngine {
         self.dynamic_edges.clear();
     }
 
+    /// Rebuild dependency state after an outer workbook transaction rolls back.
+    pub fn rebuild_after_rollback(&mut self, wb: &Workbook) {
+        self.orphaned_spills.clear();
+        self.rebuild(wb);
+    }
+
     /// Record that `coord` changed (value or formula).
     pub fn notify_edit(&mut self, wb: &Workbook, coord: CellCoord) {
         if let Some(region) = self.spill.region_at(coord.sheet, coord.row, coord.col) {
@@ -467,8 +501,18 @@ impl RecalcEngine {
 
     /// Full recalc of every formula cell.
     pub fn recalc_full(&mut self, wb: &mut Workbook) -> RecalcResult {
+        self.recalc_full_with_ctl(wb, None, None)
+    }
+
+    /// Full recalc with cooperative cancel. On cancel the workbook is restored.
+    pub fn recalc_full_with_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<std::sync::Arc<RecalcProgress>>,
+    ) -> RecalcResult {
         self.rebuild(wb);
-        self.run(wb, true)
+        self.run_ctl(wb, true, cancel, progress.as_deref())
     }
 
     /// Rebuild graph then full recalc.
@@ -476,8 +520,28 @@ impl RecalcEngine {
         self.recalc_full(wb)
     }
 
+    /// Rebuild with cooperative cancel.
+    pub fn recalc_rebuild_with_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<std::sync::Arc<RecalcProgress>>,
+    ) -> RecalcResult {
+        self.recalc_full_with_ctl(wb, cancel, progress)
+    }
+
     /// Incremental recalc of the dirty set (no-op in manual mode).
     pub fn recalc_incremental(&mut self, wb: &mut Workbook) -> RecalcResult {
+        self.recalc_incremental_with_ctl(wb, None, None)
+    }
+
+    /// Incremental recalc with cooperative cancel.
+    pub fn recalc_incremental_with_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<std::sync::Arc<RecalcProgress>>,
+    ) -> RecalcResult {
         match wb.settings().calc_mode {
             CalcMode::Manual => RecalcResult::default(),
             CalcMode::Automatic | CalcMode::AutomaticExceptTables => {
@@ -487,7 +551,7 @@ impl RecalcEngine {
                 for v in self.graph.volatiles() {
                     self.dirty.insert(v);
                 }
-                self.run(wb, false)
+                self.run_ctl(wb, false, cancel, progress.as_deref())
             }
         }
     }
@@ -500,8 +564,18 @@ impl RecalcEngine {
         }
     }
 
-    fn run(&mut self, wb: &mut Workbook, full: bool) -> RecalcResult {
+    fn run_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        full: bool,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<&RecalcProgress>,
+    ) -> RecalcResult {
+        let backup = cancel.map(|_| (wb.clone(), self.state()));
         let t0 = Instant::now();
+        if cancelled(cancel) {
+            return self.restore_cancelled(wb, backup.as_ref(), t0, 0);
+        }
         self.pass = self.pass.saturating_add(1);
         self.pass_env = self.sample_pass_env();
         let undo = wb.undo_log_mut().is_enabled();
@@ -531,6 +605,9 @@ impl RecalcEngine {
                 let _ = self.asts.get_or_parse(src);
             }
         }
+        if cancelled(cancel) {
+            return self.restore_cancelled(wb, backup.as_ref(), t0, 0);
+        }
 
         // Cached formula values are derived state, not user edits. Keep every
         // result commit (including circular/iterative paths) out of undo.
@@ -543,24 +620,43 @@ impl RecalcEngine {
 
         if !circular.is_empty() && !iteration.enabled {
             for c in &circular {
+                if cancelled(cancel) {
+                    return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+                }
                 commit_scalar(wb, *c, Scalar::Number(0.0), CellFlags::DEFAULT);
             }
             evaluated += circular.len() as u64;
         }
 
         let gens = self.graph.generations(&dirty);
+        let total = gens.iter().map(Vec::len).sum::<usize>() as u64;
         for generation in gens {
-            evaluated += self.eval_generation(wb, &generation, &mut accum) as u64;
+            if cancelled(cancel) {
+                return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+            }
+            let (count, stopped) = self.eval_generation(wb, &generation, &mut accum, cancel);
+            if stopped {
+                return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+            }
+            evaluated += count as u64;
+            if let Some(progress) = progress {
+                progress(evaluated, Some(total.max(1)), "recalc");
+            }
         }
 
         let circular_nodes = circular.clone();
         if iteration.enabled && !circular.is_empty() {
-            evaluated += self.iterate_cycle(
+            let (count, stopped) = self.iterate_cycle(
                 wb,
                 &circular,
                 iteration.max_iterations,
                 iteration.max_change,
-            ) as u64;
+                cancel,
+            );
+            if stopped {
+                return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+            }
+            evaluated += count as u64;
             accum.spill_follow.extend(circular.iter().copied());
             circular.clear();
         }
@@ -581,7 +677,12 @@ impl RecalcEngine {
             }
             let mut wave_accum = RecalcAccum::default();
             for generation in self.graph.generations(&wave) {
-                evaluated += self.eval_generation(wb, &generation, &mut wave_accum) as u64;
+                let (count, stopped) =
+                    self.eval_generation(wb, &generation, &mut wave_accum, cancel);
+                if stopped {
+                    return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+                }
+                evaluated += count as u64;
             }
             accum.spill_blocked.extend(wave_accum.spill_blocked);
             accum.pending_async.extend(wave_accum.pending_async);
@@ -600,6 +701,9 @@ impl RecalcEngine {
         let undo = wb.undo_log_mut().is_enabled();
         wb.undo_log_mut().set_enabled(false);
         for cell in &accum.stale {
+            if cancelled(cancel) {
+                return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+            }
             set_stale_flag(wb, *cell, true);
         }
         wb.undo_log_mut().set_enabled(undo);
@@ -608,6 +712,9 @@ impl RecalcEngine {
         // (Evaluated as part of generations when they have no static preds.)
 
         wb.undo_log_mut().set_enabled(recalc_undo);
+        if cancelled(cancel) {
+            return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+        }
         RecalcResult {
             cells_evaluated: evaluated,
             elapsed_ms: t0.elapsed().as_millis() as u64,
@@ -616,6 +723,7 @@ impl RecalcEngine {
             pending_async: accum.pending_async,
             stale: accum.stale,
             async_hints: accum.async_hints,
+            cancelled: false,
         }
     }
 
@@ -624,9 +732,10 @@ impl RecalcEngine {
         wb: &mut Workbook,
         generation: &[CellCoord],
         accum: &mut RecalcAccum,
-    ) -> usize {
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> (usize, bool) {
         if generation.is_empty() {
-            return 0;
+            return (0, false);
         }
         let mut results: Vec<(CellCoord, RuntimeValue, EvalFlags, bool)> = {
             let wb_ref: &Workbook = wb;
@@ -637,6 +746,9 @@ impl RecalcEngine {
             let env = self.pass_env;
             let provider = self.async_provider.clone();
             let eval_one = |cell: CellCoord| {
+                if cancelled(cancel) {
+                    return None;
+                }
                 eval_one_cell(
                     wb_ref,
                     registry,
@@ -656,11 +768,17 @@ impl RecalcEngine {
                 generation.par_iter().filter_map(|c| eval_one(*c)).collect()
             }
         };
+        if cancelled(cancel) {
+            return (0, true);
+        }
         results.sort_by_key(|(c, _, _, _)| *c);
 
         let undo = wb.undo_log_mut().is_enabled();
         wb.undo_log_mut().set_enabled(false);
         for (cell, value, flags, cse) in results {
+            if cancelled(cancel) {
+                return (0, true);
+            }
             if flags.pending_async {
                 accum.pending_async.push(cell);
             }
@@ -694,7 +812,7 @@ impl RecalcEngine {
             }
         }
         wb.undo_log_mut().set_enabled(undo);
-        generation.len()
+        (generation.len(), false)
     }
 
     fn iterate_cycle(
@@ -703,11 +821,15 @@ impl RecalcEngine {
         cycle: &[CellCoord],
         max_iter: u32,
         max_change: f64,
-    ) -> usize {
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> (usize, bool) {
         let mut n = 0usize;
         for _ in 0..max_iter.max(1) {
             let mut max_delta = 0.0f64;
             for &cell in cycle {
+                if cancelled(cancel) {
+                    return (n, true);
+                }
                 let before = match wb.get(cell.sheet, cell.row, cell.col) {
                     Ok(Some(s)) => match s.value {
                         Value::Number(v) => v,
@@ -750,8 +872,31 @@ impl RecalcEngine {
                 break;
             }
         }
-        n
+        (n, false)
     }
+
+    fn restore_cancelled(
+        &mut self,
+        wb: &mut Workbook,
+        backup: Option<&(Workbook, RecalcState)>,
+        started: Instant,
+        evaluated: u64,
+    ) -> RecalcResult {
+        if let Some((workbook, state)) = backup {
+            *wb = workbook.clone();
+            self.restore_state(state, wb);
+        }
+        RecalcResult {
+            cells_evaluated: evaluated,
+            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            cancelled: true,
+            ..RecalcResult::default()
+        }
+    }
+}
+
+fn cancelled(cancel: Option<&std::sync::atomic::AtomicBool>) -> bool {
+    cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
 }
 
 #[allow(clippy::too_many_arguments)]

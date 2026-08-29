@@ -218,6 +218,7 @@ fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
         bus: app.bus,
         ui,
         roots,
+        long_ops: omacell_bus::LongOps::production(),
     };
     omacell_tui::run(launch)?;
     Ok(())

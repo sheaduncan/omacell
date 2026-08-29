@@ -363,6 +363,58 @@ impl Block {
         }
     }
 
+    fn row(&self, row: u8) -> Vec<(u8, CellSlot)> {
+        let start = usize::from(row) * BLOCK;
+        let mut slot = self.rank(start);
+        let mut cells = Vec::new();
+        for col in 0..BLOCK {
+            let bit = start + col;
+            if self.occupied(bit) {
+                cells.push((col as u8, self.slots[slot]));
+                slot += 1;
+            }
+        }
+        cells
+    }
+
+    fn column(&self, col: u8) -> Vec<(u8, CellSlot)> {
+        let mut slot = self.rank(usize::from(col));
+        let mut cells = Vec::new();
+        for row in 0..BLOCK {
+            let bit = row * BLOCK + usize::from(col);
+            if self.occupied(bit) {
+                cells.push((row as u8, self.slots[slot]));
+            }
+            slot += self.count_occupied(bit, (bit + BLOCK).min(BLOCK * BLOCK));
+        }
+        cells
+    }
+
+    fn count_occupied(&self, start: usize, end: usize) -> usize {
+        if start >= end {
+            return 0;
+        }
+        let first = start / 64;
+        let last = (end - 1) / 64;
+        (first..=last)
+            .map(|word| {
+                let low = if word == first { start % 64 } else { 0 };
+                let high = if word == last {
+                    let remainder = end % 64;
+                    if remainder == 0 { 64 } else { remainder }
+                } else {
+                    64
+                };
+                let below_high = if high == 64 {
+                    u64::MAX
+                } else {
+                    (1_u64 << high) - 1
+                };
+                (self.bits[word] & below_high & (u64::MAX << low)).count_ones() as usize
+            })
+            .sum()
+    }
+
     fn heap_bytes(&self) -> usize {
         size_of::<Self>() + self.bits.len() * 8 + self.slots.capacity() * size_of::<CellSlot>()
     }
@@ -546,6 +598,51 @@ impl SheetStore {
                 .map(|b| b.iter_cells(coord))
                 .into_iter()
                 .flatten()
+        })
+    }
+
+    /// Occupied cells in one row, ordered by column.
+    pub fn iter_row(&self, row: u32) -> impl Iterator<Item = (u16, CellSlot)> + '_ {
+        let block_row = (row / BLOCK_SIZE) as u16;
+        let local_row = (row % BLOCK_SIZE) as u8;
+        let mut coords = self
+            .blocks
+            .keys()
+            .copied()
+            .filter(|coord| coord.brow == block_row)
+            .collect::<Vec<_>>();
+        coords.sort_unstable_by_key(|coord| coord.bcol);
+        coords.into_iter().flat_map(move |coord| {
+            let (_, origin_col) = coord.origin();
+            self.blocks.get(&coord).into_iter().flat_map(move |block| {
+                block
+                    .row(local_row)
+                    .into_iter()
+                    .map(move |(offset, slot)| (origin_col + u16::from(offset), slot))
+            })
+        })
+    }
+
+    /// Occupied cells in one column, ordered by row.
+    pub fn iter_col(&self, col: u16) -> impl Iterator<Item = (u32, CellSlot)> + '_ {
+        let block_col = (col / BLOCK_SIZE as u16) as u8;
+        let local_col = (col % BLOCK_SIZE as u16) as u8;
+        let mut coords = self
+            .blocks
+            .keys()
+            .copied()
+            .filter(|coord| coord.bcol == block_col)
+            .collect::<Vec<_>>();
+        coords.sort_unstable_by_key(|coord| coord.brow);
+        coords.into_iter().flat_map(move |coord| {
+            let (origin_row, _) = coord.origin();
+            self.blocks.get(&coord).into_iter().flat_map(move |block| {
+                block
+                    .column(local_col)
+                    .into_iter()
+                    .map(move |(offset, slot)| (origin_row + u32::from(offset), slot))
+                    .filter(|(row, _)| *row < MAX_ROWS)
+            })
         })
     }
 
@@ -806,6 +903,35 @@ mod tests {
         s.set(0, 0, CellSlot::number(3.0)).unwrap();
         let pos: Vec<_> = s.iter().map(|(r, c, _)| (r, c)).collect();
         assert_eq!(pos, vec![(0, 0), (0, 2), (1, 1)]);
+    }
+
+    #[test]
+    fn row_and_column_iterators_cross_block_boundaries_in_order() {
+        let mut store = SheetStore::new();
+        for (row, col, value) in [
+            (2, 300, 1.0),
+            (2, 1, 2.0),
+            (700, 1, 3.0),
+            (300, 1, 4.0),
+            (3, 3, 5.0),
+        ] {
+            store.set(row, col, CellSlot::number(value)).unwrap();
+        }
+        assert_eq!(
+            store.iter_row(2).map(|(col, _)| col).collect::<Vec<_>>(),
+            vec![1, 300]
+        );
+        assert_eq!(
+            store
+                .iter_col(1)
+                .map(|(row, slot)| (row, slot.value))
+                .collect::<Vec<_>>(),
+            vec![
+                (2, Value::Number(2.0)),
+                (300, Value::Number(4.0)),
+                (700, Value::Number(3.0)),
+            ]
+        );
     }
 
     #[test]

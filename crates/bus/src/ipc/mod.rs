@@ -28,4 +28,4 @@ pub use protocol::{
     encode_control, encode_line, event_type_name,
 };
 #[cfg(unix)]
-pub use server::{IpcHandle, serve};
+pub use server::{IpcHandle, serve, serve_runner};

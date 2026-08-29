@@ -10,11 +10,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use omacell_bus::Bus;
 use omacell_bus::ipc::{
     IpcClient, MAX_EVENT_QUEUE, Mode, default_runtime_dir, discover_newest, discovered_socket,
-    serve,
+    serve, serve_runner,
 };
+use omacell_bus::{Bus, LongOps, TaskRunner};
 use omacell_core::changeset::CommandCall;
 use omacell_core::command::{CommandId, Origin};
 use omacell_core::eval::FnRegistry;
@@ -41,6 +41,12 @@ fn start() -> (omacell_bus::ipc::IpcHandle, PathBuf) {
     (handle, dir)
 }
 
+fn start_runner() -> (TaskRunner, omacell_bus::ipc::IpcHandle) {
+    let runner = TaskRunner::spawn(bus(), LongOps::production()).unwrap();
+    let handle = serve_runner(runtime_dir(), runner.handle()).unwrap();
+    (runner, handle)
+}
+
 #[test]
 fn ping_and_propose_apply_revert_round_trip() {
     let (handle, dir) = start();
@@ -64,7 +70,6 @@ fn ping_and_propose_apply_revert_round_trip() {
         proposed.result.as_ref().unwrap()["status"].as_str(),
         Some("proposed")
     );
-
     let applied = client.apply(&cs).unwrap();
     assert!(applied.ok, "{:?}", applied.error);
     {
@@ -107,6 +112,47 @@ fn mutating_execute_is_rejected_internal_ids_are_rejected() {
     assert!(!err.ok);
     assert_eq!(
         err.error.as_ref().unwrap().code,
+        omacell_bus::codes::COMMAND_INTERNAL
+    );
+}
+
+#[test]
+fn runner_backed_server_preserves_ipc_mutation_policy() {
+    let (_runner, handle) = start_runner();
+    let mut client = IpcClient::connect(handle.socket_path()).unwrap();
+    let proposed = client
+        .command(
+            "cell.set",
+            serde_json::json!({"ref":"A1","input":"1"}),
+            None,
+        )
+        .unwrap();
+    assert!(proposed.ok, "{:?}", proposed.error);
+    assert_eq!(
+        proposed.result.as_ref().unwrap()["status"].as_str(),
+        Some("proposed")
+    );
+    let changeset = proposed.result.as_ref().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let applied = client.apply(&changeset).unwrap();
+    assert!(applied.ok, "{:?}", applied.error);
+
+    let execute = client
+        .command(
+            "cell.set",
+            serde_json::json!({"ref":"A1","input":"1"}),
+            Some(Mode::Execute),
+        )
+        .unwrap();
+    assert_eq!(execute.error.unwrap().code, omacell_bus::codes::IPC_MODE);
+
+    let internal = client
+        .command("cell.restore", serde_json::json!({}), None)
+        .unwrap();
+    assert_eq!(
+        internal.error.unwrap().code,
         omacell_bus::codes::COMMAND_INTERNAL
     );
 }

@@ -24,6 +24,7 @@ use super::protocol::{
 use crate::error;
 use crate::event::SubscriberId;
 use crate::registry::{CommandKind, Exposure};
+use crate::runner::TaskRunnerHandle;
 use crate::session::Bus;
 
 const READ_TICK: Duration = Duration::from_millis(100);
@@ -37,7 +38,7 @@ pub struct IpcHandle {
     shutdown: Arc<AtomicBool>,
     accept: Option<JoinHandle<()>>,
     clients: Arc<Mutex<Vec<JoinHandle<()>>>>,
-    bus: Arc<Mutex<Bus>>,
+    bus: Option<Arc<Mutex<Bus>>>,
 }
 
 impl IpcHandle {
@@ -53,10 +54,12 @@ impl IpcHandle {
         &self.dir
     }
 
-    /// Shared bus (tests).
+    /// Shared bus (tests). Panics if this server is runner-backed.
     #[must_use]
     pub fn bus(&self) -> &Arc<Mutex<Bus>> {
-        &self.bus
+        self.bus
+            .as_ref()
+            .expect("runner-backed IPC has no Mutex<Bus>")
     }
 
     /// Signal shutdown and join the accept thread.
@@ -143,7 +146,64 @@ pub fn serve(dir: PathBuf, bus: Bus) -> Result<IpcHandle, CoreError> {
         shutdown,
         accept: Some(accept),
         clients,
-        bus,
+        bus: Some(bus),
+    })
+}
+
+/// Serve IPC by submitting to the single-writer task runner.
+pub fn serve_runner(dir: PathBuf, runner: TaskRunnerHandle) -> Result<IpcHandle, CoreError> {
+    prepare_runtime_dir(&dir)?;
+    let pid = std::process::id();
+    remove_stale_socket(&dir, pid)?;
+    let path = socket_path(&dir, pid);
+    if path
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(error::ipc_socket(format!(
+            "{} is a symlink",
+            path.display()
+        )));
+    }
+    let listener = UnixListener::bind(&path)
+        .map_err(|err| error::ipc_socket(format!("bind {}: {err}", path.display())))?;
+    let mut cleanup = BoundCleanup::new(path.clone());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|err| error::ipc_socket(format!("chmod {}: {err}", path.display())))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|err| error::ipc_socket(format!("set nonblocking: {err}")))?;
+    write_discovery(&dir, pid)?;
+    cleanup.instance = Some(instance_path(&dir, pid));
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let connections = Arc::new(AtomicUsize::new(0));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let accept_shutdown = shutdown.clone();
+    let accept_clients = clients.clone();
+    let accept_runner = runner.clone();
+    let accept = thread::Builder::new()
+        .name("omacell-ipc-accept".into())
+        .spawn(move || {
+            accept_loop_runner(
+                listener,
+                accept_runner,
+                accept_shutdown,
+                connections,
+                accept_clients,
+            );
+        })
+        .map_err(|err| error::ipc_socket(format!("spawn accept: {err}")))?;
+    cleanup.disarm();
+    Ok(IpcHandle {
+        dir,
+        pid,
+        path,
+        shutdown,
+        accept: Some(accept),
+        clients,
+        bus: None,
     })
 }
 
@@ -192,6 +252,199 @@ fn accept_loop(
         }
     }
     reap_finished_clients(&clients);
+}
+
+fn accept_loop_runner(
+    listener: UnixListener,
+    runner: TaskRunnerHandle,
+    shutdown: Arc<AtomicBool>,
+    connections: Arc<AtomicUsize>,
+    clients: Arc<Mutex<Vec<JoinHandle<()>>>>,
+) {
+    while !shutdown.load(Ordering::SeqCst) {
+        reap_finished_clients(&clients);
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                let current = connections.fetch_add(1, Ordering::SeqCst);
+                if current >= MAX_CONNECTIONS {
+                    connections.fetch_sub(1, Ordering::SeqCst);
+                    let _ = write_error_and_close(
+                        stream,
+                        error::ipc_limit(format!("at most {MAX_CONNECTIONS} IPC clients")),
+                    );
+                    continue;
+                }
+                let runner = runner.clone();
+                let client_connections = connections.clone();
+                let client_shutdown = shutdown.clone();
+                match thread::Builder::new()
+                    .name("omacell-ipc-client".into())
+                    .spawn(move || {
+                        client_loop_runner(stream, runner, client_shutdown);
+                        client_connections.fetch_sub(1, Ordering::SeqCst);
+                    }) {
+                    Ok(handle) => lock_clients(&clients).push(handle),
+                    Err(_) => {
+                        connections.fetch_sub(1, Ordering::SeqCst);
+                    }
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    reap_finished_clients(&clients);
+}
+
+fn client_loop_runner(stream: UnixStream, runner: TaskRunnerHandle, shutdown: Arc<AtomicBool>) {
+    let _ = stream.set_read_timeout(Some(READ_TICK));
+    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+    let mut writer = match stream.try_clone() {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    let mut reader = stream;
+    let mut frames = FrameBuf::new();
+    let mut chunk = [0u8; 8192];
+    while !shutdown.load(Ordering::SeqCst) {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => match frames.push(&chunk[..n]) {
+                Ok(lines) => {
+                    for line in lines {
+                        let request = match super::protocol::decode_request_bytes(&line) {
+                            Ok(r) => r,
+                            Err(err) => {
+                                let _ = write_reply(&mut writer, Reply::err(0, err));
+                                continue;
+                            }
+                        };
+                        let reply = dispatch_runner(&runner, request);
+                        if write_reply(&mut writer, reply).is_err() {
+                            return;
+                        }
+                    }
+                }
+                Err(err) => {
+                    let _ = write_reply(&mut writer, Reply::err(0, err));
+                    return;
+                }
+            },
+            Err(err)
+                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut => {}
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+}
+
+fn dispatch_runner(runner: &TaskRunnerHandle, request: Request) -> Reply {
+    match request {
+        Request::Command {
+            id,
+            cmd,
+            args,
+            mode,
+        } => {
+            let (kind, eligible) = match runner.ipc_command_policy(&cmd) {
+                Ok(policy) => policy,
+                Err(err) => return Reply::err(id, err),
+            };
+            let mode = mode.unwrap_or(match kind {
+                CommandKind::Query => Mode::Execute,
+                CommandKind::Mutating if eligible => Mode::Propose,
+                CommandKind::Mutating => Mode::Execute,
+            });
+            if kind == CommandKind::Mutating && eligible && mode == Mode::Execute {
+                return Reply::err(
+                    id,
+                    error::ipc_mode("changeset-eligible mutating commands cannot use mode execute"),
+                );
+            }
+            match mode {
+                Mode::Execute => outcome_reply(id, runner.submit_wait(Origin::Ipc, &cmd, args)),
+                Mode::DryRun => match runner.dry_run(Origin::Ipc, &cmd, args) {
+                    Ok(dry) if dry.outcome.ok => Reply::ok(
+                        id,
+                        serde_json::json!({
+                            "dry_run": true,
+                            "summary": dry.summary,
+                            "result": dry.outcome.result,
+                        }),
+                    ),
+                    Ok(dry) => Reply::err(
+                        id,
+                        dry.outcome.error.unwrap_or_else(|| {
+                            error::ipc_protocol("dry-run failed without an error payload")
+                        }),
+                    ),
+                    Err(err) => Reply::err(id, err),
+                },
+                Mode::Propose => match command_call(&cmd, args) {
+                    Ok(call) => match runner.propose(Origin::Ipc, vec![call]) {
+                        Ok(cs) => match serde_json::to_value(&cs) {
+                            Ok(v) => Reply::ok(id, v),
+                            Err(err) => Reply::err(
+                                id,
+                                error::ipc_frame(format!("serialize changeset: {err}")),
+                            ),
+                        },
+                        Err(err) => Reply::err(id, err),
+                    },
+                    Err(err) => Reply::err(id, err),
+                },
+            }
+        }
+        Request::Control {
+            id, op, changeset, ..
+        } => match op {
+            ControlOp::Ping => Reply::ok(id, serde_json::json!({"pong": true})),
+            ControlOp::ChangesetList => match runner.list_changesets() {
+                Ok(changesets) => match serde_json::to_value(changesets) {
+                    Ok(value) => Reply::ok(id, value),
+                    Err(err) => {
+                        Reply::err(id, error::ipc_frame(format!("serialize changesets: {err}")))
+                    }
+                },
+                Err(err) => Reply::err(id, err),
+            },
+            operation @ (ControlOp::ChangesetGet
+            | ControlOp::ChangesetApply
+            | ControlOp::ChangesetRevert) => {
+                let Some(changeset) = changeset else {
+                    return Reply::err(id, error::ipc_protocol("changeset id is required"));
+                };
+                let changeset = match ChangesetId::new(changeset) {
+                    Ok(changeset) => changeset,
+                    Err(err) => return Reply::err(id, err),
+                };
+                let result = match operation {
+                    ControlOp::ChangesetGet => runner.get_changeset(&changeset),
+                    ControlOp::ChangesetApply => runner.apply(Origin::Ipc, &changeset),
+                    ControlOp::ChangesetRevert => runner.revert(Origin::Ipc, &changeset),
+                    _ => unreachable!(),
+                };
+                match result {
+                    Ok(changeset) => match serde_json::to_value(changeset) {
+                        Ok(value) => Reply::ok(id, value),
+                        Err(err) => {
+                            Reply::err(id, error::ipc_frame(format!("serialize changeset: {err}")))
+                        }
+                    },
+                    Err(err) => Reply::err(id, err),
+                }
+            }
+            ControlOp::Subscribe | ControlOp::Unsubscribe => Reply::err(
+                id,
+                error::ipc_protocol("event subscriptions are not available on the UI task runner"),
+            ),
+        },
+    }
 }
 
 fn write_error_and_close(mut stream: UnixStream, err: CoreError) -> Result<(), CoreError> {

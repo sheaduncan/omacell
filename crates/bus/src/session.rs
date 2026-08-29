@@ -120,11 +120,22 @@ impl Bus {
 
     /// Execute a single command. Model origins cannot directly mutate.
     pub fn execute(&mut self, origin: Origin, id: &str, args: serde_json::Value) -> Outcome {
+        self.execute_with_task(origin, id, args, crate::handler::TaskCtl::default())
+    }
+
+    /// Execute with cooperative cancel/progress (task runner).
+    pub fn execute_with_task(
+        &mut self,
+        origin: Origin,
+        id: &str,
+        args: serde_json::Value,
+        task: crate::handler::TaskCtl,
+    ) -> Outcome {
         let call = match command_call(id, args) {
             Ok(call) => call,
             Err(err) => return Outcome::failure(err),
         };
-        match self.run(origin, std::slice::from_ref(&call), Run::direct()) {
+        match self.run_with_task(origin, std::slice::from_ref(&call), Run::direct(), task) {
             Ok(effect) => Outcome::success(effect.result),
             Err(err) => Outcome::failure(err),
         }
@@ -221,6 +232,16 @@ impl Bus {
         calls: &[CommandCall],
         how: Run,
     ) -> Result<Effect, CoreError> {
+        self.run_with_task(origin, calls, how, crate::handler::TaskCtl::default())
+    }
+
+    fn run_with_task(
+        &mut self,
+        origin: Origin,
+        calls: &[CommandCall],
+        how: Run,
+        task: crate::handler::TaskCtl,
+    ) -> Result<Effect, CoreError> {
         self.check_calls(origin, calls, &how)?;
         let mut scratch_wb = self.workbook.clone();
         let mut scratch_engine = clone_engine(&self.engine);
@@ -232,6 +253,7 @@ impl Bus {
             calls,
             true,
             how.scratch_only,
+            &task,
         )?;
         if let Some(id) = &how.applied_changeset {
             self.changesets
@@ -239,11 +261,11 @@ impl Bus {
         }
         if how.scratch_only {
             if how.recalc {
-                apply_recalc(&mut scratch_wb, &mut scratch_engine, &preflight);
+                apply_recalc(&mut scratch_wb, &mut scratch_engine, &preflight, &task)?;
             }
             return Ok(preflight);
         }
-        let live_effect = {
+        let live = {
             let Bus {
                 workbook,
                 engine,
@@ -251,9 +273,9 @@ impl Bus {
                 changesets,
                 ..
             } = self;
-            let mut live_effect = Effect::default();
             workbook.transact_try(|wb| {
-                live_effect = dispatch(registry, wb, engine, origin, calls, false, false)?;
+                let live_effect =
+                    dispatch(registry, wb, engine, origin, calls, false, false, &task)?;
                 if let Some(id) = &how.applied_changeset {
                     changesets.ensure_applied_fits(
                         id,
@@ -261,11 +283,17 @@ impl Bus {
                         &live_effect.summary,
                     )?;
                 }
-                Ok(())
-            })?;
-            live_effect
+                let extra = apply_recalc(wb, engine, &live_effect, &task)?;
+                Ok((live_effect, extra))
+            })
         };
-        let extra = apply_recalc(&mut self.workbook, &mut self.engine, &live_effect);
+        let (live_effect, extra) = match live {
+            Ok(committed) => committed,
+            Err(err) => {
+                self.engine.rebuild_after_rollback(&self.workbook);
+                return Err(err);
+            }
+        };
         if how.emit {
             emit_events(&mut self.events, &live_effect, extra);
         }
@@ -392,6 +420,7 @@ fn clone_engine(engine: &RecalcEngine) -> RecalcEngine {
     cloned
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch(
     registry: &CommandRegistry,
     workbook: &mut Workbook,
@@ -400,6 +429,7 @@ fn dispatch(
     calls: &[CommandCall],
     preflight: bool,
     dry_run: bool,
+    task: &crate::handler::TaskCtl,
 ) -> Result<Effect, CoreError> {
     let mut combined = Effect {
         auto_recalc: false,
@@ -409,7 +439,8 @@ fn dispatch(
         let cmd = registry
             .get(&call.id)
             .ok_or_else(|| bus_error::unknown(call.id.as_str()))?;
-        let mut ctx = CommandContext::new(workbook, engine, origin, preflight, dry_run);
+        let mut ctx =
+            CommandContext::with_task(workbook, engine, origin, preflight, dry_run, task.clone());
         let effect = cmd.invoke(&mut ctx, call.args.clone())?;
         ensure_effect_fits(&effect)?;
         combined.append(effect);
@@ -445,7 +476,8 @@ fn apply_recalc(
     workbook: &mut Workbook,
     engine: &mut RecalcEngine,
     effect: &Effect,
-) -> Option<Event> {
+    task: &crate::handler::TaskCtl,
+) -> Result<Option<Event>, CoreError> {
     if effect.rebuild {
         engine.rebuild(workbook);
     }
@@ -453,20 +485,25 @@ fn apply_recalc(
         engine.notify_edit(workbook, *coord);
     }
     if !effect.auto_recalc {
-        return None;
+        return Ok(None);
     }
     if workbook.settings().calc_mode == CalcMode::Manual {
-        return None;
+        return Ok(None);
+    }
+    let result =
+        engine.recalc_incremental_with_ctl(workbook, task.cancel.as_deref(), task.progress.clone());
+    if result.cancelled {
+        return Err(bus_error::task_cancelled());
     }
     let RecalcResult {
         cells_evaluated,
         elapsed_ms,
         ..
-    } = engine.recalc_incremental(workbook);
-    Some(Event::RecalcDone {
+    } = result;
+    Ok(Some(Event::RecalcDone {
         cells: cells_evaluated,
         elapsed_ms,
-    })
+    }))
 }
 
 fn emit_events(bus: &mut EventBus, effect: &Effect, extra_recalc: Option<Event>) {

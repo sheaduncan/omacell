@@ -1,7 +1,11 @@
 //! `file.open` / `file.save` / `file.export` adapters over `omacell-io`.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use omacell_bus::{Bus, CommandContext, CommandKind, CommandSpec, Effect, Exposure};
@@ -22,6 +26,8 @@ enum FileKind {
     Csv,
     Omc,
 }
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 struct FileState {
@@ -141,19 +147,36 @@ fn file_open(
     args: FileOpenArgs,
 ) -> Result<Effect, CoreError> {
     let path = PathBuf::from(&args.path);
-    let opened = open_any(&path)?;
+    if ctx.is_preflight() && !ctx.is_dry_run() {
+        std::fs::metadata(&path)
+            .map_err(|err| CoreError::new("file.open", format!("{}: {err}", path.display())))?;
+        return Ok(Effect::query(serde_json::json!({
+            "path": path.display().to_string(),
+            "queued": true,
+        })));
+    }
+    if ctx.is_cancelled() {
+        return Err(cancelled());
+    }
+    let mut opened = open_any_with_cancel(&path, ctx)?;
+    if ctx.is_cancelled() {
+        return Err(cancelled());
+    }
+    let recalc = ctx.recalc_staged(&mut opened.workbook);
+    if recalc.cancelled || ctx.is_cancelled() {
+        return Err(cancelled());
+    }
     if !ctx.is_preflight() {
         session.attach(&path, &opened);
     }
     *ctx.workbook() = opened.workbook;
-    ctx.recalc_rebuild();
     Ok(Effect {
         events: vec![Event::WorkbookOpened {
             path: Some(path.display().to_string()),
         }],
         result: serde_json::json!({"path": path.display().to_string()}),
         auto_recalc: false,
-        rebuild: true,
+        rebuild: false,
         ..Effect::default()
     })
 }
@@ -198,6 +221,10 @@ fn file_save(
             "dry_run": true,
         })));
     }
+    if ctx.is_cancelled() {
+        return Err(cancelled());
+    }
+    ctx.report_progress(0, Some(1), "save");
     write_kind(
         ctx.workbook_ref(),
         &path,
@@ -205,7 +232,9 @@ fn file_save(
         package.as_ref(),
         &extras,
         keep_backups,
+        ctx.cancel_flag().map(Arc::as_ref),
     )?;
+    ctx.report_progress(1, Some(1), "save");
     {
         let mut state = session.lock();
         state.path = Some(path.clone());
@@ -263,8 +292,12 @@ fn file_export(
             }
             let bytes = csv::export(ctx.workbook_ref(), &plan)?;
             if !ctx.is_preflight() {
-                std::fs::write(&path, bytes)
-                    .map_err(|e| CoreError::new("file.export", e.to_string()))?;
+                if ctx.is_cancelled() {
+                    return Err(cancelled());
+                }
+                ctx.report_progress(0, Some(1), "export");
+                atomic_write_bytes(&path, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
+                ctx.report_progress(1, Some(1), "export");
             }
         }
         FileKind::Xlsx | FileKind::Omc => {
@@ -278,6 +311,7 @@ fn file_export(
                     package.as_ref(),
                     &extras,
                     keep_backups,
+                    ctx.cancel_flag().map(Arc::as_ref),
                 )?;
             }
         }
@@ -305,6 +339,26 @@ pub(crate) struct Opened {
     extras: HashMap<String, WorksheetExtras>,
 }
 
+fn cancelled() -> CoreError {
+    CoreError::new("task.cancelled", "operation cancelled")
+        .with_hint("the live workbook and destination file were left unchanged")
+}
+
+fn open_any_with_cancel(path: &Path, ctx: &CommandContext<'_>) -> Result<Opened, CoreError> {
+    let cancel = ctx.cancel_flag().cloned();
+    let progress = ctx.progress_sink();
+    if let Some(kind) = kind_from_path(path) {
+        return open_kind(path, kind, None, cancel, progress);
+    }
+    if let Ok(opened) = open_kind(path, FileKind::Xlsx, None, cancel.clone(), progress.clone()) {
+        return Ok(opened);
+    }
+    if let Ok(opened) = open_kind(path, FileKind::Omc, None, cancel.clone(), progress.clone()) {
+        return Ok(opened);
+    }
+    open_kind(path, FileKind::Csv, None, cancel, progress)
+}
+
 /// Open a workbook by extension, then content sniff.
 pub fn open_any(path: &Path) -> Result<Opened, CoreError> {
     open_any_with_plan(path, None)
@@ -315,24 +369,26 @@ pub(crate) fn open_any_with_plan(
     plan: Option<&csv::ImportPlan>,
 ) -> Result<Opened, CoreError> {
     if plan.is_some() {
-        return open_kind(path, FileKind::Csv, plan);
+        return open_kind(path, FileKind::Csv, plan, None, None);
     }
     if let Some(kind) = kind_from_path(path) {
-        return open_kind(path, kind, None);
+        return open_kind(path, kind, None, None, None);
     }
-    if let Ok(opened) = open_kind(path, FileKind::Xlsx, None) {
+    if let Ok(opened) = open_kind(path, FileKind::Xlsx, None, None, None) {
         return Ok(opened);
     }
-    if let Ok(opened) = open_kind(path, FileKind::Omc, None) {
+    if let Ok(opened) = open_kind(path, FileKind::Omc, None, None, None) {
         return Ok(opened);
     }
-    open_kind(path, FileKind::Csv, None)
+    open_kind(path, FileKind::Csv, None, None, None)
 }
 
 fn open_kind(
     path: &Path,
     kind: FileKind,
     import_plan: Option<&csv::ImportPlan>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    progress: Option<Arc<omacell_core::recalc::RecalcProgress>>,
 ) -> Result<Opened, CoreError> {
     match kind {
         FileKind::Xlsx => {
@@ -362,7 +418,17 @@ fn open_kind(
                 &sniffed.plan
             };
             plan.validate()?;
-            let (workbook, _) = csv::load_path(path, plan, csv::LoadOptions::default())?;
+            let on_progress = progress.map(|sink| {
+                Arc::new(move |event: csv::LoadProgress| {
+                    sink(event.rows_loaded, None, "import");
+                }) as Arc<dyn Fn(csv::LoadProgress) + Send + Sync>
+            });
+            let opts = csv::LoadOptions {
+                cancel,
+                on_progress,
+                ..csv::LoadOptions::default()
+            };
+            let (workbook, _) = csv::load_path(path, plan, opts)?;
             Ok(Opened {
                 workbook,
                 kind,
@@ -380,6 +446,7 @@ fn write_kind(
     package: Option<&OpcPackage>,
     extras: &HashMap<String, WorksheetExtras>,
     keep_backups: u32,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(), CoreError> {
     match kind {
         FileKind::Xlsx => {
@@ -390,23 +457,25 @@ fn write_kind(
                     package: package.clone(),
                     extras: extras.clone(),
                 };
-                xlsx::save(
-                    &doc,
-                    path,
-                    SaveOptions {
-                        keep_backups,
-                        lock: true,
-                    },
-                )?;
+                let opts = SaveOptions {
+                    keep_backups,
+                    lock: true,
+                };
+                if let Some(cancel) = cancel {
+                    xlsx::save_with_cancel(&doc, path, opts, cancel)?;
+                } else {
+                    xlsx::save(&doc, path, opts)?;
+                }
             } else {
-                xlsx::save_workbook(
-                    wb,
-                    path,
-                    SaveOptions {
-                        keep_backups,
-                        lock: true,
-                    },
-                )?;
+                let opts = SaveOptions {
+                    keep_backups,
+                    lock: true,
+                };
+                if let Some(cancel) = cancel {
+                    xlsx::save_workbook_with_cancel(wb, path, opts, cancel)?;
+                } else {
+                    xlsx::save_workbook(wb, path, opts)?;
+                }
             }
         }
         FileKind::Omc => {
@@ -415,7 +484,8 @@ fn write_kind(
                 extras: extras.clone(),
                 changeset: None,
             };
-            omc::write_to_path(&doc, path)?;
+            let text = omc::to_string(&doc)?;
+            atomic_write_bytes(path, text.as_bytes(), cancel)?;
         }
         FileKind::Csv => {
             let mut plan = ExportPlan::default();
@@ -423,11 +493,59 @@ fn write_kind(
                 plan.delimiter = '\t';
             }
             let bytes = csv::export(wb, &plan)?;
-            std::fs::write(path, bytes)
-                .map_err(|e| CoreError::new("file.export", e.to_string()))?;
+            atomic_write_bytes(path, &bytes, cancel)?;
         }
     }
     Ok(())
+}
+
+fn atomic_write_bytes(
+    path: &Path,
+    bytes: &[u8],
+    cancel: Option<&AtomicBool>,
+) -> Result<(), CoreError> {
+    if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err(cancelled());
+    }
+    let dir = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| CoreError::new("file.export", "destination has no file name"))?;
+    let (mut file, temp) = loop {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut temp_name = OsString::from(".");
+        temp_name.push(name);
+        temp_name.push(format!(".omacell-{}-{sequence}.tmp", std::process::id()));
+        let temp = dir.join(temp_name);
+        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => break (file, temp),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(CoreError::new("file.export", err.to_string())),
+        }
+    };
+    let result = (|| {
+        file.write_all(bytes)
+            .map_err(|err| CoreError::new("file.export", err.to_string()))?;
+        file.sync_all()
+            .map_err(|err| CoreError::new("file.export", err.to_string()))?;
+        drop(file);
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err(cancelled());
+        }
+        std::fs::rename(&temp, path)
+            .map_err(|err| CoreError::new("file.export", err.to_string()))?;
+        std::fs::File::open(dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|err| CoreError::new("file.export", err.to_string()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 fn validate_kind(
