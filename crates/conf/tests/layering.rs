@@ -3,6 +3,9 @@
 use omacell_conf::layer::{Layer, LoadOptions, load, load_with_env, load_with_options};
 use omacell_conf::paths::Paths;
 use omacell_conf::schema::package_defaults;
+use omacell_conf::workbook_settings_overlay;
+use omacell_core::date_system::DateSystem;
+use omacell_core::workbook::{CalcMode, Iteration, WorkbookSettings};
 
 fn temp_paths() -> (tempfile::TempDir, Paths) {
     let dir = tempfile::tempdir().unwrap();
@@ -133,6 +136,7 @@ fn cli_theme_override_wins_over_environment_theme() {
     let loaded = load_with_options(
         &paths,
         &LoadOptions {
+            config_file: None,
             cli_sets: Vec::new(),
             workbook: None,
             env: vec![(
@@ -144,4 +148,75 @@ fn cli_theme_override_wins_over_environment_theme() {
     )
     .unwrap();
     assert_eq!(loaded.theme.roles["state.cursor"], "#222222");
+}
+
+#[test]
+fn explicit_config_file_replaces_the_default_user_file() {
+    let (dir, paths) = temp_paths();
+    std::fs::write(
+        paths.user_config_toml(),
+        "[appearance]\ngrid_lines = false\n",
+    )
+    .unwrap();
+    let explicit = dir.path().join("profiles/review.toml");
+    std::fs::create_dir_all(explicit.parent().unwrap()).unwrap();
+    std::fs::write(&explicit, "[layout]\npanel_width = 444\n").unwrap();
+
+    let loaded = load_with_options(
+        &paths,
+        &LoadOptions {
+            config_file: Some(explicit),
+            ..LoadOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(loaded.config.appearance.grid_lines);
+    assert_eq!(loaded.config.layout.panel_width, 444);
+    assert_eq!(
+        loaded.explain("layout.panel_width").unwrap().layer,
+        Layer::User
+    );
+
+    let missing = dir.path().join("missing.toml");
+    assert!(
+        load_with_options(
+            &paths,
+            &LoadOptions {
+                config_file: Some(missing),
+                ..LoadOptions::default()
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn workbook_settings_have_one_canonical_config_overlay() {
+    let (_dir, paths) = temp_paths();
+    let settings = WorkbookSettings {
+        date_system: DateSystem::Excel1904,
+        calc_mode: CalcMode::Manual,
+        iteration: Iteration {
+            enabled: true,
+            max_iterations: 23,
+            max_change: 0.25,
+        },
+        precision_as_displayed: true,
+    };
+    let loaded = load_with_options(
+        &paths,
+        &LoadOptions {
+            workbook: Some(workbook_settings_overlay(&settings)),
+            ..LoadOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(loaded.config.behavior.date_system, 1904);
+    assert!(loaded.config.behavior.precision_as_displayed);
+    assert_eq!(loaded.config.calc.mode, "manual");
+    assert!(loaded.config.calc.iterative);
+    assert_eq!(loaded.config.calc.max_iterations, 23);
+    assert_eq!(loaded.config.calc.max_change, 0.25);
+    assert_eq!(loaded.explain("calc.mode").unwrap().layer, Layer::Workbook);
 }

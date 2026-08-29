@@ -28,6 +28,12 @@ The Omarchy-dialect escape hatch: Lua for configuration, automation, custom func
 - Custom functions participate in the dependency graph exactly like built-ins; their volatility is declared in `spec`.
 - Embedded scripts never run without explicit trust; the test for this is a release blocker.
 
+### Binding handoff from WP-12
+
+- Consume `[scripting]` and related policy from the retained `LoadedConfig`; never parse `config.toml` in `lua`. Canonicalize trusted directories before comparison and treat missing/non-directory entries as untrusted.
+- WP-12 watches the user config tree, but a filesystem notification for `init.lua` or a plugin is **not** permission to execute code. `:source` and explicit CLI commands may reload user scripts; embedded scripts still require the trust decision and never run merely because a workbook opened or a file changed.
+- When configuration reload changes scripting policy, apply the stricter policy immediately to future invocations. Do not silently broaden an already-running embedded environment; rebuilding it requires an explicit source/run action.
+
 ## Acceptance criteria
 
 - [ ] API tests for every documented function; `docs/lua-api.md` generated from the registration table and checked for drift.

@@ -27,6 +27,12 @@ Make Omacell an excellent tool for the user's coding agent — whichever one Oma
 - Agents launched by Omarchy run unattended — the skill's default workflow must be *propose*, and `apply` must be a deliberate step.
 - Test the hand-off with a fake `omarchy` script on `PATH` that records its arguments.
 
+### Binding handoff from WP-12
+
+- Replace the existing placeholder at `default/agents/skills/omacell/SKILL.md`; do not add a second skill location or reimplement installation. `setup_omarchy` already links the containing `omacell` directory into all five agent-specific locations and preserves existing user paths.
+- Add a setup/skill integration test that runs WP-12 setup in a managed home, verifies all five symlinks resolve to the completed skill, reruns setup idempotently, and then runs the CLI-help drift test against that same file.
+- Read `[ai.agent]` and notification policy from `LoadedConfig`. Agent proposals notify through the existing Omarchy/freedesktop adapter; MCP/agent code must not edit Omarchy configuration directly.
+
 ## Acceptance criteria
 
 - [ ] MCP contract tests (an `rmcp` client) exercise every tool and resource against a fixture workbook, including pagination and error cases.

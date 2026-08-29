@@ -50,6 +50,7 @@ fn reload_preserves_workbook_env_and_cli_layers() {
     .unwrap();
     let workbook = toml::from_str("[calc]\nmode = \"automatic\"\n").unwrap();
     let options = LoadOptions {
+        config_file: None,
         cli_sets: vec!["appearance.grid_lines=false".into()],
         workbook: Some(workbook),
         env: vec![("OMACELL_BEHAVIOR__ENTER_MOVES".into(), "right".into())],
@@ -138,4 +139,70 @@ fn explicit_theme_override_is_watched() {
         ReloadEvent::ThemeChanged { .. }
     )));
     assert_eq!(store.snapshot().theme.roles["state.cursor"], "#654321");
+}
+
+#[test]
+fn explicit_config_file_is_watched() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    let config = dir.path().join("profiles/work.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "[layout]\npanel_width = 400\n").unwrap();
+    let store = ConfigStore::load_and_watch_with(
+        paths,
+        LoadOptions {
+            config_file: Some(config.clone()),
+            ..LoadOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(store.snapshot().config.layout.panel_width, 400);
+
+    std::fs::write(&config, "[layout]\npanel_width = 500\n").unwrap();
+    assert!(wait_for(&store, |ev| matches!(
+        ev,
+        ReloadEvent::Applied { .. }
+    )));
+    assert_eq!(store.snapshot().config.layout.panel_width, 500);
+}
+
+#[test]
+fn selected_keymap_change_emits_an_applied_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    std::fs::create_dir_all(paths.user_config.join("keys")).unwrap();
+    let store = ConfigStore::load_and_watch(paths.clone()).unwrap();
+
+    let keymap = paths.user_config.join("keys/classic.toml");
+    std::fs::write(&keymap, "[bindings]\nF1 = \"help.keys\"\n").unwrap();
+    assert!(wait_for(&store, |event| matches!(
+        event,
+        ReloadEvent::Applied { path } if path == &keymap
+    )));
+}
+
+#[test]
+fn keymap_beside_an_explicit_config_emits_an_applied_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    let profile = dir.path().join("profiles");
+    let config = profile.join("work.toml");
+    let keymap = profile.join("keys/review.toml");
+    std::fs::create_dir_all(keymap.parent().unwrap()).unwrap();
+    std::fs::write(&config, "[keys]\nfile = \"keys/review.toml\"\n").unwrap();
+    std::fs::write(&keymap, "[bindings]\nF1 = \"help.keys\"\n").unwrap();
+    let store = ConfigStore::load_and_watch_with(
+        paths,
+        LoadOptions {
+            config_file: Some(config),
+            ..LoadOptions::default()
+        },
+    )
+    .unwrap();
+
+    std::fs::write(&keymap, "[bindings]\nF2 = \"help.keys\"\n").unwrap();
+    assert!(wait_for(&store, |event| matches!(
+        event,
+        ReloadEvent::Applied { path } if path == &keymap
+    )));
 }

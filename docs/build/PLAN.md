@@ -220,7 +220,7 @@ graph LR
   WP_27 --> WP_28
 ```
 
-Two near-critical paths now remain: engine/UI (`WP-00 → WP-01 → WP-02 → WP-04 → WP-07a → WP-14 → WP-16 → WP-25 → WP-26 → WP-28`) and functions/CLI/TUI (`WP-04/WP-06 → WP-05F → WP-05a/b/c → WP-13 → WP-15 → WP-25 → WP-26 → WP-28`). WP-07b remains on the CLI path but no longer blocks UI-core work. Session totals should be re-estimated after G1; treat package sizes as ordering signals, not commitments.
+Two near-critical paths now remain: engine/UI (`WP-00 → WP-01 → WP-02 → WP-04 → WP-07a → WP-14 → WP-16 → WP-25 → WP-26 → WP-28`) and functions/CLI/TUI (`WP-04/WP-06 → WP-05F → WP-05a/b/c → WP-13 → WP-15 → WP-25 → WP-26 → WP-28`). After WP-12 lands, WP-13 and WP-14 may start in parallel using their binding handoff sections: WP-13 owns process composition/config reload IPC, while WP-14 consumes snapshots and owns toolkit-free state transitions. Start WP-15 only after both; WP-16 follows WP-14 and reuses the same reload contract. WP-07b remains on the CLI path but no longer blocks UI-core work. Session totals should be re-estimated after G1; treat package sizes as ordering signals, not commitments.
 
 ## 7. Work-package index
 

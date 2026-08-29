@@ -41,6 +41,12 @@ pub trait Provider: Send + Sync {
 - No network in CI: every provider test runs on recorded fixtures; the recorder is a dev tool.
 - The payload builder is the single choke point for privacy — nothing else may serialize workbook content for a model.
 
+### Binding handoff from WP-12
+
+- Build provider/model/budget/privacy policy from the retained typed `LoadedConfig`; do not deserialize `config.toml` again in `ai`. Feed per-workbook configuration through `LoadOptions.workbook` using the same overlay composition used by WP-13, while keeping content-redaction marks in the workbook custom part.
+- `omacell ai setup` must make a sparse, atomic update to the selected user config (`LoadOptions.config_file` or the default), preserving every unrelated key and user comment and never materializing defaults or secrets. Add a narrowly scoped write helper to `conf` if necessary; do not put TOML/file-write logic in provider modules. A non-pre-approved editing dependency requires a one-line report justification and green `cargo deny`.
+- A config reload may change routing/budgets for subsequent requests, but it never starts a provider request. Capture an immutable policy snapshot per request so an in-flight payload cannot change privacy level halfway through serialization/sending.
+
 ## Acceptance criteria
 
 - [ ] Recorded-fixture tests for both protocols: structured output, tool calls, streaming, errors, timeouts, cancellation.

@@ -27,6 +27,12 @@ A complete keyboard-driven spreadsheet in a terminal — the first front-end rea
 - Render only the visible window; a 1M-row sheet must feel the same as a 100-row sheet.
 - Test through the real event loop with `TestBackend`; snapshot the frames.
 
+### Configuration handoff
+
+- WP-13 is the composition root: it supplies the same retained `ConfigStore`/`LoadOptions` used by CLI and IPC plus the WP-14 state model. The TUI must not create a second config load or watcher.
+- Apply `ReloadEvent::{Applied,ThemeChanged}` through WP-14's state-preserving config transition. Use `[layout]`/`[tui]` from `LoadedConfig.config` and the eight resolved reference colors, but map ordinary theme colors to terminal ANSI roles as specified; do not parse Omarchy files in `tui`.
+- The in-process IPC server registers the same `theme.reload` command described by WP-13, so the WP-12 theme hook and SIGUSR1 reach the running TUI.
+
 ## Acceptance criteria
 
 - [ ] Snapshot tests across terminal sizes (80×24, 120×40, 200×60) and three fixture themes; keymap tests through the event loop for classic and modal.

@@ -1,6 +1,7 @@
 //! Fontconfig alias resolution and file-font substitutions (spec §7.2).
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -32,20 +33,35 @@ pub fn substitute_file_font(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-/// Resolve the fontconfig `monospace` (or other) alias via fontdb.
+/// Resolve a fontconfig alias, with `fontdb` as the command fallback.
 #[must_use]
 pub fn resolve_family(alias: &str) -> String {
+    resolve_font(alias).0
+}
+
+/// Resolve a fontconfig alias to a loadable font file when one is available.
+#[must_use]
+pub fn resolve_font_path(alias: &str) -> Option<PathBuf> {
+    resolve_font(alias).1
+}
+
+fn resolve_font(alias: &str) -> (String, Option<PathBuf>) {
     if let Ok(output) = Command::new("fc-match")
-        .args(["-f", "%{family}\n", alias])
+        .args(["-f", "%{family}\n%{file}\n", alias])
         .output()
         && output.status.success()
-        && let Some(name) = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .map(str::trim)
+        && let output = String::from_utf8_lossy(&output.stdout)
+        && let Some(name) = output.lines().next().map(str::trim)
         && !name.is_empty()
     {
-        return name.split(',').next().unwrap_or(name).to_string();
+        let path = output
+            .lines()
+            .nth(1)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .filter(|path| path.is_file());
+        return (name.split(',').next().unwrap_or(name).to_string(), path);
     }
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
@@ -65,9 +81,14 @@ pub fn resolve_family(alias: &str) -> String {
         && let Some(face) = db.face(id)
         && let Some(name) = face.families.first()
     {
-        return name.0.clone();
+        let path = match &face.source {
+            fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => Some(path.clone()),
+            fontdb::Source::Binary(_) => None,
+        }
+        .filter(|path| path.is_file());
+        return (name.0.clone(), path);
     }
-    alias.to_string()
+    (alias.to_string(), None)
 }
 
 /// UI text size in pt: explicit number, else shell scale, else 11.
@@ -102,6 +123,8 @@ pub struct ShellTokens {
     pub font_base_size: Option<f64>,
     /// Resolved fontconfig family for UI chrome.
     pub ui_font_family: String,
+    /// Loadable file for the resolved UI font, when fontconfig exposes one.
+    pub ui_font_path: Option<PathBuf>,
     /// Effective UI size in points.
     pub ui_font_size_pt: f64,
     /// Shared spacing multiplier.
@@ -162,6 +185,7 @@ impl ShellTokens {
         Ok(Self {
             font_base_size,
             ui_font_family: String::new(),
+            ui_font_path: None,
             ui_font_size_pt: font_base_size.unwrap_or(11.0),
             spacing_scale,
             corner_style,
@@ -196,7 +220,9 @@ pub fn shell_tokens_for_font(
     } else {
         configured_font
     };
-    tokens.ui_font_family = resolve_family(alias);
+    let (family, path) = resolve_font(alias);
+    tokens.ui_font_family = family;
+    tokens.ui_font_path = path;
     tokens.ui_font_size_pt = ui_font_size_pt(configured_size, tokens.font_base_size);
     if configured_corner != "system" {
         tokens.corner_style = Some(configured_corner.to_string());
