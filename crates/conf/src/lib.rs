@@ -22,10 +22,11 @@ pub mod watch;
 
 pub use layer::{
     Explain, Layer, LoadOptions, LoadedConfig, Migration, Provenance, load, load_with_env,
-    load_with_options, reset_user_file, show_all_json, workbook_settings_overlay,
+    load_with_options, reset_user_file, reset_user_rel, show_all_json, validate_user_rel,
+    workbook_settings_overlay,
 };
 pub use paths::Paths;
 pub use schema::Config;
 pub use setup::{HYPRLAND_SNIPPET, SetupOptions, SetupReport, setup_omarchy};
 pub use theme::{ColorsToml, Rgb, ThemeRoles, mix, resolve_roles, resolve_roles_with_override};
-pub use watch::{ConfigStore, ReloadEvent};
+pub use watch::{ConfigStore, ReloadEvent, ReloadHandle};

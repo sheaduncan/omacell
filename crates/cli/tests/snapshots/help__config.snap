@@ -1,0 +1,25 @@
+---
+source: crates/cli/tests/help.rs
+expression: "help(&[\"config\", \"--help\"])"
+---
+Configuration
+
+Usage: omacell config [OPTIONS] <COMMAND>
+
+Commands:
+  check  Validate the effective configuration
+  edit   Open the user config in `$EDITOR`
+  reset  Restore package defaults (backup first)
+  show   Show one key or the full effective config
+  diff   Diff the user file against package defaults
+
+Options:
+      --json                  Machine-readable stdout (and stderr errors)
+      --dry-run               Validate writes without changing files
+      --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
+      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
+      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+  -q, --quiet                 Suppress non-error human output
+  -v, --verbose...            Increase log verbosity
+      --from-workbook <FILE>  Workbook whose frozen settings overlay configuration
+  -h, --help                  Print help

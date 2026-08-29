@@ -629,6 +629,72 @@ pub fn reset_user_file(
     paths: &Paths,
     stamp: &str,
 ) -> Result<Option<std::path::PathBuf>, omacell_core::error::CoreError> {
+    reset_user_rel(paths, stamp, "config.toml")
+}
+
+/// Reset a file beneath [`Paths::user_config`] using the same backup policy as
+/// [`reset_user_file`]. `relative` must contain only normal path components.
+pub fn reset_user_rel(
+    paths: &Paths,
+    stamp: &str,
+    relative: &str,
+) -> Result<Option<std::path::PathBuf>, omacell_core::error::CoreError> {
+    validate_backup_stamp(stamp)?;
+    let relative = validate_user_rel(relative)?;
+    let src = paths.user_config.join(&relative);
+    let metadata = match std::fs::symlink_metadata(&src) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(error::io(err.to_string())),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(error::schema(
+            "reset path must name a regular file, not a link or directory",
+        ));
+    }
+    let root = std::fs::canonicalize(&paths.user_config).map_err(|e| error::io(e.to_string()))?;
+    let parent = src
+        .parent()
+        .ok_or_else(|| error::schema("reset path has no parent"))?;
+    let resolved_parent = std::fs::canonicalize(parent).map_err(|e| error::io(e.to_string()))?;
+    if !resolved_parent.starts_with(&root) {
+        return Err(error::schema(
+            "reset path escaped the user config directory",
+        ));
+    }
+    let dir = paths.backup_dir(stamp);
+    let dest = dir.join(relative);
+    if dest.exists() {
+        return Err(error::io(format!(
+            "backup already exists: {}",
+            dest.display()
+        )));
+    }
+    let dest_parent = dest
+        .parent()
+        .ok_or_else(|| error::schema("backup path has no parent"))?;
+    std::fs::create_dir_all(dest_parent).map_err(|e| error::io(e.to_string()))?;
+    std::fs::rename(&src, &dest).map_err(|e| error::io(e.to_string()))?;
+    Ok(Some(dest))
+}
+
+/// Validate a user-config-relative file path without touching the filesystem.
+pub fn validate_user_rel(relative: &str) -> Result<PathBuf, omacell_core::error::CoreError> {
+    let relative = PathBuf::from(relative);
+    if relative.is_absolute()
+        || relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(error::schema(
+            "reset path must be a relative file under the user config directory",
+        ));
+    }
+    Ok(relative)
+}
+
+fn validate_backup_stamp(stamp: &str) -> Result<(), omacell_core::error::CoreError> {
     let mut components = Path::new(stamp).components();
     if !matches!(components.next(), Some(std::path::Component::Normal(_)))
         || components.next().is_some()
@@ -638,19 +704,5 @@ pub fn reset_user_file(
     {
         return Err(error::schema("backup stamp contains unsafe characters"));
     }
-    let src = paths.user_config_toml();
-    if !src.is_file() {
-        return Ok(None);
-    }
-    let dir = paths.backup_dir(stamp);
-    std::fs::create_dir_all(&dir).map_err(|e| error::io(e.to_string()))?;
-    let dest = dir.join("config.toml");
-    if dest.exists() {
-        return Err(error::io(format!(
-            "backup already exists: {}",
-            dest.display()
-        )));
-    }
-    std::fs::rename(&src, &dest).map_err(|e| error::io(e.to_string()))?;
-    Ok(Some(dest))
+    Ok(())
 }

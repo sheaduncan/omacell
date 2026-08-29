@@ -1,0 +1,24 @@
+---
+source: crates/cli/tests/help.rs
+expression: "help(&[\"ipc\", \"--help\"])"
+---
+Talk to a running instance
+
+Usage: omacell ipc [OPTIONS] <COMMAND> [PAYLOAD]
+
+Arguments:
+  <COMMAND>  Registry command id or control op (`ping`, `theme.reload`)
+  [PAYLOAD]  JSON object arguments
+
+Options:
+      --all                   Send to every live owned instance
+      --json                  Machine-readable stdout (and stderr errors)
+      --dry-run               Validate writes without changing files
+      --quiet                 Suppress per-instance human output
+      --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
+      --socket <SOCKET>       Socket path (default: newest live instance)
+      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
+      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+  -v, --verbose...            Increase log verbosity
+      --from-workbook <FILE>  Workbook whose frozen settings overlay configuration
+  -h, --help                  Print help

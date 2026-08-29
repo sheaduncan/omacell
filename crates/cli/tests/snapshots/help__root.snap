@@ -1,0 +1,44 @@
+---
+source: crates/cli/tests/help.rs
+expression: "help(&[\"--help\"])"
+---
+A spreadsheet for Omarchy Linux
+
+Usage: omacell [OPTIONS] [FILE]... [COMMAND]
+
+Commands:
+  convert    Convert a workbook between `.xlsx`, CSV, and `.omc`
+  query      Print a range as json, csv, or markdown
+  set        Set a cell or range from formula-bar text
+  eval       Evaluate a formula in a workbook
+  recalc     Recalculate a workbook
+  run        Run a Lua script (WP-20)
+  fn         Function catalog
+  config     Configuration
+  theme      Theme inspection and reload
+  keys       Keymap / Hyprland conflict check
+  setup      Omarchy integration
+  commands   List registered commands and JSON schemas
+  ipc        Talk to a running instance
+  changeset  Changesets on a running instance
+  diff       Semantic `.xlsx` diff
+  audit      Deterministic audit (WP-19)
+  ai         AI provider commands (WP-22)
+  agent      Hand off to the Omarchy default agent (WP-21)
+  mcp        MCP server (WP-21)
+
+Arguments:
+  [FILE]...  Workbook paths. With no subcommand, opens the GUI (WP-16)
+
+Options:
+      --json                  Machine-readable stdout (and stderr errors)
+      --dry-run               Validate writes without changing files
+      --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
+      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
+      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+  -q, --quiet                 Suppress non-error human output
+  -v, --verbose...            Increase log verbosity
+      --tui                   Open the terminal UI (WP-15)
+      --from-workbook <FILE>  Workbook whose frozen settings overlay configuration
+  -h, --help                  Print help
+  -V, --version               Print version

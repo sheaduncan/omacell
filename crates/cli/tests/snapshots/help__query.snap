@@ -1,0 +1,55 @@
+---
+source: crates/cli/tests/help.rs
+expression: "help(&[\"query\", \"--help\"])"
+---
+Print a range as json, csv, or markdown
+
+Usage: omacell query [OPTIONS] <BOOK> <RANGE>
+
+Arguments:
+  <BOOK>
+          Workbook path
+
+  <RANGE>
+          A1 range (`Sheet!A1:D20`)
+
+Options:
+      --format <FORMAT>
+          Output table format
+
+          Possible values:
+          - json: JSON array of rows
+          - csv:  CSV
+          - md:   GitHub-flavored markdown table
+          
+          [default: json]
+
+      --json
+          Machine-readable stdout (and stderr errors)
+
+      --dry-run
+          Validate writes without changing files
+
+      --formulas
+          Emit formula-bar text instead of values
+
+      --set <KEY=VALUE>
+          Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
+
+      --config <FILE>
+          Explicit config file; replaces `~/.config/omacell/config.toml`
+
+      --theme <FILE>
+          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+
+  -q, --quiet
+          Suppress non-error human output
+
+  -v, --verbose...
+          Increase log verbosity
+
+      --from-workbook <FILE>
+          Workbook whose frozen settings overlay configuration
+
+  -h, --help
+          Print help (see a summary with '-h')

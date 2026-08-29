@@ -12,7 +12,26 @@ description = "Command-line entry point for Omacell."
 workspace = true
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.2"
+omacell-bus = { path = "../bus", version = "0.0.0" }
+omacell-conf = { path = "../conf", version = "0.0.0" }
 omacell-core = { path = "../core", version = "0.0.0" }
+omacell-fn = { path = "../fn", version = "0.0.0" }
+omacell-io = { path = "../io", version = "0.0.0" }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+signal-hook = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+insta = "1"
+predicates = "3"
+tempfile = "3"
 
 [[bin]]
 name = "omacell"
