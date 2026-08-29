@@ -74,7 +74,12 @@ impl App {
                 options.config_file = cli.config.clone();
                 options.theme_override = cli.theme.clone();
                 options.cli_sets = cli.sets.clone();
-                options.workbook = Some(workbook_settings_overlay(opened.workbook.settings()));
+                options.workbook = if let Some(settings_path) = &cli.from_workbook {
+                    let settings_book = files::open_any(settings_path)?;
+                    Some(workbook_settings_overlay(settings_book.workbook.settings()))
+                } else {
+                    Some(workbook_settings_overlay(opened.workbook.settings()))
+                };
                 let file_session = FileSession::new();
                 file_session.attach(path, &opened);
                 Self::from_parts(paths, options, opened.workbook, file_session, true)
@@ -85,6 +90,11 @@ impl App {
                 options.config_file = cli.config.clone();
                 options.theme_override = cli.theme.clone();
                 options.cli_sets = cli.sets.clone();
+                if let Some(settings_path) = &cli.from_workbook {
+                    let settings_book = files::open_any(settings_path)?;
+                    options.workbook =
+                        Some(workbook_settings_overlay(settings_book.workbook.settings()));
+                }
                 Self::from_parts(paths, options, Workbook::new(), FileSession::new(), true)
             }
         }

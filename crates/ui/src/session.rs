@@ -223,6 +223,11 @@ impl UiSession {
         self.lock().show_formulas
     }
 
+    /// Replace formula-source display after a frontend activates a saved sheet view.
+    pub fn set_show_formulas(&self, show: bool) {
+        self.lock().show_formulas = show;
+    }
+
     /// Replace the toolkit-independent clipboard snapshot.
     pub fn set_clipboard(&self, clipboard: Option<ClipboardPayload>) {
         self.lock().clipboard = clipboard;

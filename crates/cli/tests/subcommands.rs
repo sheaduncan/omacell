@@ -78,6 +78,21 @@ fn tui_without_tty_exits_error() {
 }
 
 #[test]
+fn tui_rejects_ambiguous_or_ignored_arguments_before_tty_setup() {
+    for args in [
+        vec!["--tui", "one.xlsx", "two.xlsx"],
+        vec!["--tui", "config", "check"],
+        vec!["--tui", "--dry-run"],
+    ] {
+        let (_home, mut cmd) = home();
+        cmd.args(args)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("cli.usage"));
+    }
+}
+
+#[test]
 fn json_error_shape() {
     let (_home, mut cmd) = home();
     cmd.args(["--json", "run", "x.lua", "x.xlsx"])

@@ -22,6 +22,8 @@ pub fn file_color(hex: &str, truecolor: bool) -> Color {
     }
     let h = hex.trim().trim_start_matches('#');
     if h.len() == 6
+        && h.is_ascii()
+        && h.bytes().all(|byte| byte.is_ascii_hexdigit())
         && let Ok(r) = u8::from_str_radix(&h[0..2], 16)
         && let Ok(g) = u8::from_str_radix(&h[2..4], 16)
         && let Ok(b) = u8::from_str_radix(&h[4..6], 16)
@@ -93,6 +95,7 @@ mod tests {
         assert_eq!(file_color("#ff00aa", false), Color::Indexed(6));
         assert_eq!(file_color("#ff00aa", true), Color::Rgb(255, 0, 170));
         assert_eq!(file_color("nope", true), Color::Indexed(6));
+        assert_eq!(file_color("aébcd", true), Color::Indexed(6));
     }
 
     #[test]

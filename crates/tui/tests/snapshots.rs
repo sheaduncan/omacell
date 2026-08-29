@@ -69,3 +69,22 @@ fn formula_references_use_rgb_when_truecolor_on() {
     }
     assert!(saw_rgb, "expected file-origin RGB on formula references");
 }
+
+#[test]
+fn workbook_text_cannot_emit_terminal_control_sequences() {
+    let mut h = harness_theme("nord");
+    let payload = "safe\u{1b}]52;c;dGVzdA==\u{7}text\u{202e}tail";
+    let outcome = h
+        .tui
+        .execute_cmd(
+            "cell.set",
+            serde_json::json!({"ref": "A1", "input": payload}),
+        )
+        .unwrap();
+    assert!(outcome.ok, "{:?}", outcome.error);
+    let text = draw_text(&h.tui, 80, 24);
+    assert!(!text.contains('\u{1b}'));
+    assert!(!text.contains('\u{7}'));
+    assert!(!text.contains('\u{202e}'));
+    assert!(text.contains('�'));
+}

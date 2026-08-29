@@ -45,6 +45,24 @@ pub fn harness_modal() -> Harness {
 }
 
 pub fn harness_opts(theme: Option<&str>, keymap: &str, truecolor: &str) -> Harness {
+    harness_opts_with_workbook(theme, keymap, truecolor, Workbook::new(), &[])
+}
+
+pub fn harness_workbook(workbook: Workbook) -> Harness {
+    harness_opts_with_workbook(None, "keys/classic.toml", "off", workbook, &[])
+}
+
+pub fn harness_sets(sets: &[&str]) -> Harness {
+    harness_opts_with_workbook(None, "keys/classic.toml", "off", Workbook::new(), sets)
+}
+
+fn harness_opts_with_workbook(
+    theme: Option<&str>,
+    keymap: &str,
+    truecolor: &str,
+    workbook: Workbook,
+    extra_sets: &[&str],
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
     std::fs::create_dir_all(&paths.user_config).unwrap();
@@ -56,11 +74,13 @@ pub fn harness_opts(theme: Option<&str>, keymap: &str, truecolor: &str) -> Harne
     if let Some(theme) = theme {
         install_omarchy_theme(&paths, theme);
     }
+    let mut cli_sets = vec![
+        format!("keys.file={keymap}"),
+        format!("tui.truecolor={truecolor}"),
+    ];
+    cli_sets.extend(extra_sets.iter().map(|value| (*value).to_string()));
     let options = LoadOptions {
-        cli_sets: vec![
-            format!("keys.file={keymap}"),
-            format!("tui.truecolor={truecolor}"),
-        ],
+        cli_sets,
         ..LoadOptions::default()
     };
     let store = ConfigStore::load_with(paths.clone(), options).unwrap();
@@ -70,7 +90,7 @@ pub fn harness_opts(theme: Option<&str>, keymap: &str, truecolor: &str) -> Harne
 
     let mut functions = FnRegistry::new();
     register_all(&mut functions);
-    let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(functions)).unwrap();
+    let mut bus = Bus::new(workbook, RecalcEngine::new(functions)).unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
 
     let tui = Tui::new(

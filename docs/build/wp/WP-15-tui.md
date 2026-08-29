@@ -6,7 +6,7 @@
 | Lane | C — Surfaces (conf, UI core, TUI, GUI, charts, print) |
 | Size | L (≈ 6–10) |
 | Depends on | WP-14, WP-13 |
-| Unblocks | WP-25, WP-28 |
+| Unblocks | WP-15a, WP-25, WP-28 |
 | Spec sections | §5.4, §7.7, §10, Appendix A |
 | Where | `crates/tui` |
 

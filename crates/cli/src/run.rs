@@ -180,6 +180,27 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
 }
 
 fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
+    if cli.command.is_some() {
+        return Err(
+            CliError::new("cli.usage", "--tui cannot be combined with a subcommand")
+                .hint("use omacell --tui [FILE] or run the subcommand without --tui")
+                .exit(EXIT_USAGE),
+        );
+    }
+    if cli.files.len() > 1 {
+        return Err(
+            CliError::new("cli.usage", "--tui accepts at most one workbook")
+                .hint("run a separate Omacell instance for each workbook")
+                .exit(EXIT_USAGE),
+        );
+    }
+    if cli.dry_run {
+        return Err(
+            CliError::new("cli.usage", "--dry-run is not valid for an interactive TUI")
+                .hint("use --dry-run with a CLI or IPC command")
+                .exit(EXIT_USAGE),
+        );
+    }
     if !io::stdout().is_terminal() {
         return Err(
             CliError::new("tui.tty", "omacell --tui requires a terminal")

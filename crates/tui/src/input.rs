@@ -1,7 +1,8 @@
 //! Map crossterm events onto toolkit-neutral [`omacell_ui::KeyEvent`].
 
 use crossterm::event::{
-    KeyCode as CCode, KeyEvent as CEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    KeyCode as CCode, KeyEvent as CEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use omacell_ui::{KeyCode, KeyEvent};
 
@@ -47,11 +48,13 @@ pub fn map_key(event: CEvent) -> Option<KeyEvent> {
 #[must_use]
 pub fn map_mouse(event: MouseEvent) -> Option<(u16, u16, bool)> {
     match event.kind {
-        MouseEventKind::Down(_) | MouseEventKind::Drag(_) => Some((
-            event.column,
-            event.row,
-            event.modifiers.contains(KeyModifiers::CONTROL),
-        )),
+        MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
+            Some((
+                event.column,
+                event.row,
+                event.modifiers.contains(KeyModifiers::CONTROL),
+            ))
+        }
         _ => None,
     }
 }
@@ -59,7 +62,7 @@ pub fn map_mouse(event: MouseEvent) -> Option<(u16, u16, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyEventState;
+    use crossterm::event::{KeyEventState, MouseButton};
 
     fn press(code: CCode, mods: KeyModifiers) -> CEvent {
         CEvent {
@@ -90,5 +93,23 @@ mod tests {
             ..press(CCode::Char('q'), KeyModifiers::CONTROL)
         };
         assert!(map_key(release).is_none());
+    }
+
+    #[test]
+    fn only_left_mouse_selection_is_mapped() {
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 12,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(map_mouse(event).is_none());
+        assert_eq!(
+            map_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                ..event
+            }),
+            Some((12, 4, false))
+        );
     }
 }

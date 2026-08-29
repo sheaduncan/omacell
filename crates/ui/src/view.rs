@@ -9,7 +9,7 @@ use omacell_core::error::CoreError;
 use omacell_core::event::Event;
 use omacell_core::graph::CellCoord;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
-use omacell_core::sheet::{FreezePanes, SplitView};
+use omacell_core::sheet::{FreezePanes, SheetVisibility, SplitView};
 use omacell_core::storage::CellSlot;
 use omacell_core::value::Value;
 use schemars::JsonSchema;
@@ -547,6 +547,9 @@ fn handle(
             let sheets = ctx
                 .workbook_ref()
                 .sheets()
+                .filter(|sheet| {
+                    sheet.visibility == SheetVisibility::Visible || sheet.id == g.selection.sheet
+                })
                 .map(|sheet| sheet.id)
                 .collect::<Vec<_>>();
             if let Some(index) = sheets.iter().position(|id| *id == g.selection.sheet) {

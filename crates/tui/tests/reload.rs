@@ -40,3 +40,24 @@ fn invalid_reload_keeps_session_and_records_message() {
     assert_eq!(h.tui.ui().edit().buffer, "keep me");
     assert!(h.tui.message().is_some(), "expected Invalid message");
 }
+
+#[test]
+fn invalid_keymap_reload_keeps_the_last_good_session_alive() {
+    let mut h = harness();
+    let key_dir = h._dir.path().join(".config/omacell/keys");
+    std::fs::create_dir_all(&key_dir).unwrap();
+    std::fs::write(key_dir.join("classic.toml"), "not valid toml {{").unwrap();
+
+    h.tui.store().reload().unwrap();
+    h.tui.poll_reload().unwrap();
+
+    assert!(
+        h.tui
+            .message()
+            .is_some_and(|message| message.contains("keymap"))
+    );
+    h.tui
+        .step_key(omacell_ui::KeyEvent::new(omacell_ui::KeyCode::Right))
+        .unwrap();
+    assert_eq!(h.tui.ui().selection().cursor.col, 1);
+}

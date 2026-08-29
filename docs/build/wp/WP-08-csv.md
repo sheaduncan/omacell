@@ -6,7 +6,7 @@
 | Lane | B — File I/O |
 | Size | M (≈ 3–5) |
 | Depends on | WP-02, WP-06 |
-| Unblocks | WP-13, WP-27 |
+| Unblocks | WP-13, WP-15a, WP-27 |
 | Spec sections | §6.9 F-9.4, §8.4 A-4.4 (hook only), §12.1 |
 | Where | `crates/io` (module `csv`) |
 
