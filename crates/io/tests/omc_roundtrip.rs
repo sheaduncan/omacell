@@ -6,6 +6,13 @@ use omacell_core::changeset::{
     ChangeSummary, Changeset, ChangesetId, ChangesetStatus, CommandCall,
 };
 use omacell_core::command::{CommandId, Origin};
+use omacell_core::intern::{ArrayPayload, RichTextRun};
+use omacell_core::names::{DefinedName, NameReferent, NameScope};
+use omacell_core::sheet::{Comment, Hyperlink, Note, ProtectionState, SplitView};
+use omacell_core::storage::{CellFlags, CellSlot};
+use omacell_core::style::{Color, Font, StyleId};
+use omacell_core::tables::{Table, TableColumn, TableId};
+use omacell_core::value::{Array2D, Value};
 use omacell_core::workbook::Workbook;
 use omacell_io::omc::{
     ConversionReport, OmcDocument, changeset_from_omc, changeset_to_omc, empty_package, from_xlsx,
@@ -103,7 +110,7 @@ fn single_cell_edit_is_one_line_diff() {
 fn changeset_forward_inverse_roundtrip() {
     let cs = Changeset {
         id: ChangesetId::new("cs-1").unwrap(),
-        origin: Origin::User,
+        origin: Origin::ExternalAgent,
         status: ChangesetStatus::Applied,
         forward: vec![CommandCall {
             id: CommandId::new("cell.set").unwrap(),
@@ -115,15 +122,253 @@ fn changeset_forward_inverse_roundtrip() {
         }],
         summary: ChangeSummary {
             cells: 1,
-            text: "set A1".into(),
-            ..ChangeSummary::default()
+            rows: 2,
+            columns: 3,
+            sheets: 4,
+            styles: 5,
+            text: "set A1\twith metadata=inside".into(),
         },
     };
     let text = changeset_to_omc(&cs).unwrap();
     let again = changeset_from_omc(&text).unwrap();
-    assert_eq!(again.id.as_str(), "cs-1");
-    assert_eq!(again.forward, cs.forward);
-    assert_eq!(again.inverse, cs.inverse);
-    assert_eq!(again.status, ChangesetStatus::Applied);
-    assert_eq!(again.origin, Origin::User);
+    assert_eq!(again, cs);
+}
+
+#[test]
+fn omc_roundtrips_ambiguous_text_and_l2_metadata() {
+    let mut wb = Workbook::new();
+    wb.undo_log_mut().set_enabled(false);
+    let sheet = wb.active_sheet();
+    wb.rename_sheet(sheet, "Data Set").unwrap();
+    wb.settings_mut().iteration.enabled = true;
+    wb.settings_mut().iteration.max_iterations = 17;
+    wb.settings_mut().iteration.max_change = 0.000_01;
+    wb.settings_mut().precision_as_displayed = true;
+    wb.meta_mut().title = Some("Quarterly\tmodel".into());
+    wb.meta_mut().author = Some("Ada \"A\"".into());
+    wb.meta_mut().custom.insert("review".into(), "yes".into());
+
+    for (col, value) in [
+        (0, ""),
+        (1, "TRUE"),
+        (2, "1.25"),
+        (3, "#N/A"),
+        (4, "=SUM(A1:A2)"),
+        (5, "line one\nline two"),
+    ] {
+        wb.set_text(sheet, 0, col, value).unwrap();
+    }
+    wb.set_number(sheet, 0, 6, -0.0).unwrap();
+    wb.set_rich_text(
+        sheet,
+        1,
+        0,
+        "rich",
+        vec![RichTextRun {
+            start: 0,
+            len: 4,
+            font: Font {
+                bold: true,
+                ..Font::default()
+            },
+        }],
+    )
+    .unwrap();
+    let cached = wb
+        .set_rich_text(
+            sheet,
+            1,
+            1,
+            "TRUE",
+            vec![RichTextRun {
+                start: 0,
+                len: 4,
+                font: Font {
+                    italic: true,
+                    ..Font::default()
+                },
+            }],
+        )
+        .unwrap();
+    let formula = wb.intern_formula("=A1").unwrap();
+    wb.set_slot(
+        sheet,
+        1,
+        1,
+        CellSlot {
+            value: Value::Text(cached),
+            formula: Some(formula),
+            style: StyleId::DEFAULT,
+            flags: CellFlags::DEFAULT,
+        },
+    )
+    .unwrap();
+    wb.release_formula(formula);
+
+    let array_text = wb.intern_text("FALSE");
+    let payload = ArrayPayload::new(
+        Array2D::new(1, 2).unwrap(),
+        vec![Value::Text(array_text), Value::Number(2.0)],
+    )
+    .unwrap();
+    let array = wb.intern_array(payload);
+    wb.set_slot(
+        sheet,
+        2,
+        0,
+        CellSlot {
+            value: Value::Array(array),
+            formula: None,
+            style: StyleId::DEFAULT,
+            flags: CellFlags::DEFAULT,
+        },
+    )
+    .unwrap();
+    wb.release_array(array);
+
+    let mut view = wb.sheet(sheet).unwrap().view.clone();
+    view.zoom = 1.37;
+    view.scroll_row = 40;
+    view.scroll_col = 3;
+    view.gridlines = false;
+    view.show_formulas = true;
+    view.split = Some(SplitView { x_px: 7, y_px: 9 });
+    wb.set_sheet_view(sheet, view).unwrap();
+    wb.set_tab_color(sheet, Some(Color::Rgb { argb: 0xFF12_3456 }))
+        .unwrap();
+    wb.set_sheet_protection(
+        sheet,
+        ProtectionState {
+            enabled: true,
+            password: Some(vec![0, 1, 2, 255]),
+        },
+    )
+    .unwrap();
+    wb.set_row_height(sheet, 4, 31).unwrap();
+    wb.set_row_hidden(sheet, 5, true).unwrap();
+    wb.set_col_width(sheet, 2, 88).unwrap();
+    wb.set_col_hidden(sheet, 3, true).unwrap();
+    wb.set_note(
+        sheet,
+        0,
+        0,
+        Some(Note {
+            author: Some("A=B\tC".into()),
+            text: "note\nbody".into(),
+        }),
+    )
+    .unwrap();
+    wb.set_comment(
+        sheet,
+        0,
+        1,
+        Some(Comment {
+            author: "Ada".into(),
+            text: "thread".into(),
+            replies: vec![Comment {
+                author: "Lin".into(),
+                text: "reply".into(),
+                replies: vec![],
+            }],
+        }),
+    )
+    .unwrap();
+    wb.set_hyperlink(
+        sheet,
+        0,
+        2,
+        Some(Hyperlink {
+            target: "https://example.com/?a=1&b=2".into(),
+            tooltip: Some("tip\ttext".into()),
+            display: Some("A=B".into()),
+        }),
+    )
+    .unwrap();
+
+    let mut table = Table::new(TableId::new(0), "Sales", sheet, 4, 0, 5, 1);
+    table.has_totals = true;
+    table.banded_rows = false;
+    table.banded_cols = true;
+    table.auto_expand = false;
+    table.columns = vec![
+        TableColumn {
+            name: "Last, First".into(),
+        },
+        TableColumn {
+            name: "Amount\tUSD".into(),
+        },
+    ];
+    wb.add_table(table).unwrap();
+
+    let mut start = omacell_core::addr::CellRef::new(0, 0).unwrap();
+    start.sheet = Some(sheet);
+    wb.define_name(DefinedName {
+        name: "StartCell".into(),
+        scope: NameScope::Workbook,
+        referent: NameReferent::Range(omacell_core::addr::RangeRef::from_corners(start, start)),
+        comment: Some("points to data".into()),
+    })
+    .unwrap();
+    let text_id = wb.intern_text("TRUE");
+    wb.define_name(DefinedName {
+        name: "TextFlag".into(),
+        scope: NameScope::Sheet(sheet),
+        referent: NameReferent::Constant(Value::Text(text_id)),
+        comment: Some("not a bool".into()),
+    })
+    .unwrap();
+    wb.custom_parts.insert(
+        "xl/omacell/meta.json".into(),
+        br#"{"review":"yes"}"#.to_vec(),
+    );
+
+    let original = OmcDocument::from_workbook(wb);
+    let text = to_string(&original).unwrap();
+    let reopened = open_str(&text).unwrap();
+    let report = diff(
+        &XlsxDocument {
+            workbook: original.workbook.clone(),
+            warnings: FileWarnings::new(),
+            package: empty_package(),
+            extras: original.extras.clone(),
+        },
+        &XlsxDocument {
+            workbook: reopened.workbook.clone(),
+            warnings: FileWarnings::new(),
+            package: empty_package(),
+            extras: reopened.extras.clone(),
+        },
+    );
+    assert!(report.empty, "{report:?}\n{text}");
+    assert_eq!(reopened.workbook.meta(), original.workbook.meta());
+}
+
+#[test]
+fn omc_parser_rejects_ambiguous_or_unsafe_syntax() {
+    for bad in [
+        "omc 1\ncell\tSheet1!A1\t\"bad\\q\"\n",
+        "omc 1\ncell\tSheet1!A1\tbad\"quote\n",
+        "omc 1\ncell\tSheet1!A1\t\"text\"trailing\n",
+        "omc 1\nbook\tcalc=automatic\tcalc=manual\n",
+        "omc 1\ncell\tSheet1!A1\t1\ts=99\n",
+        "omc 1\ncell\tSheet1!A1\ttext\ttype=bogus\n",
+        "omc 1\ncell\tSheet1!A1\t1\ncell\tSheet1!A1\t2\n",
+        "omc 1\ncell\tSheet1:Sheet1!A1\t1\n",
+        "omc 1\ncustom\txl/omacell/../evil\tdata\n",
+        "omc 1\nextra\tSheet1\tunknown\tdata\n",
+        "omc 1\0\n",
+    ] {
+        assert!(open_str(bad).is_err(), "accepted {bad:?}");
+    }
+
+    let doc = open_str("omc 1\ncell\tSheet1!A1\t\"TRUE\"\n").unwrap();
+    let slot = doc
+        .workbook
+        .get(doc.workbook.active_sheet(), 0, 0)
+        .unwrap()
+        .unwrap();
+    let Value::Text(id) = slot.value else {
+        panic!("quoted TRUE was not text");
+    };
+    assert_eq!(doc.workbook.intern().strings.get(id), Some("TRUE"));
 }

@@ -1,17 +1,47 @@
 //! Encode a workbook / changeset as `.omc` text.
 
 use indexmap::IndexMap;
-use omacell_core::addr::col_to_letters;
+use omacell_core::addr::{col_to_letters, quote_sheet_name};
 use omacell_core::changeset::Changeset;
 use omacell_core::error::CoreError;
+use omacell_core::intern::{Interners, RichTextRun};
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::names::NameReferent;
 use omacell_core::sheet::SheetVisibility;
 use omacell_core::style::{Style, StyleId};
 use omacell_core::value::Value;
 use omacell_core::workbook::{CalcMode, DateSystem};
+use serde::{Deserialize, Serialize};
 
 use super::{ConversionReport, OmcDocument};
 use crate::xlsx::XlsxDocument;
+
+const MAX_VALUE_DEPTH: u8 = 16;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum WireValue {
+    Empty,
+    Number {
+        value: f64,
+    },
+    Bool {
+        value: bool,
+    },
+    Text {
+        value: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rich: Vec<RichTextRun>,
+    },
+    Error {
+        value: omacell_core::error::ErrorKind,
+    },
+    Array {
+        rows: u32,
+        cols: u32,
+        values: Vec<WireValue>,
+    },
+}
 
 pub(super) fn encode(doc: &OmcDocument) -> Result<String, CoreError> {
     let mut out = String::from("omc 1\n");
@@ -30,6 +60,22 @@ pub(super) fn encode_changeset(cs: &Changeset) -> Result<String, CoreError> {
 
 fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError> {
     let wb = &doc.workbook;
+    if !wb.settings().iteration.max_change.is_finite() || wb.settings().iteration.max_change < 0.0 {
+        return Err(crate::error::omc_format(
+            "iteration max_change must be finite and non-negative",
+        ));
+    }
+    for name in doc.extras.keys() {
+        let sheet = wb.sheet_by_name(name).ok_or_else(|| {
+            crate::error::omc_format(format!("extras reference unknown sheet {name:?}"))
+        })?;
+        if sheet.name != *name {
+            return Err(crate::error::omc_format(format!(
+                "extras sheet name {name:?} does not match workbook casing {:?}",
+                sheet.name
+            )));
+        }
+    }
     let intern = wb.intern();
     let sheets: Vec<_> = wb.sheets().collect();
     let date = match wb.settings().date_system {
@@ -44,10 +90,13 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
     let active = wb
         .sheet(wb.active_sheet())
         .map(|s| s.name.as_str())
-        .unwrap_or("Sheet1");
-    out.push_str("book\t");
-    out.push_str(&format!("date_system={date}\tcalc={calc}\tactive="));
-    push_field(out, active);
+        .ok_or_else(|| crate::error::omc_format("active sheet id is not present"))?;
+    out.push_str("book");
+    push_kv(out, "date_system", date);
+    push_kv(out, "calc", calc);
+    push_kv(out, "active", active);
+    push_json_kv(out, "settings", wb.settings())?;
+    push_json_kv(out, "meta", wb.meta())?;
     out.push('\n');
 
     let mut style_ids: IndexMap<Style, u32> = IndexMap::new();
@@ -64,19 +113,22 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
     }
     let mut styles: Vec<(&Style, u32)> = style_ids.iter().map(|(s, i)| (s, *i)).collect();
     styles.sort_by_key(|(_, i)| *i);
-    let mut seen_fmt = std::collections::BTreeSet::new();
+    let mut formats = std::collections::BTreeMap::new();
     for (style, _) in &styles {
         let nid = style.num_fmt.index();
-        if nid >= 164
-            && seen_fmt.insert(nid)
-            && let Some(code) = wb.num_fmt_code(style.num_fmt)
-        {
-            out.push_str("numfmt\t");
-            out.push_str(&nid.to_string());
-            out.push('\t');
-            push_field(out, code.as_ref());
-            out.push('\n');
+        if nid >= 164 {
+            let code = wb.num_fmt_code(style.num_fmt).ok_or_else(|| {
+                crate::error::omc_format(format!("custom number format {nid} has no code"))
+            })?;
+            formats.insert(nid, code.into_owned());
         }
+    }
+    for (nid, code) in formats {
+        out.push_str("numfmt\t");
+        out.push_str(&nid.to_string());
+        out.push('\t');
+        push_field(out, &code);
+        out.push('\n');
     }
     for (style, id) in styles {
         let json =
@@ -84,11 +136,12 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
         out.push_str("style\t");
         out.push_str(&id.to_string());
         out.push('\t');
-        out.push_str(&json);
+        push_field(out, &json);
         out.push('\n');
     }
 
     for sheet in &sheets {
+        validate_sheet_for_write(wb, sheet)?;
         out.push_str("sheet\t");
         push_field(out, &sheet.name);
         match sheet.visibility {
@@ -96,154 +149,158 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
             SheetVisibility::VeryHidden => out.push_str("\tveryHidden"),
             SheetVisibility::Visible => {}
         }
-        if sheet.view.freeze.rows > 0 || sheet.view.freeze.cols > 0 {
-            let addr = format!(
-                "{}{}",
-                col_to_letters(sheet.view.freeze.cols).unwrap_or_else(|_| "A".into()),
-                sheet.view.freeze.rows + 1
-            );
-            out.push_str("\tfreeze=");
-            out.push_str(&addr);
+        push_json_kv(out, "view", &sheet.view)?;
+        push_json_kv(out, "protection", &sheet.protection)?;
+        push_json_kv(out, "tab_color", &sheet.tab_color)?;
+        let row_sizes: Vec<_> = sheet.geometry.rows.iter_custom().collect();
+        let row_hidden: Vec<_> = sheet.geometry.rows.iter_hidden().collect();
+        let col_sizes: Vec<_> = sheet.geometry.cols.iter_custom().collect();
+        let col_hidden: Vec<_> = sheet.geometry.cols.iter_hidden().collect();
+        if !row_sizes.is_empty() {
+            push_json_kv(out, "row_sizes", &row_sizes)?;
         }
-        if (sheet.view.zoom - 1.0).abs() > f64::EPSILON {
-            out.push_str(&format!("\tzoom={}", (sheet.view.zoom * 100.0).round()));
+        if !row_hidden.is_empty() {
+            push_json_kv(out, "row_hidden", &row_hidden)?;
         }
-        if let Some(split) = sheet.view.split {
-            out.push_str(&format!("\tsplit={},{}", split.x_px, split.y_px));
+        if !col_sizes.is_empty() {
+            push_json_kv(out, "col_sizes", &col_sizes)?;
         }
-        if sheet.protection.enabled {
-            out.push_str("\tprotect=1");
-        }
-        let custom: Vec<(u32, u32)> = sheet.geometry.cols.iter_custom().collect();
-        if !custom.is_empty() {
-            out.push_str("\tcols=");
-            let mut first = true;
-            for (i, px) in custom {
-                if !first {
-                    out.push(',');
-                }
-                first = false;
-                let w = f64::from(px) * 8.43 / f64::from(omacell_core::geometry::DEFAULT_COL_PX);
-                out.push_str(&format!(
-                    "{}:{w}",
-                    col_to_letters(i as u16).unwrap_or_else(|_| "A".into())
-                ));
-            }
+        if !col_hidden.is_empty() {
+            push_json_kv(out, "col_hidden", &col_hidden)?;
         }
         out.push('\n');
 
         for (row, col, slot) in sheet.store.iter() {
-            let addr = format!(
-                "{}!{}{}",
-                sheet.name,
-                col_to_letters(col).unwrap_or_else(|_| "A".into()),
-                row + 1
-            );
+            let addr = cell_addr(&sheet.name, row, col)?;
             out.push_str("cell\t");
             push_field(out, &addr);
             out.push('\t');
-            if let Some(fid) = slot.formula
-                && let Some(src) = intern.formulas.get(fid)
-            {
+            if let Some(fid) = slot.formula {
+                let src = intern.formulas.get(fid).ok_or_else(|| {
+                    crate::error::omc_format(format!("{addr} has an unknown formula id"))
+                })?;
                 if src.starts_with('=') {
                     push_field(out, src);
                 } else {
                     push_field(out, &format!("={src}"));
                 }
+                push_kv(out, "type", "formula");
                 if !matches!(slot.value, Value::Empty) {
-                    out.push_str("\tv=");
-                    // v= is a kv field; emit the literal after =
-                    let mut tmp = String::new();
-                    push_literal(&mut tmp, intern, slot.value);
-                    out.push_str(&tmp);
+                    push_cached_value(out, intern, slot.value)?;
                 }
             } else {
-                push_literal(out, intern, slot.value);
+                push_literal(out, intern, slot.value)?;
             }
-            if slot.style != StyleId::DEFAULT
-                && let Some(style) = intern.styles.get(slot.style)
-                && let Some(id) = style_ids.get(style)
-            {
-                out.push_str(&format!("\ts={id}"));
+            if slot.style != StyleId::DEFAULT {
+                let style = intern.styles.get(slot.style).ok_or_else(|| {
+                    crate::error::omc_format(format!("{addr} has an unknown style id"))
+                })?;
+                let id = style_ids.get(style).ok_or_else(|| {
+                    crate::error::omc_format(format!("{addr} style was not emitted"))
+                })?;
+                push_kv(out, "s", &id.to_string());
             }
             out.push('\n');
         }
         for m in &sheet.merges {
+            validate_local_range(sheet.id, *m, "merge")?;
             out.push_str("merge\t");
-            push_field(out, &format!("{}!{}", sheet.name, m.to_a1()));
+            push_field(
+                out,
+                &format!("{}!{}", quote_sheet_name(&sheet.name), m.to_a1()),
+            );
             out.push('\n');
         }
         let mut notes: Vec<_> = sheet.notes.iter().collect();
         notes.sort_by_key(|((r, c), _)| (*r, *c));
         for ((row, col), n) in notes {
-            let addr = format!(
-                "{}!{}{}",
-                sheet.name,
-                col_to_letters(*col).unwrap_or_else(|_| "A".into()),
-                row + 1
-            );
+            let addr = cell_addr(&sheet.name, *row, *col)?;
             out.push_str("comment\t");
             push_field(out, &addr);
             if let Some(a) = &n.author {
-                out.push_str("\tauthor=");
-                push_field(out, a);
+                push_kv(out, "author", a);
             }
             out.push('\t');
             push_field(out, &n.text);
             out.push('\n');
         }
+        let mut comments: Vec<_> = sheet.comments.iter().collect();
+        comments.sort_by_key(|((r, c), _)| (*r, *c));
+        for ((row, col), comment) in comments {
+            out.push_str("threaded_comment\t");
+            push_field(out, &cell_addr(&sheet.name, *row, *col)?);
+            out.push('\t');
+            push_json_field(out, comment)?;
+            out.push('\n');
+        }
         let mut hrefs: Vec<_> = sheet.hyperlinks.iter().collect();
         hrefs.sort_by_key(|((r, c), _)| (*r, *c));
         for ((row, col), h) in hrefs {
-            let addr = format!(
-                "{}!{}{}",
-                sheet.name,
-                col_to_letters(*col).unwrap_or_else(|_| "A".into()),
-                row + 1
-            );
+            let addr = cell_addr(&sheet.name, *row, *col)?;
             out.push_str("hyperlink\t");
             push_field(out, &addr);
             out.push('\t');
             push_field(out, &h.target);
             if let Some(d) = &h.display {
-                out.push_str("\tdisplay=");
-                push_field(out, d);
+                push_kv(out, "display", d);
+            }
+            if let Some(t) = &h.tooltip {
+                push_kv(out, "tooltip", t);
             }
             out.push('\n');
         }
         for table in wb.tables().iter().filter(|t| t.sheet == sheet.id) {
+            if table.start_row > table.end_row || table.start_col > table.end_col {
+                return Err(crate::error::omc_format(format!(
+                    "table {:?} has a reversed range",
+                    table.name
+                )));
+            }
+            let expected_columns = usize::from(table.end_col - table.start_col) + 1;
+            if table.columns.len() != expected_columns {
+                return Err(crate::error::omc_format(format!(
+                    "table {:?} has {} columns but its range has {expected_columns}",
+                    table.name,
+                    table.columns.len()
+                )));
+            }
             let start = format!(
                 "{}{}",
-                col_to_letters(table.start_col).unwrap_or_else(|_| "A".into()),
+                col_to_letters(table.start_col)
+                    .map_err(|e| crate::error::omc_format(e.to_string()))?,
                 table.start_row + 1
             );
             let end = format!(
                 "{}{}",
-                col_to_letters(table.end_col).unwrap_or_else(|_| "A".into()),
+                col_to_letters(table.end_col)
+                    .map_err(|e| crate::error::omc_format(e.to_string()))?,
                 table.end_row + 1
             );
             out.push_str("table\t");
             push_field(out, &table.name);
             out.push('\t');
-            push_field(out, &format!("{}!{start}:{end}", sheet.name));
-            out.push_str(&format!(
-                "\theader={}\ttotals={}",
-                u8::from(table.has_header),
-                u8::from(table.has_totals)
-            ));
+            push_field(
+                out,
+                &format!("{}!{start}:{end}", quote_sheet_name(&sheet.name)),
+            );
+            push_kv(out, "header", &u8::from(table.has_header).to_string());
+            push_kv(out, "totals", &u8::from(table.has_totals).to_string());
+            push_kv(out, "banded_rows", &u8::from(table.banded_rows).to_string());
+            push_kv(out, "banded_cols", &u8::from(table.banded_cols).to_string());
+            push_kv(out, "auto_expand", &u8::from(table.auto_expand).to_string());
             if !table.columns.is_empty() {
-                let cols: Vec<_> = table.columns.iter().map(|c| c.name.as_str()).collect();
-                out.push_str("\tcols=");
-                out.push_str(&cols.join(","));
+                push_json_kv(out, "columns", &table.columns)?;
             }
             out.push('\n');
         }
         if let Some(ex) = doc.extras.get(&sheet.name) {
             if let Some(af) = &ex.autofilter {
+                let json = serde_json::to_string(af)
+                    .map_err(|e| crate::error::omc_parse(e.to_string()))?;
                 out.push_str("extra\t");
                 push_field(out, &sheet.name);
                 out.push_str("\tautofilter\t");
-                push_field(out, af);
+                push_field(out, &json);
                 out.push('\n');
             }
             for (kind, blobs) in [
@@ -253,14 +310,20 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
                 ("sparkline", &ex.sparkline_xml),
             ] {
                 for blob in blobs {
-                    let json = serde_json::to_string(&String::from_utf8_lossy(blob))
+                    let text = std::str::from_utf8(blob).map_err(|_| {
+                        crate::error::omc_format(format!(
+                            "{} {kind} extra is not valid UTF-8",
+                            sheet.name
+                        ))
+                    })?;
+                    let json = serde_json::to_string(text)
                         .map_err(|e| crate::error::omc_parse(e.to_string()))?;
                     out.push_str("extra\t");
                     push_field(out, &sheet.name);
                     out.push('\t');
                     out.push_str(kind);
                     out.push('\t');
-                    out.push_str(&json);
+                    push_field(out, &json);
                     out.push('\n');
                 }
             }
@@ -273,56 +336,80 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
         push_field(out, &n.name);
         out.push('\t');
         match &n.referent {
-            NameReferent::Range(r) => out.push_str(&r.to_a1()),
+            NameReferent::Range(r) => push_field(out, &range_addr(wb, *r)?),
             NameReferent::Formula(f) => {
                 if f.starts_with('=') {
-                    out.push_str(f);
+                    push_field(out, f);
                 } else {
-                    out.push('=');
-                    out.push_str(f);
+                    push_field(out, &format!("={f}"));
                 }
+                push_kv(out, "type", "formula");
             }
-            NameReferent::Constant(v) => push_literal(out, intern, *v),
+            NameReferent::Constant(Value::Text(id)) if intern.strings.get_rich(*id).is_some() => {
+                return Err(crate::error::omc_format(format!(
+                    "defined name {:?} has a rich-text constant, which .omc cannot intern safely",
+                    n.name
+                )));
+            }
+            NameReferent::Constant(v) => push_literal(out, intern, *v)?,
         }
-        if let omacell_core::names::NameScope::Sheet(id) = n.scope
-            && let Some(sh) = wb.sheet(id)
-        {
-            out.push_str("\tscope=");
-            push_field(out, &sh.name);
+        if let omacell_core::names::NameScope::Sheet(id) = n.scope {
+            let sh = wb.sheet(id).ok_or_else(|| {
+                crate::error::omc_format(format!(
+                    "defined name {:?} has an unknown scope sheet",
+                    n.name
+                ))
+            })?;
+            push_kv(out, "scope", &sh.name);
+        }
+        if let Some(comment) = &n.comment {
+            push_kv(out, "comment", comment);
         }
         out.push('\n');
     }
 
+    let mut custom_names = std::collections::BTreeSet::new();
     for (name, bytes) in &wb.custom_parts {
-        if let Ok(text) = std::str::from_utf8(bytes) {
-            out.push_str("custom\t");
-            push_field(out, name);
-            out.push('\t');
-            push_field(out, text);
-            out.push('\n');
+        validate_custom_part_name(name)?;
+        if !custom_names.insert(name.to_ascii_lowercase()) {
+            return Err(crate::error::omc_format(format!(
+                "duplicate custom part name {name:?} ignoring case"
+            )));
         }
+        let text = std::str::from_utf8(bytes).map_err(|_| {
+            crate::error::omc_format(format!("custom part {name:?} is not valid UTF-8"))
+        })?;
+        out.push_str("custom\t");
+        push_field(out, name);
+        out.push('\t');
+        push_field(out, text);
+        out.push('\n');
     }
     Ok(())
 }
 
 fn encode_changeset_body(out: &mut String, cs: &Changeset) -> Result<(), CoreError> {
-    let origin = serde_json::to_value(cs.origin)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| "user".into());
+    cs.validate()?;
+    let origin_value =
+        serde_json::to_value(cs.origin).map_err(|e| crate::error::omc_parse(e.to_string()))?;
+    let origin = origin_value
+        .as_str()
+        .ok_or_else(|| crate::error::omc_format("changeset origin did not serialize as text"))?;
     let status = match cs.status {
         omacell_core::changeset::ChangesetStatus::Proposed => "proposed",
         omacell_core::changeset::ChangesetStatus::Applied => "applied",
         omacell_core::changeset::ChangesetStatus::Reverted => "reverted",
     };
-    out.push_str("changeset\tid=");
-    push_field(out, cs.id.as_str());
-    out.push_str(&format!("\tstatus={status}\torigin="));
-    push_field(out, &origin);
-    if !cs.summary.text.is_empty() {
-        out.push_str("\ttext=");
-        push_field(out, &cs.summary.text);
-    }
+    out.push_str("changeset");
+    push_kv(out, "id", cs.id.as_str());
+    push_kv(out, "status", status);
+    push_kv(out, "origin", origin);
+    push_kv(out, "cells", &cs.summary.cells.to_string());
+    push_kv(out, "rows", &cs.summary.rows.to_string());
+    push_kv(out, "columns", &cs.summary.columns.to_string());
+    push_kv(out, "sheets", &cs.summary.sheets.to_string());
+    push_kv(out, "styles", &cs.summary.styles.to_string());
+    push_kv(out, "text", &cs.summary.text);
     out.push('\n');
     for call in &cs.forward {
         let json = serde_json::to_string(&call.args)
@@ -330,7 +417,7 @@ fn encode_changeset_body(out: &mut String, cs: &Changeset) -> Result<(), CoreErr
         out.push_str("change\tforward\t");
         push_field(out, call.id.as_str());
         out.push('\t');
-        out.push_str(&json);
+        push_field(out, &json);
         out.push('\n');
     }
     for call in &cs.inverse {
@@ -339,7 +426,7 @@ fn encode_changeset_body(out: &mut String, cs: &Changeset) -> Result<(), CoreErr
         out.push_str("change\tinverse\t");
         push_field(out, call.id.as_str());
         out.push('\t');
-        out.push_str(&json);
+        push_field(out, &json);
         out.push('\n');
     }
     Ok(())
@@ -357,9 +444,13 @@ pub(super) fn from_xlsx(doc: &XlsxDocument) -> (OmcDocument, ConversionReport) {
             report.dropped.push(format!("{name} (non-UTF-8)"));
         }
     }
+    let mut workbook = doc.workbook.clone();
+    workbook
+        .custom_parts
+        .retain(|_, bytes| std::str::from_utf8(bytes).is_ok());
     (
         OmcDocument {
-            workbook: doc.workbook.clone(),
+            workbook,
             extras: doc.extras.clone(),
             changeset: None,
         },
@@ -367,11 +458,18 @@ pub(super) fn from_xlsx(doc: &XlsxDocument) -> (OmcDocument, ConversionReport) {
     )
 }
 
-fn push_literal(out: &mut String, intern: &omacell_core::intern::Interners, v: Value) {
+fn push_literal(out: &mut String, intern: &Interners, v: Value) -> Result<(), CoreError> {
     match v {
         Value::Empty => {}
         Value::Number(n) => {
-            if n.is_finite() && n.fract() == 0.0 && n.abs() < 1e15 {
+            if !n.is_finite() {
+                return Err(crate::error::omc_format(
+                    "non-finite numbers cannot be represented in .omc",
+                ));
+            }
+            if n == 0.0 && n.is_sign_negative() {
+                out.push_str("-0");
+            } else if n.fract() == 0.0 && n.abs() < 1e15 {
                 out.push_str(&format!("{}", n as i64));
             } else {
                 out.push_str(&n.to_string());
@@ -381,12 +479,97 @@ fn push_literal(out: &mut String, intern: &omacell_core::intern::Interners, v: V
         Value::Bool(false) => out.push_str("FALSE"),
         Value::Error(e) => out.push_str(e.as_str()),
         Value::Text(id) => {
-            if let Some(t) = intern.strings.get(id) {
-                push_field(out, t);
+            let t = intern.strings.get(id).ok_or_else(|| {
+                crate::error::omc_format(format!("unknown string id {}", id.index()))
+            })?;
+            push_quoted_field(out, t);
+            push_kv(out, "type", "text");
+            if let Some(rich) = intern.strings.get_rich(id) {
+                push_json_kv(out, "rich", rich)?;
             }
         }
-        Value::Array(_) => {}
+        Value::Array(id) => {
+            let wire = value_to_wire(intern, Value::Array(id), 0)?;
+            push_json_kv(out, "array", &wire)?;
+        }
     }
+    Ok(())
+}
+
+fn push_cached_value(out: &mut String, intern: &Interners, value: Value) -> Result<(), CoreError> {
+    match value {
+        Value::Text(id) => {
+            let text = intern.strings.get(id).ok_or_else(|| {
+                crate::error::omc_format(format!("unknown string id {}", id.index()))
+            })?;
+            push_kv(out, "v_text", text);
+            if let Some(rich) = intern.strings.get_rich(id) {
+                push_json_kv(out, "v_rich", rich)?;
+            }
+        }
+        Value::Array(_) => {
+            let wire = value_to_wire(intern, value, 0)?;
+            push_json_kv(out, "v_array", &wire)?;
+        }
+        _ => {
+            let mut literal = String::new();
+            push_literal(&mut literal, intern, value)?;
+            push_kv(out, "v", &literal);
+        }
+    }
+    Ok(())
+}
+
+fn value_to_wire(intern: &Interners, value: Value, depth: u8) -> Result<WireValue, CoreError> {
+    if depth >= MAX_VALUE_DEPTH {
+        return Err(crate::error::omc_limit("array nesting exceeds 16 levels"));
+    }
+    Ok(match value {
+        Value::Empty => WireValue::Empty,
+        Value::Number(value) if value.is_finite() => WireValue::Number { value },
+        Value::Number(_) => {
+            return Err(crate::error::omc_format(
+                "non-finite numbers cannot be represented in .omc",
+            ));
+        }
+        Value::Bool(value) => WireValue::Bool { value },
+        Value::Text(id) => {
+            if intern.strings.get_rich(id).is_some() && depth > 0 {
+                return Err(crate::error::omc_format(
+                    "rich text inside an array is not supported by .omc",
+                ));
+            }
+            WireValue::Text {
+                value: intern
+                    .strings
+                    .get(id)
+                    .ok_or_else(|| {
+                        crate::error::omc_format(format!("unknown string id {}", id.index()))
+                    })?
+                    .to_string(),
+                rich: intern
+                    .strings
+                    .get_rich(id)
+                    .map_or_else(Vec::new, ToOwned::to_owned),
+            }
+        }
+        Value::Error(value) => WireValue::Error { value },
+        Value::Array(id) => {
+            let payload = intern.arrays.get(id).ok_or_else(|| {
+                crate::error::omc_format(format!("unknown array id {}", id.index()))
+            })?;
+            let values = payload
+                .values
+                .iter()
+                .map(|value| value_to_wire(intern, *value, depth + 1))
+                .collect::<Result<_, _>>()?;
+            WireValue::Array {
+                rows: payload.shape.rows,
+                cols: payload.shape.cols,
+                values,
+            }
+        }
+    })
 }
 
 fn push_field(out: &mut String, s: &str) {
@@ -408,12 +591,171 @@ fn push_field(out: &mut String, s: &str) {
     }
 }
 
+fn push_quoted_field(out: &mut String, s: &str) {
+    out.push('"');
+    push_escaped(out, s);
+    out.push('"');
+}
+
+fn push_escaped(out: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+}
+
+fn push_kv(out: &mut String, key: &str, value: &str) {
+    out.push('\t');
+    push_field(out, &format!("{key}={value}"));
+}
+
+fn push_json_kv<T: Serialize + ?Sized>(
+    out: &mut String,
+    key: &str,
+    value: &T,
+) -> Result<(), CoreError> {
+    let json = serde_json::to_string(value).map_err(|e| crate::error::omc_parse(e.to_string()))?;
+    push_kv(out, key, &json);
+    Ok(())
+}
+
+fn push_json_field<T: Serialize + ?Sized>(out: &mut String, value: &T) -> Result<(), CoreError> {
+    let json = serde_json::to_string(value).map_err(|e| crate::error::omc_parse(e.to_string()))?;
+    push_field(out, &json);
+    Ok(())
+}
+
 fn needs_quote(s: &str) -> bool {
     s.is_empty()
         || s.contains(['\t', '\n', '\r', '"'])
         || s.starts_with(' ')
         || s.ends_with(' ')
         || s.starts_with('#')
+}
+
+fn validate_sheet_for_write(
+    wb: &omacell_core::workbook::Workbook,
+    sheet: &omacell_core::sheet::Sheet,
+) -> Result<(), CoreError> {
+    let view = &sheet.view;
+    if !view.zoom.is_finite() || view.zoom <= 0.0 || view.zoom > 8.0 {
+        return Err(crate::error::omc_format(format!(
+            "sheet {:?} zoom must be finite and in (0, 8]",
+            sheet.name
+        )));
+    }
+    view.selection.start.validate()?;
+    view.selection.end.validate()?;
+    if view.freeze.rows > MAX_ROWS
+        || view.freeze.cols > MAX_COLS
+        || view.scroll_row >= MAX_ROWS
+        || view.scroll_col >= MAX_COLS
+    {
+        return Err(crate::error::omc_format(format!(
+            "sheet {:?} view is out of range",
+            sheet.name
+        )));
+    }
+    for id in [
+        view.selection.start.sheet,
+        view.selection.end.sheet,
+        view.selection.sheet_end,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if wb.sheet(id).is_none() {
+            return Err(crate::error::omc_format(format!(
+                "sheet {:?} view references unknown sheet id {}",
+                sheet.name,
+                id.index()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_local_range(
+    sheet: omacell_core::addr::SheetId,
+    range: omacell_core::addr::RangeRef,
+    what: &str,
+) -> Result<(), CoreError> {
+    range.start.validate()?;
+    range.end.validate()?;
+    if range.sheet_end.is_some()
+        || range.start.sheet.is_some_and(|id| id != sheet)
+        || range.end.sheet.is_some_and(|id| id != sheet)
+    {
+        return Err(crate::error::omc_format(format!(
+            "{what} range references a different sheet"
+        )));
+    }
+    Ok(())
+}
+
+fn cell_addr(sheet: &str, row: u32, col: u16) -> Result<String, CoreError> {
+    let col = col_to_letters(col).map_err(|e| crate::error::omc_format(e.to_string()))?;
+    Ok(format!("{}!{col}{}", quote_sheet_name(sheet), row + 1))
+}
+
+fn range_addr(
+    wb: &omacell_core::workbook::Workbook,
+    range: omacell_core::addr::RangeRef,
+) -> Result<String, CoreError> {
+    range.start.validate()?;
+    range.end.validate()?;
+    if range.start.sheet != range.end.sheet {
+        return Err(crate::error::omc_format(
+            "defined-name range endpoints have different sheets",
+        ));
+    }
+    let Some(sheet_id) = range.start.sheet else {
+        if range.sheet_end.is_some() {
+            return Err(crate::error::omc_format(
+                "defined-name 3-D range is missing its start sheet",
+            ));
+        }
+        return Ok(range.to_a1());
+    };
+    let start = wb
+        .sheet(sheet_id)
+        .ok_or_else(|| crate::error::omc_format("defined name has an unknown sheet id"))?;
+    let prefix = if let Some(end_id) = range.sheet_end {
+        let end = wb
+            .sheet(end_id)
+            .ok_or_else(|| crate::error::omc_format("defined name has an unknown end sheet id"))?;
+        omacell_core::addr::SheetSpec {
+            start: start.name.clone(),
+            end: Some(end.name.clone()),
+        }
+        .to_a1_prefix()
+    } else {
+        format!("{}!", quote_sheet_name(&start.name))
+    };
+    Ok(format!("{prefix}{}", range.to_a1()))
+}
+
+pub(super) fn validate_custom_part_name(name: &str) -> Result<(), CoreError> {
+    if name.is_empty()
+        || name.starts_with('/')
+        || name.ends_with('/')
+        || name.contains('\\')
+        || !name.to_ascii_lowercase().starts_with("xl/omacell/")
+        || name
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(crate::error::omc_format(format!(
+            "custom part {name:?} must name a file below xl/omacell/"
+        )));
+    }
+    Ok(())
 }
 
 fn is_modeled_part(name: &str) -> bool {
@@ -426,8 +768,8 @@ fn is_modeled_part(name: &str) -> bool {
             | "xl/_rels/workbook.xml.rels"
             | "xl/sharedstrings.xml"
             | "xl/styles.xml"
-    ) || n.starts_with("xl/worksheets/")
-        || n.starts_with("xl/tables/")
-        || n.starts_with("xl/comments")
+    ) || (n.starts_with("xl/worksheets/") && n.ends_with(".xml") && !n.contains("/_rels/"))
+        || (n.starts_with("xl/tables/") && n.ends_with(".xml"))
+        || (n.starts_with("xl/comments") && n.ends_with(".xml"))
         || n.starts_with("xl/omacell/")
 }

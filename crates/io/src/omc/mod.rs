@@ -82,12 +82,15 @@ pub fn open_bytes(bytes: &[u8]) -> Result<OmcDocument, CoreError> {
 
 /// Parse a UTF-8 `.omc` string.
 pub fn open_str(text: &str) -> Result<OmcDocument, CoreError> {
+    validate_text(text)?;
     read::parse(text)
 }
 
 /// Encode `doc` as `.omc` text (LF, trailing newline).
 pub fn to_string(doc: &OmcDocument) -> Result<String, CoreError> {
-    write::encode(doc)
+    let text = write::encode(doc)?;
+    validate_text(&text)?;
+    Ok(text)
 }
 
 /// Write `doc` to `path`.
@@ -104,14 +107,21 @@ pub fn from_xlsx(doc: &XlsxDocument) -> (OmcDocument, ConversionReport) {
 
 /// Encode a changeset as a standalone `.omc` document.
 pub fn changeset_to_omc(cs: &Changeset) -> Result<String, CoreError> {
-    write::encode_changeset(cs)
+    let text = write::encode_changeset(cs)?;
+    validate_text(&text)?;
+    Ok(text)
 }
 
 /// Parse a changeset `.omc` (must contain `change` records).
 pub fn changeset_from_omc(text: &str) -> Result<Changeset, CoreError> {
     let doc = open_str(text)?;
-    doc.changeset
-        .ok_or_else(|| error::omc_format("omc document has no change records"))
+    let changeset = doc
+        .changeset
+        .ok_or_else(|| error::omc_format("omc document has no change records"))?;
+    if changeset.forward.is_empty() && changeset.inverse.is_empty() {
+        return Err(error::omc_format("omc document has no change records"));
+    }
+    Ok(changeset)
 }
 
 /// Empty OPC package for reconstructing an `.xlsx` from `.omc` (no L3 parts).
@@ -121,4 +131,37 @@ pub fn empty_package() -> OpcPackage {
         parts: indexmap::IndexMap::new(),
         package_rels: Vec::new(),
     }
+}
+
+fn validate_text(text: &str) -> Result<(), CoreError> {
+    if text.len() > MAX_OMC_BYTES {
+        return Err(error::omc_limit(format!(
+            "omc document is {} bytes; maximum is {MAX_OMC_BYTES}",
+            text.len()
+        )));
+    }
+    if text.as_bytes().contains(&0) {
+        return Err(error::omc_parse("NUL byte in omc document"));
+    }
+    let mut records = 0usize;
+    for (index, raw) in text.split('\n').enumerate() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if line.len() > MAX_OMC_LINE {
+            return Err(error::omc_limit(format!(
+                "line {} is {} bytes; maximum is {MAX_OMC_LINE}",
+                index + 1,
+                line.len()
+            )));
+        }
+        let trimmed = line.trim_start();
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            records += 1;
+            if records > MAX_OMC_RECORDS {
+                return Err(error::omc_limit(format!(
+                    "more than {MAX_OMC_RECORDS} records"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
