@@ -25,6 +25,21 @@ fn cycle_never_hangs_and_reports_set() {
 }
 
 #[test]
+fn recalculated_cache_values_do_not_hide_the_user_undo_unit() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.transact(|workbook| {
+        workbook.set_formula_text(sheet, 0, 0, "=A1+1").unwrap();
+    });
+
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_full(&mut wb);
+    wb.undo().unwrap();
+
+    assert!(wb.get(sheet, 0, 0).unwrap().is_none());
+}
+
+#[test]
 fn circular_set_excludes_downstream_cells() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
