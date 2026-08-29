@@ -1,0 +1,17 @@
+---
+source: crates/ui/tests/palette.rs
+expression: "(empty, cell)"
+---
+(
+    [
+        "view.freeze",
+        "cell.clear",
+        "cell.set",
+        "nav.left",
+        "palette.open",
+    ],
+    [
+        "cell.clear",
+        "cell.set",
+    ],
+)

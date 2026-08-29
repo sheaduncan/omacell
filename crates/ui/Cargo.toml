@@ -10,3 +10,20 @@ description = "Shared UI logic (modes, keymaps, selection, viewport) for Omacell
 
 [lints]
 workspace = true
+
+[dependencies]
+indexmap = { workspace = true }
+omacell-bus = { path = "../bus", version = "0.0.0" }
+omacell-conf = { path = "../conf", version = "0.0.0" }
+omacell-core = { path = "../core", version = "0.0.0" }
+omacell-fn = { path = "../fn", version = "0.0.0" }
+omacell-io = { path = "../io", version = "0.0.0" }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+
+[dev-dependencies]
+insta = "1"
+proptest = { workspace = true }
+tempfile = "3"
