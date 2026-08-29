@@ -22,7 +22,7 @@ pub mod watch;
 
 pub use layer::{
     Explain, Layer, LoadOptions, LoadedConfig, Migration, Provenance, load, load_with_env,
-    load_with_options, reset_user_file, show_all_json,
+    load_with_options, reset_user_file, show_all_json, workbook_settings_overlay,
 };
 pub use paths::Paths;
 pub use schema::Config;

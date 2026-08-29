@@ -16,7 +16,7 @@ All interaction logic lives once, toolkit-free, so the TUI and GUI are thin rend
 
 ## Deliverables
 
-- Mode machine: classic vs modal (Normal/Insert/Visual/Command); keymap loader for `keys.toml` (chords, `<leader>`, counts, per-mode tables, user overrides); key-event normalization shared by crossterm and winit.
+- Mode machine: classic vs modal (Normal/Insert/Visual/Command); keymap loader for the effective `Config.keys.file` (chords, `<leader>`, counts, per-mode tables, user overrides); key-event normalization shared by crossterm and winit.
 - Selection model: single, rectangular, multi-area, row/column, current region, extend mode, selection statistics provider.
 - Editing state machine: in-cell and formula-bar editing (same state), point mode inserting references on navigation clicks/keys, reference colorization spans from the WP-03 editor parse, `F4` anchor cycling, autocomplete provider interface (functions/names/table columns/column values), localized-entry conversion to canonical formulas.
 - Command palette model: fuzzy search over the registry, recents, inline argument prompts from schemas, `?` prefix routed to an `AiPlanProvider` trait (implemented in WP-23; absent → hint).
@@ -27,9 +27,17 @@ All interaction logic lives once, toolkit-free, so the TUI and GUI are thin rend
 - No `egui`, `ratatui`, or `winit` types may appear in this crate — enforce with a dependency lint in CI.
 - Every keymap entry must resolve to a registered command id; the conformance test is the contract with WP-07a. This package owns and registers `view.freeze`, `view.split`, `view.zoom`, and `view.select` because their state lives in the UI session rather than the workbook command context.
 
+### Binding handoff from WP-12
+
+- Consume a `LoadedConfig` snapshot supplied by the frontend composition root; `ui` must not call `Paths::from_env`, start a watcher, or parse config/theme/shell TOML itself. Expose an `apply_config`/equivalent transition that updates tunable UI policy while preserving mode, edit buffer, selection, viewport, undo presentation and session state.
+- Resolve `Config.keys.file` as a safe relative path: the selected `LoadOptions.config_file` parent (or `Paths::user_config` when absent) first, then `Paths::default_dir`. The shipped default is `keys/classic.toml`, not the old `keys.toml`. WP-14 completes both Appendix A maps and overlays a sparse user map without mutating package files.
+- Default maps contain commands owned by later WPs. Keep every binding, but maintain an explicit tested deferred-command ownership table (`command id → WP`) until its owner lands. The conformance test must reject unknown unowned ids and duplicate chords; it must not weaken the maps or freeze placeholder argument schemas merely to make parallel WP-13/WP-14 development pass.
+- Formula reference colors come from `LoadedConfig.theme.roles["references.0".."references.7"]`; no palette is hard-coded in `ui`.
+
 ## Acceptance criteria
 
-- [ ] Keymap conformance: every default binding in classic and modal resolves to a registered command; duplicate chords within a mode are rejected.
+- [ ] Keymap conformance: every default binding in classic and modal resolves to a registered command or a tested deferred-command owner; unknown/unowned ids and duplicate chords within a mode are rejected. The deferred table is empty by the final integration gate.
+- [ ] Applying a changed `LoadedConfig` updates keymap/layout/reference colors without resetting an active edit, selection, viewport or session model.
 - [ ] State-machine tests for editing/point mode/`F4`; selection `proptest`s; viewport tests with frozen panes and hidden rows; clipboard round-trips; palette fuzzy ranking snapshot.
 
 ## Tests

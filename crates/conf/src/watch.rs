@@ -13,9 +13,9 @@ use crate::paths::Paths;
 /// Reload outcome.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReloadEvent {
-    /// New config applied.
+    /// The user configuration tree was successfully revalidated.
     Applied {
-        /// Path that changed.
+        /// Revalidated path in the user configuration tree.
         path: PathBuf,
     },
     /// Parse/schema error; previous config kept.
@@ -138,6 +138,18 @@ fn spawn_watcher(
     debounce: Duration,
 ) -> Result<RecommendedWatcher, omacell_core::error::CoreError> {
     let watch_dir = paths.user_config.clone();
+    let selected_keymap = {
+        let config_root = options
+            .config_file
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .unwrap_or(&paths.user_config);
+        let keymap = inner
+            .lock()
+            .map(|loaded| loaded.config.keys.file.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().config.keys.file.clone());
+        config_root.join(keymap)
+    };
     std::fs::create_dir_all(&watch_dir).map_err(|e| crate::error::io(e.to_string()))?;
     let (raw_tx, raw_rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
@@ -149,29 +161,42 @@ fn spawn_watcher(
     watcher
         .watch(&watch_dir, RecursiveMode::Recursive)
         .map_err(|e| crate::error::io(e.to_string()))?;
-    let mut watched_roots = vec![watch_dir.clone()];
+    let mut watched_roots = vec![(watch_dir.clone(), true)];
     for path in [
         paths.omarchy_state.clone(),
         paths.omarchy_config.clone(),
         paths.home.join(".config/fontconfig"),
     ] {
-        if path.is_dir() && !watched_roots.iter().any(|root| path.starts_with(root)) {
+        if path.is_dir()
+            && !watched_roots
+                .iter()
+                .any(|(root, recursive)| path == *root || (*recursive && path.starts_with(root)))
+        {
             watcher
                 .watch(&path, RecursiveMode::Recursive)
                 .map_err(|e| crate::error::io(e.to_string()))?;
-            watched_roots.push(path);
+            watched_roots.push((path, true));
         }
     }
-    if let Some(parent) = options
-        .theme_override
-        .as_deref()
-        .and_then(std::path::Path::parent)
-        && parent.is_dir()
-        && !watched_roots.iter().any(|root| parent.starts_with(root))
+    for parent in [
+        Some(selected_keymap.as_path()),
+        options.config_file.as_deref(),
+        options.theme_override.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(std::path::Path::parent)
     {
-        watcher
-            .watch(parent, RecursiveMode::NonRecursive)
-            .map_err(|e| crate::error::io(e.to_string()))?;
+        if parent.is_dir()
+            && !watched_roots
+                .iter()
+                .any(|(root, recursive)| parent == root || (*recursive && parent.starts_with(root)))
+        {
+            watcher
+                .watch(parent, RecursiveMode::NonRecursive)
+                .map_err(|e| crate::error::io(e.to_string()))?;
+            watched_roots.push((parent.to_path_buf(), false));
+        }
     }
     std::thread::spawn(move || {
         let mut last = Instant::now()
@@ -186,6 +211,11 @@ fn spawn_watcher(
             let wait = debounce.saturating_sub(last.elapsed());
             std::thread::sleep(wait);
             last = Instant::now();
+            let user_file_changed = changed_paths.iter().any(|path| {
+                path.starts_with(&paths.user_config)
+                    || options.config_file.as_ref() == Some(path)
+                    || path == &selected_keymap
+            });
             let changed_path = changed_paths
                 .into_iter()
                 .next()
@@ -199,7 +229,7 @@ fn spawn_watcher(
                         theme_changed = g.theme != next.theme || g.shell != next.shell;
                         *g = next;
                     }
-                    if config_changed {
+                    if config_changed || user_file_changed {
                         let _ = tx.send(ReloadEvent::Applied {
                             path: changed_path.clone(),
                         });

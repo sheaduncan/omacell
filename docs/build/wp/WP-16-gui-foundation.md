@@ -28,11 +28,19 @@ The native Wayland front-end: the same state machines as the TUI, rendered with 
 - CI has no GPU: run `egui_kittest` snapshots with the software rasterizer and relax the frame budget there (< 33 ms); record real-hardware numbers in the report.
 - Panels are windows-within-the-window; the only real popups are transient (autocomplete, tooltips, dropdowns).
 
+### Binding handoff from WP-12
+
+- The composition root owns one `ConfigStore`. Initialize visuals from `LoadedConfig.theme.roles`, typography from `LoadedConfig.shell.{ui_font_family,ui_font_path,ui_font_size_pt}`, and spacing/corners from the remaining shell tokens. Use the path when present to load font bytes; keep egui's built-in fallback when it is absent.
+- On `ReloadEvent::Applied`, update only affected tunables. On `ThemeChanged`, rebuild renderer resources and emit/map `core::Event::ThemeChanged`, but retain the complete WP-14 interaction/session model. Do not reconstruct the app, workbook, edit buffer or viewport and do not parse theme files in `gui`.
+- Reuse WP-13's registered `theme.reload` command for IPC/`--all` and its SIGUSR1 adapter. Filesystem watcher, hook, IPC and signal must converge on `ConfigStore::reload` and one render invalidation path.
+- WP-12's full config/theme derivation baseline is about 12 ms. Measure the end-to-end mid-edit swap separately; the remaining work (font upload, visuals/cache invalidation and repaint) must keep the total below 100 ms. Retint chart defaults only; never alter explicit file-authored cell/chart colors.
+
 ## Acceptance criteria
 
 - [ ] `egui_kittest` snapshots of the grid at 1×, 1.5×, 2× with three fixture themes; crisp 1-px gridlines asserted pixel-wise.
 - [ ] Bench: scroll through a 1M-row sheet with frame time < 16 ms on a dev GPU (recorded), < 33 ms on CI software rendering (gated).
 - [ ] Theme hot-reload test: switch fixture themes mid-edit; edit buffer intact; < 100 ms.
+- [ ] The reload test exercises watcher, registered IPC command and direct reload paths against the same `ConfigStore`; each produces the same roles and preserves UI/workbook state.
 - [ ] Startup to empty grid < 300 ms on the CI reference (recorded); AccessKit tree test shows the focused cell node.
 
 ## Tests

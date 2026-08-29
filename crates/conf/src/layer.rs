@@ -10,6 +10,8 @@ use serde::Deserialize;
 use serde_json::json;
 use toml::Value;
 
+use omacell_core::workbook::{CalcMode, WorkbookSettings};
+
 use crate::error;
 use crate::font::{ShellTokens, shell_tokens_for_font};
 use crate::paths::Paths;
@@ -75,6 +77,8 @@ pub struct LoadedConfig {
 /// Sources retained across live reloads.
 #[derive(Clone, Debug, Default)]
 pub struct LoadOptions {
+    /// Explicit user config file (`--config`); replaces the default `config.toml`.
+    pub config_file: Option<PathBuf>,
     /// CLI `--set key=value` overlays.
     pub cli_sets: Vec<String>,
     /// Workbook-stored configuration overlay.
@@ -154,6 +158,7 @@ pub fn load(
     load_with_options(
         paths,
         &LoadOptions {
+            config_file: None,
             cli_sets: cli_sets.to_vec(),
             workbook: workbook.cloned(),
             env: std::env::vars().collect(),
@@ -172,6 +177,7 @@ pub fn load_with_env(
     load_with_options(
         paths,
         &LoadOptions {
+            config_file: None,
             cli_sets: cli_sets.to_vec(),
             workbook: workbook.cloned(),
             env: env.into_iter().collect(),
@@ -196,7 +202,16 @@ pub fn load_with_options(
         "<package-default>",
         &mut provenance,
     );
-    let user = paths.user_config_toml();
+    let user = options
+        .config_file
+        .clone()
+        .unwrap_or_else(|| paths.user_config_toml());
+    if options.config_file.is_some() && !user.is_file() {
+        return Err(error::io(format!(
+            "explicit config file does not exist: {}",
+            user.display()
+        )));
+    }
     if user.is_file() {
         let (overlay, migration) = read_and_migrate_user(paths, &user)?;
         if let Some(migration) = migration {
@@ -230,6 +245,45 @@ pub fn load_with_options(
         .map(|(_, value)| PathBuf::from(value));
     let theme_override = options.theme_override.as_ref().or(env_theme.as_ref());
     finish_load(paths, value, provenance, theme_override, migrations)
+}
+
+/// Translate frozen workbook settings into the configuration keys they override.
+#[must_use]
+pub fn workbook_settings_overlay(settings: &WorkbookSettings) -> Value {
+    let mut behavior = toml::map::Map::new();
+    behavior.insert(
+        "date_system".into(),
+        Value::Integer(i64::from(settings.date_system.epoch_year())),
+    );
+    behavior.insert(
+        "precision_as_displayed".into(),
+        Value::Boolean(settings.precision_as_displayed),
+    );
+
+    let mode = match settings.calc_mode {
+        CalcMode::Automatic => "automatic",
+        CalcMode::AutomaticExceptTables => "automatic_except_tables",
+        CalcMode::Manual => "manual",
+    };
+    let mut calc = toml::map::Map::new();
+    calc.insert("mode".into(), Value::String(mode.into()));
+    calc.insert(
+        "iterative".into(),
+        Value::Boolean(settings.iteration.enabled),
+    );
+    calc.insert(
+        "max_iterations".into(),
+        Value::Integer(i64::from(settings.iteration.max_iterations)),
+    );
+    calc.insert(
+        "max_change".into(),
+        Value::Float(settings.iteration.max_change),
+    );
+
+    Value::Table(toml::map::Map::from_iter([
+        ("behavior".into(), Value::Table(behavior)),
+        ("calc".into(), Value::Table(calc)),
+    ]))
 }
 
 fn finish_load(
