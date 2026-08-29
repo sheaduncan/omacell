@@ -1,6 +1,6 @@
 //! Layering precedence and `explain`.
 
-use omacell_conf::layer::{Layer, load, load_with_env};
+use omacell_conf::layer::{Layer, LoadOptions, load, load_with_env, load_with_options};
 use omacell_conf::paths::Paths;
 use omacell_conf::schema::package_defaults;
 
@@ -88,4 +88,60 @@ fn invalid_user_toml_is_line_error() {
     std::fs::write(paths.user_config_toml(), "[appearance\n").unwrap();
     let err = load(&paths, &[], None).unwrap_err();
     assert_eq!(err.code, omacell_conf::error::codes::CONFIG_PARSE);
+}
+
+#[test]
+fn unknown_keys_are_rejected() {
+    let (_t, paths) = temp_paths();
+    std::fs::write(
+        paths.user_config_toml(),
+        "[appearance]\ngrid_linse = false\n",
+    )
+    .unwrap();
+    let err = load(&paths, &[], None).unwrap_err();
+    assert_eq!(err.code, omacell_conf::error::codes::CONFIG_SCHEMA);
+    assert!(err.message.contains("grid_linse"), "{err}");
+}
+
+#[test]
+fn invalid_enums_and_ranges_are_rejected() {
+    let (_t, paths) = temp_paths();
+    std::fs::write(
+        paths.user_config_toml(),
+        "[calc]\nmode = \"sometimes\"\nmax_change = -1\n",
+    )
+    .unwrap();
+    let err = load(&paths, &[], None).unwrap_err();
+    assert_eq!(err.code, omacell_conf::error::codes::CONFIG_SCHEMA);
+    assert!(err.message.contains("calc.mode"), "{err}");
+}
+
+#[test]
+fn cli_unknown_key_is_rejected() {
+    let (_t, paths) = temp_paths();
+    let err = load(&paths, &["appearance.typo=true".into()], None).unwrap_err();
+    assert_eq!(err.code, omacell_conf::error::codes::CONFIG_SCHEMA);
+}
+
+#[test]
+fn cli_theme_override_wins_over_environment_theme() {
+    let (dir, paths) = temp_paths();
+    let env_theme = dir.path().join("env-theme.toml");
+    let cli_theme = dir.path().join("cli-theme.toml");
+    std::fs::write(&env_theme, "[state]\ncursor = \"#111111\"\n").unwrap();
+    std::fs::write(&cli_theme, "[state]\ncursor = \"#222222\"\n").unwrap();
+    let loaded = load_with_options(
+        &paths,
+        &LoadOptions {
+            cli_sets: Vec::new(),
+            workbook: None,
+            env: vec![(
+                "OMACELL_THEME".into(),
+                env_theme.to_string_lossy().into_owned(),
+            )],
+            theme_override: Some(cli_theme),
+        },
+    )
+    .unwrap();
+    assert_eq!(loaded.theme.roles["state.cursor"], "#222222");
 }

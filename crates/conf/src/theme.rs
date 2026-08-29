@@ -189,9 +189,13 @@ impl ColorsToml {
         if let toml::Value::Table(t) = value {
             for (k, v) in t {
                 if k == "mode" {
-                    if let Some(s) = v.as_str() {
-                        mode = s.to_string();
+                    let value = v
+                        .as_str()
+                        .ok_or_else(|| error::theme("colors.toml mode must be light or dark"))?;
+                    if !matches!(value, "light" | "dark") {
+                        return Err(error::theme("colors.toml mode must be light or dark"));
                     }
+                    mode = value.to_string();
                     continue;
                 }
                 if let Some(s) = v.as_str()
@@ -269,49 +273,27 @@ impl ThemeRoles {
         for (i, k) in cycle.iter().enumerate() {
             if let Some(c) = colors.get(k) {
                 roles.insert(format!("references.{i}"), c);
+            }
+        }
+        let chart = [
+            "accent", "color2", "color3", "color5", "color6", "color1", "color4", "color7",
+        ];
+        for (i, k) in chart.iter().enumerate() {
+            if let Some(c) = colors.get(k) {
                 roles.insert(format!("charts.palette.{i}"), c);
             }
         }
-        if let Some(c) = colors.get("accent") {
-            roles.insert("charts.palette.0".into(), c);
-            roles.insert("references.6".into(), c);
-        }
-        let mut nudged = Vec::new();
-        if enforce_contrast {
-            let bg = *roles
-                .get("surfaces.background")
-                .unwrap_or(&Rgb { r: 0, g: 0, b: 0 });
-            let fg = *roles.get("text.foreground").unwrap_or(&Rgb {
-                r: 255,
-                g: 255,
-                b: 255,
-            });
-            let header_bg = *roles.get("surfaces.header_background").unwrap_or(&bg);
-            let pairs: &[(&str, Rgb, f64)] = &[
-                ("text.muted", bg, 4.5),
-                ("text.header_foreground", header_bg, 4.5),
-                ("text.bright", bg, 4.5),
-                ("structure.grid_line", bg, 1.5),
-                ("structure.pane_divider", bg, 1.5),
-            ];
-            for (role, against, min) in pairs {
-                if let Some(cur) = roles.get(*role).copied() {
-                    let next = nudge_contrast(cur, *against, bg, fg, *min);
-                    if next != cur {
-                        tracing::debug!(role, from = %cur.hex(), to = %next.hex(), "contrast nudge");
-                        roles.insert((*role).to_string(), next);
-                        nudged.push((*role).to_string());
-                    }
-                }
-            }
-        }
         let hex = roles.into_iter().map(|(k, v)| (k, v.hex())).collect();
-        Ok(Self {
+        let mut resolved = Self {
             name: name.to_string(),
             mode: colors.mode.clone(),
             roles: hex,
-            nudged,
-        })
+            nudged: Vec::new(),
+        };
+        if enforce_contrast {
+            enforce_role_contrast(&mut resolved)?;
+        }
+        Ok(resolved)
     }
 }
 
@@ -330,14 +312,13 @@ pub fn active_theme_dir(paths: &Paths) -> Option<PathBuf> {
 }
 
 /// Neutral palette when no Omarchy theme is present.
-#[must_use]
-pub fn neutral_colors(light: bool) -> ColorsToml {
+pub fn neutral_colors(light: bool) -> Result<ColorsToml, omacell_core::error::CoreError> {
     let text = if light {
         include_str!("../../../tests/fixtures/omarchy-themes/community/community-light/colors.toml")
     } else {
         include_str!("../../../tests/fixtures/omarchy-themes/tokyo-night/colors.toml")
     };
-    ColorsToml::parse(text).expect("shipped fixture")
+    ColorsToml::parse(text)
 }
 
 /// Resolve roles: user theme.toml overlay, then Omarchy `omacell.toml`, then mapping.
@@ -346,46 +327,51 @@ pub fn resolve_roles(
     enforce_contrast: bool,
     portal_light: bool,
 ) -> Result<ThemeRoles, omacell_core::error::CoreError> {
-    if let Some(dir) = active_theme_dir(paths) {
-        let name = dir
+    resolve_roles_with_override(paths, None, enforce_contrast, portal_light)
+}
+
+/// Resolve roles with an explicit CLI/environment theme file at highest precedence.
+pub fn resolve_roles_with_override(
+    paths: &Paths,
+    override_path: Option<&Path>,
+    enforce_contrast: bool,
+    portal_light: bool,
+) -> Result<ThemeRoles, omacell_core::error::CoreError> {
+    let (mut roles, active_dir) = if let Some(dir) = active_theme_dir(paths) {
+        let fallback = dir
             .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("theme")
-            .to_string();
-        let colors = ColorsToml::parse(
+            .and_then(|name| name.to_str())
+            .unwrap_or("theme");
+        let mut colors = ColorsToml::parse(
             &std::fs::read_to_string(dir.join("colors.toml"))
                 .map_err(|e| error::theme(e.to_string()))?,
         )?;
-        let mut roles = if dir.join("omacell.toml").is_file() {
-            roles_from_omacell_toml(
-                &std::fs::read_to_string(dir.join("omacell.toml"))
-                    .map_err(|e| error::theme(e.to_string()))?,
-            )?
-        } else {
-            ThemeRoles::from_colors(&name, &colors, false)?
-        };
-        if enforce_contrast {
-            let rebuilt = ThemeRoles::from_colors(&name, &colors, true)?;
-            roles.nudged = rebuilt.nudged;
-            for k in [
-                "text.muted",
-                "text.header_foreground",
-                "text.bright",
-                "structure.grid_line",
-                "structure.pane_divider",
-            ] {
-                if let Some(v) = rebuilt.roles.get(k) {
-                    roles.roles.insert(k.to_string(), v.clone());
-                }
-            }
+        if dir.join("light.mode").is_file() {
+            colors.mode = "light".into();
         }
-        overlay_user_theme(paths, &mut roles)?;
-        roles.name = theme_name(&dir, &name);
-        return Ok(roles);
+        let name = theme_name(&dir, fallback);
+        (ThemeRoles::from_colors(&name, &colors, false)?, Some(dir))
+    } else {
+        let colors = neutral_colors(portal_light)?;
+        (ThemeRoles::from_colors("neutral", &colors, false)?, None)
+    };
+
+    if let Some(dir) = &active_dir {
+        overlay_role_file(&dir.join("omacell.toml"), &mut roles)?;
     }
-    let colors = neutral_colors(portal_light);
-    let mut roles = ThemeRoles::from_colors("neutral", &colors, enforce_contrast)?;
-    overlay_user_theme(paths, &mut roles)?;
+    overlay_role_file(&paths.user_theme_toml(), &mut roles)?;
+    if let Some(path) = override_path {
+        if !path.is_file() {
+            return Err(error::theme(format!(
+                "theme override does not exist: {}",
+                path.display()
+            )));
+        }
+        overlay_role_file(path, &mut roles)?;
+    }
+    if enforce_contrast {
+        enforce_role_contrast(&mut roles)?;
+    }
     Ok(roles)
 }
 
@@ -393,6 +379,7 @@ fn theme_name(dir: &Path, fallback: &str) -> String {
     let name_file = dir.parent().map(|p| p.join("theme.name"));
     if let Some(p) = name_file
         && let Ok(s) = std::fs::read_to_string(p)
+        && !s.trim().is_empty()
     {
         return s.trim().to_string();
     }
@@ -402,22 +389,40 @@ fn theme_name(dir: &Path, fallback: &str) -> String {
         .to_string()
 }
 
-fn overlay_user_theme(
-    paths: &Paths,
+fn overlay_role_file(
+    path: &Path,
     roles: &mut ThemeRoles,
 ) -> Result<(), omacell_core::error::CoreError> {
-    let p = paths.user_theme_toml();
-    if !p.is_file() {
+    if !path.is_file() {
         return Ok(());
     }
-    let text = std::fs::read_to_string(&p).map_err(|e| error::io(e.to_string()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| error::io(e.to_string()))?;
     let v: toml::Value =
-        toml::from_str(&text).map_err(|e| error::parse(format!("{}: {e}", p.display())))?;
-    flatten_hex(&v, "", &mut roles.roles);
+        toml::from_str(&text).map_err(|e| error::parse(format!("{}: {e}", path.display())))?;
+    let mut overlay = BTreeMap::new();
+    let mut mode = None;
+    flatten_role_values(&v, "", &mut overlay, &mut mode)?;
+    for (role, color) in overlay {
+        if !roles.roles.contains_key(&role) {
+            return Err(error::theme(format!(
+                "{}: unknown theme role {role}",
+                path.display()
+            )));
+        }
+        roles.roles.insert(role, color);
+    }
+    if let Some(mode) = mode {
+        roles.mode = mode;
+    }
     Ok(())
 }
 
-fn flatten_hex(v: &toml::Value, prefix: &str, out: &mut BTreeMap<String, String>) {
+fn flatten_role_values(
+    v: &toml::Value,
+    prefix: &str,
+    out: &mut BTreeMap<String, String>,
+    mode: &mut Option<String>,
+) -> Result<(), omacell_core::error::CoreError> {
     match v {
         toml::Value::Table(t) => {
             for (k, child) in t {
@@ -426,31 +431,72 @@ fn flatten_hex(v: &toml::Value, prefix: &str, out: &mut BTreeMap<String, String>
                 } else {
                     format!("{prefix}.{k}")
                 };
-                flatten_hex(child, &next, out);
+                flatten_role_values(child, &next, out, mode)?;
             }
         }
-        toml::Value::String(s) if s.starts_with('#') => {
-            out.insert(prefix.to_string(), s.clone());
+        toml::Value::String(value) if prefix == "mode" => {
+            if !matches!(value.as_str(), "light" | "dark") {
+                return Err(error::theme("theme mode must be light or dark"));
+            }
+            *mode = Some(value.clone());
         }
-        _ => {}
+        toml::Value::String(value) => {
+            out.insert(prefix.to_string(), Rgb::parse(value)?.hex());
+        }
+        toml::Value::Array(values) if matches!(prefix, "references.colors" | "charts.palette") => {
+            if values.len() != 8 {
+                return Err(error::theme(format!(
+                    "{prefix} must contain exactly eight colors"
+                )));
+            }
+            let output_prefix = if prefix == "references.colors" {
+                "references"
+            } else {
+                "charts.palette"
+            };
+            for (index, value) in values.iter().enumerate() {
+                let color = value
+                    .as_str()
+                    .ok_or_else(|| error::theme(format!("{prefix}[{index}] must be a color")))?;
+                out.insert(format!("{output_prefix}.{index}"), Rgb::parse(color)?.hex());
+            }
+        }
+        _ => return Err(error::theme(format!("unsupported theme value at {prefix}"))),
     }
+    Ok(())
 }
 
-fn roles_from_omacell_toml(text: &str) -> Result<ThemeRoles, omacell_core::error::CoreError> {
-    let v: toml::Value = toml::from_str(text).map_err(|e| error::theme(e.to_string()))?;
-    let mut roles = BTreeMap::new();
-    flatten_hex(&v, "", &mut roles);
-    let mode = v
-        .get("mode")
-        .and_then(|x| x.as_str())
-        .unwrap_or("dark")
-        .to_string();
-    Ok(ThemeRoles {
-        name: "omacell.toml".into(),
-        mode,
-        roles,
-        nudged: Vec::new(),
-    })
+fn enforce_role_contrast(roles: &mut ThemeRoles) -> Result<(), omacell_core::error::CoreError> {
+    let bg = role_color(roles, "surfaces.background")?;
+    let fg = role_color(roles, "text.foreground")?;
+    let header_bg = role_color(roles, "surfaces.header_background")?;
+    let pairs = [
+        ("text.muted", bg, 4.5),
+        ("text.header_foreground", header_bg, 4.5),
+        ("text.bright", bg, 4.5),
+        ("structure.grid_line", bg, 1.5),
+        ("structure.pane_divider", bg, 1.5),
+        ("structure.frozen_edge", bg, 1.5),
+    ];
+    roles.nudged.clear();
+    for (role, against, minimum) in pairs {
+        let current = role_color(roles, role)?;
+        let next = nudge_contrast(current, against, bg, fg, minimum);
+        if next != current {
+            tracing::debug!(role, from = %current.hex(), to = %next.hex(), "contrast nudge");
+            roles.roles.insert(role.into(), next.hex());
+            roles.nudged.push(role.into());
+        }
+    }
+    Ok(())
+}
+
+fn role_color(roles: &ThemeRoles, role: &str) -> Result<Rgb, omacell_core::error::CoreError> {
+    let color = roles
+        .roles
+        .get(role)
+        .ok_or_else(|| error::theme(format!("missing theme role {role}")))?;
+    Rgb::parse(color)
 }
 
 /// Desktop-portal color-scheme: `true` = prefer light. Fails open to dark.
@@ -481,26 +527,39 @@ pub const TEMPLATE: &str = include_str!("../../../default/themed/omacell.toml.tp
 #[must_use]
 pub fn template_placeholders() -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    let mut section = String::new();
-    for raw in TEMPLATE.lines() {
-        let line = raw.trim();
-        if line.starts_with('[') && line.ends_with(']') {
-            section = line.trim_matches(['[', ']']).to_string();
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=') {
-            let key = k.trim();
-            let val = v.trim().trim_matches('"').to_string();
-            if !val.contains("{{") {
-                continue;
-            }
-            let path = if section.is_empty() {
-                key.to_string()
-            } else {
-                format!("{section}.{key}")
-            };
-            out.insert(path, val);
-        }
+    if let Ok(value) = toml::from_str::<toml::Value>(TEMPLATE) {
+        flatten_template_values(&value, "", &mut out);
     }
     out
+}
+
+fn flatten_template_values(value: &toml::Value, prefix: &str, out: &mut BTreeMap<String, String>) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, child) in table {
+                let next = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                flatten_template_values(child, &next, out);
+            }
+        }
+        toml::Value::Array(values) if matches!(prefix, "references.colors" | "charts.palette") => {
+            let output_prefix = if prefix == "references.colors" {
+                "references"
+            } else {
+                "charts.palette"
+            };
+            for (index, value) in values.iter().enumerate() {
+                if let Some(expression) = value.as_str() {
+                    out.insert(format!("{output_prefix}.{index}"), expression.into());
+                }
+            }
+        }
+        toml::Value::String(expression) if expression.contains("{{") => {
+            out.insert(prefix.into(), expression.clone());
+        }
+        _ => {}
+    }
 }

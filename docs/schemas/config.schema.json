@@ -60,6 +60,9 @@
       "description": "Schema version.",
       "type": "integer",
       "format": "uint32",
+      "enum": [
+        1
+      ],
       "minimum": 0
     },
     "scripting": {
@@ -75,6 +78,7 @@
       "$ref": "#/$defs/Tui"
     }
   },
+  "additionalProperties": false,
   "required": [
     "schema",
     "appearance",
@@ -134,6 +138,7 @@
           "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "enabled",
         "status_segment",
@@ -152,11 +157,16 @@
           "description": "Cap.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "autopilot_scope": {
           "description": "`sheet` / `range` / `workbook`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "sheet",
+            "range",
+            "workbook"
+          ]
         },
         "diagnose_offers": {
           "description": "Diagnose offers.",
@@ -168,13 +178,18 @@
         },
         "review": {
           "description": "`always` / `autopilot_opt_in`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "always",
+            "autopilot_opt_in"
+          ]
         },
         "skills_dir": {
           "description": "Skills directory.",
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "review",
         "autopilot_scope",
@@ -196,9 +211,15 @@
         },
         "mode": {
           "description": "`auto` / `on` / `off`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "mode",
         "debounce"
@@ -216,7 +237,7 @@
           "description": "Batch size.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "keep_stale": {
           "description": "Keep stale values.",
@@ -226,13 +247,13 @@
           "description": "Confirm above this many cells.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "max_requests_per_minute": {
           "description": "Rate limit.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "refresh_on_full_recalc": {
           "description": "Refresh on full recalc.",
@@ -240,9 +261,14 @@
         },
         "xlsx_export": {
           "description": "`formulas` / `values`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "formulas",
+            "values"
+          ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "auto",
         "batch_size",
@@ -281,6 +307,7 @@
           "default": ""
         }
       },
+      "additionalProperties": false,
       "required": [
         "fast",
         "default"
@@ -300,13 +327,19 @@
         },
         "send": {
           "description": "`schema` / `sample` / `full`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "schema",
+            "sample",
+            "full"
+          ]
         },
         "suggest_redaction": {
           "description": "Suggest redaction.",
           "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "send",
         "local_full",
@@ -346,6 +379,7 @@
           ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "kind",
         "endpoint"
@@ -357,7 +391,12 @@
       "properties": {
         "animation": {
           "description": "`system` / `on` / `off`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "system",
+            "on",
+            "off"
+          ]
         },
         "cell_font": {
           "description": "Cell fontconfig alias.",
@@ -366,7 +405,8 @@
         "cell_font_size": {
           "description": "Cell size in pt.",
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "minimum": 1e-6
         },
         "cell_padding": {
           "description": "Padding px at 1×.",
@@ -377,15 +417,26 @@
         "column_width": {
           "description": "Default column width in characters.",
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "minimum": 1e-6
         },
         "corner_style": {
           "description": "`system` / `rounded` / `sharp`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "system",
+            "rounded",
+            "sharp"
+          ]
         },
         "cursor_style": {
           "description": "`outline` / `block` / `underline`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "outline",
+            "block",
+            "underline"
+          ]
         },
         "enforce_contrast": {
           "description": "WCAG nudge.",
@@ -393,7 +444,12 @@
         },
         "grid_line_style": {
           "description": "`solid` / `dotted` / `none`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "solid",
+            "dotted",
+            "none"
+          ]
         },
         "grid_lines": {
           "description": "Draw grid lines.",
@@ -405,11 +461,19 @@
         },
         "selection_style": {
           "description": "`fill` / `outline`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "fill",
+            "outline"
+          ]
         },
         "sheet_tabs_position": {
           "description": "`top` / `bottom`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "top",
+            "bottom"
+          ]
         },
         "show_formula_bar": {
           "description": "Formula bar visible.",
@@ -436,6 +500,7 @@
           "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "cell_font",
         "cell_font_size",
@@ -488,17 +553,26 @@
           "description": "1900 or 1904.",
           "type": "integer",
           "format": "uint32",
+          "enum": [
+            1900,
+            1904
+          ],
           "minimum": 0
         },
         "default_sheets": {
           "description": "New-workbook sheet count.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "enter_moves": {
           "description": "`down` / `right` / `none`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "down",
+            "right",
+            "none"
+          ]
         },
         "fill_prompt": {
           "description": "Fill-options prompt.",
@@ -514,13 +588,18 @@
         },
         "reference_style": {
           "description": "`A1` / `R1C1`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "A1",
+            "R1C1"
+          ]
         },
         "smart_paste": {
           "description": "Detect delimited paste.",
           "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "enter_moves",
         "autocomplete",
@@ -545,17 +624,23 @@
         "max_change": {
           "description": "Max change.",
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "minimum": 0.0
         },
         "max_iterations": {
           "description": "Max iterations.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "mode": {
           "description": "`automatic` / `automatic_except_tables` / `manual`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "automatic",
+            "automatic_except_tables",
+            "manual"
+          ]
         },
         "threads": {
           "description": "`\"auto\"` or a thread count.",
@@ -566,6 +651,7 @@
           "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "mode",
         "threads",
@@ -591,13 +677,14 @@
           "description": "Line width.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "palette": {
           "description": "`theme` or a named palette.",
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "palette",
         "default_type",
@@ -614,14 +701,16 @@
           "type": "integer",
           "format": "uint64",
           "default": 50,
-          "minimum": 0
+          "maximum": 60000,
+          "minimum": 1
         },
         "live_reload": {
           "description": "Watch user files.",
           "type": "boolean",
           "default": true
         }
-      }
+      },
+      "additionalProperties": false
     },
     "Files": {
       "description": "`[files]`.",
@@ -639,7 +728,11 @@
         },
         "default_format": {
           "description": "`xlsx` / `omc`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "xlsx",
+            "omc"
+          ]
         },
         "follow_external_links": {
           "description": "Follow external links.",
@@ -656,6 +749,7 @@
           "$ref": "#/$defs/FilesXlsx"
         }
       },
+      "additionalProperties": false,
       "required": [
         "default_format",
         "autosave_interval",
@@ -679,9 +773,15 @@
         },
         "type_inference": {
           "description": "`conservative` / `aggressive` / `none`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "conservative",
+            "aggressive",
+            "none"
+          ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "delimiter",
         "encoding",
@@ -697,6 +797,7 @@
           "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "preserve_unknown_parts"
       ]
@@ -715,7 +816,12 @@
         },
         "notifications": {
           "description": "`all` / `recovery_only` / `off`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "all",
+            "recovery_only",
+            "off"
+          ]
         },
         "ocr_paste": {
           "description": "OCR paste.",
@@ -723,9 +829,15 @@
         },
         "omarchy": {
           "description": "`auto` / `on` / `off`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ]
         }
       },
+      "additionalProperties": false,
       "required": [
         "omarchy",
         "notifications",
@@ -740,9 +852,11 @@
       "properties": {
         "file": {
           "description": "Keymap file name under the config dir or package defaults.",
-          "type": "string"
+          "type": "string",
+          "pattern": "^[^/\\\\.][^\\\\]*$"
         }
       },
+      "additionalProperties": false,
       "required": [
         "file"
       ]
@@ -755,13 +869,13 @@
           "description": "Compact-chrome width.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "formula_bar_lines": {
           "description": "Formula bar rows.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "menu_bar": {
           "description": "Menu bar.",
@@ -769,13 +883,18 @@
         },
         "panel_side": {
           "description": "`right` / `left` / `bottom`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "right",
+            "left",
+            "bottom"
+          ]
         },
         "panel_width": {
           "description": "Panel width px.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1
         },
         "status_line": {
           "description": "Status-line segments.",
@@ -785,6 +904,7 @@
           }
         }
       },
+      "additionalProperties": false,
       "required": [
         "panel_side",
         "panel_width",
@@ -831,6 +951,7 @@
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "language",
         "decimal_separator",
@@ -862,6 +983,7 @@
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "enabled",
         "allow_functions",
@@ -874,7 +996,12 @@
       "properties": {
         "embedded_scripts": {
           "description": "`sandbox` / `ask` / `deny`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "sandbox",
+            "ask",
+            "deny"
+          ]
         },
         "enabled": {
           "description": "Lua enabled.",
@@ -888,6 +1015,7 @@
           }
         }
       },
+      "additionalProperties": false,
       "required": [
         "enabled",
         "trusted_dirs",
@@ -913,6 +1041,7 @@
           "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "restore",
         "recent_files",
@@ -925,7 +1054,13 @@
       "properties": {
         "graphics": {
           "description": "`auto` / `sixel` / `kitty` / `off`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "auto",
+            "sixel",
+            "kitty",
+            "off"
+          ]
         },
         "mouse": {
           "description": "Mouse.",
@@ -933,13 +1068,19 @@
         },
         "truecolor": {
           "description": "`auto` / `on` / `off`.",
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ]
         },
         "unicode_borders": {
           "description": "Unicode box drawing.",
           "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "unicode_borders",
         "truecolor",

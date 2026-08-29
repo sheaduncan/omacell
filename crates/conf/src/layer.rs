@@ -1,16 +1,20 @@
 //! Layered load, provenance, env, and CLI `--set`.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use serde_json::json;
 use toml::Value;
 
 use crate::error;
+use crate::font::{ShellTokens, shell_tokens_for_font};
 use crate::paths::Paths;
-use crate::schema::{Config, DEFAULT_TOML};
-use crate::theme::{ThemeRoles, portal_prefers_light, resolve_roles};
+use crate::schema::{CURRENT_SCHEMA, Config, DEFAULT_TOML};
+use crate::theme::{ThemeRoles, portal_prefers_light, resolve_roles_with_override};
 
 /// Configuration layer (lowest → highest).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -62,6 +66,45 @@ pub struct LoadedConfig {
     pub provenance: BTreeMap<String, Provenance>,
     /// Resolved color roles.
     pub theme: ThemeRoles,
+    /// Resolved Omarchy shell/font tokens.
+    pub shell: ShellTokens,
+    /// User-file migrations performed during this load.
+    pub migrations: Vec<Migration>,
+}
+
+/// Sources retained across live reloads.
+#[derive(Clone, Debug, Default)]
+pub struct LoadOptions {
+    /// CLI `--set key=value` overlays.
+    pub cli_sets: Vec<String>,
+    /// Workbook-stored configuration overlay.
+    pub workbook: Option<Value>,
+    /// Environment snapshot, including an optional `OMACELL_THEME`.
+    pub env: Vec<(String, String)>,
+    /// Explicit CLI `--theme` path; wins over `OMACELL_THEME`.
+    pub theme_override: Option<PathBuf>,
+}
+
+impl LoadOptions {
+    /// Capture the current process environment with no workbook or CLI overlays.
+    #[must_use]
+    pub fn from_process() -> Self {
+        Self {
+            env: std::env::vars().collect(),
+            ..Self::default()
+        }
+    }
+}
+
+/// One backed-up schema migration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Migration {
+    /// Previous schema number.
+    pub from: u32,
+    /// Resulting schema number.
+    pub to: u32,
+    /// Backup created before rewriting.
+    pub backup: PathBuf,
 }
 
 impl LoadedConfig {
@@ -108,45 +151,15 @@ pub fn load(
     cli_sets: &[String],
     workbook: Option<&Value>,
 ) -> Result<LoadedConfig, omacell_core::error::CoreError> {
-    let mut value: Value =
-        toml::from_str(DEFAULT_TOML).map_err(|e| error::parse(format!("package defaults: {e}")))?;
-    let mut provenance = BTreeMap::new();
-    mark_leaves(
-        &value,
-        "",
-        Layer::Package,
-        "<package-default>",
-        &mut provenance,
-    );
-
-    let user = paths.user_config_toml();
-    if user.is_file() {
-        let text = std::fs::read_to_string(&user).map_err(|e| error::io(e.to_string()))?;
-        let overlay = parse_user_toml(&text, &user)?;
-        merge(
-            &mut value,
-            overlay,
-            Layer::User,
-            &user.display().to_string(),
-            "",
-            &mut provenance,
-        );
-    }
-
-    if let Some(wb) = workbook {
-        merge(
-            &mut value,
-            wb.clone(),
-            Layer::Workbook,
-            "<workbook>",
-            "",
-            &mut provenance,
-        );
-    }
-
-    merge_env_pairs(&mut value, std::env::vars(), &mut provenance)?;
-    merge_cli(&mut value, cli_sets, &mut provenance)?;
-    finish_load(paths, value, provenance)
+    load_with_options(
+        paths,
+        &LoadOptions {
+            cli_sets: cli_sets.to_vec(),
+            workbook: workbook.cloned(),
+            env: std::env::vars().collect(),
+            theme_override: None,
+        },
+    )
 }
 
 /// Load with an explicit environment (tests).
@@ -156,9 +169,26 @@ pub fn load_with_env(
     workbook: Option<&Value>,
     env: impl IntoIterator<Item = (String, String)>,
 ) -> Result<LoadedConfig, omacell_core::error::CoreError> {
+    load_with_options(
+        paths,
+        &LoadOptions {
+            cli_sets: cli_sets.to_vec(),
+            workbook: workbook.cloned(),
+            env: env.into_iter().collect(),
+            theme_override: None,
+        },
+    )
+}
+
+/// Load all layers from a reusable source snapshot.
+pub fn load_with_options(
+    paths: &Paths,
+    options: &LoadOptions,
+) -> Result<LoadedConfig, omacell_core::error::CoreError> {
     let mut value: Value =
         toml::from_str(DEFAULT_TOML).map_err(|e| error::parse(format!("package defaults: {e}")))?;
     let mut provenance = BTreeMap::new();
+    let mut migrations = Vec::new();
     mark_leaves(
         &value,
         "",
@@ -168,8 +198,10 @@ pub fn load_with_env(
     );
     let user = paths.user_config_toml();
     if user.is_file() {
-        let text = std::fs::read_to_string(&user).map_err(|e| error::io(e.to_string()))?;
-        let overlay = parse_user_toml(&text, &user)?;
+        let (overlay, migration) = read_and_migrate_user(paths, &user)?;
+        if let Some(migration) = migration {
+            migrations.push(migration);
+        }
         merge(
             &mut value,
             overlay,
@@ -179,7 +211,7 @@ pub fn load_with_env(
             &mut provenance,
         );
     }
-    if let Some(wb) = workbook {
+    if let Some(wb) = &options.workbook {
         merge(
             &mut value,
             wb.clone(),
@@ -189,34 +221,133 @@ pub fn load_with_env(
             &mut provenance,
         );
     }
-    merge_env_pairs(&mut value, env, &mut provenance)?;
-    merge_cli(&mut value, cli_sets, &mut provenance)?;
-    finish_load(paths, value, provenance)
+    merge_env_pairs(&mut value, options.env.iter().cloned(), &mut provenance)?;
+    merge_cli(&mut value, &options.cli_sets, &mut provenance)?;
+    let env_theme = options
+        .env
+        .iter()
+        .find(|(key, _)| key == "OMACELL_THEME")
+        .map(|(_, value)| PathBuf::from(value));
+    let theme_override = options.theme_override.as_ref().or(env_theme.as_ref());
+    finish_load(paths, value, provenance, theme_override, migrations)
 }
 
 fn finish_load(
     paths: &Paths,
     value: Value,
     provenance: BTreeMap<String, Provenance>,
+    theme_override: Option<&PathBuf>,
+    migrations: Vec<Migration>,
 ) -> Result<LoadedConfig, omacell_core::error::CoreError> {
     let config: Config =
         Config::deserialize(value).map_err(|e| error::schema(format!("merged config: {e}")))?;
-    if config.schema != 1 {
-        return Err(error::schema(format!(
-            "unsupported schema {}; expected 1",
-            config.schema
-        )));
-    }
-    let theme = resolve_roles(
+    config.validate()?;
+    let theme = resolve_roles_with_override(
         paths,
+        theme_override.map(PathBuf::as_path),
         config.appearance.enforce_contrast,
         portal_prefers_light(),
+    )?;
+    let shell = shell_tokens_for_font(
+        paths,
+        &config.appearance.ui_font_size,
+        &config.appearance.ui_font,
+        &config.appearance.corner_style,
     )?;
     Ok(LoadedConfig {
         config,
         provenance,
         theme,
+        shell,
+        migrations,
     })
+}
+
+fn read_and_migrate_user(
+    paths: &Paths,
+    path: &Path,
+) -> Result<(Value, Option<Migration>), omacell_core::error::CoreError> {
+    let original = std::fs::read_to_string(path).map_err(|e| error::io(e.to_string()))?;
+    let mut value = parse_user_toml(&original, path)?;
+    let Some(schema) = value.get("schema").and_then(Value::as_integer) else {
+        return Ok((value, None));
+    };
+    let schema = u32::try_from(schema)
+        .map_err(|_| error::schema("schema must be a non-negative integer"))?;
+    if schema > CURRENT_SCHEMA {
+        return Err(error::schema(format!(
+            "unsupported schema {schema}; expected at most {CURRENT_SCHEMA}"
+        )));
+    }
+    if schema == CURRENT_SCHEMA {
+        return Ok((value, None));
+    }
+
+    let backup = backup_user_text(paths, &original)?;
+    let table = value
+        .as_table_mut()
+        .ok_or_else(|| error::schema("user config root must be a table"))?;
+    table.insert("schema".into(), Value::Integer(i64::from(CURRENT_SCHEMA)));
+    let rewritten = toml::to_string_pretty(&value)
+        .map_err(|e| error::schema(format!("migrated config: {e}")))?;
+    atomic_write(path, rewritten.as_bytes())?;
+    Ok((
+        value,
+        Some(Migration {
+            from: schema,
+            to: CURRENT_SCHEMA,
+            backup,
+        }),
+    ))
+}
+
+fn backup_user_text(paths: &Paths, text: &str) -> Result<PathBuf, omacell_core::error::CoreError> {
+    let stamp = unique_stamp()?;
+    let dir = paths.backup_dir(&stamp);
+    std::fs::create_dir_all(&dir).map_err(|e| error::io(e.to_string()))?;
+    let backup = dir.join("config.toml");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&backup)
+        .map_err(|e| error::io(e.to_string()))?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| error::io(e.to_string()))?;
+    Ok(backup)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), omacell_core::error::CoreError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| error::io("config path has no parent"))?;
+    let stamp = unique_stamp()?;
+    let temp = parent.join(format!(".config.toml.omacell-new-{stamp}"));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result.map_err(|e| error::io(e.to_string()))
+}
+
+fn unique_stamp() -> Result<String, omacell_core::error::CoreError> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| error::io(e.to_string()))?;
+    Ok(format!(
+        "{}-{:09}-{}",
+        elapsed.as_secs(),
+        elapsed.subsec_nanos(),
+        std::process::id()
+    ))
 }
 
 fn parse_user_toml(text: &str, path: &Path) -> Result<Value, omacell_core::error::CoreError> {
@@ -430,6 +561,12 @@ pub fn show_all_json(loaded: &LoadedConfig) -> serde_json::Value {
             (k.clone(), json!({"layer": p.layer.as_str(), "source": p.source}))
         }).collect::<BTreeMap<_, _>>(),
         "theme": loaded.theme,
+        "shell": loaded.shell,
+        "migrations": loaded.migrations.iter().map(|migration| json!({
+            "from": migration.from,
+            "to": migration.to,
+            "backup": migration.backup,
+        })).collect::<Vec<_>>(),
     })
 }
 
@@ -438,6 +575,15 @@ pub fn reset_user_file(
     paths: &Paths,
     stamp: &str,
 ) -> Result<Option<std::path::PathBuf>, omacell_core::error::CoreError> {
+    let mut components = Path::new(stamp).components();
+    if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+        || components.next().is_some()
+        || !stamp
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(error::schema("backup stamp contains unsafe characters"));
+    }
     let src = paths.user_config_toml();
     if !src.is_file() {
         return Ok(None);
@@ -445,6 +591,12 @@ pub fn reset_user_file(
     let dir = paths.backup_dir(stamp);
     std::fs::create_dir_all(&dir).map_err(|e| error::io(e.to_string()))?;
     let dest = dir.join("config.toml");
+    if dest.exists() {
+        return Err(error::io(format!(
+            "backup already exists: {}",
+            dest.display()
+        )));
+    }
     std::fs::rename(&src, &dest).map_err(|e| error::io(e.to_string()))?;
     Ok(Some(dest))
 }

@@ -21,12 +21,11 @@ pub struct Paths {
 
 impl Paths {
     /// Resolve from the process environment (`HOME`, `OMACELL_DEFAULT_DIR`).
-    #[must_use]
-    pub fn from_env() -> Self {
+    pub fn from_env() -> Result<Self, omacell_core::error::CoreError> {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/"));
-        Self::from_home(home)
+            .ok_or_else(|| crate::error::schema("HOME is not set; refusing to use / as a home"))?;
+        Ok(Self::from_home(home))
     }
 
     /// Build paths under `home` (tests pass a temp dir).

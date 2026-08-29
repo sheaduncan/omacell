@@ -159,4 +159,4 @@ live_reload = true
 debounce_ms = 50
 
 [keys]
-file = "keys.toml"
+file = "keys/classic.toml"
