@@ -1,0 +1,14 @@
+# Appendix E sketch (WP-11)
+omc 1
+book	date_system=1900	calc=automatic
+name	TaxRate	Inputs!$B$3
+style	1	font=monospace;bold
+sheet	Inputs	cols=A:8.43,B:12	freeze=A2
+cell	Inputs!A1	Rate	s=1
+cell	Inputs!B3	0.07
+sheet	Model
+cell	Model!A1	=SEQUENCE(12)
+cell	Model!B1	=A1#*TaxRate
+cf	Model!B1:B12	rule=cell_value	op=gt	value=1	style=2
+validation	Inputs!B3	type=decimal	between	0	1
+comment	Inputs!B3	author=shea	Confirm with finance
