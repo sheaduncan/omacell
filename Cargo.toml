@@ -30,6 +30,7 @@ indexmap = { version = "2", features = ["serde"] }
 criterion = "0.5"
 rayon = "1"
 regex = "1"
+rustix = { version = "1", features = ["fs"] }
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

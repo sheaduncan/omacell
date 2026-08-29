@@ -152,6 +152,20 @@ impl AxisGeometry {
         Ok(self.hidden.contains(&index))
     }
 
+    /// Custom sizes `(index, px)` in ascending index order (WP-10 writer).
+    pub fn iter_custom(&self) -> impl Iterator<Item = (u32, u32)> {
+        let mut v: Vec<(u32, u32)> = self.custom.iter().map(|(&i, &px)| (i, px)).collect();
+        v.sort_unstable_by_key(|(i, _)| *i);
+        v.into_iter()
+    }
+
+    /// Hidden indices in ascending order (WP-10 writer).
+    pub fn iter_hidden(&self) -> impl Iterator<Item = u32> {
+        let mut v: Vec<u32> = self.hidden.iter().copied().collect();
+        v.sort_unstable();
+        v.into_iter()
+    }
+
     /// Set a custom size in pixels. Hidden rows keep a stored size for unhide.
     pub fn set_size(&mut self, index: u32, px: u32) -> Result<(), CoreError> {
         self.check(index)?;

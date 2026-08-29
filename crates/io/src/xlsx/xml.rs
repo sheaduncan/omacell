@@ -202,6 +202,83 @@ fn collect_attrs(
     Ok(out)
 }
 
+/// Escape XML text / attribute values.
+#[must_use]
+pub fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Escape SpreadsheetML text, including XML-forbidden control characters and
+/// literal `_xHHHH_` sequences used by OOXML's character escape convention.
+#[must_use]
+pub fn escape_ooxml_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for (offset, ch) in s.char_indices() {
+        if ch == '_' && looks_like_ooxml_escape(&s.as_bytes()[offset..]) {
+            out.push_str("_x005F_");
+            continue;
+        }
+        if !is_xml10_char(ch) {
+            out.push_str(&format!("_x{:04X}_", u32::from(ch)));
+            continue;
+        }
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Decode SpreadsheetML `_xHHHH_` character escapes after XML parsing.
+#[must_use]
+pub fn decode_ooxml_text(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        if looks_like_ooxml_escape(&bytes[offset..]) {
+            let code = std::str::from_utf8(&bytes[offset + 2..offset + 6])
+                .ok()
+                .and_then(|hex| u32::from_str_radix(hex, 16).ok());
+            if let Some(ch) = code.and_then(char::from_u32) {
+                out.push(ch);
+                offset += 7;
+                continue;
+            }
+        }
+        let Some(ch) = s[offset..].chars().next() else {
+            break;
+        };
+        out.push(ch);
+        offset += ch.len_utf8();
+    }
+    out
+}
+
+fn looks_like_ooxml_escape(bytes: &[u8]) -> bool {
+    bytes.len() >= 7
+        && bytes[0] == b'_'
+        && matches!(bytes[1], b'x' | b'X')
+        && bytes[2..6].iter().all(u8::is_ascii_hexdigit)
+        && bytes[6] == b'_'
+}
+
 /// Attribute helper.
 #[must_use]
 pub fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -232,5 +309,13 @@ mod tests {
         let mut reader = XmlReader::new(b"<a>&custom;</a>");
         assert!(matches!(reader.next(), Ok(Some(XmlEvent::Start { .. }))));
         assert!(reader.next().is_err());
+    }
+
+    #[test]
+    fn ooxml_text_escapes_controls_and_literal_escape_tokens() {
+        let input = "before\u{1}_x0002_after";
+        let escaped = escape_ooxml_text(input);
+        assert_eq!(escaped, "before_x0001__x005F_x0002_after");
+        assert_eq!(decode_ooxml_text(&escaped), input);
     }
 }

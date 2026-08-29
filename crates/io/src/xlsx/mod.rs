@@ -1,26 +1,35 @@
-//! `.xlsx` / `.xlsm` reader (spec F-9.1, F-9.2, F-9.6).
+//! `.xlsx` / `.xlsm` reader and writer (spec F-9.1, F-9.2, F-9.6, F-9.7).
 //!
-//! Unknown parts stay on [`OpcPackage`] for WP-10 L3 re-emission. VBA is
-//! preserved and never executed.
+//! Unknown parts stay on [`OpcPackage`] and are re-emitted byte-identical on
+//! save. VBA is preserved and never executed. Modeled parts are regenerated
+//! from the workbook.
 //!
 //! ```
-//! use omacell_io::xlsx::open;
+//! use omacell_io::xlsx::{diff, open, save_bytes};
 //! # let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/corpus/xlsx/l1_values.xlsx"));
 //! let doc = open(path).unwrap();
-//! assert!(!doc.package.parts.is_empty());
+//! let bytes = save_bytes(&doc).unwrap();
+//! let again = omacell_io::xlsx::open_bytes(&bytes).unwrap();
+//! assert!(diff(&doc, &again).empty);
 //! ```
 
+mod atomic;
+mod diff;
 mod opc;
 mod read;
 mod warnings;
+mod write;
 mod xml;
 
+pub use atomic::{SaveOptions, acquire_lock, lock_path, release_lock, save, save_workbook};
+pub use diff::{DiffReport, diff};
 pub use opc::{
     MAX_COMPRESSION_RATIO, MAX_ENTRY_BYTES, MAX_PACKAGE_BYTES, MAX_UNCOMPRESSED_TOTAL,
     MAX_ZIP_ENTRIES, OpcPackage, PreservedPart, Relationship, open_package, sanitize_path,
 };
 pub use read::WorksheetExtras;
 pub use warnings::{FileWarning, FileWarnings};
+pub use write::{save_bytes, save_workbook_bytes};
 pub use xml::MAX_XML_DEPTH;
 
 use std::collections::HashMap;

@@ -17,6 +17,7 @@ encoding_rs = "0.8"
 indexmap = { workspace = true }
 omacell-core = { path = "../core", version = "0.0.0" }
 quick-xml = "0.41"
+rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -32,4 +33,8 @@ harness = false
 
 [[bench]]
 name = "xlsx_open"
+harness = false
+
+[[bench]]
+name = "xlsx_save"
 harness = false
