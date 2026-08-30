@@ -29,6 +29,7 @@ fn setup() -> (tempfile::TempDir, Tui, Terminal<TestBackend>) {
     omacell_bus::register_edit_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_data_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_audit_commands(bus.registry_mut()).unwrap();
+    omacell_bus::register_analysis_commands(bus.registry_mut()).unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
     let mut tui = Tui::new(
         Launch {

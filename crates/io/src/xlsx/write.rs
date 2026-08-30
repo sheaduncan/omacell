@@ -44,6 +44,8 @@ const REL_SST: &str =
 const REL_STYLES: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
 const REL_TABLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+const REL_PIVOT_CACHE_DEF: &str = super::pivot::REL_PIVOT_CACHE_DEF;
+const REL_PIVOT_TABLE: &str = super::pivot::REL_PIVOT_TABLE;
 const REL_COMMENTS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
 const REL_THREADED_COMMENTS: &str =
@@ -236,6 +238,26 @@ pub(crate) fn encode(
         overrides.push(("/xl/persons/person.xml".into(), CT_PERSON.into()));
     }
 
+    let mut pivot_caches: Vec<(u32, String)> = Vec::new();
+    for pivot in wb.pivots().iter() {
+        let cache = super::pivot::cache_parts(wb, pivot)?;
+        let r = format!("rId{rid}");
+        rid += 1;
+        wb_rels.push((
+            r.clone(),
+            REL_PIVOT_CACHE_DEF.into(),
+            cache.def_target,
+            false,
+        ));
+        pivot_caches.push((cache.cache_id, r));
+        for (name, bytes, ct) in cache.parts {
+            if !ct.is_empty() {
+                overrides.push((format!("/{name}"), ct));
+            }
+            parts.insert(name, bytes);
+        }
+    }
+
     if let Some(pkg) = package
         && let Ok(orig) = pkg.rels_for("xl/workbook.xml")
     {
@@ -244,6 +266,7 @@ pub(crate) fn encode(
                 || rel.rel_type == REL_SST
                 || rel.rel_type == REL_STYLES
                 || rel.rel_type == REL_PERSON
+                || rel.rel_type == REL_PIVOT_CACHE_DEF
             {
                 continue;
             }
@@ -270,7 +293,7 @@ pub(crate) fn encode(
 
     parts.insert(
         "xl/workbook.xml".into(),
-        workbook_xml(wb, intern, &sheets, &sheet_rids)?,
+        workbook_xml(wb, intern, &sheets, &sheet_rids, &pivot_caches)?,
     );
     let workbook_content_type = package
         .and_then(|pkg| pkg.workbook_part().ok())
@@ -349,6 +372,8 @@ fn is_rewritten(name: &str) -> bool {
             | "xl/calcchain.xml"
     ) || n.starts_with("xl/worksheets/")
         || n.starts_with("xl/tables/")
+        || n.starts_with("xl/pivotcache/")
+        || n.starts_with("xl/pivottables/")
         || n.starts_with("xl/comments")
         || n.starts_with("xl/threadedcomments/")
         || n.starts_with("xl/persons/")
@@ -451,6 +476,7 @@ fn workbook_xml(
     intern: &omacell_core::intern::Interners,
     sheets: &[&Sheet],
     rids: &[String],
+    pivot_caches: &[(u32, String)],
 ) -> Result<Vec<u8>, CoreError> {
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="{NS}" xmlns:r="{NS_R}">"#
@@ -586,6 +612,15 @@ fn workbook_xml(
         CalcMode::Manual => s.push_str(r#"<calcPr calcMode="manual"/>"#),
         CalcMode::AutomaticExceptTables => s.push_str(r#"<calcPr calcMode="autoNoTable"/>"#),
         CalcMode::Automatic => {}
+    }
+    if !pivot_caches.is_empty() {
+        s.push_str(&format!(r#"<pivotCaches count="{}">"#, pivot_caches.len()));
+        for (cache_id, rid) in pivot_caches {
+            s.push_str(&format!(
+                r#"<pivotCache cacheId="{cache_id}" r:id="{rid}"/>"#
+            ));
+        }
+        s.push_str("</pivotCaches>");
     }
     s.push_str("</workbook>");
     Ok(s.into_bytes())
@@ -1379,6 +1414,7 @@ fn worksheet_xml(
         for rel in orig {
             if rel.rel_type == REL_HYPER
                 || rel.rel_type == REL_TABLE
+                || rel.rel_type == REL_PIVOT_TABLE
                 || rel.rel_type == REL_COMMENTS
                 || rel.rel_type == REL_THREADED_COMMENTS
             {
@@ -1439,6 +1475,17 @@ fn worksheet_xml(
             s.push_str(&format!(r#"<tablePart r:id="{id}"/>"#));
         }
         s.push_str("</tableParts>");
+    }
+    for pivot in wb
+        .pivots()
+        .iter()
+        .filter(|pivot| pivot.dest_sheet == sheet.id)
+    {
+        let extra = super::pivot::table_parts(wb, pivot)?;
+        let id = format!("rId{rid}");
+        rid += 1;
+        rels.push((id, REL_PIVOT_TABLE.into(), extra.rel_target, false));
+        extra_parts.extend(extra.parts);
     }
     if let Some(ex) = extras.filter(|ex| {
         !ex.sparkline_xml.is_empty()

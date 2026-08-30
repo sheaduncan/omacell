@@ -43,6 +43,14 @@ pub(super) enum WireValue {
     },
 }
 
+/// Pivot wire record uses sheet names because `.omc` does not persist `SheetId`s.
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct PivotWire {
+    pub(super) source_sheet: String,
+    pub(super) dest_sheet: String,
+    pub(super) table: omacell_core::pivot::PivotTable,
+}
+
 pub(super) fn encode(doc: &OmcDocument) -> Result<String, CoreError> {
     let mut out = String::from("omc 1\n");
     encode_workbook(&mut out, doc)?;
@@ -73,6 +81,24 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
             return Err(crate::error::omc_format(format!(
                 "extras sheet name {name:?} does not match workbook casing {:?}",
                 sheet.name
+            )));
+        }
+    }
+    for pivot in wb.pivots().iter() {
+        if wb.sheet(pivot.source_sheet).is_none() || wb.sheet(pivot.dest_sheet).is_none() {
+            return Err(crate::error::omc_format(format!(
+                "pivot {:?} references an unknown sheet",
+                pivot.name
+            )));
+        }
+        if pivot.dest_row >= MAX_ROWS
+            || u32::from(pivot.dest_col) >= u32::from(MAX_COLS)
+            || pivot.out_end_row >= MAX_ROWS
+            || u32::from(pivot.out_end_col) >= u32::from(MAX_COLS)
+        {
+            return Err(crate::error::omc_format(format!(
+                "pivot {:?} output is outside the worksheet grid",
+                pivot.name
             )));
         }
     }
@@ -295,6 +321,30 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
             if !table.columns.is_empty() {
                 push_json_kv(out, "columns", &table.columns)?;
             }
+            out.push('\n');
+        }
+        for pivot in wb
+            .pivots()
+            .iter()
+            .filter(|pivot| pivot.dest_sheet == sheet.id)
+        {
+            out.push_str("pivot\t");
+            push_json_field(
+                out,
+                &PivotWire {
+                    source_sheet: wb
+                        .sheet(pivot.source_sheet)
+                        .map(|source| source.name.clone())
+                        .ok_or_else(|| {
+                            crate::error::omc_format(format!(
+                                "pivot {:?} references an unknown source sheet",
+                                pivot.name
+                            ))
+                        })?,
+                    dest_sheet: sheet.name.clone(),
+                    table: pivot.clone(),
+                },
+            )?;
             out.push('\n');
         }
         if let Some(filter) = &sheet.autofilter {

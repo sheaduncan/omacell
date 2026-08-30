@@ -139,6 +139,22 @@ Civil-to-serial conversion rejects impossible calendar dates and inconsistent `l
 
 `format` does not take interned `Value::Text`; pass [`FormatValue::Text`]. Default date system is 1900.
 
+## Analysis — `omacell_core::{pivot,whatif,stats}` (WP-24; approval pending)
+
+WP-24 proposes the following additions to the frozen public core contract. The PR must not merge until a human approves this RFC in `reports/WP-24.md`.
+
+| Type / fn | Source |
+|---|---|
+| `PivotId`, `PivotTable`, `PivotRegistry`, `PivotDataField`, `PivotColumns`, `PivotCell`, `PivotValue` | [`pivot.rs`](../crates/core/src/pivot.rs) |
+| `PivotAgg`, `ShowAs`, `DateGroup`, `PivotGroup`, `PivotLayout`, `CacheValue` | same |
+| `materialize`, `materialize_from_cache`, `cache_table`, `write_output` | same |
+| `GoalSeekResult`, `goal_seek`, `validate_goal_seek`, `DEFAULT_MAX_ITER`, `DEFAULT_TOL` | [`whatif.rs`](../crates/core/src/whatif.rs) |
+| `StatsSummary`, `HistBin`, `describe_range` | [`stats.rs`](../crates/core/src/stats.rs) |
+
+`Workbook` adds `pivots`, `add_pivot`, `import_pivot`, `refresh_pivot`, `refresh_pivot_from_cache`, `remove_pivot`, and `restore_pivot`; `WorkbookSnapshot` adds `pivots`. Pivot output cells are managed and reject ordinary edits with `pivot.readonly`. Percentage show-as values use fractional storage (`0.3` means 30%) and a percentage number format.
+
+The WP-07a command catalog adds public ids `pivot.create`, `pivot.refresh`, `pivot.remove`, `whatif.goalseek`, and `stats.describe` with the typed schemas in [`analysis.rs`](../crates/bus/src/analysis.rs). `pivot.restore` is an internal inverse and is excluded from `commands_json`. The catalog envelope remains schema version 1; existing ids and schemas are unchanged.
+
 ## Corpora
 
 - [`tests/corpus/addr/a1.tsv`](../tests/corpus/addr/a1.tsv)

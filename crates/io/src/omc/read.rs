@@ -26,7 +26,7 @@ use super::{MAX_OMC_LINE, MAX_OMC_RECORDS, OmcDocument};
 use crate::error;
 use crate::xlsx::WorksheetExtras;
 
-use super::write::{WireValue, validate_custom_part_name};
+use super::write::{PivotWire, WireValue, validate_custom_part_name};
 
 const MAX_VALUE_DEPTH: u8 = 16;
 
@@ -49,6 +49,8 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
     let mut pending_active: Option<String> = None;
     let mut pending_vis: BTreeMap<String, SheetVisibility> = BTreeMap::new();
     let mut pending_names: Vec<Vec<Field>> = Vec::new();
+    let mut pending_pivots: Vec<PivotWire> = Vec::new();
+    let mut pending_pivot_ids = BTreeSet::new();
     let mut sheet_records = BTreeSet::new();
     let mut page_setup_records = BTreeSet::new();
     let mut custom_names = BTreeSet::new();
@@ -120,6 +122,26 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
             "threaded_comment" => load_threaded_comment(&mut wb, &fields[1..])?,
             "hyperlink" => load_hyperlink(&mut wb, &fields[1..])?,
             "table" => load_table(&mut wb, &fields[1..])?,
+            "pivot" => {
+                if fields.len() != 2 {
+                    return Err(error::omc_parse(format!(
+                        "line {line_no}: pivot record needs one JSON field"
+                    )));
+                }
+                if pending_pivots.len() >= usize::from(MAX_COLS) {
+                    return Err(error::omc_limit(format!(
+                        "more than {MAX_COLS} pivot records"
+                    )));
+                }
+                let pivot: PivotWire = parse_json(&fields[1].value, "pivot")?;
+                if !pending_pivot_ids.insert(pivot.table.id) {
+                    return Err(error::omc_parse(format!(
+                        "duplicate pivot id {}",
+                        pivot.table.id.index()
+                    )));
+                }
+                pending_pivots.push(pivot);
+            }
             "extra" | "cf" | "validation" => load_extra(&mut wb, &mut extras, &fields)?,
             "custom" => load_custom(&mut wb, &mut custom_names, &fields[1..])?,
             "aicache" => {}
@@ -179,6 +201,22 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
     if let Some(name) = pending_active {
         let id = wb.resolve_sheet_name(&name)?;
         wb.set_active_sheet(id)?;
+    }
+    for wire in pending_pivots {
+        let mut pivot = wire.table;
+        pivot.source_sheet = wb.resolve_sheet_name(&wire.source_sheet)?;
+        pivot.dest_sheet = wb.resolve_sheet_name(&wire.dest_sheet)?;
+        if pivot.dest_row >= MAX_ROWS
+            || u32::from(pivot.dest_col) >= u32::from(MAX_COLS)
+            || pivot.out_end_row >= MAX_ROWS
+            || u32::from(pivot.out_end_col) >= u32::from(MAX_COLS)
+        {
+            return Err(error::omc_parse(format!(
+                "pivot {:?} output is outside the worksheet grid",
+                pivot.name
+            )));
+        }
+        wb.restore_pivot(pivot)?;
     }
     validate_sheet_links(&wb)?;
     let changeset =
@@ -440,7 +478,10 @@ fn load_sheet(
             "duplicate sheet record for {name:?}"
         )));
     }
-    let id = if wb.sheets().count() == 1 && wb.sheets().next().is_some_and(|s| s.name == "Sheet1") {
+    let id = if sheet_records.len() == 1
+        && wb.sheets().count() == 1
+        && wb.sheets().next().is_some_and(|s| s.name == "Sheet1")
+    {
         let id = wb.active_sheet();
         if name != "Sheet1" {
             wb.rename_sheet(id, name)?;

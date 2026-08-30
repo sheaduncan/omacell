@@ -19,6 +19,10 @@ use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
 use crate::locale::LocaleId;
 use crate::names::{DefinedName, NameRegistry, NameScope};
 use crate::numfmt;
+use crate::pivot::{
+    CacheValue, PivotId, PivotRegistry, PivotTable, materialize, materialize_from_cache,
+    write_output,
+};
 use crate::print::PageSetup;
 use crate::sheet::{
     Comment, Hyperlink, Note, ProtectionState, Sheet, SheetEditState, SheetVisibility, ViewState,
@@ -151,6 +155,7 @@ pub struct WorkbookSnapshot {
     sheets: IndexMap<SheetId, Sheet>,
     names: NameRegistry,
     tables: crate::tables::TableRegistry,
+    pivots: crate::pivot::PivotRegistry,
     intern: Arc<Interners>,
     settings: WorkbookSettings,
     protection: WorkbookProtectionState,
@@ -184,6 +189,12 @@ impl WorkbookSnapshot {
     #[must_use]
     pub fn tables(&self) -> &crate::tables::TableRegistry {
         &self.tables
+    }
+
+    /// Pivot tables as of the snapshot.
+    #[must_use]
+    pub fn pivots(&self) -> &crate::pivot::PivotRegistry {
+        &self.pivots
     }
 
     /// Settings.
@@ -227,6 +238,7 @@ pub struct Workbook {
     intern: Arc<Interners>,
     names: NameRegistry,
     tables: TableRegistry,
+    pivots: PivotRegistry,
     settings: WorkbookSettings,
     protection: WorkbookProtectionState,
     meta: WorkbookMeta,
@@ -285,6 +297,7 @@ impl Workbook {
             intern: Arc::new(Interners::new()),
             names: NameRegistry::new(),
             tables: TableRegistry::new(),
+            pivots: PivotRegistry::new(),
             settings: WorkbookSettings::default(),
             protection: WorkbookProtectionState::default(),
             meta: WorkbookMeta::default(),
@@ -308,6 +321,7 @@ impl Workbook {
             sheets: self.sheets.clone(),
             names: self.names.clone(),
             tables: self.tables.clone(),
+            pivots: self.pivots.clone(),
             intern: Arc::clone(&self.intern),
             settings: self.settings.clone(),
             protection: self.protection.clone(),
@@ -375,6 +389,12 @@ impl Workbook {
     #[must_use]
     pub fn tables(&self) -> &TableRegistry {
         &self.tables
+    }
+
+    /// Pivot tables.
+    #[must_use]
+    pub fn pivots(&self) -> &PivotRegistry {
+        &self.pivots
     }
 
     /// Undo log (budget, enable/disable, stack queries).
@@ -656,6 +676,48 @@ impl Workbook {
         intern.styles.release(slot.style);
     }
 
+    fn ensure_not_pivot_output(&self, id: SheetId, row: u32, col: u16) -> Result<(), CoreError> {
+        self.ensure_range_not_pivot_output(id, row, col, row, col)
+    }
+
+    pub(crate) fn ensure_range_not_pivot_output(
+        &self,
+        id: SheetId,
+        min_row: u32,
+        min_col: u16,
+        max_row: u32,
+        max_col: u16,
+    ) -> Result<(), CoreError> {
+        if self.pivots.iter().any(|pivot| {
+            pivot.dest_sheet == id
+                && min_row <= pivot.out_end_row
+                && pivot.dest_row <= max_row
+                && min_col <= pivot.out_end_col
+                && pivot.dest_col <= max_col
+        }) {
+            return Err(
+                CoreError::new("pivot.readonly", "pivot output cells are read-only")
+                    .with_hint("change the source range and run pivot.refresh"),
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_sheet_not_used_by_pivot(&self, id: SheetId) -> Result<(), CoreError> {
+        if let Some(pivot) = self
+            .pivots
+            .iter()
+            .find(|pivot| pivot.source_sheet == id || pivot.dest_sheet == id)
+        {
+            return Err(CoreError::new(
+                "pivot.readonly",
+                format!("structural edit would invalidate pivot {:?}", pivot.name),
+            )
+            .with_hint("remove the pivot before inserting or deleting cells, rows, or columns"));
+        }
+        Ok(())
+    }
+
     /// Set a plain numeric cell.
     pub fn set_number(
         &mut self,
@@ -664,6 +726,7 @@ impl Workbook {
         col: u16,
         n: f64,
     ) -> Result<Option<CellSlot>, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         let old = self.replace_slot(id, row, col, Some(CellSlot::number(n)))?;
         self.expand_tables_at(id, row, col);
         Ok(old)
@@ -678,6 +741,7 @@ impl Workbook {
         text: &str,
         runs: Vec<RichTextRun>,
     ) -> Result<StrId, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         let sid = self.intern_mut().strings.intern_rich(text, runs);
         let slot = CellSlot {
             value: Value::Text(sid),
@@ -699,6 +763,7 @@ impl Workbook {
         col: u16,
         text: &str,
     ) -> Result<StrId, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         let sid = self.intern_mut().strings.intern(text);
         let slot = CellSlot {
             value: Value::Text(sid),
@@ -720,6 +785,7 @@ impl Workbook {
         col: u16,
         source: &str,
     ) -> Result<FormulaId, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         let fid = self.intern_mut().formulas.intern(source)?;
         let slot = CellSlot {
             value: Value::Empty,
@@ -739,6 +805,7 @@ impl Workbook {
         row: u32,
         col: u16,
     ) -> Result<Option<CellSlot>, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         self.replace_slot(id, row, col, None)
     }
 
@@ -799,6 +866,7 @@ impl Workbook {
         col: u16,
         style: Style,
     ) -> Result<StyleId, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         let sid = self.intern_mut().styles.intern(style);
         let mut slot = self
             .get(id, row, col)?
@@ -1037,6 +1105,16 @@ impl Workbook {
                 }
                 if let Some(t) = target {
                     self.tables.restore(t.clone())?;
+                }
+                Ok(())
+            }
+            Delta::Pivot { before, after } => {
+                let target = if inverse { before } else { after };
+                if let Some(t) = after.as_ref().or(before.as_ref()) {
+                    let _ = self.pivots.remove(t.id);
+                }
+                if let Some(t) = target {
+                    self.pivots.restore((**t).clone())?;
                 }
                 Ok(())
             }
@@ -1284,6 +1362,17 @@ impl Workbook {
     /// Remove a sheet. The last remaining sheet cannot be removed. The last
     /// visible sheet cannot be removed if it is the only visible one.
     pub fn remove_sheet(&mut self, id: SheetId) -> Result<Sheet, CoreError> {
+        if let Some(pivot) = self
+            .pivots
+            .iter()
+            .find(|pivot| pivot.source_sheet == id || pivot.dest_sheet == id)
+        {
+            return Err(CoreError::new(
+                "pivot.sheet",
+                format!("sheet is used by pivot {:?}", pivot.name),
+            )
+            .with_hint("remove the pivot table before deleting its source or output sheet"));
+        }
         if self.sheets.len() == 1 {
             return Err(CoreError::sheet_name(
                 "a workbook must contain at least one sheet",
@@ -1824,6 +1913,129 @@ impl Workbook {
         Ok(id)
     }
 
+    /// Insert a pivot definition without writing output (xlsx import).
+    pub fn import_pivot(&mut self, table: PivotTable) -> Result<PivotId, CoreError> {
+        self.pivots.insert(table)
+    }
+
+    /// Insert a pivot table and materialize its output region.
+    pub fn add_pivot(&mut self, table: PivotTable) -> Result<PivotId, CoreError> {
+        self.transact_try(move |workbook| workbook.add_pivot_inner(table))
+    }
+
+    fn add_pivot_inner(&mut self, mut table: PivotTable) -> Result<PivotId, CoreError> {
+        self.pivots.validate_insert(&table)?;
+        let cells = materialize(self, &table)?;
+        write_output(self, &mut table, &cells)?;
+        let id = self.pivots.insert(table.clone())?;
+        let stored = self.pivots.get(id).cloned();
+        self.undo.record(Delta::Pivot {
+            before: None,
+            after: stored.map(Box::new),
+        });
+        Ok(id)
+    }
+
+    /// Rebuild a pivot from its source range.
+    pub fn refresh_pivot(&mut self, id: PivotId) -> Result<(), CoreError> {
+        self.transact_try(|workbook| workbook.refresh_pivot_inner(id))
+    }
+
+    fn refresh_pivot_inner(&mut self, id: PivotId) -> Result<(), CoreError> {
+        let mut table =
+            self.pivots.get(id).cloned().ok_or_else(|| {
+                CoreError::new("pivot.id", format!("unknown pivot {}", id.index()))
+            })?;
+        let before = table.clone();
+        let cells = materialize(self, &table)?;
+        write_output(self, &mut table, &cells)?;
+        self.pivots.restore(table.clone())?;
+        self.undo.record(Delta::Pivot {
+            before: Some(Box::new(before)),
+            after: Some(Box::new(table)),
+        });
+        Ok(())
+    }
+
+    /// Rebuild a pivot from cached records (source range missing).
+    pub fn refresh_pivot_from_cache(
+        &mut self,
+        id: PivotId,
+        headers: &[String],
+        rows: &[Vec<CacheValue>],
+    ) -> Result<(), CoreError> {
+        self.transact_try(|workbook| workbook.refresh_pivot_from_cache_inner(id, headers, rows))
+    }
+
+    fn refresh_pivot_from_cache_inner(
+        &mut self,
+        id: PivotId,
+        headers: &[String],
+        rows: &[Vec<CacheValue>],
+    ) -> Result<(), CoreError> {
+        let mut table =
+            self.pivots.get(id).cloned().ok_or_else(|| {
+                CoreError::new("pivot.id", format!("unknown pivot {}", id.index()))
+            })?;
+        let before = table.clone();
+        let cells = materialize_from_cache(self.settings().date_system, &table, headers, rows)?;
+        write_output(self, &mut table, &cells)?;
+        self.pivots.restore(table.clone())?;
+        self.undo.record(Delta::Pivot {
+            before: Some(Box::new(before)),
+            after: Some(Box::new(table)),
+        });
+        Ok(())
+    }
+
+    /// Drop a pivot and clear its output region.
+    pub fn remove_pivot(&mut self, id: PivotId) -> Result<PivotTable, CoreError> {
+        self.transact_try(|workbook| workbook.remove_pivot_inner(id))
+    }
+
+    fn remove_pivot_inner(&mut self, id: PivotId) -> Result<PivotTable, CoreError> {
+        let mut table = self
+            .pivots
+            .remove(id)
+            .ok_or_else(|| CoreError::new("pivot.id", format!("unknown pivot {}", id.index())))?;
+        if table.out_end_row >= table.dest_row && table.out_end_col >= table.dest_col {
+            for r in table.dest_row..=table.out_end_row {
+                for c in table.dest_col..=table.out_end_col {
+                    let _ = self.write_slot(table.dest_sheet, r, c, None);
+                }
+            }
+        }
+        table.out_end_row = table.dest_row;
+        table.out_end_col = table.dest_col;
+        self.undo.record(Delta::Pivot {
+            before: Some(Box::new(table.clone())),
+            after: None,
+        });
+        Ok(table)
+    }
+
+    /// Restore or replace a pivot while preserving its stable id.
+    pub fn restore_pivot(&mut self, table: PivotTable) -> Result<(), CoreError> {
+        let before = self.pivots.get(table.id).cloned();
+        if before.as_ref() == Some(&table) {
+            return Ok(());
+        }
+        if before.is_some() {
+            let _ = self.pivots.remove(table.id);
+        }
+        if let Err(error) = self.pivots.restore(table.clone()) {
+            if let Some(previous) = before.clone() {
+                let _ = self.pivots.restore(previous);
+            }
+            return Err(error);
+        }
+        self.undo.record(Delta::Pivot {
+            before: before.map(Box::new),
+            after: Some(Box::new(table)),
+        });
+        Ok(())
+    }
+
     /// Create a table covering `range`, using the first row as headers.
     pub fn create_table(
         &mut self,
@@ -1835,6 +2047,7 @@ impl Workbook {
         let r1 = range.start.row.max(range.end.row);
         let c0 = range.start.col.min(range.end.col);
         let c1 = range.start.col.max(range.end.col);
+        self.ensure_range_not_pivot_output(sheet, r0, c0, r1, c1)?;
         if self.tables.iter().any(|existing| {
             existing.sheet == sheet
                 && ranges_overlap(
@@ -1954,6 +2167,13 @@ impl Workbook {
             range.start.row.max(range.end.row),
             range.start.col.max(range.end.col),
         );
+        self.ensure_range_not_pivot_output(
+            before.sheet,
+            new_bounds.0,
+            new_bounds.1,
+            new_bounds.2,
+            new_bounds.3,
+        )?;
         if self.tables.iter().any(|existing| {
             existing.id != id
                 && existing.sheet == before.sheet
@@ -2204,6 +2424,7 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
+        self.ensure_sheet_not_used_by_pivot(id)?;
         let n = i32::try_from(count).map_err(|_| CoreError::addr_ref("row count too large"))?;
         self.sheet_mut(id)?.store.shift_rows(at, n)?;
         self.undo.record(Delta::ShiftRows {
@@ -2220,6 +2441,7 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
+        self.ensure_sheet_not_used_by_pivot(id)?;
         if at >= crate::limits::MAX_ROWS {
             return Err(CoreError::addr_ref("row delete anchor is out of range"));
         }
@@ -2246,6 +2468,7 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
+        self.ensure_sheet_not_used_by_pivot(id)?;
         let n = i32::from(count);
         self.sheet_mut(id)?.store.shift_cols(at, n)?;
         self.undo.record(Delta::ShiftCols {
@@ -2262,6 +2485,7 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
+        self.ensure_sheet_not_used_by_pivot(id)?;
         if u32::from(at) >= u32::from(crate::limits::MAX_COLS) {
             return Err(CoreError::addr_ref("column delete anchor is out of range"));
         }
@@ -2292,6 +2516,7 @@ impl Workbook {
         note: Option<Note>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
+        self.ensure_not_pivot_output(id, row, col)?;
         self.mutate_sheet_edit(id, |sheet| {
             match note {
                 Some(n) => {
@@ -2314,6 +2539,7 @@ impl Workbook {
         comment: Option<Comment>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
+        self.ensure_not_pivot_output(id, row, col)?;
         self.mutate_sheet_edit(id, |sheet| {
             match comment {
                 Some(c) => {
@@ -2336,6 +2562,7 @@ impl Workbook {
         link: Option<Hyperlink>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
+        self.ensure_not_pivot_output(id, row, col)?;
         self.mutate_sheet_edit(id, |sheet| {
             match link {
                 Some(h) => {
@@ -2376,12 +2603,23 @@ impl Workbook {
         col: u16,
         slot: CellSlot,
     ) -> Result<Option<CellSlot>, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         self.replace_slot(id, row, col, Some(slot))
     }
 
     /// Intern text (refcount +1). Pair with [`Self::release_text`] after the slot holds it.
     pub fn intern_text(&mut self, text: &str) -> StrId {
         self.intern_mut().strings.intern(text)
+    }
+
+    /// Intern a style (refcount +1). Pair with [`Self::release_style`] after slots hold it.
+    pub fn intern_style(&mut self, style: Style) -> StyleId {
+        self.intern_mut().styles.intern(style)
+    }
+
+    /// Drop an interned-style refcount.
+    pub fn release_style(&mut self, id: StyleId) {
+        self.intern_mut().styles.release(id);
     }
 
     /// Drop an interned-text refcount.
@@ -2454,6 +2692,7 @@ impl Workbook {
         col: u16,
         input: &str,
     ) -> Result<Option<CellSlot>, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         let prev = self.get(id, row, col)?.copied();
         let style = prev.map(|slot| slot.style).unwrap_or(StyleId::DEFAULT);
         let flags = content_flags(prev);

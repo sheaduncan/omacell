@@ -149,6 +149,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
     }
 
     let mut extras: HashMap<String, WorksheetExtras> = HashMap::new();
+    let caches = super::pivot::load_caches(&package, &wb_name, &wb_rels, &mut warnings)?;
 
     for (meta, &id) in workbook_meta.sheets.iter().zip(&sheet_ids) {
         let rel = wb_rels.iter().find(|r| r.id == meta.rid);
@@ -199,6 +200,14 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
         load_tables(&mut wb, id, &package, &sheet_rels, &mut warnings)?;
         load_comments(&mut wb, id, &package, &sheet_rels, &persons, &mut warnings)?;
         load_charts(&mut wb, id, &package, &sheet_rels);
+        super::pivot::load_sheet_pivots(
+            &mut wb,
+            &package,
+            id,
+            &sheet_rels,
+            &caches,
+            &mut warnings,
+        )?;
     }
 
     apply_print_defined_names(&mut wb);

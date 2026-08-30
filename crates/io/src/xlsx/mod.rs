@@ -18,6 +18,7 @@ pub(crate) mod data;
 mod diff;
 mod drawing;
 mod opc;
+pub(crate) mod pivot;
 pub(crate) mod print;
 mod read;
 mod warnings;

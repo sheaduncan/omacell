@@ -1,0 +1,559 @@
+//! WP-24 pivot, Goal Seek, and statistics corpora.
+
+use std::path::PathBuf;
+
+use omacell_core::addr::{CellRef, RangeRef, SheetId};
+use omacell_core::dates::{CivilDate, date_to_serial};
+use omacell_core::eval::FnRegistry;
+use omacell_core::graph::CellCoord;
+use omacell_core::pivot::{
+    DateGroup, PivotAgg, PivotDataField, PivotGroup, PivotLayout, PivotTable, ShowAs, materialize,
+};
+use omacell_core::recalc::RecalcEngine;
+use omacell_core::stats::describe_range;
+use omacell_core::storage::CellSlot;
+use omacell_core::style::{Font, Style};
+use omacell_core::value::Value;
+use omacell_core::whatif::{DEFAULT_MAX_ITER, DEFAULT_TOL, goal_seek};
+use omacell_core::workbook::{DateSystem, Workbook};
+use serde::Deserialize;
+
+fn corpus(rel: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/corpus")
+        .join(rel)
+}
+
+fn range(r0: u32, c0: u16, r1: u32, c1: u16) -> RangeRef {
+    RangeRef::from_corners(CellRef::new(r0, c0).unwrap(), CellRef::new(r1, c1).unwrap())
+}
+
+#[derive(Deserialize)]
+struct CaseFile {
+    name: String,
+    headers: Vec<String>,
+    rows: Vec<Vec<serde_json::Value>>,
+    #[serde(default)]
+    rows_fields: Vec<String>,
+    #[serde(default)]
+    cols_fields: Vec<String>,
+    #[serde(default)]
+    data: Vec<DataSpec>,
+    #[serde(default)]
+    groups: std::collections::BTreeMap<String, GroupSpec>,
+    expect: Vec<ExpectCell>,
+}
+
+#[derive(Deserialize)]
+struct DataSpec {
+    source: String,
+    #[serde(default)]
+    agg: String,
+    #[serde(default)]
+    show_as: String,
+}
+
+#[derive(Deserialize)]
+struct GroupSpec {
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    numeric: Option<NumericSpec>,
+}
+
+#[derive(Deserialize)]
+struct NumericSpec {
+    start: f64,
+    size: f64,
+}
+
+#[derive(Deserialize)]
+struct ExpectCell {
+    row: u32,
+    col: u16,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    n: Option<f64>,
+}
+
+fn parse_iso_date(text: &str) -> Option<f64> {
+    let mut parts = text.split('-');
+    let year: i32 = parts.next()?.parse().ok()?;
+    let month: u8 = parts.next()?.parse().ok()?;
+    let day: u8 = parts.next()?.parse().ok()?;
+    date_to_serial(
+        CivilDate {
+            year,
+            month,
+            day,
+            lotus_leap: false,
+        },
+        DateSystem::Excel1900,
+    )
+    .map(|n| n as f64)
+}
+
+fn load_source(case: &CaseFile) -> Workbook {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    for (c, header) in case.headers.iter().enumerate() {
+        wb.set_text(sheet, 0, c as u16, header).unwrap();
+    }
+    for (r, row) in case.rows.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            match cell {
+                serde_json::Value::Number(n) => {
+                    wb.set_number(sheet, r as u32 + 1, c as u16, n.as_f64().unwrap())
+                        .unwrap();
+                }
+                serde_json::Value::String(s) => {
+                    if let Some(serial) = parse_iso_date(s) {
+                        wb.set_number(sheet, r as u32 + 1, c as u16, serial)
+                            .unwrap();
+                    } else {
+                        wb.set_text(sheet, r as u32 + 1, c as u16, s).unwrap();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    wb
+}
+
+fn definition(case: &CaseFile, dest_row: u32, dest_col: u16) -> PivotTable {
+    let sheet = SheetId::new(0);
+    let last_row = u32::try_from(case.rows.len()).unwrap();
+    let last_col = u16::try_from(case.headers.len().saturating_sub(1)).unwrap_or(0);
+    let mut table = PivotTable::new(
+        case.name.clone(),
+        sheet,
+        range(0, 0, last_row, last_col),
+        sheet,
+        dest_row,
+        dest_col,
+    );
+    table.rows = case.rows_fields.clone();
+    table.cols = case.cols_fields.clone();
+    table.data = case
+        .data
+        .iter()
+        .map(|d| PivotDataField {
+            source: d.source.clone(),
+            agg: PivotAgg::parse(if d.agg.is_empty() { "sum" } else { &d.agg }).unwrap(),
+            show_as: if d.show_as.is_empty() {
+                ShowAs::Normal
+            } else {
+                ShowAs::parse(&d.show_as).unwrap()
+            },
+        })
+        .collect();
+    table.groups = case
+        .groups
+        .iter()
+        .map(|(name, spec)| {
+            let group = if let Some(grain) = &spec.date {
+                PivotGroup::Date(DateGroup::parse(grain).unwrap())
+            } else if let Some(num) = &spec.numeric {
+                PivotGroup::Numeric {
+                    start: num.start,
+                    size: num.size,
+                }
+            } else {
+                PivotGroup::None
+            };
+            (name.clone(), group)
+        })
+        .collect();
+    table
+}
+
+fn cell_text(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> String {
+    match wb.get(sheet, row, col).ok().flatten().map(|s| s.value) {
+        Some(Value::Text(id)) => wb.intern().strings.get(id).unwrap_or("").to_string(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn cell_num(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> Option<f64> {
+    match wb.get(sheet, row, col).ok().flatten().map(|s| s.value) {
+        Some(Value::Number(n)) => Some(n),
+        _ => None,
+    }
+}
+
+fn assert_expect(wb: &Workbook, dest_row: u32, dest_col: u16, expect: &[ExpectCell], name: &str) {
+    let sheet = wb.active_sheet();
+    for cell in expect {
+        let row = dest_row + cell.row;
+        let col = dest_col + cell.col;
+        if let Some(text) = &cell.text {
+            assert_eq!(
+                cell_text(wb, sheet, row, col),
+                *text,
+                "{name} {}{}",
+                omacell_core::addr::col_to_letters(col).unwrap(),
+                row + 1
+            );
+        }
+        if let Some(n) = cell.n {
+            let got = cell_num(wb, sheet, row, col).unwrap_or(f64::NAN);
+            assert!(
+                (got - n).abs() < 1e-9,
+                "{name} {}{}: got {got} want {n}",
+                omacell_core::addr::col_to_letters(col).unwrap(),
+                row + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn pivot_corpus_definitions_match_expected_tables() {
+    let cases: Vec<CaseFile> =
+        serde_json::from_str(&std::fs::read_to_string(corpus("pivot/cases.json")).unwrap())
+            .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let mut wb = load_source(&case);
+        let table = definition(&case, 0, 4);
+        let cells = materialize(&wb, &table).unwrap();
+        let mut stored = table;
+        omacell_core::pivot::write_output(&mut wb, &mut stored, &cells).unwrap();
+        assert_expect(&wb, 0, 4, &case.expect, &case.name);
+    }
+}
+
+#[test]
+fn pivot_refresh_after_source_change() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_number(s, 1, 1, 10.0).unwrap();
+    wb.set_text(s, 2, 0, "West").unwrap();
+    wb.set_number(s, 2, 1, 70.0).unwrap();
+    let mut table = PivotTable::new("Sales", s, range(0, 0, 2, 1), s, 0, 4);
+    table.rows = vec!["Region".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let id = wb.add_pivot(table).unwrap();
+    assert_eq!(cell_num(&wb, s, 1, 5), Some(10.0));
+    wb.set_number(s, 1, 1, 15.0).unwrap();
+    wb.refresh_pivot(id).unwrap();
+    assert_eq!(cell_num(&wb, s, 1, 5), Some(15.0));
+    assert_eq!(cell_num(&wb, s, 3, 5), Some(85.0));
+}
+
+#[test]
+fn pivot_create_is_atomic_for_undo_and_blocks_sheet_removal() {
+    let mut wb = Workbook::new();
+    let source = wb.active_sheet();
+    let output = wb.add_sheet("Output").unwrap();
+    wb.set_text(source, 0, 0, "Region").unwrap();
+    wb.set_text(source, 0, 1, "Amount").unwrap();
+    wb.set_text(source, 1, 0, "East").unwrap();
+    wb.set_number(source, 1, 1, 10.0).unwrap();
+    let mut table = PivotTable::new("Sales", source, range(0, 0, 1, 1), output, 0, 0);
+    table.rows = vec!["Region".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    wb.add_pivot(table).unwrap();
+
+    assert_eq!(wb.remove_sheet(source).unwrap_err().code, "pivot.sheet");
+    assert_eq!(wb.remove_sheet(output).unwrap_err().code, "pivot.sheet");
+    assert_eq!(
+        wb.insert_rows(source, 0, 1).unwrap_err().code,
+        "pivot.readonly"
+    );
+    assert_eq!(
+        wb.insert_cols(output, 0, 1).unwrap_err().code,
+        "pivot.readonly"
+    );
+    wb.undo().unwrap();
+    assert!(wb.pivots().is_empty());
+    assert!(wb.get(output, 0, 0).unwrap().is_none());
+    assert!(wb.get(output, 1, 1).unwrap().is_none());
+    wb.redo().unwrap();
+    assert_eq!(wb.pivots().len(), 1);
+    assert_eq!(cell_num(&wb, output, 1, 1), Some(10.0));
+}
+
+#[test]
+fn pivot_output_is_read_only() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_number(s, 1, 1, 10.0).unwrap();
+    let mut table = PivotTable::new("Sales", s, range(0, 0, 1, 1), s, 0, 4);
+    table.rows = vec!["Region".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    wb.add_pivot(table).unwrap();
+    let err = wb.set_number(s, 1, 5, 99.0).unwrap_err();
+    assert_eq!(err.code, "pivot.readonly");
+    let err = wb.clear_cell(s, 1, 4).unwrap_err();
+    assert_eq!(err.code, "pivot.readonly");
+    let err = wb.set_cell_contents(s, 0, 5, "x").unwrap_err();
+    assert_eq!(err.code, "pivot.readonly");
+    let err = wb.set_slot(s, 1, 5, CellSlot::number(99.0)).unwrap_err();
+    assert_eq!(err.code, "pivot.readonly");
+    let err = wb
+        .set_cell_style(
+            s,
+            1,
+            5,
+            Style {
+                font: Font {
+                    bold: true,
+                    ..Font::default()
+                },
+                ..Style::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "pivot.readonly");
+}
+
+#[test]
+fn pivot_rejects_unknown_fields_and_unsafe_destinations() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_number(s, 1, 1, 10.0).unwrap();
+
+    let mut unknown = PivotTable::new("Unknown", s, range(0, 0, 1, 1), s, 0, 4);
+    unknown.rows = vec!["Missing".into()];
+    unknown.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let err = wb.add_pivot(unknown).unwrap_err();
+    assert_eq!(err.code, "pivot.field");
+
+    let mut overlap = PivotTable::new("Overlap", s, range(0, 0, 1, 1), s, 1, 1);
+    overlap.rows = vec!["Region".into()];
+    overlap.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let err = wb.add_pivot(overlap).unwrap_err();
+    assert_eq!(err.code, "pivot.output");
+
+    let mut overflow = PivotTable::new("Overflow", s, range(0, 0, 1, 1), s, 0, 16_383);
+    overflow.rows = vec!["Region".into()];
+    overflow.data = vec![
+        PivotDataField::new("Amount", PivotAgg::Sum),
+        PivotDataField::new("Amount", PivotAgg::Count),
+    ];
+    let err = wb.add_pivot(overflow).unwrap_err();
+    assert_eq!(err.code, "pivot.output");
+}
+
+#[test]
+fn percent_show_as_uses_fractional_values_and_percent_style() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_number(s, 1, 1, 30.0).unwrap();
+    wb.set_text(s, 2, 0, "West").unwrap();
+    wb.set_number(s, 2, 1, 70.0).unwrap();
+    let mut table = PivotTable::new("Percent", s, range(0, 0, 2, 1), s, 0, 4);
+    table.rows = vec!["Region".into()];
+    table.data = vec![PivotDataField {
+        source: "Amount".into(),
+        agg: PivotAgg::Sum,
+        show_as: ShowAs::PctOfTotal,
+    }];
+    wb.add_pivot(table).unwrap();
+
+    assert_eq!(cell_num(&wb, s, 1, 5), Some(0.3));
+    assert_eq!(cell_num(&wb, s, 2, 5), Some(0.7));
+    assert_eq!(cell_num(&wb, s, 3, 5), Some(1.0));
+    let slot = wb.get(s, 1, 5).unwrap().unwrap();
+    let style = wb.intern().styles.get(slot.style).unwrap();
+    assert_eq!(wb.num_fmt_code(style.num_fmt).as_deref(), Some("0.00%"));
+}
+
+#[test]
+fn pivot_layouts_and_aggs() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Product").unwrap();
+    wb.set_text(s, 0, 2, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_text(s, 1, 1, "A").unwrap();
+    wb.set_number(s, 1, 2, 10.0).unwrap();
+    wb.set_text(s, 2, 0, "East").unwrap();
+    wb.set_text(s, 2, 1, "B").unwrap();
+    wb.set_number(s, 2, 2, 20.0).unwrap();
+    wb.set_text(s, 3, 0, "West").unwrap();
+    wb.set_text(s, 3, 1, "A").unwrap();
+    wb.set_number(s, 3, 2, 40.0).unwrap();
+    let mut table = PivotTable::new("Sales", s, range(0, 0, 3, 2), s, 0, 5);
+    table.rows = vec!["Region".into(), "Product".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    table.layout = PivotLayout::Tabular;
+    let cells = materialize(&wb, &table).unwrap();
+    omacell_core::pivot::write_output(&mut wb, &mut table, &cells).unwrap();
+    assert_eq!(cell_text(&wb, s, 1, 5), "East");
+    assert_eq!(cell_text(&wb, s, 1, 6), "A");
+    assert!(
+        cell_text(&wb, s, 3, 5).contains("East"),
+        "subtotal {}",
+        cell_text(&wb, s, 3, 5)
+    );
+    let mut count = PivotTable::new("Count", s, range(0, 0, 3, 2), s, 20, 0);
+    count.rows = vec!["Region".into()];
+    count.data = vec![PivotDataField::new("Amount", PivotAgg::Count)];
+    let cells = materialize(&wb, &count).unwrap();
+    omacell_core::pivot::write_output(&mut wb, &mut count, &cells).unwrap();
+    assert_eq!(cell_num(&wb, s, 21, 1), Some(2.0));
+    let mut avg = PivotTable::new("Avg", s, range(0, 0, 3, 2), s, 30, 0);
+    avg.rows = vec!["Region".into()];
+    avg.data = vec![PivotDataField::new("Amount", PivotAgg::Average)];
+    let cells = materialize(&wb, &avg).unwrap();
+    omacell_core::pivot::write_output(&mut wb, &mut avg, &cells).unwrap();
+    assert_eq!(cell_num(&wb, s, 31, 1), Some(15.0));
+}
+
+#[test]
+fn goal_seek_corpus_converges_within_tolerance() {
+    let text = std::fs::read_to_string(corpus("whatif/goalseek.tsv")).unwrap();
+    for line in text.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with("name\t") {
+            continue;
+        }
+        let c: Vec<&str> = t.split('\t').collect();
+        let name = c[0];
+        let goal: f64 = c[2].parse().unwrap();
+        let start: f64 = c[4].parse().unwrap();
+        let formula = c[5];
+        let want_ok = c[6] == "true";
+        let mut wb = Workbook::new();
+        let s = wb.active_sheet();
+        wb.set_number(s, 0, 0, start).unwrap();
+        wb.set_cell_contents(s, 0, 1, formula).unwrap();
+        let mut engine = RecalcEngine::new(FnRegistry::new());
+        engine.recalc_rebuild(&mut wb);
+        let result = goal_seek(
+            &mut wb,
+            &mut engine,
+            CellCoord::new(s, 0, 1),
+            goal,
+            CellCoord::new(s, 0, 0),
+            DEFAULT_MAX_ITER,
+            DEFAULT_TOL,
+        )
+        .unwrap();
+        assert_eq!(result.converged, want_ok, "{name}");
+        if want_ok {
+            let expect: f64 = c[7].parse().unwrap();
+            assert!(
+                (result.input - expect).abs() < 1e-4,
+                "{name} input {} want {expect}",
+                result.input
+            );
+            assert!((result.output - goal).abs() <= DEFAULT_TOL * 10.0);
+        } else {
+            assert!(result.input.is_finite(), "{name} last trial must be finite");
+        }
+    }
+}
+
+#[test]
+fn goal_seek_is_one_undo_unit_and_honors_iteration_cap() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_number(s, 0, 0, 1.0).unwrap();
+    wb.set_cell_style(
+        s,
+        0,
+        0,
+        Style {
+            font: Font {
+                bold: true,
+                ..Font::default()
+            },
+            ..Style::default()
+        },
+    )
+    .unwrap();
+    wb.set_cell_contents(s, 0, 1, "=A1*2").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+
+    wb.transact_try(|workbook| {
+        goal_seek(
+            workbook,
+            &mut engine,
+            CellCoord::new(s, 0, 1),
+            10.0,
+            CellCoord::new(s, 0, 0),
+            DEFAULT_MAX_ITER,
+            DEFAULT_TOL,
+        )
+        .map(|_| ())
+    })
+    .unwrap();
+    assert_eq!(cell_num(&wb, s, 0, 0), Some(5.0));
+    let style = wb
+        .intern()
+        .styles
+        .get(wb.get(s, 0, 0).unwrap().unwrap().style)
+        .unwrap();
+    assert!(style.font.bold);
+    wb.undo().unwrap();
+    assert_eq!(cell_num(&wb, s, 0, 0), Some(1.0));
+    let style = wb
+        .intern()
+        .styles
+        .get(wb.get(s, 0, 0).unwrap().unwrap().style)
+        .unwrap();
+    assert!(style.font.bold);
+    assert!(wb.get(s, 0, 1).unwrap().unwrap().formula.is_some());
+
+    let result = goal_seek(
+        &mut wb,
+        &mut engine,
+        CellCoord::new(s, 0, 1),
+        10.0,
+        CellCoord::new(s, 0, 0),
+        1,
+        DEFAULT_TOL,
+    )
+    .unwrap();
+    assert_eq!(result.iterations, 1);
+}
+
+#[test]
+fn stats_describe_known_range() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    for (i, n) in [1.0, 2.0, 3.0, 4.0, 5.0].into_iter().enumerate() {
+        wb.set_number(s, i as u32, 0, n).unwrap();
+    }
+    wb.set_text(s, 5, 0, "x").unwrap();
+    let summary = describe_range(&wb, s, range(0, 0, 5, 0)).unwrap();
+    assert_eq!(summary.count, 5);
+    assert_eq!(summary.count_a, 6);
+    assert_eq!(summary.sum, 15.0);
+    assert_eq!(summary.mean, Some(3.0));
+    assert_eq!(summary.min, Some(1.0));
+    assert_eq!(summary.max, Some(5.0));
+    assert_eq!(summary.median, Some(3.0));
+    let var = summary.var.unwrap();
+    assert!((var - 2.5).abs() < 1e-12);
+    assert!((summary.stdev.unwrap() - var.sqrt()).abs() < 1e-12);
+    assert!(!summary.histogram.is_empty());
+    assert!(summary.histogram.iter().map(|b| b.count).sum::<u32>() == 5);
+}
+
+#[test]
+fn stats_rejects_an_unknown_sheet() {
+    let wb = Workbook::new();
+    let err = describe_range(&wb, SheetId::new(999), range(0, 0, 0, 0)).unwrap_err();
+    assert_eq!(err.code, omacell_core::error::codes::SHEET_ID);
+}

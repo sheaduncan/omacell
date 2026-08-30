@@ -64,6 +64,11 @@ impl<'a> CommandContext<'a> {
         self.engine
     }
 
+    /// Simultaneous workbook and engine borrows (Goal Seek).
+    pub fn workbook_and_engine(&mut self) -> (&mut Workbook, &mut RecalcEngine) {
+        (self.workbook, self.engine)
+    }
+
     /// Shared engine borrow for queries (WP-19).
     #[must_use]
     pub fn engine_ref(&self) -> &RecalcEngine {

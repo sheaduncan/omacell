@@ -130,6 +130,7 @@ pub fn sort_range(
     let spec = spec.clone();
     wb.transact_try(move |wb| {
         let (r0, c0, r1, c1) = norm(range);
+        wb.ensure_range_not_pivot_output(sheet, r0, c0, r1, c1)?;
         let max_offset = if spec.left_to_right {
             r1 - r0
         } else {
