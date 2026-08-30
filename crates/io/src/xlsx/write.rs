@@ -1108,11 +1108,20 @@ fn worksheet_xml(
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="{NS}" xmlns:r="{NS_R}">"#
     );
-    if let Some(color) = sheet.tab_color {
-        s.push_str(&format!(
-            "<sheetPr>{}</sheetPr>",
-            color_tag("tabColor", &color)
-        ));
+    let filter_mode = sheet
+        .autofilter
+        .as_ref()
+        .is_some_and(|filter| !filter.columns.is_empty());
+    if sheet.tab_color.is_some() || filter_mode {
+        s.push_str("<sheetPr");
+        if filter_mode {
+            s.push_str(r#" filterMode="1""#);
+        }
+        s.push('>');
+        if let Some(color) = sheet.tab_color {
+            s.push_str(&color_tag("tabColor", &color));
+        }
+        s.push_str("</sheetPr>");
     }
     s.push_str(&sheet_views_xml(sheet));
     s.push_str(&cols_xml(sheet));

@@ -666,6 +666,13 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
         .unwrap();
     let bytes = save_workbook_bytes(&wb).unwrap();
     let doc = open_bytes(&bytes).unwrap();
+    let sheet_xml = String::from_utf8_lossy(
+        &doc.package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("data worksheet part")
+            .bytes,
+    );
+    assert!(sheet_xml.contains(r#"<sheetPr filterMode="1">"#));
     let loaded = doc.workbook.sheet(doc.workbook.active_sheet()).unwrap();
     let filter = loaded.autofilter.as_ref().expect("autofilter");
     assert_eq!(filter.columns.len(), 1);
