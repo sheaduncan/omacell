@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -663,7 +664,7 @@ fn file_print(
 ) -> Result<Effect, CoreError> {
     let mut pages = Vec::new();
     for sheet in ctx.workbook_ref().sheets() {
-        for page in omacell_core::print::paginate(sheet, &sheet.page_setup) {
+        for page in omacell_core::print::paginate(sheet, &sheet.page_setup)? {
             pages.push(serde_json::json!({
                 "sheet": sheet.name,
                 "page": page.page,
@@ -677,6 +678,7 @@ fn file_print(
         }
     }
     let printers = list_printers();
+    let printer = args.printer.as_deref().map(validate_printer).transpose()?;
     if ctx.is_preflight() {
         return Ok(Effect::query(serde_json::json!({
             "pages": pages,
@@ -684,42 +686,130 @@ fn file_print(
             "dry_run": ctx.is_dry_run(),
         })));
     }
-    let mut written: Option<String> = None;
-    if args.path.is_some() || args.printer.is_some() {
-        let dest = match args.path.as_ref() {
-            Some(path) => PathBuf::from(path),
-            None => std::env::temp_dir().join(format!(
-                "omacell-print-{}-{}.pdf",
-                std::process::id(),
-                TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-            )),
+    let explicit_dest = args.path.as_deref().map(PathBuf::from);
+    if explicit_dest.is_some() || printer.is_some() {
+        let ephemeral = explicit_dest.is_none();
+        let dest = match explicit_dest.as_ref() {
+            Some(path) => path.clone(),
+            None => print_spool_path()?,
         };
         let options = pdf_options_for(session, &dest);
         let bytes = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
-        atomic_write_bytes(&dest, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
-        if let Some(printer) = args.printer.as_deref().filter(|p| !p.is_empty()) {
-            let status = std::process::Command::new("lp")
-                .args(["-d", printer, &dest.display().to_string()])
-                .status()
-                .map_err(|err| CoreError::new("file.print", format!("lp: {err}")))?;
-            if !status.success() {
-                return Err(CoreError::new(
-                    "file.print",
-                    format!("lp exited {}", status.code().unwrap_or(-1)),
-                ));
-            }
+        if ephemeral {
+            write_private_spool(&dest, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
+        } else {
+            atomic_write_bytes(&dest, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
         }
-        written = Some(dest.display().to_string());
+        let print_result = printer.map_or(Ok(()), |printer| send_to_printer(printer, &dest));
+        let cleanup_result = if ephemeral {
+            std::fs::remove_file(&dest)
+                .map_err(|err| CoreError::new("file.print", format!("remove spool PDF: {err}")))
+        } else {
+            Ok(())
+        };
+        print_result?;
+        cleanup_result?;
     }
     Ok(Effect {
         result: serde_json::json!({
             "pages": pages,
             "printers": printers,
-            "path": written,
+            "path": explicit_dest.map(|path| path.display().to_string()),
         }),
         auto_recalc: false,
         ..Effect::default()
     })
+}
+
+fn validate_printer(printer: &str) -> Result<&str, CoreError> {
+    if printer.is_empty()
+        || printer.len() > 127
+        || printer.starts_with('-')
+        || !printer
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err(CoreError::new(
+            "file.print",
+            "printer must be a non-empty CUPS name using letters, digits, '.', '_', or '-'",
+        ));
+    }
+    Ok(printer)
+}
+
+fn print_spool_path() -> Result<PathBuf, CoreError> {
+    let root = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| {
+            CoreError::new(
+                "file.print",
+                "printer output requires an absolute XDG_RUNTIME_DIR",
+            )
+            .with_hint("set XDG_RUNTIME_DIR or provide an explicit PDF path")
+        })?;
+    let app_dir = root.join("omacell");
+    let dir = app_dir.join("print");
+    for candidate in [&root, &app_dir, &dir] {
+        omacell_bus::ipc::prepare_runtime_dir(candidate)
+            .map_err(|err| CoreError::new("file.print", err.message))?;
+    }
+    loop {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("job-{}-{sequence}.pdf", std::process::id()));
+        if std::fs::symlink_metadata(&path).is_err() {
+            return Ok(path);
+        }
+    }
+}
+
+fn write_private_spool(
+    path: &Path,
+    bytes: &[u8],
+    cancel: Option<&AtomicBool>,
+) -> Result<(), CoreError> {
+    if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err(cancelled());
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|err| CoreError::new("file.print", format!("create spool PDF: {err}")))?;
+    let result = (|| {
+        file.write_all(bytes)
+            .map_err(|err| CoreError::new("file.print", format!("write spool PDF: {err}")))?;
+        file.sync_all()
+            .map_err(|err| CoreError::new("file.print", format!("sync spool PDF: {err}")))?;
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err(cancelled());
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+fn send_to_printer(printer: &str, path: &Path) -> Result<(), CoreError> {
+    let status = std::process::Command::new("lp")
+        .arg("-d")
+        .arg(printer)
+        .arg(path)
+        .status()
+        .map_err(|err| CoreError::new("file.print", format!("lp: {err}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CoreError::new(
+            "file.print",
+            format!("lp exited {}", status.code().unwrap_or(-1)),
+        ))
+    }
 }
 
 fn pdf_options_for(session: &FileSession, dest: &Path) -> omacell_io::pdf::PdfOptions {
@@ -750,4 +840,40 @@ fn list_printers() -> Vec<String> {
         .lines()
         .filter_map(|line| line.split_whitespace().next().map(str::to_string))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn printer_names_cannot_be_parsed_as_options() {
+        assert_eq!(validate_printer("office-2").unwrap(), "office-2");
+        assert!(validate_printer("-o").is_err());
+        assert!(validate_printer("office name").is_err());
+        assert!(validate_printer("office\nname").is_err());
+    }
+
+    #[test]
+    fn private_spool_is_exclusive_and_mode_0600() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("omacell-spool-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!(
+            "job-{}.pdf",
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        write_private_spool(&path, b"private", None).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(write_private_spool(&path, b"replace", None).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"private");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
 }

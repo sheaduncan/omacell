@@ -1,6 +1,8 @@
 //! PDF export of paginated sheets (spec F-11.2). Same grid + chart scene as the GUI.
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use omacell_core::addr::{SheetId, col_to_letters};
 use omacell_core::chart::{ChartTheme, Op, layout_chart};
@@ -20,6 +22,9 @@ use pdf_writer::{Content, Name, Pdf, Rect, Ref, Str};
 use crate::error;
 
 const FONT_NAME: Name<'_> = Name(b"F1");
+const MAX_EMBEDDED_FONT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_PDF_STREAM_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PDF_PAGES: usize = 10_000;
 const SYSTEM_INFO: SystemInfo<'_> = SystemInfo {
     registry: Str(b"Adobe"),
     ordering: Str(b"Identity"),
@@ -65,7 +70,7 @@ impl Default for PdfOptions {
 /// Encode `wb` as PDF bytes.
 pub fn write_pdf(wb: &Workbook, options: &PdfOptions) -> Result<Vec<u8>, CoreError> {
     let font_data = match &options.font_path {
-        Some(path) => Some(std::fs::read(path).map_err(|err| error::pdf_write(err.to_string()))?),
+        Some(path) => Some(read_font(path)?),
         None => None,
     };
     let face = font_data
@@ -89,9 +94,15 @@ pub fn write_pdf(wb: &Workbook, options: &PdfOptions) -> Result<Vec<u8>, CoreErr
     let mut pages: Vec<PlannedPage<'_>> = Vec::new();
     for sheet in wb.sheets() {
         let setup = &sheet.page_setup;
-        let boxes = paginate(sheet, setup);
+        let boxes = paginate(sheet, setup)?;
         for page in boxes {
             pages.push(PlannedPage { sheet, setup, page });
+        }
+        if pages.len() > MAX_PDF_PAGES {
+            return Err(CoreError::new(
+                "pdf.limit",
+                format!("PDF has more than {MAX_PDF_PAGES} pages"),
+            ));
         }
     }
     if pages.is_empty() {
@@ -132,6 +143,7 @@ pub fn write_pdf(wb: &Workbook, options: &PdfOptions) -> Result<Vec<u8>, CoreErr
         font_data.as_deref(),
     )?;
 
+    let mut stream_bytes = font_data.as_ref().map_or(0, Vec::len);
     for (i, planned) in pages.iter().enumerate() {
         let (media_w, media_h) = planned.setup.media_pt();
         let links = collect_links(wb, planned);
@@ -166,12 +178,49 @@ pub fn write_pdf(wb: &Workbook, options: &PdfOptions) -> Result<Vec<u8>, CoreErr
             &options.file_name,
             &options.theme,
         )?;
+        stream_bytes = stream_bytes.saturating_add(content.len());
+        if stream_bytes > MAX_PDF_STREAM_BYTES {
+            return Err(CoreError::new(
+                "pdf.limit",
+                format!(
+                    "PDF streams exceed {} MiB",
+                    MAX_PDF_STREAM_BYTES / (1024 * 1024)
+                ),
+            )
+            .with_hint("set a smaller print area or reduce cell text"));
+        }
         pdf.stream(content_ids[i], &content);
         annot_ids.push(this_annots);
     }
 
     let _ = annot_ids;
     Ok(pdf.finish())
+}
+
+fn read_font(path: &Path) -> Result<Vec<u8>, CoreError> {
+    let meta = std::fs::metadata(path).map_err(|err| error::pdf_write(err.to_string()))?;
+    if meta.len() > MAX_EMBEDDED_FONT_BYTES {
+        return Err(CoreError::new(
+            "pdf.limit",
+            format!(
+                "font is {} bytes; maximum is {MAX_EMBEDDED_FONT_BYTES}",
+                meta.len()
+            ),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    File::open(path)
+        .map_err(|err| error::pdf_write(err.to_string()))?
+        .take(MAX_EMBEDDED_FONT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| error::pdf_write(err.to_string()))?;
+    if bytes.len() as u64 > MAX_EMBEDDED_FONT_BYTES {
+        return Err(CoreError::new(
+            "pdf.limit",
+            format!("font exceeds {MAX_EMBEDDED_FONT_BYTES} bytes"),
+        ));
+    }
+    Ok(bytes)
 }
 
 struct Alloc(i32);
@@ -346,39 +395,81 @@ fn build_content(
     let origin_x = left + heading_w;
     let mut y_from_top = heading_h;
 
-    let (area_r0, area_c0, _, _) = print_bounds(sheet, setup);
-    let title_r1 = area_r0.saturating_add(setup.title_rows).saturating_sub(1);
-    let title_c1 = area_c0.saturating_add(setup.title_cols).saturating_sub(1);
+    let (area_r0, area_c0, area_r1, area_c1) = print_bounds(sheet, setup);
+    let title_rows = setup
+        .title_rows
+        .min(area_r1.saturating_sub(area_r0).saturating_add(1));
+    let title_cols = setup
+        .title_cols
+        .min(area_c1.saturating_sub(area_c0).saturating_add(1));
+    let title_r1 = area_r0.saturating_add(title_rows).saturating_sub(1);
+    let title_c1 = area_c0.saturating_add(title_cols).saturating_sub(1);
+    let title_c0 = (title_cols > 0).then_some(area_c0);
+    let title_w = if title_cols == 0 {
+        0.0
+    } else {
+        col_span_pt(sheet, area_c0, title_c1) * scale
+    };
+    let title_h = if title_rows == 0 {
+        0.0
+    } else {
+        row_span_pt(sheet, area_r0, title_r1) * scale
+    };
+    let data_x = origin_x + title_w;
 
     if setup.headings {
-        let mut x = origin_x;
-        for col in page.col0..=page.col1 {
-            let w = col_pt(sheet, col) * scale;
-            let label = col_to_letters(col).unwrap_or_else(|_| "?".into());
-            show_text(
+        if title_cols > 0 {
+            draw_col_labels(
+                sheet,
                 &mut content,
                 face,
-                x + 2.0,
+                area_c0,
+                title_c1,
+                origin_x,
                 media_h - top - heading_h + 2.0,
-                8.0,
-                &label,
-                (0.2, 0.2, 0.2),
+                scale,
             );
-            x += w;
         }
+        draw_col_labels(
+            sheet,
+            &mut content,
+            face,
+            page.col0,
+            page.col1,
+            data_x,
+            media_h - top - heading_h + 2.0,
+            scale,
+        );
     }
 
-    if setup.title_rows > 0 {
-        y_from_top += draw_row_band(
+    if title_rows > 0 {
+        if setup.headings {
+            draw_row_labels(
+                sheet,
+                &mut content,
+                face,
+                area_r0,
+                title_r1,
+                left,
+                media_h,
+                top,
+                y_from_top,
+                scale,
+            );
+        }
+        y_from_top += draw_split_band(
             wb,
             sheet,
             &mut content,
             face,
             area_r0,
             title_r1,
+            title_c0,
+            title_c1,
             page.col0,
             page.col1,
             origin_x,
+            data_x,
             media_h,
             top,
             y_from_top,
@@ -388,16 +479,33 @@ fn build_content(
         );
     }
 
-    y_from_top += draw_row_band(
+    if setup.headings {
+        draw_row_labels(
+            sheet,
+            &mut content,
+            face,
+            page.row0,
+            page.row1,
+            left,
+            media_h,
+            top,
+            y_from_top,
+            scale,
+        );
+    }
+    y_from_top += draw_split_band(
         wb,
         sheet,
         &mut content,
         face,
         page.row0,
         page.row1,
+        title_c0,
+        title_c1,
         page.col0,
         page.col1,
         origin_x,
+        data_x,
         media_h,
         top,
         y_from_top,
@@ -406,7 +514,7 @@ fn build_content(
         bw,
     );
 
-    let _ = (title_c1, y_from_top, media_w);
+    let _ = (y_from_top, media_w);
 
     for chart in &sheet.charts {
         let overlaps = chart.anchor.to_row >= page.row0
@@ -417,9 +525,10 @@ fn build_content(
             continue;
         }
         let scene = layout_chart(wb, chart, theme, 320.0, 200.0)?;
-        let x0 = origin_x
-            + col_offset_pt(sheet, page.col0, chart.anchor.from_col.max(page.col0)) * scale;
+        let x0 =
+            data_x + col_offset_pt(sheet, page.col0, chart.anchor.from_col.max(page.col0)) * scale;
         let y0 = heading_h
+            + title_h
             + row_offset_pt(sheet, page.row0, chart.anchor.from_row.max(page.row0)) * scale;
         let w = col_span_pt(
             sheet,
@@ -444,6 +553,99 @@ fn build_content(
     }
 
     Ok(content.finish())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_col_labels(
+    sheet: &Sheet,
+    content: &mut Content,
+    face: Option<&ttf_parser::Face<'_>>,
+    c0: u16,
+    c1: u16,
+    origin_x: f64,
+    y: f64,
+    scale: f64,
+) {
+    if c1 < c0 {
+        return;
+    }
+    let mut x = origin_x;
+    for col in c0..=c1 {
+        let w = col_pt(sheet, col) * scale;
+        let label = col_to_letters(col).unwrap_or_else(|_| "?".into());
+        show_text(content, face, x + 2.0, y, 8.0, &label, (0.2, 0.2, 0.2));
+        x += w;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_row_labels(
+    sheet: &Sheet,
+    content: &mut Content,
+    face: Option<&ttf_parser::Face<'_>>,
+    r0: u32,
+    r1: u32,
+    left: f64,
+    media_h: f64,
+    top: f64,
+    y_from_top: f64,
+    scale: f64,
+) {
+    if r1 < r0 {
+        return;
+    }
+    let mut y = y_from_top;
+    for row in r0..=r1 {
+        let h = row_pt(sheet, row) * scale;
+        if h > 0.0 {
+            show_text(
+                content,
+                face,
+                left + 2.0,
+                media_h - top - y - h + (h * 0.25).max(1.0),
+                8.0,
+                &(row + 1).to_string(),
+                (0.2, 0.2, 0.2),
+            );
+        }
+        y += h;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_split_band(
+    wb: &Workbook,
+    sheet: &Sheet,
+    content: &mut Content,
+    face: Option<&ttf_parser::Face<'_>>,
+    r0: u32,
+    r1: u32,
+    title_c0: Option<u16>,
+    title_c1: u16,
+    data_c0: u16,
+    data_c1: u16,
+    title_x: f64,
+    data_x: f64,
+    media_h: f64,
+    top: f64,
+    y_from_top: f64,
+    scale: f64,
+    gridlines: bool,
+    bw: bool,
+) -> f64 {
+    if let Some(title_c0) = title_c0 {
+        draw_row_band(
+            wb, sheet, content, face, r0, r1, title_c0, title_c1, title_x, media_h, top,
+            y_from_top, scale, gridlines, bw,
+        );
+    }
+    if data_c1 >= data_c0 {
+        draw_row_band(
+            wb, sheet, content, face, r0, r1, data_c0, data_c1, data_x, media_h, top, y_from_top,
+            scale, gridlines, bw,
+        );
+    }
+    row_span_pt(sheet, r0, r1) * scale
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -740,28 +942,63 @@ fn col_offset_pt(sheet: &Sheet, from: u16, to: u16) -> f64 {
     }
 }
 
-fn collect_links(wb: &Workbook, planned: &PlannedPage<'_>) -> Vec<LinkAnn> {
+fn collect_links(_wb: &Workbook, planned: &PlannedPage<'_>) -> Vec<LinkAnn> {
     let sheet = planned.sheet;
     let page = &planned.page;
     let setup = planned.setup;
-    let (media_w, media_h) = setup.media_pt();
-    let _ = media_w;
+    let (_, media_h) = setup.media_pt();
     let left = setup.margins.left_pt();
     let top = setup.margins.top_pt();
     let scale = page.scale;
+    let heading_w = if setup.headings { 28.0 } else { 0.0 };
+    let heading_h = if setup.headings { 14.0 } else { 0.0 };
+    let (area_r0, area_c0, area_r1, area_c1) = print_bounds(sheet, setup);
+    let title_rows = setup
+        .title_rows
+        .min(area_r1.saturating_sub(area_r0).saturating_add(1));
+    let title_cols = setup
+        .title_cols
+        .min(area_c1.saturating_sub(area_c0).saturating_add(1));
+    let title_r1 = area_r0.saturating_add(title_rows).saturating_sub(1);
+    let title_c1 = area_c0.saturating_add(title_cols).saturating_sub(1);
+    let title_w = if title_cols == 0 {
+        0.0
+    } else {
+        col_span_pt(sheet, area_c0, title_c1) * scale
+    };
+    let title_h = if title_rows == 0 {
+        0.0
+    } else {
+        row_span_pt(sheet, area_r0, title_r1) * scale
+    };
     let mut out = Vec::new();
     let mut links: Vec<((u32, u16), &Hyperlink)> =
         sheet.hyperlinks.iter().map(|(k, v)| (*k, v)).collect();
     links.sort_by_key(|(k, _)| *k);
     for ((row, col), link) in links {
-        if row < page.row0 || row > page.row1 || col < page.col0 || col > page.col1 {
+        let title_col = title_cols > 0 && (area_c0..=title_c1).contains(&col);
+        let data_col = page.col1 >= page.col0 && (page.col0..=page.col1).contains(&col);
+        let title_row = title_rows > 0 && (area_r0..=title_r1).contains(&row);
+        let data_row = page.row1 >= page.row0 && (page.row0..=page.row1).contains(&row);
+        if !(title_col || data_col) || !(title_row || data_row) {
             continue;
         }
         if !(link.target.starts_with("http://") || link.target.starts_with("https://")) {
             continue;
         }
-        let x = left + col_offset_pt(sheet, page.col0, col) * scale;
-        let y_top = row_offset_pt(sheet, page.row0, row) * scale;
+        let x = left
+            + heading_w
+            + if title_col {
+                col_offset_pt(sheet, area_c0, col) * scale
+            } else {
+                title_w + col_offset_pt(sheet, page.col0, col) * scale
+            };
+        let y_top = heading_h
+            + if title_row {
+                row_offset_pt(sheet, area_r0, row) * scale
+            } else {
+                title_h + row_offset_pt(sheet, page.row0, row) * scale
+            };
         let w = col_pt(sheet, col) * scale;
         let h = row_pt(sheet, row) * scale;
         let pdf_y = media_h - top - y_top - h;
@@ -770,7 +1007,6 @@ fn collect_links(wb: &Workbook, planned: &PlannedPage<'_>) -> Vec<LinkAnn> {
             uri: link.target.clone(),
         });
     }
-    let _ = wb;
     out
 }
 

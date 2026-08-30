@@ -3,11 +3,19 @@
 use serde::{Deserialize, Serialize};
 
 use crate::addr::RangeRef;
+use crate::error::CoreError;
 use crate::geometry::{DEFAULT_COL_PX, DEFAULT_ROW_PX};
+use crate::limits::{MAX_COLS, MAX_ROWS};
 use crate::sheet::Sheet;
 
 /// 96 CSS px → 72 PDF points.
 pub const PX_TO_PT: f64 = 72.0 / 96.0;
+
+/// Maximum pages produced by one workbook sheet.
+pub const MAX_PRINT_PAGES: usize = 10_000;
+
+/// Maximum cell rectangles visited across one sheet's generated pages.
+pub const MAX_PRINT_CELL_VISITS: u64 = 10_000_000;
 
 /// Paper size in PDF points (1/72 in).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -228,6 +236,73 @@ impl Default for PageSetup {
 }
 
 impl PageSetup {
+    /// Reject non-finite, out-of-grid, and physically impossible settings.
+    pub fn validate(&self) -> Result<(), CoreError> {
+        let margin_values = [
+            self.margins.left,
+            self.margins.right,
+            self.margins.top,
+            self.margins.bottom,
+            self.margins.header,
+            self.margins.footer,
+        ];
+        if margin_values
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(CoreError::new(
+                "print.setup",
+                "page margins must be finite, non-negative inches",
+            ));
+        }
+        let (media_w, media_h) = self.media_pt();
+        if self.margins.left_pt() + self.margins.right_pt() >= media_w
+            || self.margins.top_pt() + self.margins.bottom_pt() >= media_h
+        {
+            return Err(CoreError::new(
+                "print.setup",
+                "page margins leave no printable area",
+            ));
+        }
+        if !(10..=400).contains(&self.scale_percent) {
+            return Err(CoreError::new(
+                "print.setup",
+                "print scale must be between 10 and 400 percent",
+            ));
+        }
+        if self.fit_to_width == Some(0) || self.fit_to_height == Some(0) {
+            return Err(CoreError::new(
+                "print.setup",
+                "zero fit-to values must be represented as unlimited (None)",
+            ));
+        }
+        if self.title_rows > MAX_ROWS || self.title_cols > MAX_COLS {
+            return Err(CoreError::new(
+                "print.setup",
+                "print-title counts exceed the worksheet grid",
+            ));
+        }
+        if self.row_breaks.iter().any(|row| *row >= MAX_ROWS - 1)
+            || self.col_breaks.iter().any(|col| *col >= MAX_COLS - 1)
+        {
+            return Err(CoreError::new(
+                "print.setup",
+                "manual page break is outside the worksheet grid",
+            ));
+        }
+        if let Some(area) = self.print_area {
+            area.start.validate()?;
+            area.end.validate()?;
+            if area.is_3d() {
+                return Err(CoreError::new(
+                    "print.setup",
+                    "print area cannot span multiple sheets",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Media box width × height in points.
     #[must_use]
     pub fn media_pt(&self) -> (f64, f64) {
@@ -275,28 +350,34 @@ pub struct PageBox {
 }
 
 /// Paginate `sheet` using `setup`.
-#[must_use]
-pub fn paginate(sheet: &Sheet, setup: &PageSetup) -> Vec<PageBox> {
+pub fn paginate(sheet: &Sheet, setup: &PageSetup) -> Result<Vec<PageBox>, CoreError> {
+    setup.validate()?;
     let (area_r0, area_c0, area_r1, area_c1) = print_bounds(sheet, setup);
+    let title_rows = setup
+        .title_rows
+        .min(area_r1.saturating_sub(area_r0).saturating_add(1));
+    let title_cols = setup
+        .title_cols
+        .min(area_c1.saturating_sub(area_c0).saturating_add(1));
     let (usable_w, usable_h) = setup.usable_pt();
     let heading_w = if setup.headings { 28.0 } else { 0.0 };
     let heading_h = if setup.headings { 14.0 } else { 0.0 };
-    let title_h = if setup.title_rows == 0 {
+    let title_h = if title_rows == 0 {
         0.0
     } else {
         row_span_pt(
             sheet,
             area_r0,
-            area_r0.saturating_add(setup.title_rows).saturating_sub(1),
+            area_r0.saturating_add(title_rows).saturating_sub(1),
         )
     };
-    let title_w = if setup.title_cols == 0 {
+    let title_w = if title_cols == 0 {
         0.0
     } else {
         col_span_pt(
             sheet,
             area_c0,
-            area_c0.saturating_add(setup.title_cols).saturating_sub(1),
+            area_c0.saturating_add(title_cols).saturating_sub(1),
         )
     };
     let content_w = col_span_pt(sheet, area_c0, area_c1);
@@ -305,17 +386,54 @@ pub fn paginate(sheet: &Sheet, setup: &PageSetup) -> Vec<PageBox> {
         setup,
         content_w,
         content_h,
+        title_w,
+        title_h,
         (usable_w - heading_w).max(1.0),
         (usable_h - heading_h).max(1.0),
     );
     let data_w = ((usable_w - heading_w) / scale - title_w).max(1.0);
     let data_h = ((usable_h - heading_h) / scale - title_h).max(1.0);
 
-    let data_r0 = area_r0.saturating_add(setup.title_rows);
-    let data_c0 = area_c0.saturating_add(setup.title_cols);
-    let row_pages = pack_axis_rows(sheet, data_r0, area_r1, data_h, &setup.row_breaks);
-    let col_pages = pack_axis_cols(sheet, data_c0, area_c1, data_w, &setup.col_breaks);
-    let pages = (row_pages.len() * col_pages.len()).max(1) as u32;
+    let data_r0 = area_r0.saturating_add(title_rows);
+    let data_c0 = area_c0.saturating_add(title_cols);
+    let mut row_pages = pack_axis_rows(sheet, data_r0, area_r1, data_h, &setup.row_breaks);
+    let mut col_pages = pack_axis_cols(sheet, data_c0, area_c1, data_w, &setup.col_breaks);
+    if row_pages.is_empty() {
+        row_pages.push((data_r0, area_r1));
+    }
+    if col_pages.is_empty() {
+        col_pages.push((data_c0, area_c1));
+    }
+    let page_count = row_pages
+        .len()
+        .checked_mul(col_pages.len())
+        .ok_or_else(|| CoreError::new("print.limit", "print page count overflow"))?;
+    if page_count > MAX_PRINT_PAGES {
+        return Err(CoreError::new(
+            "print.limit",
+            format!("print job has {page_count} pages; maximum is {MAX_PRINT_PAGES}"),
+        )
+        .with_hint("set a print area or use fit-to-page scaling"));
+    }
+    let mut visits = 0u64;
+    for (r0, r1) in &row_pages {
+        let rows = if r1 < r0 { 0 } else { u64::from(r1 - r0) + 1 } + u64::from(title_rows);
+        for (c0, c1) in &col_pages {
+            let cols = if c1 < c0 { 0 } else { u64::from(c1 - c0) + 1 } + u64::from(title_cols);
+            visits = visits.saturating_add(rows.saturating_mul(cols));
+        }
+    }
+    if visits > MAX_PRINT_CELL_VISITS {
+        return Err(CoreError::new(
+            "print.limit",
+            format!(
+                "print job visits {visits} cell rectangles; maximum is {MAX_PRINT_CELL_VISITS}"
+            ),
+        )
+        .with_hint("set a smaller print area or reduce repeated title bands"));
+    }
+    let pages = u32::try_from(page_count)
+        .map_err(|_| CoreError::new("print.limit", "print page count does not fit u32"))?;
     let mut out = Vec::new();
     let mut n = 1u32;
     for (r0, r1) in &row_pages {
@@ -332,18 +450,7 @@ pub fn paginate(sheet: &Sheet, setup: &PageSetup) -> Vec<PageBox> {
             n += 1;
         }
     }
-    if out.is_empty() {
-        out.push(PageBox {
-            row0: data_r0,
-            row1: data_r0,
-            col0: data_c0,
-            col1: data_c0,
-            scale,
-            page: 1,
-            pages: 1,
-        });
-    }
-    out
+    Ok(out)
 }
 
 /// Inclusive print-area or used-range bounds `(row0, col0, row1, col1)`.
@@ -367,14 +474,20 @@ fn compute_scale(
     setup: &PageSetup,
     content_w: f64,
     content_h: f64,
+    title_w: f64,
+    title_h: f64,
     usable_w: f64,
     usable_h: f64,
 ) -> f64 {
     if setup.fit_to_width.is_some() || setup.fit_to_height.is_some() {
-        let fw = f64::from(setup.fit_to_width.unwrap_or(1).max(1));
-        let fh = f64::from(setup.fit_to_height.unwrap_or(1).max(1));
-        let sx = (fw * usable_w) / content_w.max(1.0);
-        let sy = (fh * usable_h) / content_h.max(1.0);
+        let sx = setup.fit_to_width.map_or(f64::INFINITY, |pages| {
+            let repeated = title_w * f64::from(pages.saturating_sub(1));
+            (f64::from(pages) * usable_w) / (content_w + repeated).max(1.0)
+        });
+        let sy = setup.fit_to_height.map_or(f64::INFINITY, |pages| {
+            let repeated = title_h * f64::from(pages.saturating_sub(1));
+            (f64::from(pages) * usable_h) / (content_h + repeated).max(1.0)
+        });
         let pct = ((sx.min(sy) * 100.0).floor() as u32).clamp(10, 400);
         f64::from(pct) / 100.0
     } else {

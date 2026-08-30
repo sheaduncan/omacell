@@ -77,24 +77,30 @@ fn truthy(s: &str) -> bool {
 }
 
 fn apply_margins(setup: &mut PageSetup, attrs: &[(String, String)]) {
-    if let Some(v) = attr(attrs, "left").and_then(|s| s.parse().ok()) {
+    if let Some(v) = margin(attrs, "left") {
         setup.margins.left = v;
     }
-    if let Some(v) = attr(attrs, "right").and_then(|s| s.parse().ok()) {
+    if let Some(v) = margin(attrs, "right") {
         setup.margins.right = v;
     }
-    if let Some(v) = attr(attrs, "top").and_then(|s| s.parse().ok()) {
+    if let Some(v) = margin(attrs, "top") {
         setup.margins.top = v;
     }
-    if let Some(v) = attr(attrs, "bottom").and_then(|s| s.parse().ok()) {
+    if let Some(v) = margin(attrs, "bottom") {
         setup.margins.bottom = v;
     }
-    if let Some(v) = attr(attrs, "header").and_then(|s| s.parse().ok()) {
+    if let Some(v) = margin(attrs, "header") {
         setup.margins.header = v;
     }
-    if let Some(v) = attr(attrs, "footer").and_then(|s| s.parse().ok()) {
+    if let Some(v) = margin(attrs, "footer") {
         setup.margins.footer = v;
     }
+}
+
+fn margin(attrs: &[(String, String)], name: &str) -> Option<f64> {
+    attr(attrs, name)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 fn apply_page_setup(setup: &mut PageSetup, attrs: &[(String, String)]) {
@@ -104,14 +110,14 @@ fn apply_page_setup(setup: &mut PageSetup, attrs: &[(String, String)]) {
     if attr(attrs, "orientation").is_some_and(|s| s.eq_ignore_ascii_case("landscape")) {
         setup.orientation = Orientation::Landscape;
     }
-    if let Some(scale) = attr(attrs, "scale").and_then(|s| s.parse().ok()) {
-        setup.scale_percent = scale;
+    if let Some(scale) = attr(attrs, "scale").and_then(|s| s.parse::<u32>().ok()) {
+        setup.scale_percent = scale.clamp(10, 400);
     }
-    if let Some(w) = attr(attrs, "fitToWidth").and_then(|s| s.parse().ok()) {
-        setup.fit_to_width = Some(w);
+    if let Some(w) = attr(attrs, "fitToWidth").and_then(|s| s.parse::<u32>().ok()) {
+        setup.fit_to_width = (w > 0).then_some(w);
     }
-    if let Some(h) = attr(attrs, "fitToHeight").and_then(|s| s.parse().ok()) {
-        setup.fit_to_height = Some(h);
+    if let Some(h) = attr(attrs, "fitToHeight").and_then(|s| s.parse::<u32>().ok()) {
+        setup.fit_to_height = (h > 0).then_some(h);
     }
     setup.black_and_white = attr(attrs, "blackAndWhite").is_some_and(truthy);
 }
@@ -134,10 +140,20 @@ fn apply_break(setup: &mut PageSetup, attrs: &[(String, String)], col: bool) {
     }
 }
 
-/// True when extras already carry raw print XML (corpus L3 path).
+/// True when raw print XML still models the current setup (corpus L3 path).
 #[must_use]
-pub(crate) fn extras_win(print_xml: &[Vec<u8>]) -> bool {
-    !print_xml.is_empty()
+pub(crate) fn extras_match(print_xml: &[Vec<u8>], setup: &PageSetup) -> bool {
+    if print_xml.is_empty() {
+        return false;
+    }
+    let mut parsed = PageSetup {
+        print_area: setup.print_area,
+        title_rows: setup.title_rows,
+        title_cols: setup.title_cols,
+        ..PageSetup::default()
+    };
+    apply_print_xml(&mut parsed, print_xml);
+    parsed == *setup
 }
 
 /// Modeled print XML, one complete root per blob (spec order).
@@ -227,13 +243,13 @@ pub(crate) fn modeled_print_xml(setup: &PageSetup) -> Vec<String> {
 /// Parse `_xlnm.Print_Area` / `Print_Titles` formula text.
 pub(crate) fn apply_print_name(setup: &mut PageSetup, name: &str, referent: &str) {
     let lower = name.to_ascii_lowercase();
-    if lower.ends_with("print_area") {
+    if is_print_area(&lower) {
         if let Some(range) = parse_print_range(referent) {
             setup.print_area = Some(range);
         }
         return;
     }
-    if lower.ends_with("print_titles") {
+    if is_print_titles(&lower) {
         for part in referent.split(',') {
             if let Some(range) = parse_print_range(part.trim()) {
                 let rows = range
@@ -255,6 +271,42 @@ pub(crate) fn apply_print_name(setup: &mut PageSetup, name: &str, referent: &str
             }
         }
     }
+}
+
+/// Whether `name` is one of Excel's built-in print defined names.
+#[must_use]
+pub(crate) fn is_print_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    is_print_area(&lower) || is_print_titles(&lower)
+}
+
+fn is_print_area(lower: &str) -> bool {
+    matches!(lower, "_xlnm.print_area" | "print_area")
+}
+
+fn is_print_titles(lower: &str) -> bool {
+    matches!(lower, "_xlnm.print_titles" | "print_titles")
+}
+
+/// True when preserved print defined names still model the current setup.
+pub(crate) fn print_names_match<'a>(
+    setup: &PageSetup,
+    names: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> bool {
+    let mut parsed = PageSetup::default();
+    let mut saw_area = false;
+    let mut saw_titles = false;
+    for (name, referent) in names {
+        let lower = name.to_ascii_lowercase();
+        saw_area |= is_print_area(&lower);
+        saw_titles |= is_print_titles(&lower);
+        apply_print_name(&mut parsed, name, referent);
+    }
+    saw_area == setup.print_area.is_some()
+        && saw_titles == (setup.title_rows > 0 || setup.title_cols > 0)
+        && parsed.print_area == setup.print_area
+        && parsed.title_rows == setup.title_rows
+        && parsed.title_cols == setup.title_cols
 }
 
 fn parse_print_range(text: &str) -> Option<RangeRef> {
@@ -310,5 +362,55 @@ fn escape_name(name: &str) -> String {
         format!("'{}'", name.replace('\'', "''"))
     } else {
         name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_numeric_attributes_do_not_poison_page_setup() {
+        let mut setup = PageSetup::default();
+        apply_print_xml(
+            &mut setup,
+            &[
+                br#"<pageMargins left="NaN" right="-1" top="inf"/>"#.to_vec(),
+                br#"<pageSetup scale="0" fitToWidth="0" fitToHeight="2"/>"#.to_vec(),
+            ],
+        );
+        assert_eq!(setup.margins, omacell_core::print::Margins::default());
+        assert_eq!(setup.scale_percent, 10);
+        assert_eq!(setup.fit_to_width, None);
+        assert_eq!(setup.fit_to_height, Some(2));
+        setup.validate().unwrap();
+    }
+
+    #[test]
+    fn raw_print_xml_only_wins_while_it_matches() {
+        let raw =
+            vec![br#"<pageSetup paperSize="9" orientation="landscape" scale="100"/>"#.to_vec()];
+        let setup = PageSetup {
+            paper: PaperSize::A4,
+            orientation: Orientation::Landscape,
+            ..PageSetup::default()
+        };
+        assert!(extras_match(&raw, &setup));
+        assert!(!extras_match(
+            &raw,
+            &PageSetup {
+                paper: PaperSize::Legal,
+                ..setup
+            }
+        ));
+    }
+
+    #[test]
+    fn similarly_suffixed_user_name_is_not_a_builtin_print_name() {
+        let mut setup = PageSetup::default();
+        apply_print_name(&mut setup, "Quarterly_Print_Area", "$A$1:$B$2");
+        assert_eq!(setup.print_area, None);
+        assert!(!is_print_name("Quarterly_Print_Area"));
+        assert!(is_print_name("_xlnm.Print_Area"));
     }
 }

@@ -10,6 +10,7 @@ use crate::chart::{Chart, Sparkline};
 use crate::command::UndoUnitId;
 use crate::error::CoreError;
 use crate::names::{DefinedName, NameScope};
+use crate::print::PageSetup;
 use crate::sheet::{Sheet, SheetVisibility};
 use crate::storage::CellSlot;
 use crate::style::Color;
@@ -168,6 +169,15 @@ pub enum Delta {
         /// New.
         after: Option<Color>,
     },
+    /// Per-sheet print/page setup.
+    PageSetup {
+        /// Sheet.
+        sheet: SheetId,
+        /// Previous setup.
+        before: Box<PageSetup>,
+        /// New setup.
+        after: Box<PageSetup>,
+    },
     /// Defined name upsert / remove.
     Name {
         /// Scope + name identity.
@@ -263,6 +273,17 @@ impl Delta {
             }
             Self::SheetRename { before, after, .. } => 32 + before.len() + after.len(),
             Self::SheetVisibility { .. } | Self::TabColor { .. } => 16,
+            Self::PageSetup { before, after, .. } => {
+                256 + before.header.as_ref().map(String::len).unwrap_or(0)
+                    + before.footer.as_ref().map(String::len).unwrap_or(0)
+                    + after.header.as_ref().map(String::len).unwrap_or(0)
+                    + after.footer.as_ref().map(String::len).unwrap_or(0)
+                    + (before.row_breaks.len()
+                        + before.col_breaks.len()
+                        + after.row_breaks.len()
+                        + after.col_breaks.len())
+                        * 4
+            }
             Self::Name { before, after, .. } => {
                 64 + before.as_ref().map(|n| n.name.len()).unwrap_or(0)
                     + after.as_ref().map(|n| n.name.len()).unwrap_or(0)
@@ -315,6 +336,7 @@ impl Delta {
             | Self::SheetRename { id, .. }
             | Self::SheetVisibility { id, .. }
             | Self::TabColor { id, .. } => AffectedRange::sheet(*id),
+            Self::PageSetup { sheet, .. } => AffectedRange::sheet(*sheet),
             Self::Name { .. } | Self::Table { .. } => AffectedRange::sheet(SheetId::new(0)),
             Self::ChartAdd { sheet, .. }
             | Self::ChartRemove { sheet, .. }

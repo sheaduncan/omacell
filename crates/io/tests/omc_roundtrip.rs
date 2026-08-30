@@ -8,6 +8,7 @@ use omacell_core::changeset::{
 use omacell_core::command::{CommandId, Origin};
 use omacell_core::intern::{ArrayPayload, RichTextRun};
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
+use omacell_core::print::{Orientation, PageSetup, PaperSize};
 use omacell_core::sheet::{Comment, Hyperlink, Note, ProtectionState, SplitView};
 use omacell_core::storage::{CellFlags, CellSlot};
 use omacell_core::style::{Color, Font, StyleId};
@@ -51,6 +52,29 @@ fn appendix_e_sketch_parses() {
     let doc = open_str(&text).unwrap();
     assert!(doc.workbook.resolve_sheet_name("Inputs").is_ok());
     assert!(doc.workbook.resolve_sheet_name("Model").is_ok());
+}
+
+#[test]
+fn modeled_page_setup_round_trips_through_omc() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let setup = PageSetup {
+        paper: PaperSize::A4,
+        orientation: Orientation::Landscape,
+        title_rows: 2,
+        ..PageSetup::default()
+    };
+    wb.set_page_setup(sheet, setup.clone()).unwrap();
+    let text = to_string(&OmcDocument::from_workbook(wb)).unwrap();
+    let reopened = open_str(&text).unwrap();
+    assert_eq!(
+        reopened
+            .workbook
+            .sheet(reopened.workbook.active_sheet())
+            .unwrap()
+            .page_setup,
+        setup
+    );
 }
 
 #[test]

@@ -474,7 +474,17 @@ impl Workbook {
 
     /// Replace a sheet's page setup (print / PDF).
     pub fn set_page_setup(&mut self, id: SheetId, setup: PageSetup) -> Result<(), CoreError> {
-        self.sheet_mut(id)?.page_setup = setup;
+        setup.validate()?;
+        let before = self.sheet_mut(id)?.page_setup.clone();
+        if before == setup {
+            return Ok(());
+        }
+        self.sheet_mut(id)?.page_setup = setup.clone();
+        self.undo.record(Delta::PageSetup {
+            sheet: id,
+            before: Box::new(before),
+            after: Box::new(setup),
+        });
         Ok(())
     }
 
@@ -834,6 +844,18 @@ impl Workbook {
             Delta::TabColor { id, before, after } => {
                 let c = if inverse { *before } else { *after };
                 self.sheet_mut(*id)?.tab_color = c;
+                Ok(())
+            }
+            Delta::PageSetup {
+                sheet,
+                before,
+                after,
+            } => {
+                self.sheet_mut(*sheet)?.page_setup = if inverse {
+                    (**before).clone()
+                } else {
+                    (**after).clone()
+                };
                 Ok(())
             }
             Delta::Name {

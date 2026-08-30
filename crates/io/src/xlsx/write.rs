@@ -424,8 +424,42 @@ fn workbook_xml(
     }
     s.push_str("</sheets>");
     let names: Vec<_> = wb.names().iter().collect();
+    let rewrite_print_names: Vec<bool> = sheets
+        .iter()
+        .map(|sheet| {
+            let existing: Vec<_> = names
+                .iter()
+                .filter(|name| {
+                    matches!(name.scope, omacell_core::names::NameScope::Sheet(id) if id == sheet.id)
+                        && xlsx_print::is_print_name(&name.name)
+                })
+                .map(|name| {
+                    let referent = match &name.referent {
+                        omacell_core::names::NameReferent::Range(range) => range.to_a1(),
+                        omacell_core::names::NameReferent::Formula(formula) => formula.clone(),
+                        omacell_core::names::NameReferent::Constant(_) => String::new(),
+                    };
+                    (name.name.as_str(), referent)
+                })
+                .collect();
+            !xlsx_print::print_names_match(
+                &sheet.page_setup,
+                existing.iter().map(|(name, referent)| (*name, referent.as_str())),
+            )
+        })
+        .collect();
     let mut names_xml = String::new();
     for n in &names {
+        let rewrite = match n.scope {
+            omacell_core::names::NameScope::Workbook => false,
+            omacell_core::names::NameScope::Sheet(id) => sheets
+                .iter()
+                .position(|sheet| sheet.id == id)
+                .is_some_and(|index| rewrite_print_names[index]),
+        };
+        if rewrite && xlsx_print::is_print_name(&n.name) {
+            continue;
+        }
         let local = match n.scope {
             omacell_core::names::NameScope::Workbook => String::new(),
             omacell_core::names::NameScope::Sheet(id) => sheets
@@ -451,12 +485,7 @@ fn workbook_xml(
         ));
     }
     for (i, sheet) in sheets.iter().enumerate() {
-        let has_print_name = names.iter().any(|n| {
-            let lower = n.name.to_ascii_lowercase();
-            (lower.ends_with("print_area") || lower.ends_with("print_titles"))
-                && matches!(n.scope, omacell_core::names::NameScope::Sheet(id) if id == sheet.id)
-        });
-        if !has_print_name {
+        if rewrite_print_names[i] {
             names_xml.push_str(&xlsx_print::print_names_xml(sheet, i));
         }
     }
@@ -976,6 +1005,7 @@ fn worksheet_xml(
     if !sheet.view.zoom.is_finite() || sheet.view.zoom <= 0.0 {
         return Err(error::xlsx_write("sheet zoom is not finite and positive"));
     }
+    sheet.page_setup.validate()?;
     if sheet.view.freeze.rows >= MAX_ROWS
         || u32::from(sheet.view.freeze.cols) >= u32::from(MAX_COLS)
         || sheet.view.scroll_row >= MAX_ROWS
@@ -1123,7 +1153,8 @@ fn worksheet_xml(
         "rowBreaks",
         "colBreaks",
     ];
-    if let Some(ex) = extras.filter(|ex| xlsx_print::extras_win(&ex.print_xml)) {
+    if let Some(ex) = extras.filter(|ex| xlsx_print::extras_match(&ex.print_xml, &sheet.page_setup))
+    {
         for blob in &ex.print_xml {
             push_fragment(&mut s, blob, "print settings", &print_roots)?;
         }

@@ -5,7 +5,7 @@ use omacell_core::workbook::Workbook;
 use omacell_io::pdf::{
     PdfOptions, pdf_extract_text, pdf_has_fontfile2, pdf_media_box, pdf_page_count, write_pdf,
 };
-use omacell_io::xlsx::{open_bytes, save_workbook_bytes};
+use omacell_io::xlsx::{open_bytes, save_bytes, save_workbook_bytes};
 
 fn seed() -> Workbook {
     let mut wb = Workbook::new();
@@ -21,7 +21,7 @@ fn seed() -> Workbook {
 #[test]
 fn pdf_page_count_matches_paginator() {
     let wb = seed();
-    let pages = paginate(wb.sheet(wb.active_sheet()).unwrap(), &PageSetup::default());
+    let pages = paginate(wb.sheet(wb.active_sheet()).unwrap(), &PageSetup::default()).unwrap();
     let bytes = write_pdf(&wb, &PdfOptions::default()).unwrap();
     assert_eq!(pdf_page_count(&bytes), pages.len());
     assert!(bytes.starts_with(b"%PDF-"));
@@ -103,11 +103,88 @@ fn modeled_page_setup_round_trips_through_xlsx() {
 }
 
 #[test]
+fn changed_page_setup_replaces_stale_xlsx_fragments_and_names() {
+    let mut wb = seed();
+    let original = PageSetup {
+        paper: omacell_core::print::PaperSize::A4,
+        title_rows: 1,
+        ..PageSetup::default()
+    };
+    wb.set_page_setup(wb.active_sheet(), original).unwrap();
+    let original_bytes = save_workbook_bytes(&wb).unwrap();
+    let mut doc = open_bytes(&original_bytes).unwrap();
+    let sheet = doc.workbook.active_sheet();
+    let changed = PageSetup {
+        paper: omacell_core::print::PaperSize::Legal,
+        title_rows: 2,
+        margins: omacell_core::print::Margins {
+            left: 0.25,
+            ..Default::default()
+        },
+        ..PageSetup::default()
+    };
+    doc.workbook.set_page_setup(sheet, changed.clone()).unwrap();
+
+    let saved = save_bytes(&doc).unwrap();
+    let reopened = open_bytes(&saved).unwrap();
+    let got = &reopened
+        .workbook
+        .sheet(reopened.workbook.active_sheet())
+        .unwrap()
+        .page_setup;
+    assert_eq!(got.paper, changed.paper);
+    assert_eq!(got.title_rows, 2);
+    assert_eq!(got.margins.left, 0.25);
+}
+
+#[test]
+fn title_columns_are_repeated_in_pdf_content() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_text(sheet, 0, 0, "REPEATED_TITLE").unwrap();
+    for col in 1..30 {
+        wb.set_number(sheet, 0, col, f64::from(col)).unwrap();
+    }
+    let setup = PageSetup {
+        title_cols: 1,
+        ..PageSetup::default()
+    };
+    wb.set_page_setup(sheet, setup.clone()).unwrap();
+    let pages = paginate(wb.sheet(sheet).unwrap(), &setup).unwrap();
+    assert!(pages.len() > 1);
+
+    let bytes = write_pdf(&wb, &PdfOptions::default()).unwrap();
+    assert_eq!(
+        pdf_extract_text(&bytes).matches("REPEATED_TITLE").count(),
+        pages.len()
+    );
+}
+
+#[test]
+fn oversized_font_is_rejected_before_reading_it() {
+    let dir = test_scratch("oversized-font");
+    let path = dir.join("oversized.ttf");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(64 * 1024 * 1024 + 1).unwrap();
+    drop(file);
+
+    let error = write_pdf(
+        &seed(),
+        &PdfOptions {
+            font_path: Some(path),
+            ..PdfOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "pdf.limit");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn pdftotext_and_mutool_open_without_warnings_if_present() {
     let wb = seed();
     let bytes = write_pdf(&wb, &PdfOptions::default()).unwrap();
-    let dir = std::env::temp_dir().join(format!("omacell-pdf-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = test_scratch("external-tools");
     let path = dir.join("out.pdf");
     std::fs::write(&path, &bytes).unwrap();
     if which("pdftotext") {
@@ -135,7 +212,15 @@ fn pdftotext_and_mutool_open_without_warnings_if_present() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn test_scratch(label: &str) -> std::path::PathBuf {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/test-scratch")
+        .join(format!("omacell-pdf-{}-{label}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 fn which(bin: &str) -> bool {

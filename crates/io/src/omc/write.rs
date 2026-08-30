@@ -152,6 +152,7 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
         push_json_kv(out, "view", &sheet.view)?;
         push_json_kv(out, "protection", &sheet.protection)?;
         push_json_kv(out, "tab_color", &sheet.tab_color)?;
+        push_json_kv(out, "page_setup", &sheet.page_setup)?;
         let row_sizes: Vec<_> = sheet.geometry.rows.iter_custom().collect();
         let row_hidden: Vec<_> = sheet.geometry.rows.iter_hidden().collect();
         let col_sizes: Vec<_> = sheet.geometry.cols.iter_custom().collect();

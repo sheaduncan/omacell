@@ -48,6 +48,7 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
     let mut pending_vis: BTreeMap<String, SheetVisibility> = BTreeMap::new();
     let mut pending_names: Vec<Vec<Field>> = Vec::new();
     let mut sheet_records = BTreeSet::new();
+    let mut page_setup_records = BTreeSet::new();
     let mut custom_names = BTreeSet::new();
     let mut changeset_id = None;
     let mut changeset_status = ChangesetStatus::Proposed;
@@ -104,7 +105,13 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
             "numfmt" => load_numfmt(&mut wb, &mut numfmt_map, &fields[1..])?,
             "style" => load_style(&mut style_map, &numfmt_map, &fields[1..])?,
             "name" => pending_names.push(fields[1..].to_vec()),
-            "sheet" => load_sheet(&mut wb, &mut pending_vis, &mut sheet_records, &fields[1..])?,
+            "sheet" => load_sheet(
+                &mut wb,
+                &mut pending_vis,
+                &mut sheet_records,
+                &mut page_setup_records,
+                &fields[1..],
+            )?,
             "cell" => load_cell(&mut wb, &style_map, &fields[1..])?,
             "merge" => load_merge(&mut wb, &fields[1..])?,
             "comment" => load_comment(&mut wb, &fields[1..])?,
@@ -159,6 +166,7 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
     for fields in pending_names {
         load_name(&mut wb, &fields)?;
     }
+    hydrate_legacy_print_setups(&mut wb, &extras, &page_setup_records)?;
     let sheet_order: Vec<_> = wb.sheets().map(|sheet| sheet.name.clone()).collect();
     for name in sheet_order {
         if let Some(vis) = pending_vis.get(&name) {
@@ -411,6 +419,7 @@ fn load_sheet(
     wb: &mut Workbook,
     pending_vis: &mut BTreeMap<String, SheetVisibility>,
     sheet_records: &mut BTreeSet<String>,
+    page_setup_records: &mut BTreeSet<String>,
     fields: &[Field],
 ) -> Result<(), CoreError> {
     if fields.is_empty() {
@@ -418,7 +427,7 @@ fn load_sheet(
     }
     let name = &fields[0].value;
     let lower = name.to_lowercase();
-    if !sheet_records.insert(lower) {
+    if !sheet_records.insert(lower.clone()) {
         return Err(error::omc_parse(format!(
             "duplicate sheet record for {name:?}"
         )));
@@ -486,6 +495,12 @@ fn load_sheet(
         let color = parse_json(value, "sheet tab color")?;
         wb.set_tab_color(id, color)?;
     }
+    if let Some(value) = kv.get("page_setup") {
+        let setup = parse_json(value, "sheet page setup")?;
+        wb.set_page_setup(id, setup)
+            .map_err(|err| error::omc_parse(err.message))?;
+        page_setup_records.insert(lower);
+    }
     if let Some(cols) = kv.get("cols") {
         for part in cols.split(',') {
             let (letters, w) = part
@@ -517,6 +532,50 @@ fn load_sheet(
         let col =
             u16::try_from(index).map_err(|_| error::omc_parse("column index is out of range"))?;
         wb.set_col_hidden(id, col, true)?;
+    }
+    Ok(())
+}
+
+fn hydrate_legacy_print_setups(
+    wb: &mut Workbook,
+    extras: &HashMap<String, WorksheetExtras>,
+    page_setup_records: &BTreeSet<String>,
+) -> Result<(), CoreError> {
+    let sheets: Vec<_> = wb
+        .sheets()
+        .map(|sheet| (sheet.id, sheet.name.clone()))
+        .collect();
+    for (sheet_id, sheet_name) in sheets {
+        if page_setup_records.contains(&sheet_name.to_lowercase()) {
+            continue;
+        }
+        let mut setup = omacell_core::print::PageSetup::default();
+        if let Some(extra) = extras.get(&sheet_name) {
+            crate::xlsx::print::apply_print_xml(&mut setup, &extra.print_xml);
+        }
+        let print_names: Vec<_> = wb
+            .names()
+            .iter()
+            .filter(|name| {
+                matches!(name.scope, NameScope::Sheet(id) if id == sheet_id)
+                    && crate::xlsx::print::is_print_name(&name.name)
+            })
+            .map(|name| {
+                let referent = match &name.referent {
+                    NameReferent::Range(range) => range.to_a1(),
+                    NameReferent::Formula(formula) => formula.clone(),
+                    NameReferent::Constant(_) => String::new(),
+                };
+                (name.name.clone(), referent)
+            })
+            .collect();
+        for (name, referent) in print_names {
+            crate::xlsx::print::apply_print_name(&mut setup, &name, &referent);
+        }
+        if !setup.is_default() {
+            wb.set_page_setup(sheet_id, setup)
+                .map_err(|err| error::omc_parse(err.message))?;
+        }
     }
     Ok(())
 }

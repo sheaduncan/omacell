@@ -12,7 +12,7 @@ use omacell_conf::{ConfigStore, LoadedConfig, Paths, ReloadEvent};
 use omacell_core::addr::{SheetId, col_to_letters, parse_a1_cell, quote_sheet_name};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
-use omacell_core::print::{PageBox, paginate};
+use omacell_core::print::paginate;
 use omacell_core::{PRODUCT_DISPLAY_NAME, PRODUCT_NAME};
 use omacell_ui::{
     Area, EditSurface, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, SessionState, UiSession,
@@ -74,7 +74,7 @@ pub struct Gui {
     drag: Option<PointerDrag>,
     focused_cancel: Option<CancelHandle>,
     last_title: String,
-    print_preview: Option<Vec<PageBox>>,
+    print_preview: bool,
     _ipc: Option<IpcHandle>,
 }
 
@@ -144,7 +144,7 @@ impl Gui {
             drag: None,
             focused_cancel,
             last_title: String::new(),
-            print_preview: None,
+            print_preview: false,
             _ipc: ipc_handle,
         })
     }
@@ -660,18 +660,23 @@ impl Gui {
                     }
                 }
             }
-            if let Some(pages) = &self.print_preview {
+            if self.print_preview
+                && let Some(ws) = snapshot.workbook.sheet(sheet)
+                && let Ok(pages) = paginate(ws, &ws.page_setup)
+            {
                 let painter = ui.painter();
                 for page in pages {
-                    let from = self.grid.cell_rect(page.row0, page.col0);
-                    let to = self.grid.cell_rect(page.row1, page.col1);
-                    if let (Some(a), Some(b)) = (from, to) {
-                        painter.rect_stroke(
-                            egui::Rect::from_two_pos(a.min, b.max),
-                            0.0,
-                            egui::Stroke::new(1.5_f32, self.theme.warning),
-                            egui::StrokeKind::Inside,
-                        );
+                    if page.row1 >= page.row0 && page.col1 >= page.col0 {
+                        let from = self.grid.cell_rect(page.row0, page.col0);
+                        let to = self.grid.cell_rect(page.row1, page.col1);
+                        if let (Some(a), Some(b)) = (from, to) {
+                            painter.rect_stroke(
+                                egui::Rect::from_two_pos(a.min, b.max),
+                                0.0,
+                                egui::Stroke::new(1.5_f32, self.theme.warning),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
                     }
                 }
             }
@@ -723,8 +728,8 @@ impl Gui {
     }
 
     fn toggle_print_preview(&mut self) {
-        if self.print_preview.is_some() {
-            self.print_preview = None;
+        if self.print_preview {
+            self.print_preview = false;
             self.message = Some("print preview off".into());
             return;
         }
@@ -732,9 +737,13 @@ impl Gui {
         let Some(sheet) = snap.workbook.sheet(self.active_sheet) else {
             return;
         };
-        let pages = paginate(sheet, &sheet.page_setup);
-        self.message = Some(format!("print preview · {} page(s)", pages.len()));
-        self.print_preview = Some(pages);
+        match paginate(sheet, &sheet.page_setup) {
+            Ok(pages) => {
+                self.message = Some(format!("print preview · {} page(s)", pages.len()));
+                self.print_preview = true;
+            }
+            Err(err) => self.message = Some(err.message),
+        }
     }
 
     fn execute_if_available(&mut self, command: &str, owner: &str) {
