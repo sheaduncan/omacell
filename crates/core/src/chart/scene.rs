@@ -134,6 +134,7 @@ pub fn layout(
             sampled.kind == ChartKind::Donut,
         ),
         ChartKind::Scatter | ChartKind::Bubble => scatter(&mut scene, sampled, chart, theme, plot),
+        ChartKind::Unsupported => unsupported(&mut scene, chart, theme, plot),
         _ => cartesian(&mut scene, sampled, chart, theme, plot),
     }
     legend(&mut scene, sampled, chart, theme, plot);
@@ -254,7 +255,7 @@ fn cartesian(
         .map(|s| s.categories.clone())
         .unwrap_or_default();
     let n = cats.len().max(1);
-    let (ymin, ymax) = y_bounds(sampled, chart.kind);
+    let (ymin, ymax) = y_bounds_for(sampled, chart.kind, None);
     grid(scene, theme, &plot, ymin, ymax, chart.value_axis.gridlines);
     scene.ops.push(Op::Polyline {
         points: vec![
@@ -279,8 +280,20 @@ fn cartesian(
         ChartKind::Line | ChartKind::Combo => {
             if chart.kind == ChartKind::Combo {
                 bars(scene, sampled, theme, &plot, ymin, ymax, false);
+                let (secondary_min, secondary_max) = y_bounds_for(sampled, chart.kind, Some(true));
+                secondary_axis(scene, theme, &plot, secondary_min, secondary_max);
+                lines(
+                    scene,
+                    sampled,
+                    chart,
+                    theme,
+                    &plot,
+                    secondary_min,
+                    secondary_max,
+                );
+            } else {
+                lines(scene, sampled, chart, theme, &plot, ymin, ymax);
             }
-            lines(scene, sampled, chart, theme, &plot, ymin, ymax);
         }
         ChartKind::Area => area(scene, sampled, theme, &plot, ymin, ymax),
         _ => bars(
@@ -292,6 +305,43 @@ fn cartesian(
             ymax,
             chart.kind.horizontal(),
         ),
+    }
+}
+
+fn unsupported(scene: &mut Scene, chart: &Chart, theme: &ChartTheme, plot: PlotRect) {
+    scene.ops.push(Op::Polyline {
+        points: vec![
+            (plot.x, plot.y),
+            (plot.x + plot.w, plot.y),
+            (plot.x + plot.w, plot.y + plot.h),
+            (plot.x, plot.y + plot.h),
+            (plot.x, plot.y),
+        ],
+        color: theme.axis.clone(),
+        width: 1.0,
+    });
+    scene.ops.push(Op::Text {
+        x: plot.x + 12.0,
+        y: plot.y + 28.0,
+        text: "Unsupported chart (preserved in .xlsx)".into(),
+        color: theme.foreground.clone(),
+        size: 12.0,
+    });
+    let mut ranges = chart
+        .series
+        .iter()
+        .map(|series| series.values.to_a1())
+        .collect::<Vec<_>>();
+    ranges.sort();
+    ranges.dedup();
+    if !ranges.is_empty() {
+        scene.ops.push(Op::Text {
+            x: plot.x + 12.0,
+            y: plot.y + 48.0,
+            text: ranges.join(", "),
+            color: theme.axis.clone(),
+            size: 9.0,
+        });
     }
 }
 
@@ -760,7 +810,29 @@ fn grid(scene: &mut Scene, theme: &ChartTheme, plot: &PlotRect, ymin: f64, ymax:
     }
 }
 
-fn y_bounds(sampled: &SampledChart, kind: ChartKind) -> (f64, f64) {
+fn secondary_axis(scene: &mut Scene, theme: &ChartTheme, plot: &PlotRect, ymin: f64, ymax: f64) {
+    scene.ops.push(Op::Polyline {
+        points: vec![
+            (plot.x + plot.w, plot.y),
+            (plot.x + plot.w, plot.y + plot.h),
+        ],
+        color: theme.axis.clone(),
+        width: 1.0,
+    });
+    for i in 0..=4 {
+        let value = ymin + (ymax - ymin) * i as f64 / 4.0;
+        let y = map(value, ymin, ymax, plot.y + plot.h, plot.y);
+        scene.ops.push(Op::Text {
+            x: plot.x + plot.w + 4.0,
+            y: y + 4.0,
+            text: format!("{value:.1}"),
+            color: theme.axis.clone(),
+            size: 9.0,
+        });
+    }
+}
+
+fn y_bounds_for(sampled: &SampledChart, kind: ChartKind, secondary: Option<bool>) -> (f64, f64) {
     if kind.percent() {
         return (0.0, 100.0);
     }
@@ -772,6 +844,9 @@ fn y_bounds(sampled: &SampledChart, kind: ChartKind) -> (f64, f64) {
             let mut pos = 0.0;
             let mut neg = 0.0;
             for s in &sampled.series {
+                if secondary.is_some_and(|wanted| s.secondary_axis != wanted) {
+                    continue;
+                }
                 let v = s.y.get(i).copied().unwrap_or(0.0);
                 if v.is_finite() {
                     if v >= 0.0 {
@@ -786,6 +861,9 @@ fn y_bounds(sampled: &SampledChart, kind: ChartKind) -> (f64, f64) {
         }
     } else {
         for s in &sampled.series {
+            if secondary.is_some_and(|wanted| s.secondary_axis != wanted) {
+                continue;
+            }
             for v in &s.y {
                 if v.is_finite() {
                     min = min.min(*v);

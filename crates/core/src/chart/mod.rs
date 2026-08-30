@@ -13,6 +13,8 @@ pub use model::{
     Axis, Chart, ChartAnchor, ChartId, ChartKind, ChartTheme, LegendPos, Series, Sparkline,
     SparklineKind, Trendline, TrendlineKind,
 };
-pub use sample::{SampledChart, SampledSeries, chart_from_range, parse_range, sample};
+pub use sample::{
+    MAX_CHART_POINTS, SampledChart, SampledSeries, chart_from_range, parse_range, sample,
+};
 pub use scene::{Op, Scene, layout, layout_chart, layout_sparkline};
 pub use svg::to_svg;

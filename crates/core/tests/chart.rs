@@ -107,6 +107,35 @@ fn sample_reads_values_and_updates_after_edit() {
 }
 
 #[test]
+fn scatter_and_bubble_use_numeric_x_y_columns() {
+    let wb = seed();
+    for kind in [ChartKind::Scatter, ChartKind::Bubble] {
+        let chart =
+            chart_from_range(&wb, wb.active_sheet(), range(0, 0, 3, 2), kind, None).unwrap();
+        let sampled = sample(&wb, &chart).unwrap();
+        assert_eq!(sampled.series.len(), 1);
+        assert_eq!(sampled.series[0].x, vec![10.0, 20.0, 12.0]);
+        assert_eq!(sampled.series[0].y, vec![5.0, 8.0, 15.0]);
+        let scene = layout(&sampled, &chart, &ChartTheme::neutral(), 320.0, 200.0);
+        assert!(
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, omacell_core::chart::Op::Circle { .. })),
+            "{kind:?} must contain visible data points"
+        );
+    }
+}
+
+#[test]
+fn oversized_chart_range_is_rejected_before_sampling() {
+    let wb = Workbook::new();
+    let huge = range(0, 0, 100_000, 10);
+    let error = chart_from_range(&wb, wb.active_sheet(), huge, ChartKind::Line, None).unwrap_err();
+    assert_eq!(error.code, "chart.limit");
+}
+
+#[test]
 fn every_kind_emits_svg_for_three_palettes() {
     let wb = seed();
     let themes = [

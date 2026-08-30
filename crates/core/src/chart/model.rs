@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::addr::{RangeRef, SheetId};
+use crate::addr::{CellRef, RangeRef, SheetId};
+use crate::error::CoreError;
 
 /// Stable chart id within a workbook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -54,6 +55,8 @@ pub enum ChartKind {
     Combo,
     /// Histogram of a single numeric series.
     Histogram,
+    /// An imported chart type that Omacell preserves but does not model.
+    Unsupported,
 }
 
 impl ChartKind {
@@ -97,6 +100,7 @@ impl ChartKind {
             Self::Bubble => "bubble",
             Self::Combo => "combo",
             Self::Histogram => "histogram",
+            Self::Unsupported => "unsupported",
         }
     }
 
@@ -270,6 +274,47 @@ pub struct Chart {
     pub sheet: SheetId,
 }
 
+impl Chart {
+    /// Validate grid-bound ranges and the drawing anchor.
+    pub fn values_valid(&self) -> Result<(), CoreError> {
+        if self.anchor.from_row > self.anchor.to_row || self.anchor.from_col > self.anchor.to_col {
+            return Err(CoreError::new(
+                "chart.anchor",
+                "chart anchor start must not follow its end",
+            ));
+        }
+        CellRef::new(self.anchor.from_row, self.anchor.from_col)?;
+        CellRef::new(self.anchor.to_row, self.anchor.to_col)?;
+        if let Some(categories) = self.categories {
+            validate_range(categories)?;
+        }
+        if self.kind != ChartKind::Unsupported && self.series.is_empty() {
+            return Err(CoreError::new(
+                "chart.series",
+                "modeled charts require at least one series",
+            ));
+        }
+        for series in &self.series {
+            if let Some(color) = series.color.as_deref()
+                && !valid_hex_color(color)
+            {
+                return Err(CoreError::new(
+                    "chart.color",
+                    "series colors must use #rrggbb",
+                ));
+            }
+            validate_range(series.values)?;
+            if let Some(range) = series.x {
+                validate_range(range)?;
+            }
+            if let Some(range) = series.size {
+                validate_range(range)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// In-cell sparkline kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -308,6 +353,27 @@ pub struct Sparkline {
     pub col: u16,
     /// Sheet.
     pub sheet: SheetId,
+}
+
+impl Sparkline {
+    /// Validate the source range and destination cell.
+    pub fn values_valid(&self) -> Result<(), CoreError> {
+        validate_range(self.data)?;
+        CellRef::new(self.row, self.col)?;
+        Ok(())
+    }
+}
+
+fn validate_range(range: RangeRef) -> Result<(), CoreError> {
+    range.start.validate()?;
+    range.end.validate()?;
+    Ok(())
+}
+
+fn valid_hex_color(color: &str) -> bool {
+    color.len() == 7
+        && color.starts_with('#')
+        && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Palette and chrome used by the vector renderer (no conf dependency).

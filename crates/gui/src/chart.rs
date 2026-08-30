@@ -66,7 +66,7 @@ pub fn paint(ui: &mut Ui, scene: &Scene, rect: Rect) {
                     map(rect, sx, sy, (*x, *y)),
                     Align2::LEFT_BOTTOM,
                     text,
-                    FontId::proportional(size * sy.max(8.0) / 12.0),
+                    FontId::proportional((size * sy).max(1.0)),
                     hex_color(color),
                 );
             }
