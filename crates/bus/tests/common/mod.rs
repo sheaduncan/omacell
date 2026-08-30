@@ -49,6 +49,8 @@ pub fn logical_dump(bus: &Bus) -> String {
     let wb = bus.workbook();
     let mut lines = Vec::new();
     lines.push(format!("calc={:?}", wb.settings().calc_mode));
+    lines.push(format!("active={}", wb.active_sheet().index()));
+    lines.push(format!("workbook_protection={:?}", wb.protection()));
     for sheet in wb.sheets() {
         lines.push(format!(
             "sheet {} vis={:?} name={}",
@@ -79,12 +81,34 @@ pub fn logical_dump(bus: &Bus) -> String {
                 .unwrap_or_default();
             let fmt = wb.num_fmt_code(style.num_fmt).unwrap_or_default();
             lines.push(format!(
-                "  {}{} {input} bold={} fmt={fmt}",
+                "  {}{} {input} style={style:?} fmt={fmt}",
                 omacell_core::addr::col_to_letters(col).unwrap_or_else(|_| "?".into()),
-                row + 1,
-                style.font.bold
+                row + 1
             ));
         }
+        lines.push(format!("  merges={:?}", sheet.merges));
+        lines.push(format!("  protection={:?}", sheet.protection));
+        lines.push(format!(
+            "  row_geometry=custom:{:?} hidden:{:?} outline:{:?} collapsed:{:?}",
+            sheet.geometry.rows.iter_custom().collect::<Vec<_>>(),
+            sheet.geometry.rows.iter_hidden().collect::<Vec<_>>(),
+            sheet.geometry.rows.iter_outline().collect::<Vec<_>>(),
+            sheet.geometry.rows.iter_collapsed().collect::<Vec<_>>()
+        ));
+        lines.push(format!(
+            "  col_geometry=custom:{:?} hidden:{:?} outline:{:?} collapsed:{:?}",
+            sheet.geometry.cols.iter_custom().collect::<Vec<_>>(),
+            sheet.geometry.cols.iter_hidden().collect::<Vec<_>>(),
+            sheet.geometry.cols.iter_outline().collect::<Vec<_>>(),
+            sheet.geometry.cols.iter_collapsed().collect::<Vec<_>>()
+        ));
+        lines.push(format!("  notes={:?}", sheet.notes_sorted()));
+        let mut comments: Vec<_> = sheet.comments.iter().collect();
+        comments.sort_by_key(|(coord, _)| **coord);
+        lines.push(format!("  comments={comments:?}"));
+        let mut hyperlinks: Vec<_> = sheet.hyperlinks.iter().collect();
+        hyperlinks.sort_by_key(|(coord, _)| **coord);
+        lines.push(format!("  hyperlinks={hyperlinks:?}"));
     }
     let mut names: Vec<_> = wb.names().iter().map(|n| n.name.clone()).collect();
     names.sort();

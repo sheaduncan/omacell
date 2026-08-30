@@ -20,6 +20,7 @@ fn apply_config_preserves_interaction_state() {
     let mut registry = CommandRegistry::new();
     register_core(&mut registry).unwrap();
     omacell_bus::register_chart_commands(&mut registry).unwrap();
+    omacell_bus::register_edit_commands(&mut registry).unwrap();
     register_ui_commands(&mut registry, &session).unwrap();
     session.begin_edit(EditSurface::InCell, "=A1+1");
     let before_edit = session.edit();

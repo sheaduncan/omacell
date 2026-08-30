@@ -221,10 +221,10 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
     registry.register(
         CommandSpec {
             id: "sheet.remove",
-            doc: "Internal: remove a sheet (inverse of sheet.add)",
+            doc: "Remove a sheet",
             kind: CommandKind::Mutating,
-            changeset_eligible: false,
-            exposure: Exposure::Internal,
+            changeset_eligible: true,
+            exposure: Exposure::Public,
             default_keys: &[],
         },
         sheet_remove,
@@ -948,7 +948,10 @@ fn redo_cmd(ctx: &mut CommandContext<'_>, _args: EmptyArgs) -> Result<Effect, Co
     })
 }
 
-fn cell_restore(ctx: &mut CommandContext<'_>, args: CellRestoreArgs) -> Result<Effect, CoreError> {
+pub(crate) fn cell_restore(
+    ctx: &mut CommandContext<'_>,
+    args: CellRestoreArgs,
+) -> Result<Effect, CoreError> {
     let cell = resolve_cell(ctx.workbook_ref(), &args.cell_ref)?;
     if args.absent {
         let _ = ctx.workbook().clear_cell(cell.sheet, cell.row, cell.col)?;

@@ -1,0 +1,11 @@
+# case	kind	seed	destination	mode	expected
+linear_down	fill	1,3	A1:A5	linear	1,3,5,7,9
+growth_down	fill	2,4	A1:A4	growth	2,4,8,16
+weekday_down	fill	1	A1:A5	weekday	1,2,3,4,5
+linear_up	fill	3,5	A1:A4	linear	-1,1,3,5
+paste_add	paste	2	A1	add	5
+paste_subtract	paste	2	A1	subtract	1
+paste_multiply	paste	2	A1	multiply	6
+paste_divide	paste	2	A1	divide	1.5
+paste_skip_blank	paste	blank	A1	skip_blanks	3
+paste_transpose	paste	1,2;3,4	A1:B2	transpose	1,3;2,4

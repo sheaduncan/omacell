@@ -17,7 +17,7 @@ pub const DEFAULT_ROW_PX: u32 = 20;
 pub const DEFAULT_COL_PX: u32 = 64;
 
 /// Sparse Fenwick tree of i64 deltas. Index 1 is the first row/col (0-based 0).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Fenwick {
     n: u32,
     tree: BTreeMap<u32, i64>,
@@ -71,13 +71,15 @@ impl Fenwick {
 /// assert_eq!(a.index_to_pixel(1), 40);
 /// assert_eq!(a.size(1).unwrap(), DEFAULT_ROW_PX);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AxisGeometry {
     max: u32,
     default_px: u32,
     fenwick: Fenwick,
     custom: FxHashMap<u32, u32>,
     hidden: FxHashSet<u32>,
+    outline: FxHashMap<u32, u8>,
+    collapsed: FxHashSet<u32>,
 }
 
 impl AxisGeometry {
@@ -100,6 +102,8 @@ impl AxisGeometry {
             fenwick: Fenwick::new(max),
             custom: FxHashMap::default(),
             hidden: FxHashSet::default(),
+            outline: FxHashMap::default(),
+            collapsed: FxHashSet::default(),
         }
     }
 
@@ -164,6 +168,109 @@ impl AxisGeometry {
         let mut v: Vec<u32> = self.hidden.iter().copied().collect();
         v.sort_unstable();
         v.into_iter()
+    }
+
+    /// Outline level (0–7). Excel default is 0.
+    #[must_use]
+    pub fn outline_level(&self, index: u32) -> u8 {
+        self.outline.get(&index).copied().unwrap_or(0)
+    }
+
+    /// Set outline level. 0 clears.
+    pub fn set_outline_level(&mut self, index: u32, level: u8) -> Result<(), CoreError> {
+        self.check(index)?;
+        if level == 0 {
+            self.outline.remove(&index);
+        } else {
+            self.outline.insert(index, level.min(7));
+        }
+        Ok(())
+    }
+
+    /// Whether the outline group at `index` is collapsed.
+    #[must_use]
+    pub fn is_collapsed(&self, index: u32) -> bool {
+        self.collapsed.contains(&index)
+    }
+
+    /// Collapse or expand an outline group.
+    pub fn set_collapsed(&mut self, index: u32, collapsed: bool) -> Result<(), CoreError> {
+        self.check(index)?;
+        if collapsed {
+            self.collapsed.insert(index);
+        } else {
+            self.collapsed.remove(&index);
+        }
+        Ok(())
+    }
+
+    /// `(index, level)` in ascending order for the writer.
+    pub fn iter_outline(&self) -> impl Iterator<Item = (u32, u8)> {
+        let mut v: Vec<(u32, u8)> = self.outline.iter().map(|(&i, &l)| (i, l)).collect();
+        v.sort_unstable_by_key(|(i, _)| *i);
+        v.into_iter()
+    }
+
+    /// Collapsed outline markers in ascending index order.
+    pub fn iter_collapsed(&self) -> impl Iterator<Item = u32> {
+        let mut v: Vec<u32> = self.collapsed.iter().copied().collect();
+        v.sort_unstable();
+        v.into_iter()
+    }
+
+    /// Remove a custom size so the axis default applies again.
+    pub(crate) fn clear_size(&mut self, index: u32) -> Result<(), CoreError> {
+        self.check(index)?;
+        let old = self.size_unchecked(index);
+        self.custom.remove(&index);
+        if !self.hidden.contains(&index) {
+            self.fenwick
+                .add(index + 1, i64::from(self.default_px) - i64::from(old));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn has_custom_size(&self, index: u32) -> bool {
+        self.custom.contains_key(&index)
+    }
+
+    /// Shift hidden/custom/outline maps when inserting or deleting `count` items at `at`.
+    pub fn shift_meta(&mut self, at: u32, count: i32) -> Result<(), CoreError> {
+        if count == 0 {
+            return Ok(());
+        }
+        let mag = count.unsigned_abs();
+        if count > 0 {
+            if at.saturating_add(mag) > self.max {
+                return Err(CoreError::addr_ref("geometry insert exceeds the axis"));
+            }
+            shift_map_insert(&mut self.custom, at, mag, self.max);
+            shift_set_insert(&mut self.hidden, at, mag, self.max);
+            shift_map_insert(&mut self.outline, at, mag, self.max);
+            shift_set_insert(&mut self.collapsed, at, mag, self.max);
+            // Fenwick: rebuild from custom+hidden
+            self.rebuild_fenwick();
+        } else {
+            shift_map_delete(&mut self.custom, at, mag);
+            shift_set_delete(&mut self.hidden, at, mag);
+            shift_map_delete(&mut self.outline, at, mag);
+            shift_set_delete(&mut self.collapsed, at, mag);
+            self.rebuild_fenwick();
+        }
+        Ok(())
+    }
+
+    fn rebuild_fenwick(&mut self) {
+        self.fenwick = Fenwick::new(self.max);
+        let mut idxs: FxHashSet<u32> = self.custom.keys().copied().collect();
+        idxs.extend(self.hidden.iter().copied());
+        for i in idxs {
+            let sz = self.size_unchecked(i);
+            let delta = i64::from(sz) - i64::from(self.default_px);
+            if delta != 0 {
+                self.fenwick.add(i + 1, delta);
+            }
+        }
     }
 
     /// Set a custom size in pixels. Hidden rows keep a stored size for unhide.
@@ -252,6 +359,54 @@ impl AxisGeometry {
     }
 }
 
+fn shift_map_insert<T: Copy>(map: &mut FxHashMap<u32, T>, at: u32, mag: u32, max: u32) {
+    let mut next = FxHashMap::default();
+    for (&i, &v) in map.iter() {
+        let ni = if i >= at { i.saturating_add(mag) } else { i };
+        if ni < max {
+            next.insert(ni, v);
+        }
+    }
+    *map = next;
+}
+
+fn shift_map_delete<T: Copy>(map: &mut FxHashMap<u32, T>, at: u32, mag: u32) {
+    let end = at.saturating_add(mag);
+    let mut next = FxHashMap::default();
+    for (&i, &v) in map.iter() {
+        if i < at {
+            next.insert(i, v);
+        } else if i >= end {
+            next.insert(i - mag, v);
+        }
+    }
+    *map = next;
+}
+
+fn shift_set_insert(set: &mut FxHashSet<u32>, at: u32, mag: u32, max: u32) {
+    let mut next = FxHashSet::default();
+    for &i in set.iter() {
+        let ni = if i >= at { i.saturating_add(mag) } else { i };
+        if ni < max {
+            next.insert(ni);
+        }
+    }
+    *set = next;
+}
+
+fn shift_set_delete(set: &mut FxHashSet<u32>, at: u32, mag: u32) {
+    let end = at.saturating_add(mag);
+    let mut next = FxHashSet::default();
+    for &i in set.iter() {
+        if i < at {
+            next.insert(i);
+        } else if i >= end {
+            next.insert(i - mag);
+        }
+    }
+    *set = next;
+}
+
 /// Row and column geometry for one sheet.
 ///
 /// ```
@@ -260,7 +415,7 @@ impl AxisGeometry {
 /// assert_eq!(g.rows.index_to_pixel(1), 20);
 /// assert_eq!(g.cols.index_to_pixel(1), 64);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SheetGeometry {
     /// Row heights.
     pub rows: AxisGeometry,

@@ -30,6 +30,7 @@ pub mod limits;
 pub mod locale;
 pub mod names;
 pub mod numfmt;
+pub mod ops;
 pub mod print;
 pub mod product;
 pub mod recalc;

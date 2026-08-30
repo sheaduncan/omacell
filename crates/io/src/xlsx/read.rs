@@ -1,6 +1,6 @@
 //! Load an OPC package into a [`Workbook`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use omacell_core::addr::{CellRef, RangeRef, RefKind, parse_a1, parse_a1_cell};
 use omacell_core::error::{CoreError, ErrorKind};
@@ -9,7 +9,7 @@ use omacell_core::intern::RichTextRun;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::sheet::{
-    FreezePanes, Hyperlink, Note, ProtectionState, SheetVisibility, SplitView,
+    FreezePanes, Hyperlink, Note, ProtectedRange, ProtectionState, SheetVisibility, SplitView,
 };
 use omacell_core::storage::{CellFlags, CellSlot};
 use omacell_core::style::{
@@ -19,7 +19,7 @@ use omacell_core::style::{
 };
 use omacell_core::tables::{Table, TableColumn};
 use omacell_core::value::Value;
-use omacell_core::workbook::{CalcMode, DateSystem, Workbook};
+use omacell_core::workbook::{CalcMode, DateSystem, Workbook, WorkbookProtectionState};
 
 use super::XlsxDocument;
 use super::opc::{OpcPackage, Relationship, open_package};
@@ -37,6 +37,9 @@ const REL_THEME: &str = "http://schemas.openxmlformats.org/officeDocument/2006/r
 const REL_TABLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
 const REL_COMMENTS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+const REL_THREADED_COMMENTS: &str =
+    "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment";
+const REL_PERSON: &str = "http://schemas.microsoft.com/office/2017/10/relationships/person";
 const REL_HYPER: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
 const REL_DRAWING: &str =
@@ -72,6 +75,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
     let sst = load_sst(&package, &wb_rels, &mut warnings)?;
     let styles = load_styles(&package, &wb_rels, &theme, &mut wb, &mut warnings)?;
     let workbook_meta = parse_workbook_xml(&wb_bytes, &mut wb)?;
+    let persons = load_persons(&package, &wb_rels, &mut warnings)?;
 
     let first_id = wb.active_sheet();
     let mut sheet_ids = Vec::with_capacity(workbook_meta.sheets.len());
@@ -178,7 +182,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
         }
         extras.insert(meta.name.clone(), extra);
         load_tables(&mut wb, id, &package, &sheet_rels, &mut warnings)?;
-        load_comments(&mut wb, id, &package, &sheet_rels, &mut warnings)?;
+        load_comments(&mut wb, id, &package, &sheet_rels, &persons, &mut warnings)?;
         load_charts(&mut wb, id, &package, &sheet_rels);
     }
 
@@ -268,6 +272,18 @@ fn parse_workbook_xml(bytes: &[u8], wb: &mut Workbook) -> Result<WorkbookMeta, C
                     "autoNoTable" => wb.settings_mut().calc_mode = CalcMode::AutomaticExceptTables,
                     _ => wb.settings_mut().calc_mode = CalcMode::Automatic,
                 }
+            }
+            XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
+                if name == "workbookProtection" =>
+            {
+                let password =
+                    attr(&attrs, "workbookPassword").map(|value| value.as_bytes().to_vec());
+                wb.set_workbook_protection(WorkbookProtectionState {
+                    enabled: true,
+                    lock_structure: attr(&attrs, "lockStructure").is_some_and(truthy),
+                    lock_windows: attr(&attrs, "lockWindows").is_some_and(truthy),
+                    password,
+                })?;
             }
             XmlEvent::Start { name, .. } if name == "definedNames" => in_names = true,
             XmlEvent::End { name } if name == "definedNames" => in_names = false,
@@ -1026,6 +1042,15 @@ fn load_sheet(
                     if attr(&attrs, "hidden").is_some_and(truthy) {
                         wb.set_row_hidden(id, row, true)?;
                     }
+                    if let Some(level) =
+                        attr(&attrs, "outlineLevel").and_then(|s| s.parse::<u8>().ok())
+                        && level > 0
+                    {
+                        let _ = wb.set_row_outline_level(id, row, level);
+                    }
+                    if attr(&attrs, "collapsed").is_some_and(truthy) {
+                        let _ = wb.set_row_collapsed(id, row, true);
+                    }
                     if let Some(ht) = attr(&attrs, "ht")
                         .and_then(|s| s.parse::<f64>().ok())
                         .filter(|height| height.is_finite() && *height > 0.0)
@@ -1146,6 +1171,15 @@ fn load_sheet(
                     if hidden {
                         wb.set_col_hidden(id, idx, true)?;
                     }
+                    if let Some(level) =
+                        attr(&attrs, "outlineLevel").and_then(|s| s.parse::<u8>().ok())
+                        && level > 0
+                    {
+                        let _ = wb.set_col_outline_level(id, idx, level);
+                    }
+                    if attr(&attrs, "collapsed").is_some_and(truthy) {
+                        let _ = wb.set_col_collapsed(id, idx, true);
+                    }
                     if let Some(w) = width {
                         let px = (w * f64::from(omacell_core::geometry::DEFAULT_COL_PX) / 8.43)
                             .round()
@@ -1256,6 +1290,20 @@ fn load_sheet(
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "sheetProtection" =>
             {
+                let mut allow = omacell_core::sheet::ProtectionAllow::default();
+                for (name, target) in [
+                    ("selectLockedCells", &mut allow.select_locked),
+                    ("selectUnlockedCells", &mut allow.select_unlocked),
+                    ("formatCells", &mut allow.format_cells),
+                    ("insertRows", &mut allow.insert_rows),
+                    ("insertColumns", &mut allow.insert_cols),
+                    ("sort", &mut allow.sort),
+                    ("autoFilter", &mut allow.auto_filter),
+                ] {
+                    if let Some(value) = attr(&attrs, name) {
+                        *target = !truthy(value);
+                    }
+                }
                 wb.set_sheet_protection(
                     id,
                     ProtectionState {
@@ -1263,8 +1311,34 @@ fn load_sheet(
                         password: attr(&attrs, "hashValue")
                             .or_else(|| attr(&attrs, "password"))
                             .map(|s| s.as_bytes().to_vec()),
+                        allow,
+                        protected_ranges: Vec::new(),
                     },
                 )?;
+            }
+            XmlEvent::Empty { name, attrs } if name == "protectedRange" => {
+                let mut protection = wb
+                    .sheet(id)
+                    .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
+                    .protection
+                    .clone();
+                let ranges = attr(&attrs, "sqref")
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .filter_map(|value| parse_a1(value).ok())
+                    .map(|parsed| match parsed.kind {
+                        RefKind::Cell(cell) => RangeRef::from_corners(cell, cell),
+                        RefKind::Range(range) => range,
+                    })
+                    .collect::<Vec<_>>();
+                if !ranges.is_empty() {
+                    protection.protected_ranges.push(ProtectedRange {
+                        name: attr(&attrs, "name").unwrap_or_default().to_string(),
+                        ranges,
+                        password: attr(&attrs, "password").map(|value| value.as_bytes().to_vec()),
+                    });
+                    wb.set_sheet_protection(id, protection)?;
+                }
             }
             XmlEvent::Start { name, .. } if name == "hyperlinks" => in_hyperlinks = true,
             XmlEvent::End { name } if name == "hyperlinks" => in_hyperlinks = false,
@@ -1693,11 +1767,39 @@ fn load_tables(
     Ok(())
 }
 
+fn load_persons(
+    package: &OpcPackage,
+    rels: &[Relationship],
+    warnings: &mut FileWarnings,
+) -> Result<HashMap<String, String>, CoreError> {
+    let mut persons = HashMap::new();
+    for rel in rels.iter().filter(|rel| rel.rel_type == REL_PERSON) {
+        let Some(part) = package.part(&rel.target) else {
+            warnings.push("xlsx.part", "person part missing", Some(rel.target.clone()));
+            continue;
+        };
+        let mut reader = XmlReader::new(&part.bytes);
+        while let Some(event) = reader.next()? {
+            if let XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs } = event
+                && name.eq_ignore_ascii_case("person")
+                && let Some(id) = attr(&attrs, "id")
+            {
+                let display = attr(&attrs, "displayName")
+                    .or_else(|| attr(&attrs, "userId"))
+                    .unwrap_or(id);
+                persons.insert(id.to_string(), display.to_string());
+            }
+        }
+    }
+    Ok(persons)
+}
+
 fn load_comments(
     wb: &mut Workbook,
     sheet: omacell_core::addr::SheetId,
     package: &OpcPackage,
     rels: &[Relationship],
+    persons: &HashMap<String, String>,
     warnings: &mut FileWarnings,
 ) -> Result<(), CoreError> {
     for rel in rels.iter().filter(|r| r.rel_type == REL_COMMENTS) {
@@ -1765,7 +1867,126 @@ fn load_comments(
             }
         }
     }
+    load_threaded_comments(wb, sheet, package, rels, persons, warnings)?;
     Ok(())
+}
+
+#[derive(Clone)]
+struct RawThreadComment {
+    id: String,
+    parent: Option<String>,
+    cell_ref: String,
+    person: String,
+    text: String,
+    resolved: bool,
+}
+
+fn load_threaded_comments(
+    wb: &mut Workbook,
+    sheet: omacell_core::addr::SheetId,
+    package: &OpcPackage,
+    rels: &[Relationship],
+    persons: &HashMap<String, String>,
+    warnings: &mut FileWarnings,
+) -> Result<(), CoreError> {
+    for rel in rels
+        .iter()
+        .filter(|rel| rel.rel_type == REL_THREADED_COMMENTS)
+    {
+        let Some(part) = package.part(&rel.target) else {
+            warnings.push(
+                "xlsx.part",
+                "threaded comments part missing",
+                Some(rel.target.clone()),
+            );
+            continue;
+        };
+        let mut reader = XmlReader::new(&part.bytes);
+        let mut current: Option<RawThreadComment> = None;
+        let mut in_text = false;
+        let mut records = BTreeMap::new();
+        while let Some(event) = reader.next()? {
+            match event {
+                XmlEvent::Start { name, attrs } if name == "threadedComment" => {
+                    current = Some(RawThreadComment {
+                        id: attr(&attrs, "id").unwrap_or_default().to_string(),
+                        parent: attr(&attrs, "parentId").map(ToOwned::to_owned),
+                        cell_ref: attr(&attrs, "ref").unwrap_or_default().to_string(),
+                        person: attr(&attrs, "personId").unwrap_or_default().to_string(),
+                        text: String::new(),
+                        resolved: attr(&attrs, "done").is_some_and(truthy),
+                    });
+                }
+                XmlEvent::End { name } if name == "threadedComment" => {
+                    if let Some(record) = current.take()
+                        && !record.id.is_empty()
+                    {
+                        records.insert(record.id.clone(), record);
+                    }
+                }
+                XmlEvent::Start { name, .. } if name == "text" => in_text = true,
+                XmlEvent::End { name } if name == "text" => in_text = false,
+                XmlEvent::Text(text) if in_text => {
+                    if let Some(record) = &mut current {
+                        record.text.push_str(&text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for record in records.values() {
+            if let Some(parent) = &record.parent {
+                children
+                    .entry(parent.clone())
+                    .or_default()
+                    .push(record.id.clone());
+            }
+        }
+        for record in records.values().filter(|record| record.parent.is_none()) {
+            let Ok(cell) = parse_a1_cell(&record.cell_ref) else {
+                warnings.push(
+                    "xlsx.comment",
+                    format!("invalid threaded comment ref {:?}", record.cell_ref),
+                    Some(rel.target.clone()),
+                );
+                continue;
+            };
+            let comment = build_thread_comment(&record.id, &records, &children, persons, 0)?;
+            wb.set_comment(sheet, cell.row, cell.col, Some(comment))?;
+        }
+    }
+    Ok(())
+}
+
+fn build_thread_comment(
+    id: &str,
+    records: &BTreeMap<String, RawThreadComment>,
+    children: &BTreeMap<String, Vec<String>>,
+    persons: &HashMap<String, String>,
+    depth: usize,
+) -> Result<omacell_core::sheet::Comment, CoreError> {
+    if depth >= 64 {
+        return Err(error::xlsx_limit("threaded comment nesting exceeds 64"));
+    }
+    let record = records
+        .get(id)
+        .ok_or_else(|| error::xlsx_format("threaded comment parent is missing"))?;
+    let replies = children
+        .get(id)
+        .into_iter()
+        .flatten()
+        .map(|child| build_thread_comment(child, records, children, persons, depth + 1))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(omacell_core::sheet::Comment {
+        author: persons
+            .get(&record.person)
+            .cloned()
+            .unwrap_or_else(|| record.person.clone()),
+        text: record.text.clone(),
+        replies,
+        resolved: record.resolved,
+    })
 }
 
 fn load_charts(

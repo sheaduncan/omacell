@@ -32,6 +32,7 @@ pub struct Bus {
     registry: CommandRegistry,
     changesets: ChangesetStore,
     events: EventBus,
+    last_repeatable: Option<CommandCall>,
 }
 
 impl Bus {
@@ -45,6 +46,7 @@ impl Bus {
             registry,
             changesets: ChangesetStore::new(),
             events: EventBus::new(),
+            last_repeatable: None,
         })
     }
 
@@ -131,12 +133,48 @@ impl Bus {
         args: serde_json::Value,
         task: crate::handler::TaskCtl,
     ) -> Outcome {
+        if id == "edit.repeat" {
+            let repeat_args = if args.is_null() {
+                serde_json::json!({})
+            } else {
+                args
+            };
+            let repeat: crate::edit::RepeatArgs = match serde_json::from_value(repeat_args) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Outcome::failure(bus_error::args(format!(
+                        "invalid arguments for edit.repeat: {error}"
+                    )));
+                }
+            };
+            if repeat.count == 0 || repeat.count > 1_000 {
+                return Outcome::failure(bus_error::args("edit.repeat count must be in 1..=1000"));
+            }
+            let Some(call) = self.last_repeatable.clone() else {
+                return Outcome::failure(bus_error::args("there is no prior mutation to repeat"));
+            };
+            let calls = vec![call; repeat.count as usize];
+            return match self.run_with_task(origin, &calls, Run::direct(), task) {
+                Ok(effect) => Outcome::success(effect.result),
+                Err(error) => Outcome::failure(error),
+            };
+        }
         let call = match command_call(id, args) {
             Ok(call) => call,
             Err(err) => return Outcome::failure(err),
         };
+        let repeatable = self.registry.get(&call.id).is_some_and(|command| {
+            command.descriptor.mutating
+                && command.exposure == Exposure::Public
+                && !matches!(call.id.as_str(), "edit.undo" | "edit.redo" | "edit.repeat")
+        });
         match self.run_with_task(origin, std::slice::from_ref(&call), Run::direct(), task) {
-            Ok(effect) => Outcome::success(effect.result),
+            Ok(effect) => {
+                if repeatable {
+                    self.last_repeatable = Some(call);
+                }
+                Outcome::success(effect.result)
+            }
             Err(err) => Outcome::failure(err),
         }
     }
@@ -439,9 +477,17 @@ fn dispatch(
         let cmd = registry
             .get(&call.id)
             .ok_or_else(|| bus_error::unknown(call.id.as_str()))?;
+        let before = (cmd.descriptor.mutating && cmd.changeset_eligible).then(|| workbook.clone());
         let mut ctx =
             CommandContext::with_task(workbook, engine, origin, preflight, dry_run, task.clone());
-        let effect = cmd.invoke(&mut ctx, call.args.clone())?;
+        let mut effect = cmd.invoke(&mut ctx, call.args.clone())?;
+        if effect.inverse.is_empty()
+            && let Some(before) = before
+        {
+            effect
+                .inverse
+                .push(crate::restore::exact_inverse(&before, workbook)?);
+        }
         ensure_effect_fits(&effect)?;
         combined.append(effect);
         ensure_effect_fits(&combined)?;

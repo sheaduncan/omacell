@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::addr::{CellRef, RangeRef, SheetId};
 use crate::chart::{Chart, Sparkline};
 use crate::error::CoreError;
-use crate::geometry::SheetGeometry;
+use crate::geometry::{AxisGeometry, SheetGeometry};
 use crate::print::PageSetup;
 use crate::storage::{SheetStore, UsedRange};
 use crate::style::Color;
@@ -136,9 +136,71 @@ impl Default for ViewState {
 pub struct ProtectionState {
     /// Protection is on.
     pub enabled: bool,
-    /// Opaque hash / verifier bytes.
+    /// Opaque hash / verifier bytes (Excel XOR hash, two bytes, not a secret).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<Vec<u8>>,
+    /// Actions still allowed while the sheet is protected.
+    #[serde(default)]
+    pub allow: ProtectionAllow,
+    /// Password-editable ranges preserved from OOXML.
+    #[serde(default)]
+    pub protected_ranges: Vec<ProtectedRange>,
+}
+
+/// A sheet range that may use its own legacy protection verifier.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProtectedRange {
+    /// Display name.
+    pub name: String,
+    /// One or more allowed areas.
+    pub ranges: Vec<RangeRef>,
+    /// Optional uppercase ASCII legacy verifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<Vec<u8>>,
+}
+
+/// Excel sheet-protection allow-list (compatibility only).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProtectionAllow {
+    /// Select locked cells.
+    #[serde(default = "true_bool")]
+    pub select_locked: bool,
+    /// Select unlocked cells.
+    #[serde(default = "true_bool")]
+    pub select_unlocked: bool,
+    /// Format cells.
+    #[serde(default)]
+    pub format_cells: bool,
+    /// Insert rows.
+    #[serde(default)]
+    pub insert_rows: bool,
+    /// Insert columns.
+    #[serde(default)]
+    pub insert_cols: bool,
+    /// Sort.
+    #[serde(default)]
+    pub sort: bool,
+    /// AutoFilter.
+    #[serde(default)]
+    pub auto_filter: bool,
+}
+
+fn true_bool() -> bool {
+    true
+}
+
+impl Default for ProtectionAllow {
+    fn default() -> Self {
+        Self {
+            select_locked: true,
+            select_unlocked: true,
+            format_cells: false,
+            insert_rows: false,
+            insert_cols: false,
+            sort: false,
+            auto_filter: false,
+        }
+    }
 }
 
 /// Cell note (legacy comment).
@@ -161,7 +223,7 @@ pub struct Note {
 ///
 /// ```
 /// use omacell_core::sheet::Comment;
-/// let c = Comment { author: "Ada".into(), text: "hi".into(), replies: vec![] };
+/// let c = Comment { author: "Ada".into(), text: "hi".into(), replies: vec![], resolved: false };
 /// assert!(c.replies.is_empty());
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -173,6 +235,9 @@ pub struct Comment {
     /// Replies.
     #[serde(default)]
     pub replies: Vec<Comment>,
+    /// Thread is resolved.
+    #[serde(default)]
+    pub resolved: bool,
 }
 
 /// Hyperlink on a cell.
@@ -260,6 +325,147 @@ pub struct Sheet {
     pub sparklines: Vec<Sparkline>,
     /// Page setup used by print preview and PDF export.
     pub page_setup: PageSetup,
+}
+
+/// Undo snapshot of the WP-17 sheet metadata that lives outside the cell store.
+///
+/// The fields are intentionally private: callers edit through [`crate::workbook::Workbook`]
+/// so mutations remain validated and undo tracked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SheetEditState {
+    rows: AxisEditState,
+    cols: AxisEditState,
+    protection: ProtectionState,
+    merges: Vec<RangeRef>,
+    notes: Vec<(u32, u16, Note)>,
+    comments: Vec<(u32, u16, Comment)>,
+    hyperlinks: Vec<(u32, u16, Hyperlink)>,
+}
+
+/// Portable sparse state for one row or column axis.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct AxisEditState {
+    custom: Vec<(u32, u32)>,
+    hidden: Vec<u32>,
+    outline: Vec<(u32, u8)>,
+    collapsed: Vec<u32>,
+}
+
+impl SheetEditState {
+    pub(crate) fn capture(sheet: &Sheet) -> Self {
+        Self {
+            rows: capture_axis(&sheet.geometry.rows),
+            cols: capture_axis(&sheet.geometry.cols),
+            protection: sheet.protection.clone(),
+            merges: sheet.merges.clone(),
+            notes: sorted_map(&sheet.notes),
+            comments: sorted_map(&sheet.comments),
+            hyperlinks: sorted_map(&sheet.hyperlinks),
+        }
+    }
+
+    pub(crate) fn restore(self, sheet: &mut Sheet) {
+        sheet.geometry.rows = restore_axis(self.rows, true);
+        sheet.geometry.cols = restore_axis(self.cols, false);
+        sheet.protection = self.protection;
+        sheet.merges = self.merges;
+        sheet.notes = self
+            .notes
+            .into_iter()
+            .map(|(row, col, value)| ((row, col), value))
+            .collect();
+        sheet.comments = self
+            .comments
+            .into_iter()
+            .map(|(row, col, value)| ((row, col), value))
+            .collect();
+        sheet.hyperlinks = self
+            .hyperlinks
+            .into_iter()
+            .map(|(row, col, value)| ((row, col), value))
+            .collect();
+    }
+
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let note_bytes = self
+            .notes
+            .iter()
+            .map(|(_, _, note)| {
+                note.text.len() + note.author.as_ref().map(String::len).unwrap_or(0)
+            })
+            .sum::<usize>();
+        let comment_bytes = self
+            .comments
+            .iter()
+            .map(|(_, _, comment)| comment_bytes(comment))
+            .sum::<usize>();
+        let hyperlink_bytes = self
+            .hyperlinks
+            .iter()
+            .map(|(_, _, link)| {
+                link.target.len()
+                    + link.tooltip.as_ref().map(String::len).unwrap_or(0)
+                    + link.display.as_ref().map(String::len).unwrap_or(0)
+            })
+            .sum::<usize>();
+        256 + self.rows.custom.len() * 16
+            + self.rows.hidden.len() * 4
+            + self.rows.outline.len() * 8
+            + self.rows.collapsed.len() * 4
+            + self.cols.custom.len() * 16
+            + self.cols.hidden.len() * 4
+            + self.cols.outline.len() * 8
+            + self.cols.collapsed.len() * 4
+            + self.merges.len() * std::mem::size_of::<RangeRef>()
+            + note_bytes
+            + comment_bytes
+            + hyperlink_bytes
+    }
+}
+
+fn capture_axis(axis: &AxisGeometry) -> AxisEditState {
+    AxisEditState {
+        custom: axis.iter_custom().collect(),
+        hidden: axis.iter_hidden().collect(),
+        outline: axis.iter_outline().collect(),
+        collapsed: axis.iter_collapsed().collect(),
+    }
+}
+
+fn restore_axis(state: AxisEditState, rows: bool) -> AxisGeometry {
+    let mut axis = if rows {
+        AxisGeometry::rows()
+    } else {
+        AxisGeometry::cols()
+    };
+    for (index, size) in state.custom {
+        let _ = axis.set_size(index, size);
+    }
+    for index in state.hidden {
+        let _ = axis.set_hidden(index, true);
+    }
+    for (index, level) in state.outline {
+        let _ = axis.set_outline_level(index, level);
+    }
+    for index in state.collapsed {
+        let _ = axis.set_collapsed(index, true);
+    }
+    axis
+}
+
+fn sorted_map<T: Clone>(map: &FxHashMap<(u32, u16), T>) -> Vec<(u32, u16, T)> {
+    let mut entries: Vec<_> = map
+        .iter()
+        .map(|(&(row, col), value)| (row, col, value.clone()))
+        .collect();
+    entries.sort_by_key(|(row, col, _)| (*row, *col));
+    entries
+}
+
+fn comment_bytes(comment: &Comment) -> usize {
+    comment.author.len()
+        + comment.text.len()
+        + comment.replies.iter().map(comment_bytes).sum::<usize>()
 }
 
 impl Sheet {

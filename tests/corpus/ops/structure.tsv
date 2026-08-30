@@ -1,0 +1,9 @@
+# case	op	formula_cell	formula_before	op_range	shift_or_dest	formula_after	excel_rule
+insert_rows	insert	A1	=A3	A2	rows	=A4	whole-row insertion shifts references at or below the insertion
+delete_rows_ref	delete	A1	=A3	A3	rows	=#REF!	deleting the referenced row produces #REF!
+insert_cols	insert	A1	=C1	B1	cols	=D1	whole-column insertion shifts references at or right of the insertion
+delete_cols_ref	delete	A1	=C1	C1	cols	=#REF!	deleting the referenced column produces #REF!
+band_down	insert	D1	=A2	A2:B2	down	=A3	cell insertion adjusts references inside the shifted column band
+band_down_unaffected	insert	D1	=C2	A2:B2	down	=C2	cell insertion leaves references outside the shifted column band unchanged
+band_right	insert	A4	=B1	B1:B2	right	=C1	cell insertion adjusts references inside the shifted row band
+move_retarget	move	D1	=A1	A1	B2	=B2	moving cells retargets dependents to the destination

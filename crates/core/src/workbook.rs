@@ -21,7 +21,7 @@ use crate::names::{DefinedName, NameRegistry, NameScope};
 use crate::numfmt;
 use crate::print::PageSetup;
 use crate::sheet::{
-    Comment, Hyperlink, Note, ProtectionState, Sheet, SheetVisibility, ViewState,
+    Comment, Hyperlink, Note, ProtectionState, Sheet, SheetEditState, SheetVisibility, ViewState,
     validate_sheet_name,
 };
 use crate::storage::{CellFlags, CellSlot, UsedRange};
@@ -127,6 +127,22 @@ pub struct WorkbookMeta {
     pub custom: IndexMap<String, String>,
 }
 
+/// Legacy workbook-level protection flags (compatibility, not encryption).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct WorkbookProtectionState {
+    /// Protection record is enabled.
+    pub enabled: bool,
+    /// Prevent sheet add/remove/reorder/rename.
+    #[serde(default)]
+    pub lock_structure: bool,
+    /// Prevent workbook-window changes.
+    #[serde(default)]
+    pub lock_windows: bool,
+    /// OOXML legacy password verifier as uppercase ASCII hex bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<Vec<u8>>,
+}
+
 /// Cheap reader snapshot (Arc block pages + intern tables).
 ///
 /// Mutating the originating [`Workbook`] does not change this view.
@@ -137,6 +153,7 @@ pub struct WorkbookSnapshot {
     tables: crate::tables::TableRegistry,
     intern: Arc<Interners>,
     settings: WorkbookSettings,
+    protection: WorkbookProtectionState,
 }
 
 impl WorkbookSnapshot {
@@ -175,6 +192,12 @@ impl WorkbookSnapshot {
         &self.settings
     }
 
+    /// Workbook protection as of the snapshot.
+    #[must_use]
+    pub fn protection(&self) -> &WorkbookProtectionState {
+        &self.protection
+    }
+
     /// Get a cell slot.
     pub fn get(&self, id: SheetId, row: u32, col: u16) -> Result<Option<&CellSlot>, CoreError> {
         let sheet = self
@@ -205,6 +228,7 @@ pub struct Workbook {
     names: NameRegistry,
     tables: TableRegistry,
     settings: WorkbookSettings,
+    protection: WorkbookProtectionState,
     meta: WorkbookMeta,
     /// Opaque extra parts for WP-10 (e.g. unused OOXML).
     pub custom_parts: IndexMap<String, Vec<u8>>,
@@ -258,6 +282,7 @@ impl Workbook {
             names: NameRegistry::new(),
             tables: TableRegistry::new(),
             settings: WorkbookSettings::default(),
+            protection: WorkbookProtectionState::default(),
             meta: WorkbookMeta::default(),
             custom_parts: IndexMap::new(),
             undo: UndoLog::new(),
@@ -281,6 +306,7 @@ impl Workbook {
             tables: self.tables.clone(),
             intern: Arc::clone(&self.intern),
             settings: self.settings.clone(),
+            protection: self.protection.clone(),
         }
     }
 
@@ -293,6 +319,29 @@ impl Workbook {
     /// Mutable settings (not undo-tracked; WP-07a will wrap this).
     pub fn settings_mut(&mut self) -> &mut WorkbookSettings {
         &mut self.settings
+    }
+
+    /// Workbook-level protection flags.
+    #[must_use]
+    pub fn protection(&self) -> &WorkbookProtectionState {
+        &self.protection
+    }
+
+    /// Replace workbook-level protection flags with undo tracking.
+    pub fn set_workbook_protection(
+        &mut self,
+        protection: WorkbookProtectionState,
+    ) -> Result<(), CoreError> {
+        let before = self.protection.clone();
+        if before == protection {
+            return Ok(());
+        }
+        self.protection = protection.clone();
+        self.undo.record(Delta::WorkbookProtection {
+            before,
+            after: protection,
+        });
+        Ok(())
     }
 
     /// Metadata.
@@ -361,6 +410,32 @@ impl Workbook {
         self.sheets.get(&id)
     }
 
+    /// Ordered tab index for a sheet.
+    pub fn sheet_index(&self, id: SheetId) -> Result<usize, CoreError> {
+        self.sheets
+            .get_index_of(&id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Portable snapshot of WP-17 metadata outside the cell store.
+    pub fn sheet_edit_state(&self, id: SheetId) -> Result<SheetEditState, CoreError> {
+        self.sheet(id)
+            .map(SheetEditState::capture)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Restore a portable WP-17 metadata snapshot as one undo delta.
+    pub fn restore_sheet_edit_state(
+        &mut self,
+        id: SheetId,
+        state: SheetEditState,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            state.restore(sheet);
+            Ok(())
+        })
+    }
+
     /// Sheet by name (case-insensitive).
     #[must_use]
     pub fn sheet_by_name(&self, name: &str) -> Option<&Sheet> {
@@ -409,10 +484,40 @@ impl Workbook {
         })
     }
 
-    fn sheet_mut(&mut self, id: SheetId) -> Result<&mut Sheet, CoreError> {
+    pub(crate) fn sheet_mut(&mut self, id: SheetId) -> Result<&mut Sheet, CoreError> {
         self.sheets
             .get_mut(&id)
             .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    pub(crate) fn mutate_sheet_edit<T>(
+        &mut self,
+        id: SheetId,
+        edit: impl FnOnce(&mut Sheet) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        let before = SheetEditState::capture(
+            self.sheet(id)
+                .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?,
+        );
+        let result = match edit(self.sheet_mut(id)?) {
+            Ok(result) => result,
+            Err(error) => {
+                before.clone().restore(self.sheet_mut(id)?);
+                return Err(error);
+            }
+        };
+        let after = SheetEditState::capture(
+            self.sheet(id)
+                .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?,
+        );
+        if before != after {
+            self.undo.record(Delta::SheetEdit {
+                sheet: id,
+                before: Box::new(before),
+                after: Box::new(after),
+            });
+        }
+        Ok(result)
     }
 
     /// Append a chart. Ids are assigned.
@@ -788,14 +893,21 @@ impl Workbook {
                 after_px,
                 hidden_before,
                 hidden_after,
+                custom_before,
+                custom_after,
             } => {
-                let (px, hid) = if inverse {
-                    (*before_px, *hidden_before)
+                let (px, hid, custom) = if inverse {
+                    (*before_px, *hidden_before, *custom_before)
                 } else {
-                    (*after_px, *hidden_after)
+                    (*after_px, *hidden_after, *custom_after)
                 };
                 let s = self.sheet_mut(*sheet)?;
-                s.geometry.rows.set_size(*row, px)?;
+                s.geometry.rows.set_hidden(*row, false)?;
+                if custom {
+                    s.geometry.rows.set_size(*row, px)?;
+                } else {
+                    s.geometry.rows.clear_size(*row)?;
+                }
                 s.geometry.rows.set_hidden(*row, hid)?;
                 Ok(())
             }
@@ -806,14 +918,21 @@ impl Workbook {
                 after_px,
                 hidden_before,
                 hidden_after,
+                custom_before,
+                custom_after,
             } => {
-                let (px, hid) = if inverse {
-                    (*before_px, *hidden_before)
+                let (px, hid, custom) = if inverse {
+                    (*before_px, *hidden_before, *custom_before)
                 } else {
-                    (*after_px, *hidden_after)
+                    (*after_px, *hidden_after, *custom_after)
                 };
                 let s = self.sheet_mut(*sheet)?;
-                s.geometry.cols.set_size(u32::from(*col), px)?;
+                s.geometry.cols.set_hidden(u32::from(*col), false)?;
+                if custom {
+                    s.geometry.cols.set_size(u32::from(*col), px)?;
+                } else {
+                    s.geometry.cols.clear_size(u32::from(*col))?;
+                }
                 s.geometry.cols.set_hidden(u32::from(*col), hid)?;
                 Ok(())
             }
@@ -825,12 +944,33 @@ impl Workbook {
                 }
                 Ok(())
             }
-            Delta::SheetRemove { id, index, sheet } => {
+            Delta::SheetRemove {
+                id,
+                index,
+                sheet,
+                active_before,
+                active_after,
+            } => {
                 if inverse {
                     self.link_sheet(*index, (**sheet).clone())?;
+                    self.active = *active_before;
                 } else {
                     self.unlink_sheet(*id)?;
+                    self.active = *active_after;
                 }
+                Ok(())
+            }
+            Delta::SheetReorder { id, before, after } => {
+                let index = if inverse { *before } else { *after };
+                self.reorder_sheet_inner(*id, index)
+            }
+            Delta::SheetEdit {
+                sheet,
+                before,
+                after,
+            } => {
+                let state = if inverse { before } else { after };
+                state.as_ref().clone().restore(self.sheet_mut(*sheet)?);
                 Ok(())
             }
             Delta::SheetRename { id, before, after } => {
@@ -1029,6 +1169,14 @@ impl Workbook {
                 self.settings.calc_mode = if inverse { *before } else { *after };
                 Ok(())
             }
+            Delta::WorkbookProtection { before, after } => {
+                self.protection = if inverse {
+                    before.clone()
+                } else {
+                    after.clone()
+                };
+                Ok(())
+            }
         }
     }
 
@@ -1080,6 +1228,40 @@ impl Workbook {
         Ok(id)
     }
 
+    /// Restore an exact sheet snapshot at a tab index.
+    ///
+    /// This narrow hook exists for the trusted command bus inverse of
+    /// `sheet.remove`; ordinary callers should use [`Self::add_sheet`].
+    pub fn restore_sheet_at(&mut self, index: usize, sheet: Sheet) -> Result<(), CoreError> {
+        validate_sheet_name(&sheet.name)?;
+        if self.sheets.contains_key(&sheet.id) {
+            return Err(CoreError::sheet_id(format!(
+                "sheet {} already exists",
+                sheet.id.index()
+            )));
+        }
+        if self.names_by_lower.contains_key(&sheet.name.to_lowercase()) {
+            return Err(CoreError::sheet_name(format!(
+                "sheet name {:?} already exists",
+                sheet.name
+            )));
+        }
+        self.next_sheet = self.next_sheet.max(
+            sheet
+                .id
+                .index()
+                .checked_add(1)
+                .ok_or_else(|| CoreError::sheet_id("sheet id space is exhausted"))?,
+        );
+        self.link_sheet(index, sheet.clone())?;
+        self.undo.record(Delta::SheetAdd {
+            id: sheet.id,
+            index: index.min(self.sheets.len().saturating_sub(1)),
+            sheet: Box::new(sheet),
+        });
+        Ok(())
+    }
+
     /// Remove a sheet. The last remaining sheet cannot be removed. The last
     /// visible sheet cannot be removed if it is the only visible one.
     pub fn remove_sheet(&mut self, id: SheetId) -> Result<Sheet, CoreError> {
@@ -1106,13 +1288,47 @@ impl Workbook {
             }
         }
         let index = self.sheets.get_index_of(&id).unwrap_or(0);
+        let active_before = self.active;
         let sheet = self.unlink_sheet(id)?;
+        let active_after = self.active;
         self.undo.record(Delta::SheetRemove {
             id,
             index,
             sheet: Box::new(sheet.clone()),
+            active_before,
+            active_after,
         });
         Ok(sheet)
+    }
+
+    /// Move `id` to tab index `index` (0-based).
+    pub fn reorder_sheet(&mut self, id: SheetId, index: usize) -> Result<(), CoreError> {
+        let from = self
+            .sheets
+            .get_index_of(&id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?;
+        let to = index.min(self.sheets.len().saturating_sub(1));
+        if from != to {
+            self.reorder_sheet_inner(id, to)?;
+            self.undo.record(Delta::SheetReorder {
+                id,
+                before: from,
+                after: to,
+            });
+        }
+        Ok(())
+    }
+
+    fn reorder_sheet_inner(&mut self, id: SheetId, index: usize) -> Result<(), CoreError> {
+        let from = self
+            .sheets
+            .get_index_of(&id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?;
+        let to = index.min(self.sheets.len().saturating_sub(1));
+        if from != to {
+            self.sheets.move_index(from, to);
+        }
+        Ok(())
     }
 
     /// Rename a sheet.
@@ -1211,28 +1427,182 @@ impl Workbook {
 
     /// Hide or unhide a row (`SUBTOTAL` / `AGGREGATE` hidden-row semantics).
     pub fn set_row_hidden(&mut self, id: SheetId, row: u32, hidden: bool) -> Result<(), CoreError> {
-        self.sheet_mut(id)?.geometry.rows.set_hidden(row, hidden)
+        let (before_px, hidden_before, custom_before) = {
+            let sheet = self.sheet_mut(id)?;
+            let before_px = sheet.geometry.rows.size(row)?;
+            let hidden_before = sheet.geometry.rows.is_hidden(row)?;
+            let custom_before = sheet.geometry.rows.has_custom_size(row);
+            if hidden_before == hidden {
+                return Ok(());
+            }
+            sheet.geometry.rows.set_hidden(row, hidden)?;
+            (before_px, hidden_before, custom_before)
+        };
+        self.undo.record(Delta::RowGeom {
+            sheet: id,
+            row,
+            before_px,
+            after_px: before_px,
+            hidden_before,
+            hidden_after: hidden,
+            custom_before,
+            custom_after: custom_before,
+        });
+        Ok(())
     }
 
     /// Set a row height in pixels.
     pub fn set_row_height(&mut self, id: SheetId, row: u32, px: u32) -> Result<(), CoreError> {
-        self.sheet_mut(id)?.geometry.rows.set_size(row, px)
+        let (before_px, hidden, custom_before) = {
+            let sheet = self.sheet_mut(id)?;
+            let before_px = sheet.geometry.rows.size(row)?;
+            let hidden = sheet.geometry.rows.is_hidden(row)?;
+            let custom_before = sheet.geometry.rows.has_custom_size(row);
+            if before_px == px && custom_before {
+                return Ok(());
+            }
+            sheet.geometry.rows.set_size(row, px)?;
+            (before_px, hidden, custom_before)
+        };
+        self.undo.record(Delta::RowGeom {
+            sheet: id,
+            row,
+            before_px,
+            after_px: px,
+            hidden_before: hidden,
+            hidden_after: hidden,
+            custom_before,
+            custom_after: true,
+        });
+        Ok(())
     }
 
     /// Hide or unhide a column.
     pub fn set_col_hidden(&mut self, id: SheetId, col: u16, hidden: bool) -> Result<(), CoreError> {
-        self.sheet_mut(id)?
-            .geometry
-            .cols
-            .set_hidden(u32::from(col), hidden)
+        let (before_px, hidden_before, custom_before) = {
+            let sheet = self.sheet_mut(id)?;
+            let before_px = sheet.geometry.cols.size(u32::from(col))?;
+            let hidden_before = sheet.geometry.cols.is_hidden(u32::from(col))?;
+            let custom_before = sheet.geometry.cols.has_custom_size(u32::from(col));
+            if hidden_before == hidden {
+                return Ok(());
+            }
+            sheet.geometry.cols.set_hidden(u32::from(col), hidden)?;
+            (before_px, hidden_before, custom_before)
+        };
+        self.undo.record(Delta::ColGeom {
+            sheet: id,
+            col,
+            before_px,
+            after_px: before_px,
+            hidden_before,
+            hidden_after: hidden,
+            custom_before,
+            custom_after: custom_before,
+        });
+        Ok(())
     }
 
     /// Set a column width in pixels.
     pub fn set_col_width(&mut self, id: SheetId, col: u16, px: u32) -> Result<(), CoreError> {
-        self.sheet_mut(id)?
-            .geometry
-            .cols
-            .set_size(u32::from(col), px)
+        let (before_px, hidden, custom_before) = {
+            let sheet = self.sheet_mut(id)?;
+            let before_px = sheet.geometry.cols.size(u32::from(col))?;
+            let hidden = sheet.geometry.cols.is_hidden(u32::from(col))?;
+            let custom_before = sheet.geometry.cols.has_custom_size(u32::from(col));
+            if before_px == px && custom_before {
+                return Ok(());
+            }
+            sheet.geometry.cols.set_size(u32::from(col), px)?;
+            (before_px, hidden, custom_before)
+        };
+        self.undo.record(Delta::ColGeom {
+            sheet: id,
+            col,
+            before_px,
+            after_px: px,
+            hidden_before: hidden,
+            hidden_after: hidden,
+            custom_before,
+            custom_after: true,
+        });
+        Ok(())
+    }
+
+    /// Row outline level (0–7).
+    pub fn row_outline_level(&self, id: SheetId, row: u32) -> Result<u8, CoreError> {
+        self.sheet(id)
+            .map(|sheet| sheet.geometry.rows.outline_level(row))
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Set a row outline level while loading or editing.
+    pub fn set_row_outline_level(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        level: u8,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.geometry.rows.set_outline_level(row, level)
+        })
+    }
+
+    /// Column outline level (0–7).
+    pub fn col_outline_level(&self, id: SheetId, col: u16) -> Result<u8, CoreError> {
+        self.sheet(id)
+            .map(|sheet| sheet.geometry.cols.outline_level(u32::from(col)))
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Set a column outline level while loading or editing.
+    pub fn set_col_outline_level(
+        &mut self,
+        id: SheetId,
+        col: u16,
+        level: u8,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.geometry.cols.set_outline_level(u32::from(col), level)
+        })
+    }
+
+    /// Set row outline collapse state while loading a file.
+    pub fn set_row_collapsed(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        collapsed: bool,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.geometry.rows.set_collapsed(row, collapsed)
+        })
+    }
+
+    /// Whether a row outline marker is collapsed.
+    pub fn row_collapsed(&self, id: SheetId, row: u32) -> Result<bool, CoreError> {
+        self.sheet(id)
+            .map(|sheet| sheet.geometry.rows.is_collapsed(row))
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Whether a column outline marker is collapsed.
+    pub fn col_collapsed(&self, id: SheetId, col: u16) -> Result<bool, CoreError> {
+        self.sheet(id)
+            .map(|sheet| sheet.geometry.cols.is_collapsed(u32::from(col)))
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Set column outline collapse state while loading or editing.
+    pub fn set_col_collapsed(
+        &mut self,
+        id: SheetId,
+        col: u16,
+        collapsed: bool,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.geometry.cols.set_collapsed(u32::from(col), collapsed)
+        })
     }
 
     /// Replace sheet view state while loading a file.
@@ -1247,8 +1617,10 @@ impl Workbook {
         id: SheetId,
         protection: ProtectionState,
     ) -> Result<(), CoreError> {
-        self.sheet_mut(id)?.protection = protection;
-        Ok(())
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.protection = protection;
+            Ok(())
+        })
     }
 
     /// Replace merged ranges while loading a file.
@@ -1409,16 +1781,17 @@ impl Workbook {
         note: Option<Note>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
-        let sheet = self.sheet_mut(id)?;
-        match note {
-            Some(n) => {
-                sheet.notes.insert((row, col), n);
+        self.mutate_sheet_edit(id, |sheet| {
+            match note {
+                Some(n) => {
+                    sheet.notes.insert((row, col), n);
+                }
+                None => {
+                    sheet.notes.remove(&(row, col));
+                }
             }
-            None => {
-                sheet.notes.remove(&(row, col));
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Set a threaded comment.
@@ -1430,16 +1803,17 @@ impl Workbook {
         comment: Option<Comment>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
-        let sheet = self.sheet_mut(id)?;
-        match comment {
-            Some(c) => {
-                sheet.comments.insert((row, col), c);
+        self.mutate_sheet_edit(id, |sheet| {
+            match comment {
+                Some(c) => {
+                    sheet.comments.insert((row, col), c);
+                }
+                None => {
+                    sheet.comments.remove(&(row, col));
+                }
             }
-            None => {
-                sheet.comments.remove(&(row, col));
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Set a hyperlink.
@@ -1451,16 +1825,17 @@ impl Workbook {
         link: Option<Hyperlink>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
-        let sheet = self.sheet_mut(id)?;
-        match link {
-            Some(h) => {
-                sheet.hyperlinks.insert((row, col), h);
+        self.mutate_sheet_edit(id, |sheet| {
+            match link {
+                Some(h) => {
+                    sheet.hyperlinks.insert((row, col), h);
+                }
+                None => {
+                    sheet.hyperlinks.remove(&(row, col));
+                }
             }
-            None => {
-                sheet.hyperlinks.remove(&(row, col));
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Used range of a sheet.

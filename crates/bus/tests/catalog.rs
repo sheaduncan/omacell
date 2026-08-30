@@ -130,7 +130,7 @@ fn commands_json_is_sorted_stable_and_matches_schema() {
     sorted.sort();
     assert_eq!(ids, sorted);
     assert!(!ids.contains(&"cell.restore".to_string()));
-    assert!(!ids.contains(&"sheet.remove".to_string()));
+    assert!(ids.contains(&"sheet.remove".to_string()));
     for required in [
         "cell.set",
         "cell.clear",
