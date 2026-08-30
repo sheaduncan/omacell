@@ -43,6 +43,12 @@ pub struct GuiTheme {
     pub stale: Color32,
     /// Formula reference cycle.
     pub references: [Color32; 8],
+    /// Chart series cycle.
+    pub charts: [Color32; 8],
+    /// Chart axis.
+    pub chart_axis: Color32,
+    /// Chart gridline.
+    pub chart_gridline: Color32,
     /// UI font size in points.
     pub ui_font_size_pt: f64,
     /// Corner rounding from shell tokens.
@@ -76,6 +82,9 @@ impl GuiTheme {
             warning: role(roles, "semantic.warning"),
             stale: role(roles, "state.stale"),
             references: std::array::from_fn(|i| role(roles, &format!("references.{i}"))),
+            charts: std::array::from_fn(|i| role(roles, &format!("charts.palette.{i}"))),
+            chart_axis: role(roles, "charts.axis"),
+            chart_gridline: role(roles, "charts.gridline"),
             ui_font_size_pt: shell.ui_font_size_pt.max(9.0),
             rounding,
         }
@@ -110,6 +119,22 @@ impl GuiTheme {
         );
         ctx.set_style(style);
     }
+
+    /// Theme tokens for the shared chart scene.
+    #[must_use]
+    pub fn chart_theme(&self) -> omacell_core::chart::ChartTheme {
+        omacell_core::chart::ChartTheme {
+            background: color_hex(self.background),
+            foreground: color_hex(self.foreground),
+            axis: color_hex(self.chart_axis),
+            gridline: color_hex(self.chart_gridline),
+            palette: std::array::from_fn(|i| color_hex(self.charts[i])),
+        }
+    }
+}
+
+fn color_hex(c: Color32) -> String {
+    format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
 }
 
 fn role(roles: &ThemeRoles, key: &str) -> Color32 {

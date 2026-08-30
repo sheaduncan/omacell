@@ -4,6 +4,7 @@ use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::addr::{CellRef, RangeRef, SheetId};
+use crate::chart::{Chart, Sparkline};
 use crate::error::CoreError;
 use crate::geometry::SheetGeometry;
 use crate::storage::{SheetStore, UsedRange};
@@ -252,6 +253,10 @@ pub struct Sheet {
     pub store: SheetStore,
     /// Row/column geometry.
     pub geometry: SheetGeometry,
+    /// Charts overlaid on this sheet.
+    pub charts: Vec<Chart>,
+    /// In-cell sparklines.
+    pub sparklines: Vec<Sparkline>,
 }
 
 impl Sheet {
@@ -272,6 +277,8 @@ impl Sheet {
             hyperlinks: FxHashMap::default(),
             store: SheetStore::new(),
             geometry: SheetGeometry::new(),
+            charts: Vec::new(),
+            sparklines: Vec::new(),
         })
     }
 

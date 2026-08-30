@@ -1,6 +1,6 @@
 //! Keymap conformance: registered ∪ deferred; no unknown ids; no duplicate chords.
 
-use omacell_bus::{CommandRegistry, register_core};
+use omacell_bus::{CommandRegistry, register_chart_commands, register_core};
 use omacell_conf::{Paths, load};
 use omacell_ui::{
     DEFERRED_COMMANDS, KeyCode, KeyEvent, KeyOutcome, Keymap, KeymapRoots, UiSession,
@@ -21,6 +21,7 @@ fn load_session(model_file: &str) -> (tempfile::TempDir, UiSession, CommandRegis
     let session = UiSession::new(&loaded, &roots).unwrap();
     let mut registry = CommandRegistry::new();
     register_core(&mut registry).unwrap();
+    register_chart_commands(&mut registry).unwrap();
     register_ui_commands(&mut registry, &session).unwrap();
     let keymap = session.keymap();
     (dir, session, registry, keymap)

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
 use crate::addr::{CellRef, ParsedRef, RefKind, SheetId, SheetSpec};
+use crate::chart::{Chart, ChartId, Sparkline};
 pub use crate::date_system::DateSystem;
 use crate::error::CoreError;
 use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
@@ -240,6 +241,8 @@ impl Workbook {
                 hyperlinks: FxHashMap::default(),
                 store: crate::storage::SheetStore::new(),
                 geometry: crate::geometry::SheetGeometry::new(),
+                charts: Vec::new(),
+                sparklines: Vec::new(),
             },
         };
         let mut sheets = IndexMap::new();
@@ -408,6 +411,27 @@ impl Workbook {
         self.sheets
             .get_mut(&id)
             .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Append a chart. Ids are assigned.
+    pub fn add_chart(&mut self, mut chart: Chart) -> Result<ChartId, CoreError> {
+        let next = self
+            .sheets
+            .values()
+            .flat_map(|sheet| sheet.charts.iter().map(|c| c.id.index()))
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let id = ChartId::new(next);
+        chart.id = id;
+        self.sheet_mut(chart.sheet)?.charts.push(chart);
+        Ok(id)
+    }
+
+    /// Append a sparkline.
+    pub fn add_sparkline(&mut self, spark: Sparkline) -> Result<(), CoreError> {
+        self.sheet_mut(spark.sheet)?.sparklines.push(spark);
+        Ok(())
     }
 
     /// Borrow a cell.

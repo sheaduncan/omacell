@@ -13,6 +13,7 @@
 
 pub mod addr;
 pub mod changeset;
+pub mod chart;
 pub mod coerce;
 pub mod command;
 pub mod date_system;

@@ -252,7 +252,7 @@ pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
         wp: "WP-21",
     },
     DeferredCommand {
-        id: "chart.fromselection",
+        id: "chart.export",
         wp: "WP-25",
     },
     DeferredCommand {

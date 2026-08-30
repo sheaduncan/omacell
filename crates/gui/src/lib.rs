@@ -7,6 +7,7 @@
 #![deny(missing_docs)]
 
 mod app;
+mod chart;
 mod chrome;
 mod grid;
 mod input;

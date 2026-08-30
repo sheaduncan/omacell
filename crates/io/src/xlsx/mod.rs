@@ -15,6 +15,7 @@
 
 mod atomic;
 mod diff;
+mod drawing;
 mod opc;
 mod read;
 mod warnings;

@@ -23,6 +23,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+insta = "1"
 proptest = { workspace = true }
 
 [[bench]]

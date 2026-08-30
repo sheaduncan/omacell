@@ -288,6 +288,7 @@ impl Tui {
             }
             return Ok(Outcome::success(serde_json::json!({"ok": true})));
         }
+        let args = inject_chart_range(&self.ui, cmd, args);
         let (id, cancel) = match handle.submit(Origin::User, cmd, args) {
             Ok(task) => task,
             Err(err) => {
@@ -884,6 +885,19 @@ fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutatin
         return false;
     }
     true
+}
+
+fn inject_chart_range(ui: &UiSession, cmd: &str, mut args: serde_json::Value) -> serde_json::Value {
+    if cmd == "chart.fromselection"
+        && args
+            .get("range")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .is_empty()
+    {
+        args["range"] = serde_json::json!(ui.selection().active().to_range().to_a1());
+    }
+    args
 }
 
 fn apply_sheet_view(ui: &UiSession, workbook: &Workbook, id: SheetId) {

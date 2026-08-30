@@ -369,6 +369,7 @@ impl Gui {
             }
             return Ok(Outcome::success(json!({"ok": true})));
         }
+        let args = inject_chart_range(&self.ui, cmd, args);
         match handle.submit(Origin::User, cmd, args) {
             Ok((id, cancel)) => {
                 self.focused_cancel = Some(cancel);
@@ -629,6 +630,30 @@ impl Gui {
                 ctx.pixels_per_point(),
                 &a11y,
             );
+            let sheet = self.ui.selection().sheet;
+            if let Some(ws) = snapshot.workbook.sheet(sheet) {
+                let theme = self.theme.chart_theme();
+                for chart in &ws.charts {
+                    let from = self
+                        .grid
+                        .cell_rect(chart.anchor.from_row, chart.anchor.from_col);
+                    let to = self
+                        .grid
+                        .cell_rect(chart.anchor.to_row, chart.anchor.to_col);
+                    if let (Some(a), Some(b)) = (from, to) {
+                        let rect = egui::Rect::from_two_pos(a.min, b.max);
+                        if let Ok(scene) = omacell_core::chart::layout_chart(
+                            &snapshot.workbook,
+                            chart,
+                            &theme,
+                            480.0,
+                            280.0,
+                        ) {
+                            crate::chart::paint(ui, &scene, rect);
+                        }
+                    }
+                }
+            }
         });
 
         let double = input
@@ -905,6 +930,20 @@ impl Drop for Gui {
 }
 
 const DEFAULT_FIT_ROW: u32 = 20;
+
+fn inject_chart_range(ui: &UiSession, cmd: &str, mut args: serde_json::Value) -> serde_json::Value {
+    if cmd == "chart.fromselection"
+        && args
+            .get("range")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .is_empty()
+    {
+        let sel = ui.selection();
+        args["range"] = json!(sel.active().to_range().to_a1());
+    }
+    args
+}
 
 fn toolkit_owns_key(edit: &omacell_ui::EditState, event: &KeyEvent) -> bool {
     if edit.is_idle() {

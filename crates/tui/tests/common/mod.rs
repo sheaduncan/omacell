@@ -91,6 +91,7 @@ fn harness_opts_with_workbook(
     let mut functions = FnRegistry::new();
     register_all(&mut functions);
     let mut bus = Bus::new(workbook, RecalcEngine::new(functions)).unwrap();
+    omacell_bus::register_chart_commands(bus.registry_mut()).unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
 
     let tui = Tui::new(
