@@ -724,10 +724,9 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
         );
         let converted = std::fs::read(output_dir.join("in.xlsx")).unwrap();
         let converted = open_bytes(&converted).unwrap();
-        let sheet = converted
-            .workbook
-            .sheet(converted.workbook.active_sheet())
-            .unwrap();
+        // LibreOffice may change the active tab while rewriting the workbook,
+        // so resolve the sheet that owns these definitions explicitly.
+        let sheet = converted.workbook.sheet_by_name("Sheet1").unwrap();
         assert!(sheet.autofilter.is_some());
         assert_eq!(sheet.validations.len(), 1);
         assert_eq!(sheet.cond_formats.len(), 1);
