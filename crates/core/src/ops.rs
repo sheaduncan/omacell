@@ -1,14 +1,18 @@
 //! Structural edits, fill, paste-special, and protection (WP-17).
 
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
 
 use crate::addr::{CellRef, RangeRef, SheetId, SheetSpec, col_to_letters};
 use crate::dates::{CivilDate, DateSystem, date_to_serial, serial_to_date};
-use crate::error::CoreError;
+use crate::error::{CoreError, ErrorKind};
 use crate::formula::{
-    Expr, ExprKind, Formula, RewriteOp, adjust_cols, adjust_rows, parse, print, rewrite_print,
+    Expr, ExprKind, Formula, RewriteOp, adjust_cols, adjust_rows, move_range, parse, print,
+    rewrite_print,
 };
-use crate::storage::CellSlot;
+use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::storage::{CellFlags, CellSlot};
+use crate::style::Style;
 use crate::value::Value;
 use crate::workbook::Workbook;
 
@@ -213,9 +217,11 @@ pub fn insert_cells(
             rewrite_formulas(
                 wb,
                 sheet,
-                RewriteKind::Rows {
+                RewriteKind::BandRows {
                     at: r0,
                     count: n,
+                    c0,
+                    c1,
                     delete: false,
                 },
             )
@@ -226,9 +232,11 @@ pub fn insert_cells(
             rewrite_formulas(
                 wb,
                 sheet,
-                RewriteKind::Cols {
+                RewriteKind::BandCols {
                     at: c0,
                     count: n,
+                    r0,
+                    r1,
                     delete: false,
                 },
             )
@@ -251,9 +259,11 @@ pub fn delete_cells(
             rewrite_formulas(
                 wb,
                 sheet,
-                RewriteKind::Rows {
+                RewriteKind::BandRows {
                     at: r0,
                     count: n,
+                    c0,
+                    c1,
                     delete: true,
                 },
             )
@@ -264,9 +274,11 @@ pub fn delete_cells(
             rewrite_formulas(
                 wb,
                 sheet,
-                RewriteKind::Cols {
+                RewriteKind::BandCols {
                     at: c0,
                     count: n,
+                    r0,
+                    r1,
                     delete: true,
                 },
             )
@@ -291,7 +303,7 @@ fn shift_band_rows(
         .filter(|(_, c, _)| *c >= c0 && *c <= c1)
         .collect();
     for (r, c, _) in &cells {
-        let _ = wb.replace_slot_public(sheet, *r, *c, None)?;
+        let _ = replace_cell_slot(wb, sheet, *r, *c, None)?;
     }
     let mag = count;
     for (r, c, slot) in cells {
@@ -308,7 +320,7 @@ fn shift_band_rows(
         } else {
             r
         };
-        let _ = wb.replace_slot_public(sheet, nr, c, Some(slot))?;
+        let _ = replace_cell_slot(wb, sheet, nr, c, Some(slot))?;
     }
     Ok(())
 }
@@ -330,7 +342,7 @@ fn shift_band_cols(
         .filter(|(r, _, _)| *r >= r0 && *r <= r1)
         .collect();
     for (r, c, _) in &cells {
-        let _ = wb.replace_slot_public(sheet, *r, *c, None)?;
+        let _ = replace_cell_slot(wb, sheet, *r, *c, None)?;
     }
     let mag = count;
     for (r, c, slot) in cells {
@@ -347,14 +359,36 @@ fn shift_band_cols(
         } else {
             c
         };
-        let _ = wb.replace_slot_public(sheet, r, nc, Some(slot))?;
+        let _ = replace_cell_slot(wb, sheet, r, nc, Some(slot))?;
     }
     Ok(())
 }
 
 enum RewriteKind {
-    Rows { at: u32, count: u32, delete: bool },
-    Cols { at: u16, count: u16, delete: bool },
+    Rows {
+        at: u32,
+        count: u32,
+        delete: bool,
+    },
+    Cols {
+        at: u16,
+        count: u16,
+        delete: bool,
+    },
+    BandRows {
+        at: u32,
+        count: u32,
+        c0: u16,
+        c1: u16,
+        delete: bool,
+    },
+    BandCols {
+        at: u16,
+        count: u16,
+        r0: u32,
+        r1: u32,
+        delete: bool,
+    },
 }
 
 fn rewrite_formulas(
@@ -391,6 +425,38 @@ fn rewrite_formulas(
                 RewriteKind::Cols { at, count, delete } => {
                     map_sheet_cols(&parsed.ast, &home_name, &target_name, *at, *count, *delete)
                 }
+                RewriteKind::BandRows {
+                    at,
+                    count,
+                    c0,
+                    c1,
+                    delete,
+                } => map_sheet_band_rows(
+                    &parsed.ast,
+                    &home_name,
+                    &target_name,
+                    *at,
+                    *count,
+                    *c0,
+                    *c1,
+                    *delete,
+                ),
+                RewriteKind::BandCols {
+                    at,
+                    count,
+                    r0,
+                    r1,
+                    delete,
+                } => map_sheet_band_cols(
+                    &parsed.ast,
+                    &home_name,
+                    &target_name,
+                    *at,
+                    *count,
+                    *r0,
+                    *r1,
+                    *delete,
+                ),
             };
             let printed = print(&Formula {
                 ast: new_ast,
@@ -517,6 +583,138 @@ fn map_sheet_cols(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn map_sheet_band_rows(
+    expr: &Expr,
+    home: &str,
+    target: &str,
+    at: u32,
+    count: u32,
+    c0: u16,
+    c1: u16,
+    delete: bool,
+) -> Expr {
+    let applies = |sheet: &Option<SheetSpec>| match sheet {
+        None => home.eq_ignore_ascii_case(target),
+        Some(spec) => spec.start.eq_ignore_ascii_case(target),
+    };
+    expr.clone().map(&mut |item| {
+        let kind = match item.kind {
+            ExprKind::Cell { sheet, cell }
+                if applies(&sheet) && cell.col >= c0 && cell.col <= c1 =>
+            {
+                restore_sheet_qualifier(
+                    adjust_rows(
+                        &Expr {
+                            kind: ExprKind::Cell { sheet: None, cell },
+                            span: item.span,
+                        },
+                        at,
+                        count,
+                        delete,
+                    )
+                    .kind,
+                    sheet,
+                )
+            }
+            ExprKind::Range { sheet, range }
+                if applies(&sheet)
+                    && range.start.col.min(range.end.col) >= c0
+                    && range.start.col.max(range.end.col) <= c1 =>
+            {
+                restore_sheet_qualifier(
+                    adjust_rows(
+                        &Expr {
+                            kind: ExprKind::Range { sheet: None, range },
+                            span: item.span,
+                        },
+                        at,
+                        count,
+                        delete,
+                    )
+                    .kind,
+                    sheet,
+                )
+            }
+            other => other,
+        };
+        Expr {
+            kind,
+            span: item.span,
+        }
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_sheet_band_cols(
+    expr: &Expr,
+    home: &str,
+    target: &str,
+    at: u16,
+    count: u16,
+    r0: u32,
+    r1: u32,
+    delete: bool,
+) -> Expr {
+    let applies = |sheet: &Option<SheetSpec>| match sheet {
+        None => home.eq_ignore_ascii_case(target),
+        Some(spec) => spec.start.eq_ignore_ascii_case(target),
+    };
+    expr.clone().map(&mut |item| {
+        let kind = match item.kind {
+            ExprKind::Cell { sheet, cell }
+                if applies(&sheet) && cell.row >= r0 && cell.row <= r1 =>
+            {
+                restore_sheet_qualifier(
+                    adjust_cols(
+                        &Expr {
+                            kind: ExprKind::Cell { sheet: None, cell },
+                            span: item.span,
+                        },
+                        at,
+                        count,
+                        delete,
+                    )
+                    .kind,
+                    sheet,
+                )
+            }
+            ExprKind::Range { sheet, range }
+                if applies(&sheet)
+                    && range.start.row.min(range.end.row) >= r0
+                    && range.start.row.max(range.end.row) <= r1 =>
+            {
+                restore_sheet_qualifier(
+                    adjust_cols(
+                        &Expr {
+                            kind: ExprKind::Range { sheet: None, range },
+                            span: item.span,
+                        },
+                        at,
+                        count,
+                        delete,
+                    )
+                    .kind,
+                    sheet,
+                )
+            }
+            other => other,
+        };
+        Expr {
+            kind,
+            span: item.span,
+        }
+    })
+}
+
+fn restore_sheet_qualifier(kind: ExprKind, sheet: Option<SheetSpec>) -> ExprKind {
+    match kind {
+        ExprKind::Cell { cell, .. } => ExprKind::Cell { sheet, cell },
+        ExprKind::Range { range, .. } => ExprKind::Range { sheet, range },
+        other => other,
+    }
+}
+
 fn shift_side_tables(
     wb: &mut Workbook,
     sheet: SheetId,
@@ -525,7 +723,7 @@ fn shift_side_tables(
     rows: bool,
 ) -> Result<(), CoreError> {
     let _ = rows;
-    let s = wb.sheet_mut_public(sheet)?;
+    let s = wb.sheet_mut(sheet)?;
     s.geometry.rows.shift_meta(at, count)?;
     s.notes = shift_map_rows(&s.notes, at, count);
     s.comments = shift_map_rows(&s.comments, at, count);
@@ -544,7 +742,7 @@ fn shift_side_tables_cols(
     at: u16,
     count: i32,
 ) -> Result<(), CoreError> {
-    let s = wb.sheet_mut_public(sheet)?;
+    let s = wb.sheet_mut(sheet)?;
     s.geometry.cols.shift_meta(u32::from(at), count)?;
     s.notes = shift_map_cols(&s.notes, at, count);
     s.comments = shift_map_cols(&s.comments, at, count);
@@ -659,7 +857,7 @@ fn shift_range_cols(range: RangeRef, at: u16, count: i32) -> Option<RangeRef> {
 
 /// Merge `range` into one merged area.
 pub fn merge(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Result<(), CoreError> {
-    wb.sheet_mut_public(sheet)?.add_merge(range)
+    wb.sheet_mut(sheet)?.add_merge(range)
 }
 
 /// Merge each row of `range` independently (Excel merge-across).
@@ -668,14 +866,14 @@ pub fn merge_across(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Resul
     for r in r0..=r1 {
         let row_range =
             RangeRef::from_corners(CellRef::new(r, c0).unwrap(), CellRef::new(r, c1).unwrap());
-        wb.sheet_mut_public(sheet)?.add_merge(row_range)?;
+        wb.sheet_mut(sheet)?.add_merge(row_range)?;
     }
     Ok(())
 }
 
 /// Unmerge any merge overlapping `range`.
 pub fn unmerge(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Result<usize, CoreError> {
-    let s = wb.sheet_mut_public(sheet)?;
+    let s = wb.sheet_mut(sheet)?;
     let before = s.merges.len();
     s.merges.retain(|m| !overlaps(*m, range));
     Ok(before - s.merges.len())
@@ -694,6 +892,19 @@ fn norm(r: RangeRef) -> (u32, u16, u32, u16) {
         r.start.row.max(r.end.row),
         r.start.col.max(r.end.col),
     )
+}
+
+fn replace_cell_slot(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+    slot: Option<CellSlot>,
+) -> Result<Option<CellSlot>, CoreError> {
+    match slot {
+        Some(slot) => wb.set_slot(sheet, row, col, slot),
+        None => wb.clear_cell(sheet, row, col),
+    }
 }
 
 /// Detect a fill series from numeric source values.
@@ -853,14 +1064,19 @@ pub fn fill_range(
             for c in sc0..=sc1 {
                 match mode {
                     FillMode::Copy => {
-                        if let Ok(Some(slot)) =
-                            wb.get(sheet, sr0 + (r - sr1 - 1) % (sr1 - sr0 + 1), c)
-                        {
-                            copy_slot(wb, sheet, *slot, r, c, r as i32 - sr0 as i32, 0)?;
+                        let source_row = sr0 + (r - sr1 - 1) % (sr1 - sr0 + 1);
+                        if let Ok(Some(slot)) = wb.get(sheet, source_row, c) {
+                            copy_slot(wb, sheet, *slot, r, c, r as i32 - source_row as i32, 0)?;
                             changed += 1;
                         }
                     }
-                    FillMode::Formats => {}
+                    FillMode::Formats => {
+                        let source_row = sr0 + (r - sr1 - 1) % (sr1 - sr0 + 1);
+                        if let Ok(Some(slot)) = wb.get(sheet, source_row, c) {
+                            copy_slot_format(wb, sheet, *slot, r, c)?;
+                            changed += 1;
+                        }
+                    }
                     _ => {
                         if i < ext.len() {
                             wb.set_number(sheet, r, c, ext[i])?;
@@ -885,24 +1101,62 @@ pub fn fill_range(
             (u32::from(dc1.saturating_sub(sc1))) as usize,
             DateSystem::Excel1900,
         );
-        for (i, c) in (sc1.saturating_add(1)..=dc1).enumerate() {
-            match mode {
-                FillMode::Copy => {
-                    if let Ok(Some(slot)) = wb.get(sheet, sr0, sc0) {
-                        copy_slot(wb, sheet, *slot, sr0, c, 0, i32::from(c) - i32::from(sc0))?;
-                        changed += 1;
+        for r in sr0..=sr1 {
+            for (i, c) in (sc1.saturating_add(1)..=dc1).enumerate() {
+                match mode {
+                    FillMode::Copy => {
+                        let source_col = sc0 + (c - sc1 - 1) % (sc1 - sc0 + 1);
+                        if let Ok(Some(slot)) = wb.get(sheet, r, source_col) {
+                            copy_slot(
+                                wb,
+                                sheet,
+                                *slot,
+                                r,
+                                c,
+                                0,
+                                i32::from(c) - i32::from(source_col),
+                            )?;
+                            changed += 1;
+                        }
                     }
-                }
-                _ => {
-                    if i < ext.len() {
-                        wb.set_number(sheet, sr0, c, ext[i])?;
-                        changed += 1;
+                    FillMode::Formats => {
+                        let source_col = sc0 + (c - sc1 - 1) % (sc1 - sc0 + 1);
+                        if let Ok(Some(slot)) = wb.get(sheet, r, source_col) {
+                            copy_slot_format(wb, sheet, *slot, r, c)?;
+                            changed += 1;
+                        }
+                    }
+                    _ => {
+                        if i < ext.len() {
+                            wb.set_number(sheet, r, c, ext[i])?;
+                            changed += 1;
+                        }
                     }
                 }
             }
         }
     }
     Ok(changed)
+}
+
+fn copy_slot_format(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    source: CellSlot,
+    row: u32,
+    col: u16,
+) -> Result<(), CoreError> {
+    let mut dest = wb
+        .get(sheet, row, col)?
+        .copied()
+        .unwrap_or_else(CellSlot::empty);
+    dest.style = source.style;
+    dest.flags = dest
+        .flags
+        .with(CellFlags::LOCKED, source.flags.locked())
+        .with(CellFlags::HIDDEN, source.flags.hidden());
+    replace_cell_slot(wb, sheet, row, col, Some(dest))?;
+    Ok(())
 }
 
 fn copy_slot(
@@ -918,34 +1172,61 @@ fn copy_slot(
         let src = wb.intern().formulas.get(fid).unwrap_or("").to_string();
         if let Ok(rewritten) = rewrite_print(&src, &RewriteOp::Copy { dcol, drow }) {
             wb.set_cell_contents(sheet, row, col, &rewritten)?;
+            let mut copied = wb
+                .get(sheet, row, col)?
+                .copied()
+                .unwrap_or_else(CellSlot::empty);
+            copied.style = slot.style;
+            copied.flags = slot.flags;
+            replace_cell_slot(wb, sheet, row, col, Some(copied))?;
             return Ok(());
         }
     }
-    match slot.value {
-        Value::Number(n) => {
-            wb.set_number(sheet, row, col, n)?;
-        }
-        Value::Bool(b) => {
-            wb.set_cell_contents(sheet, row, col, if b { "TRUE" } else { "FALSE" })?;
-        }
-        Value::Text(id) => {
-            let t = wb.intern().strings.get(id).unwrap_or("").to_string();
-            wb.set_text(sheet, row, col, &t)?;
-        }
-        _ => {
-            wb.set_cell_contents(sheet, row, col, "")?;
-        }
-    }
+    replace_cell_slot(wb, sheet, row, col, Some(slot))?;
     Ok(())
 }
 
 /// One clipboard cell.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ClipValue {
+    /// Blank cell or blank cached formula result.
+    Empty,
+    /// Number.
+    Number(f64),
+    /// Boolean.
+    Bool(bool),
+    /// Text with no workbook-local interner id.
+    Text(String),
+    /// Cell error.
+    Error(ErrorKind),
+}
+
+impl ClipValue {
+    fn number(&self) -> Option<f64> {
+        match self {
+            Self::Number(value) => Some(*value),
+            _ => None,
+        }
+    }
+}
+
+/// One clipboard cell with workbook-local ids expanded to portable values.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClipCell {
     /// Formula-bar text (leading `=` if formula).
     pub input: String,
-    /// Cached number when present.
-    pub number: Option<f64>,
+    /// Stored value, including the cached result of a formula.
+    pub value: ClipValue,
+    /// Complete cell style for ordinary and formats-only paste.
+    pub style: Style,
+    /// Packed protection/recalc flags.
+    pub flags: CellFlags,
+    /// Source number-format code, used to remap custom ids safely.
+    pub number_format: Option<String>,
+    /// Source column width in pixels.
+    pub column_width_px: u32,
 }
 
 /// Copy `range` into a grid of clip cells.
@@ -963,10 +1244,18 @@ pub fn copy_range(wb: &Workbook, sheet: SheetId, range: RangeRef) -> Vec<Vec<Cli
 }
 
 fn clip_one(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> ClipCell {
+    let column_width_px = wb
+        .sheet(sheet)
+        .and_then(|s| s.geometry.cols.size(u32::from(col)).ok())
+        .unwrap_or(crate::geometry::DEFAULT_COL_PX);
     let Ok(Some(slot)) = wb.get(sheet, row, col) else {
         return ClipCell {
             input: String::new(),
-            number: None,
+            value: ClipValue::Empty,
+            style: Style::default(),
+            flags: CellFlags::DEFAULT,
+            number_format: None,
+            column_width_px,
         };
     };
     let input = if let Some(fid) = slot.formula {
@@ -981,11 +1270,30 @@ fn clip_one(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> ClipCell {
             _ => String::new(),
         }
     };
-    let number = match slot.value {
-        Value::Number(n) => Some(n),
-        _ => None,
+    let value = match slot.value {
+        Value::Empty | Value::Array(_) => ClipValue::Empty,
+        Value::Number(value) => ClipValue::Number(value),
+        Value::Bool(value) => ClipValue::Bool(value),
+        Value::Text(id) => {
+            ClipValue::Text(wb.intern().strings.get(id).unwrap_or_default().to_string())
+        }
+        Value::Error(value) => ClipValue::Error(value),
     };
-    ClipCell { input, number }
+    let style = wb
+        .intern()
+        .styles
+        .get(slot.style)
+        .cloned()
+        .unwrap_or_default();
+    let number_format = wb.num_fmt_code(style.num_fmt).map(|code| code.into_owned());
+    ClipCell {
+        input,
+        value,
+        style,
+        flags: slot.flags,
+        number_format,
+        column_width_px,
+    }
 }
 
 /// Paste `grid` at `dest` with special options.
@@ -997,75 +1305,180 @@ pub fn paste_special(
     spec: PasteSpecial,
     src_origin: Option<(u32, u16)>,
 ) -> Result<u32, CoreError> {
-    let rows = grid.len() as u32;
-    let cols = grid.first().map(|r| r.len() as u16).unwrap_or(0);
+    validate_paste_bounds(dest, grid, spec.transpose)?;
+    let ordinary = !spec.values
+        && !spec.formulas
+        && !spec.formats
+        && !spec.number_formats
+        && !spec.column_widths
+        && spec.operation == PasteOp::None
+        && !spec.paste_link;
     let mut changed = 0u32;
-    for (dr, row) in grid.iter().enumerate() {
-        for (dc, cell) in row.iter().enumerate() {
+    for (source_row, cells) in grid.iter().enumerate() {
+        for (source_col, cell) in cells.iter().enumerate() {
             let (rr, cc) = if spec.transpose {
-                (dc as u32, dr as u16)
+                (source_col as u32, source_row as u16)
             } else {
-                (dr as u32, dc as u16)
+                (source_row as u32, source_col as u16)
             };
             if spec.skip_blanks && cell.input.is_empty() {
                 continue;
             }
-            let row = dest.row.saturating_add(rr);
-            let col = dest.col.saturating_add(cc);
+            let row = dest.row + rr;
+            let col = dest.col + cc;
             if spec.paste_link {
                 if let Some((sr, sc)) = src_origin {
-                    let letters = col_to_letters(sc + cc).unwrap_or_else(|_| "A".into());
-                    let input = format!("={}{}", letters, sr + rr + 1);
+                    let source_row = sr + source_row as u32;
+                    let source_col = sc + source_col as u16;
+                    let letters = col_to_letters(source_col)?;
+                    let input = format!("=${letters}${}", source_row + 1);
                     wb.set_cell_contents(sheet, row, col, &input)?;
                     changed += 1;
                 }
                 continue;
             }
             if spec.operation != PasteOp::None {
-                let src_n = cell.number.unwrap_or(0.0);
+                let src_n = cell.value.number().unwrap_or(0.0);
                 let dst_n = match wb.get(sheet, row, col).ok().flatten().map(|s| s.value) {
                     Some(Value::Number(n)) => n,
                     _ => 0.0,
                 };
-                let n = match spec.operation {
-                    PasteOp::Add => dst_n + src_n,
-                    PasteOp::Sub => dst_n - src_n,
-                    PasteOp::Mul => dst_n * src_n,
-                    PasteOp::Div => {
-                        if src_n == 0.0 {
-                            dst_n
-                        } else {
-                            dst_n / src_n
-                        }
-                    }
-                    PasteOp::None => src_n,
-                };
-                wb.set_number(sheet, row, col, n)?;
+                if spec.operation == PasteOp::Div && src_n == 0.0 {
+                    set_clip_value(wb, sheet, row, col, &ClipValue::Error(ErrorKind::Div0))?;
+                } else {
+                    let n = match spec.operation {
+                        PasteOp::Add => dst_n + src_n,
+                        PasteOp::Sub => dst_n - src_n,
+                        PasteOp::Mul => dst_n * src_n,
+                        PasteOp::Div => dst_n / src_n,
+                        PasteOp::None => src_n,
+                    };
+                    wb.set_number(sheet, row, col, n)?;
+                }
                 changed += 1;
                 continue;
             }
-            if spec.formulas || spec.values || !(spec.formulas || spec.values || spec.formats) {
-                let drow = row as i32 - dest.row as i32;
-                let dcol = i32::from(col) - i32::from(dest.col);
-                let mut input = cell.input.clone();
-                if spec.formulas && input.starts_with('=') {
-                    if let Ok(rewritten) = rewrite_print(&input, &RewriteOp::Copy { dcol, drow }) {
-                        input = rewritten;
-                    }
-                } else if spec.values && input.starts_with('=') {
-                    if let Some(n) = cell.number {
-                        input = n.to_string();
-                    }
-                }
-                if spec.formulas || spec.values || !spec.formats {
+
+            if ordinary || spec.formulas || spec.values {
+                if spec.values && !spec.formulas && cell.input.starts_with('=') {
+                    set_clip_value(wb, sheet, row, col, &cell.value)?;
+                } else if (ordinary || spec.formulas) && cell.input.starts_with('=') {
+                    let (source_row, source_col) = src_origin
+                        .map(|(sr, sc)| (sr + source_row as u32, sc + source_col as u16))
+                        .unwrap_or((row, col));
+                    let drow = row as i32 - source_row as i32;
+                    let dcol = i32::from(col) - i32::from(source_col);
+                    let input = rewrite_print(&cell.input, &RewriteOp::Copy { dcol, drow })
+                        .unwrap_or_else(|_| cell.input.clone());
                     wb.set_cell_contents(sheet, row, col, &input)?;
-                    changed += 1;
+                } else {
+                    set_clip_value(wb, sheet, row, col, &cell.value)?;
                 }
+                changed += 1;
+            }
+            if ordinary || spec.formats {
+                apply_clip_style(wb, sheet, row, col, cell, true)?;
+            } else if spec.number_formats {
+                apply_clip_style(wb, sheet, row, col, cell, false)?;
+            }
+            if spec.column_widths && source_row == 0 {
+                wb.set_col_width(sheet, col, cell.column_width_px)?;
             }
         }
     }
-    let _ = (rows, cols);
     Ok(changed)
+}
+
+fn validate_paste_bounds(
+    dest: CellRef,
+    grid: &[Vec<ClipCell>],
+    transpose: bool,
+) -> Result<(), CoreError> {
+    let rows = u32::try_from(grid.len()).map_err(|_| CoreError::addr_ref("paste is too tall"))?;
+    let cols = grid.iter().map(Vec::len).max().unwrap_or(0);
+    let cols = u32::try_from(cols).map_err(|_| CoreError::addr_ref("paste is too wide"))?;
+    let (height, width) = if transpose {
+        (cols, rows)
+    } else {
+        (rows, cols)
+    };
+    if height > MAX_ROWS - dest.row || width > u32::from(MAX_COLS - dest.col) {
+        return Err(CoreError::addr_ref("paste exceeds the worksheet grid"));
+    }
+    Ok(())
+}
+
+fn set_clip_value(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+    value: &ClipValue,
+) -> Result<(), CoreError> {
+    match value {
+        ClipValue::Empty => {
+            wb.set_cell_contents(sheet, row, col, "")?;
+        }
+        ClipValue::Number(value) => {
+            wb.set_number(sheet, row, col, *value)?;
+        }
+        ClipValue::Bool(value) => {
+            wb.set_cell_contents(sheet, row, col, if *value { "TRUE" } else { "FALSE" })?;
+        }
+        ClipValue::Text(value) => {
+            wb.set_text(sheet, row, col, value)?;
+        }
+        ClipValue::Error(value) => {
+            let previous = wb.get(sheet, row, col)?.copied();
+            wb.set_slot(
+                sheet,
+                row,
+                col,
+                CellSlot {
+                    value: Value::Error(*value),
+                    formula: None,
+                    style: previous
+                        .map(|slot| slot.style)
+                        .unwrap_or(crate::style::StyleId::DEFAULT),
+                    flags: previous
+                        .map(|slot| slot.flags)
+                        .unwrap_or(CellFlags::DEFAULT),
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_clip_style(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+    cell: &ClipCell,
+    full: bool,
+) -> Result<(), CoreError> {
+    let mut style = if full {
+        cell.style.clone()
+    } else {
+        wb.get(sheet, row, col)?
+            .and_then(|slot| wb.intern().styles.get(slot.style))
+            .cloned()
+            .unwrap_or_default()
+    };
+    if let Some(code) = &cell.number_format {
+        style.num_fmt = wb.intern_num_fmt(code)?;
+    }
+    wb.set_cell_style(sheet, row, col, style)?;
+    if full {
+        let mut slot = wb
+            .get(sheet, row, col)?
+            .copied()
+            .unwrap_or_else(CellSlot::empty);
+        slot.flags = cell.flags;
+        wb.set_slot(sheet, row, col, slot)?;
+    }
+    Ok(())
 }
 
 /// Move `src` to `dest` (cut semantics: retarget refs, clear source).
@@ -1075,43 +1488,198 @@ pub fn move_range_cells(
     src: RangeRef,
     dest: CellRef,
 ) -> Result<u32, CoreError> {
-    let grid = copy_range(wb, sheet, src);
     let (r0, c0, r1, c1) = norm(src);
+    let height = r1 - r0 + 1;
+    let width = c1 - c0 + 1;
+    if height > MAX_ROWS - dest.row || u32::from(width) > u32::from(MAX_COLS - dest.col) {
+        return Err(CoreError::addr_ref("move exceeds the worksheet grid"));
+    }
+    let grid: Vec<Vec<Option<CellSlot>>> = (r0..=r1)
+        .map(|row| {
+            (c0..=c1)
+                .map(|col| wb.get(sheet, row, col).map(|slot| slot.copied()))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut changed = 0u32;
-    for (dr, row) in grid.iter().enumerate() {
-        for (dc, cell) in row.iter().enumerate() {
+    for (dr, cells) in grid.iter().enumerate() {
+        for (dc, slot) in cells.iter().enumerate() {
             let row = dest.row + dr as u32;
             let col = dest.col + dc as u16;
-            let mut input = cell.input.clone();
-            if input.starts_with('=') {
-                let src_a1 = src.to_a1();
-                let dest_a1 = dest.to_a1();
-                if let Ok(rewritten) = rewrite_print(
-                    &input,
-                    &RewriteOp::Move {
-                        src: src_a1,
-                        dest: dest_a1,
-                    },
-                ) {
-                    input = rewritten;
-                }
-            }
-            wb.set_cell_contents(sheet, row, col, &input)?;
+            replace_cell_slot(wb, sheet, row, col, *slot)?;
             changed += 1;
         }
     }
     for r in r0..=r1 {
         for c in c0..=c1 {
-            let in_dest = r >= dest.row
-                && r < dest.row + (r1 - r0 + 1)
-                && c >= dest.col
-                && c < dest.col + (c1 - c0 + 1);
+            let in_dest =
+                r >= dest.row && r < dest.row + height && c >= dest.col && c < dest.col + width;
             if !in_dest {
-                wb.set_cell_contents(sheet, r, c, "")?;
+                wb.clear_cell(sheet, r, c)?;
             }
         }
     }
+    move_side_tables(wb, sheet, src, dest)?;
+    rewrite_formulas_move(wb, sheet, src, dest)?;
     Ok(changed)
+}
+
+fn move_side_tables(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    src: RangeRef,
+    dest: CellRef,
+) -> Result<(), CoreError> {
+    let (r0, c0, r1, c1) = norm(src);
+    let drow = dest.row as i64 - r0 as i64;
+    let dcol = i64::from(dest.col) - i64::from(c0);
+    let target = |row: u32, col: u16| -> (u32, u16) {
+        (
+            (i64::from(row) + drow) as u32,
+            (i64::from(col) + dcol) as u16,
+        )
+    };
+    let sheet_ref = wb.sheet_mut(sheet)?;
+    for merge in &sheet_ref.merges {
+        let (mr0, mc0, mr1, mc1) = norm(*merge);
+        let fully_inside = mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1;
+        let overlaps_source = mr0 <= r1 && r0 <= mr1 && mc0 <= c1 && c0 <= mc1;
+        if overlaps_source && !fully_inside {
+            return Err(CoreError::new(
+                "edit.move.merge",
+                "move range partially overlaps a merged area",
+            ));
+        }
+    }
+    move_map_entries(&mut sheet_ref.notes, r0, c0, r1, c1, target);
+    move_map_entries(&mut sheet_ref.comments, r0, c0, r1, c1, target);
+    move_map_entries(&mut sheet_ref.hyperlinks, r0, c0, r1, c1, target);
+    for merge in &mut sheet_ref.merges {
+        let (mr0, mc0, mr1, mc1) = norm(*merge);
+        if mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1 {
+            let (start_row, start_col) = target(merge.start.row, merge.start.col);
+            let (end_row, end_col) = target(merge.end.row, merge.end.col);
+            *merge = RangeRef::from_corners(
+                CellRef::new(start_row, start_col)?,
+                CellRef::new(end_row, end_col)?,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn move_map_entries<T: Clone>(
+    map: &mut FxHashMap<(u32, u16), T>,
+    r0: u32,
+    c0: u16,
+    r1: u32,
+    c1: u16,
+    target: impl Fn(u32, u16) -> (u32, u16),
+) {
+    let moved: Vec<_> = map
+        .iter()
+        .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+        .map(|(coord, value)| (*coord, value.clone()))
+        .collect();
+    for ((row, col), value) in moved {
+        map.remove(&(row, col));
+        map.insert(target(row, col), value);
+    }
+}
+
+fn rewrite_formulas_move(
+    wb: &mut Workbook,
+    target: SheetId,
+    src: RangeRef,
+    dest: CellRef,
+) -> Result<(), CoreError> {
+    let target_name = wb
+        .sheet(target)
+        .map(|sheet| sheet.name.clone())
+        .ok_or_else(|| CoreError::sheet_id("unknown sheet"))?;
+    let sheet_ids: Vec<SheetId> = wb.sheets().map(|sheet| sheet.id).collect();
+    let mut updates = Vec::new();
+    for id in sheet_ids {
+        let home_name = wb
+            .sheet(id)
+            .map(|sheet| sheet.name.clone())
+            .unwrap_or_default();
+        let cells: Vec<_> = wb
+            .sheet(id)
+            .map(|sheet| sheet.store.iter().collect())
+            .unwrap_or_default();
+        for (row, col, slot) in cells {
+            let Some(fid) = slot.formula else {
+                continue;
+            };
+            let Some(source) = wb.intern().formulas.get(fid).map(str::to_string) else {
+                continue;
+            };
+            let Ok(parsed) = parse(&source) else {
+                continue;
+            };
+            let ast = map_sheet_move(&parsed.ast, &home_name, &target_name, src, dest);
+            let printed = print(&Formula {
+                ast,
+                style: parsed.style,
+                base_row: parsed.base_row,
+                base_col: parsed.base_col,
+            });
+            if printed != source {
+                updates.push((id, row, col, printed));
+            }
+        }
+    }
+    for (id, row, col, source) in updates {
+        wb.set_cell_contents(id, row, col, &source)?;
+    }
+    Ok(())
+}
+
+fn map_sheet_move(expr: &Expr, home: &str, target: &str, src: RangeRef, dest: CellRef) -> Expr {
+    let applies = |sheet: &Option<SheetSpec>| match sheet {
+        None => home.eq_ignore_ascii_case(target),
+        Some(spec) => spec.start.eq_ignore_ascii_case(target),
+    };
+    expr.clone().map(&mut |item| {
+        let kind = match item.kind {
+            ExprKind::Cell { sheet, cell } if applies(&sheet) => {
+                match move_range(
+                    &Expr {
+                        kind: ExprKind::Cell { sheet: None, cell },
+                        span: item.span,
+                    },
+                    src,
+                    dest,
+                )
+                .kind
+                {
+                    ExprKind::Cell { cell, .. } => ExprKind::Cell { sheet, cell },
+                    other => other,
+                }
+            }
+            ExprKind::Range { sheet, range } if applies(&sheet) => {
+                match move_range(
+                    &Expr {
+                        kind: ExprKind::Range { sheet: None, range },
+                        span: item.span,
+                    },
+                    src,
+                    dest,
+                )
+                .kind
+                {
+                    ExprKind::Range { range, .. } => ExprKind::Range { sheet, range },
+                    other => other,
+                }
+            }
+            other => other,
+        };
+        Expr {
+            kind,
+            span: item.span,
+        }
+    })
 }
 
 /// Split the first row of `range` by `delim` into adjacent columns.
@@ -1132,9 +1700,17 @@ pub fn text_to_columns(
             },
             None => String::new(),
         };
-        for (i, part) in text.split(delim).enumerate() {
-            let col = c0.saturating_add(i as u16);
-            wb.set_text(sheet, r, col, part.trim())?;
+        let parts: Vec<&str> = text.split(delim).collect();
+        if parts.len() > usize::from(MAX_COLS - c0) {
+            return Err(CoreError::addr_ref(
+                "text-to-columns output exceeds the worksheet grid",
+            ));
+        }
+        for (i, part) in parts.into_iter().enumerate() {
+            let offset = u16::try_from(i)
+                .map_err(|_| CoreError::addr_ref("text-to-columns output is too wide"))?;
+            let col = c0 + offset;
+            wb.set_text(sheet, r, col, part)?;
             changed += 1;
         }
     }
@@ -1152,20 +1728,47 @@ pub fn remove_duplicates(
     let cols: Vec<u16> = if columns.is_empty() {
         (c0..=c1).collect()
     } else {
-        columns.iter().map(|c| c0.saturating_add(*c)).collect()
+        columns
+            .iter()
+            .map(|offset| {
+                let col = c0
+                    .checked_add(*offset)
+                    .ok_or_else(|| CoreError::addr_ref("duplicate key column is out of range"))?;
+                if col > c1 {
+                    return Err(CoreError::addr_ref(
+                        "duplicate key column is outside the selected range",
+                    ));
+                }
+                Ok(col)
+            })
+            .collect::<Result<Vec<_>, _>>()?
     };
     let mut seen = std::collections::BTreeSet::new();
-    let mut removed = 0u32;
+    let mut kept = Vec::new();
     for r in r0..=r1 {
         let key: Vec<String> = cols
             .iter()
             .map(|&c| clip_one(wb, sheet, r, c).input)
             .collect();
-        if !seen.insert(key) {
-            for c in c0..=c1 {
-                wb.set_cell_contents(sheet, r, c, "")?;
-            }
-            removed += 1;
+        if seen.insert(key) {
+            let row = (c0..=c1)
+                .map(|col| wb.get(sheet, r, col).map(|slot| slot.copied()))
+                .collect::<Result<Vec<_>, _>>()?;
+            kept.push(row);
+        }
+    }
+    let total = usize::try_from(r1 - r0 + 1).unwrap_or(usize::MAX);
+    let removed = u32::try_from(total.saturating_sub(kept.len())).unwrap_or(u32::MAX);
+    for (offset, row) in kept.iter().enumerate() {
+        let target_row = r0 + offset as u32;
+        for (column, slot) in (c0..=c1).zip(row) {
+            replace_cell_slot(wb, sheet, target_row, column, *slot)?;
+        }
+    }
+    let first_blank = r0 + kept.len() as u32;
+    for row in first_blank..=r1 {
+        for col in c0..=c1 {
+            wb.clear_cell(sheet, row, col)?;
         }
     }
     Ok(removed)

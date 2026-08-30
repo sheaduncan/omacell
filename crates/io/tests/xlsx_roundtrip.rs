@@ -501,15 +501,8 @@ fn threaded_comments_are_reported_and_not_silently_dropped() {
         .unwrap();
     assert!(!diff(&original, &changed).empty);
     assert!(!diff(&changed, &original).empty);
-    let bytes = save_bytes(&changed).expect("WP-17 writes threaded comments as comments.xml");
-    let again = omacell_io::xlsx::open_bytes(&bytes).unwrap();
-    let note = again
-        .workbook
-        .sheet(again.workbook.active_sheet())
-        .unwrap()
-        .notes
-        .get(&(0, 0));
-    assert_eq!(note.map(|n| n.text.as_str()), Some("review"));
+    let error = save_bytes(&changed).expect_err("threaded comment downgrade must be rejected");
+    assert!(error.message.contains("cannot be downgraded"));
 }
 
 #[test]

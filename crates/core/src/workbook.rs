@@ -409,26 +409,10 @@ impl Workbook {
         })
     }
 
-    fn sheet_mut(&mut self, id: SheetId) -> Result<&mut Sheet, CoreError> {
+    pub(crate) fn sheet_mut(&mut self, id: SheetId) -> Result<&mut Sheet, CoreError> {
         self.sheets
             .get_mut(&id)
             .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
-    }
-
-    /// Mutable sheet borrow for structural ops (WP-17).
-    pub fn sheet_mut_public(&mut self, id: SheetId) -> Result<&mut Sheet, CoreError> {
-        self.sheet_mut(id)
-    }
-
-    /// Replace a slot and record undo (WP-17).
-    pub fn replace_slot_public(
-        &mut self,
-        id: SheetId,
-        row: u32,
-        col: u16,
-        slot: Option<CellSlot>,
-    ) -> Result<Option<CellSlot>, CoreError> {
-        self.replace_slot(id, row, col, slot)
     }
 
     /// Append a chart. Ids are assigned.
@@ -1240,28 +1224,135 @@ impl Workbook {
 
     /// Hide or unhide a row (`SUBTOTAL` / `AGGREGATE` hidden-row semantics).
     pub fn set_row_hidden(&mut self, id: SheetId, row: u32, hidden: bool) -> Result<(), CoreError> {
-        self.sheet_mut(id)?.geometry.rows.set_hidden(row, hidden)
+        let (before_px, hidden_before) = {
+            let sheet = self.sheet_mut(id)?;
+            let before_px = sheet.geometry.rows.size(row)?;
+            let hidden_before = sheet.geometry.rows.is_hidden(row)?;
+            sheet.geometry.rows.set_hidden(row, hidden)?;
+            (before_px, hidden_before)
+        };
+        self.undo.record(Delta::RowGeom {
+            sheet: id,
+            row,
+            before_px,
+            after_px: before_px,
+            hidden_before,
+            hidden_after: hidden,
+        });
+        Ok(())
     }
 
     /// Set a row height in pixels.
     pub fn set_row_height(&mut self, id: SheetId, row: u32, px: u32) -> Result<(), CoreError> {
-        self.sheet_mut(id)?.geometry.rows.set_size(row, px)
+        let (before_px, hidden) = {
+            let sheet = self.sheet_mut(id)?;
+            let before_px = sheet.geometry.rows.size(row)?;
+            let hidden = sheet.geometry.rows.is_hidden(row)?;
+            sheet.geometry.rows.set_size(row, px)?;
+            (before_px, hidden)
+        };
+        self.undo.record(Delta::RowGeom {
+            sheet: id,
+            row,
+            before_px,
+            after_px: px,
+            hidden_before: hidden,
+            hidden_after: hidden,
+        });
+        Ok(())
     }
 
     /// Hide or unhide a column.
     pub fn set_col_hidden(&mut self, id: SheetId, col: u16, hidden: bool) -> Result<(), CoreError> {
-        self.sheet_mut(id)?
-            .geometry
-            .cols
-            .set_hidden(u32::from(col), hidden)
+        let (before_px, hidden_before) = {
+            let sheet = self.sheet_mut(id)?;
+            let before_px = sheet.geometry.cols.size(u32::from(col))?;
+            let hidden_before = sheet.geometry.cols.is_hidden(u32::from(col))?;
+            sheet.geometry.cols.set_hidden(u32::from(col), hidden)?;
+            (before_px, hidden_before)
+        };
+        self.undo.record(Delta::ColGeom {
+            sheet: id,
+            col,
+            before_px,
+            after_px: before_px,
+            hidden_before,
+            hidden_after: hidden,
+        });
+        Ok(())
     }
 
     /// Set a column width in pixels.
     pub fn set_col_width(&mut self, id: SheetId, col: u16, px: u32) -> Result<(), CoreError> {
+        let (before_px, hidden) = {
+            let sheet = self.sheet_mut(id)?;
+            let before_px = sheet.geometry.cols.size(u32::from(col))?;
+            let hidden = sheet.geometry.cols.is_hidden(u32::from(col))?;
+            sheet.geometry.cols.set_size(u32::from(col), px)?;
+            (before_px, hidden)
+        };
+        self.undo.record(Delta::ColGeom {
+            sheet: id,
+            col,
+            before_px,
+            after_px: px,
+            hidden_before: hidden,
+            hidden_after: hidden,
+        });
+        Ok(())
+    }
+
+    /// Row outline level (0–7).
+    pub fn row_outline_level(&self, id: SheetId, row: u32) -> Result<u8, CoreError> {
+        self.sheet(id)
+            .map(|sheet| sheet.geometry.rows.outline_level(row))
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Set a row outline level while loading or editing.
+    pub fn set_row_outline_level(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        level: u8,
+    ) -> Result<(), CoreError> {
+        self.sheet_mut(id)?
+            .geometry
+            .rows
+            .set_outline_level(row, level)
+    }
+
+    /// Column outline level (0–7).
+    pub fn col_outline_level(&self, id: SheetId, col: u16) -> Result<u8, CoreError> {
+        self.sheet(id)
+            .map(|sheet| sheet.geometry.cols.outline_level(u32::from(col)))
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Set a column outline level while loading or editing.
+    pub fn set_col_outline_level(
+        &mut self,
+        id: SheetId,
+        col: u16,
+        level: u8,
+    ) -> Result<(), CoreError> {
         self.sheet_mut(id)?
             .geometry
             .cols
-            .set_size(u32::from(col), px)
+            .set_outline_level(u32::from(col), level)
+    }
+
+    /// Set row outline collapse state while loading a file.
+    pub fn set_row_collapsed(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        collapsed: bool,
+    ) -> Result<(), CoreError> {
+        self.sheet_mut(id)?
+            .geometry
+            .rows
+            .set_collapsed(row, collapsed)
     }
 
     /// Replace sheet view state while loading a file.

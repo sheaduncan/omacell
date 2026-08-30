@@ -997,6 +997,11 @@ fn worksheet_xml(
     ),
     CoreError,
 > {
+    if !sheet.comments.is_empty() {
+        return Err(error::xlsx_write(
+            "threaded comments cannot be downgraded to legacy notes without losing replies and resolution state",
+        ));
+    }
     if !sheet.view.zoom.is_finite() || sheet.view.zoom <= 0.0 {
         return Err(error::xlsx_write("sheet zoom is not finite and positive"));
     }
@@ -1199,7 +1204,7 @@ fn worksheet_xml(
         rels.extend(parts.rels);
         extra_parts.extend(parts.parts);
     }
-    if (!sheet.notes.is_empty() || !sheet.comments.is_empty()) && vml_xml.is_empty() {
+    if !sheet.notes.is_empty() && vml_xml.is_empty() {
         let id = format!("rId{rid}");
         rid += 1;
         let number = sheet_ord + 1;
@@ -1245,7 +1250,7 @@ fn worksheet_xml(
     } else if let Some(blob) = drawing::sparkline_xml(wb, sheet) {
         push_fragment(&mut s, &blob, "sparkline", &["sparklineGroups"])?;
     }
-    if !sheet.notes.is_empty() || !sheet.comments.is_empty() {
+    if !sheet.notes.is_empty() {
         let id = format!("rId{rid}");
         let cname = format!("xl/comments{}.xml", sheet_ord + 1);
         rels.push((
@@ -1599,13 +1604,6 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
             authors.push(a);
         }
     }
-    let mut comments: Vec<_> = sheet.comments.iter().collect();
-    comments.sort_by_key(|((r, c), _)| (*r, *c));
-    for (_, c) in &comments {
-        if !authors.iter().any(|x| x == &c.author) {
-            authors.push(c.author.clone());
-        }
-    }
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><comments xmlns="{NS}"><authors>"#
     );
@@ -1627,24 +1625,6 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
         s.push_str(&format!(
             r#"<comment ref="{addr}" authorId="{aid}"><text>{}</text></comment>"#,
             t_elem(&n.text)
-        ));
-    }
-    for ((row, col), c) in comments {
-        if sheet.notes.contains_key(&(*row, *col)) {
-            continue;
-        }
-        let addr = format!(
-            "{}{}",
-            col_to_letters(*col).unwrap_or_else(|_| "A".into()),
-            row + 1
-        );
-        let aid = authors
-            .iter()
-            .position(|candidate| candidate == &c.author)
-            .unwrap_or(0);
-        s.push_str(&format!(
-            r#"<comment ref="{addr}" authorId="{aid}"><text>{}</text></comment>"#,
-            t_elem(&c.text)
         ));
     }
     s.push_str("</commentList></comments>");

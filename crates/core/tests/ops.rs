@@ -193,6 +193,80 @@ fn insert_cells_shift_down_moves_band() {
 }
 
 #[test]
+fn insert_cells_rewrites_only_references_in_shifted_band() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_cell_contents(s, 0, 3, "=B3+C3").unwrap();
+    insert_cells(&mut wb, s, range(1, 1, 1, 1), Shift::Down).unwrap();
+    assert_eq!(formula_src(&wb, s, 0, 3), "=B4+C3");
+}
+
+#[test]
+fn paste_formula_uses_source_to_destination_delta() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_cell_contents(s, 0, 0, "=B1").unwrap();
+    let grid = copy_range(&wb, s, range(0, 0, 0, 0));
+    paste_special(
+        &mut wb,
+        s,
+        cell(2, 2),
+        &grid,
+        PasteSpecial {
+            formulas: true,
+            ..PasteSpecial::default()
+        },
+        Some((0, 0)),
+    )
+    .unwrap();
+    assert_eq!(formula_src(&wb, s, 2, 2), "=D3");
+}
+
+#[test]
+fn move_retargets_formulas_outside_the_moved_range() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_number(s, 0, 0, 1.0).unwrap();
+    wb.set_cell_contents(s, 1, 0, "=A1").unwrap();
+    wb.set_cell_contents(s, 0, 3, "=A1").unwrap();
+    move_range_cells(&mut wb, s, range(0, 0, 1, 0), cell(0, 1)).unwrap();
+    assert_eq!(formula_src(&wb, s, 1, 1), "=B1");
+    assert_eq!(formula_src(&wb, s, 0, 3), "=B1");
+}
+
+#[test]
+fn remove_duplicates_compacts_kept_rows() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "a").unwrap();
+    wb.set_text(s, 1, 0, "a").unwrap();
+    wb.set_text(s, 2, 0, "b").unwrap();
+    assert_eq!(
+        remove_duplicates(&mut wb, s, range(0, 0, 2, 0), &[]).unwrap(),
+        1
+    );
+    let moved = wb.get(s, 1, 0).unwrap().unwrap();
+    let Value::Text(id) = moved.value else {
+        panic!("expected compacted text row");
+    };
+    assert_eq!(wb.intern().strings.get(id), Some("b"));
+    assert!(wb.get(s, 2, 0).unwrap().is_none());
+}
+
+#[test]
+fn text_to_columns_preserves_field_whitespace() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "a, b ").unwrap();
+    text_to_columns(&mut wb, s, range(0, 0, 0, 0), ',').unwrap();
+    let value = wb.get(s, 0, 1).unwrap().unwrap();
+    let Value::Text(id) = value.value else {
+        panic!("expected text");
+    };
+    assert_eq!(wb.intern().strings.get(id), Some(" b "));
+}
+
+#[test]
 fn merge_rejects_overlap() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

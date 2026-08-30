@@ -223,7 +223,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
             id: "sheet.remove",
             doc: "Remove a sheet",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },

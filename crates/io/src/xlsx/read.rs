@@ -1030,14 +1030,10 @@ fn load_sheet(
                         attr(&attrs, "outlineLevel").and_then(|s| s.parse::<u8>().ok())
                         && level > 0
                     {
-                        let _ = wb
-                            .sheet_mut_public(id)
-                            .and_then(|s| s.geometry.rows.set_outline_level(row, level));
+                        let _ = wb.set_row_outline_level(id, row, level);
                     }
                     if attr(&attrs, "collapsed").is_some_and(truthy) {
-                        let _ = wb
-                            .sheet_mut_public(id)
-                            .and_then(|s| s.geometry.rows.set_collapsed(row, true));
+                        let _ = wb.set_row_collapsed(id, row, true);
                     }
                     if let Some(ht) = attr(&attrs, "ht")
                         .and_then(|s| s.parse::<f64>().ok())
@@ -1163,9 +1159,7 @@ fn load_sheet(
                         attr(&attrs, "outlineLevel").and_then(|s| s.parse::<u8>().ok())
                         && level > 0
                     {
-                        let _ = wb
-                            .sheet_mut_public(id)
-                            .and_then(|s| s.geometry.cols.set_outline_level(u32::from(idx), level));
+                        let _ = wb.set_col_outline_level(id, idx, level);
                     }
                     if let Some(w) = width {
                         let px = (w * f64::from(omacell_core::geometry::DEFAULT_COL_PX) / 8.43)

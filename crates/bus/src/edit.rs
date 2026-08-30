@@ -168,7 +168,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.insert",
             doc: "Insert cells, rows, or columns",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+Shift+="],
         },
@@ -179,7 +179,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.delcells",
             doc: "Delete cells, rows, or columns",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+-"],
         },
@@ -212,7 +212,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.paste",
             doc: "Paste a clipboard payload",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+V"],
         },
@@ -223,7 +223,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.pastespecial",
             doc: "Paste special",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+Alt+V"],
         },
@@ -234,7 +234,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.move",
             doc: "Move a range in one atomic operation",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },
@@ -245,7 +245,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.fillselection",
             doc: "Fill the destination from a source range",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+Enter"],
         },
@@ -256,7 +256,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.filldown",
             doc: "Fill down",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+D"],
         },
@@ -267,7 +267,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.fillright",
             doc: "Fill right",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+R"],
         },
@@ -278,7 +278,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "range.merge",
             doc: "Merge a range",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },
@@ -289,7 +289,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "range.mergeacross",
             doc: "Merge each row of a range",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },
@@ -300,7 +300,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "range.unmerge",
             doc: "Unmerge overlapping merges",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },
@@ -311,7 +311,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "view.hiderows",
             doc: "Hide rows in a range",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+9"],
         },
@@ -322,7 +322,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "view.hidecols",
             doc: "Hide columns in a range",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+0"],
         },
@@ -333,7 +333,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "view.unhiderows",
             doc: "Unhide rows",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+Shift+9"],
         },
@@ -344,7 +344,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "view.unhidecols",
             doc: "Unhide columns",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+Shift+0"],
         },
@@ -355,7 +355,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.group",
             doc: "Group rows or columns",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Alt+Shift+Right"],
         },
@@ -366,7 +366,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.ungroup",
             doc: "Ungroup rows or columns",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Alt+Shift+Left"],
         },
@@ -377,7 +377,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.note",
             doc: "Set or clear a legacy note",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Shift+F2"],
         },
@@ -388,7 +388,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.hyperlink",
             doc: "Set or clear a hyperlink",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Ctrl+K"],
         },
@@ -399,7 +399,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "sheet.protect",
             doc: "Protect or unprotect a sheet (legacy XOR hash)",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },
@@ -410,7 +410,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "sheet.reorder",
             doc: "Move a sheet to a new tab index",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },
@@ -421,7 +421,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.texttocolumns",
             doc: "Split text into columns",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },
@@ -432,7 +432,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "range.removeduplicates",
             doc: "Clear duplicate rows in a range",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &[],
         },
@@ -443,7 +443,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             id: "edit.clearcell",
             doc: "Clear cell contents in a range",
             kind: CommandKind::Mutating,
-            changeset_eligible: true,
+            changeset_eligible: false,
             exposure: Exposure::Public,
             default_keys: &["Delete"],
         },
@@ -459,11 +459,15 @@ fn to_range(r: crate::resolve::ResolvedRange) -> RangeRef {
     )
 }
 
-fn parse_shift(s: &str) -> Shift {
-    if s.eq_ignore_ascii_case("right") || s.eq_ignore_ascii_case("cols") {
-        Shift::Right
+fn parse_shift(value: &str) -> Result<Shift, CoreError> {
+    if value.eq_ignore_ascii_case("right") || value.eq_ignore_ascii_case("cols") {
+        Ok(Shift::Right)
+    } else if value.eq_ignore_ascii_case("down") || value.eq_ignore_ascii_case("rows") {
+        Ok(Shift::Down)
     } else {
-        Shift::Down
+        Err(crate::error::args(format!(
+            "unknown insert/delete shift {value:?}"
+        )))
     }
 }
 
@@ -477,7 +481,7 @@ fn whole_cols(r: crate::resolve::ResolvedRange) -> bool {
 
 fn edit_insert(ctx: &mut CommandContext<'_>, args: EditInsertArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
-    let shift = parse_shift(&args.shift);
+    let shift = parse_shift(&args.shift)?;
     if whole_rows(r) || args.shift.eq_ignore_ascii_case("rows") {
         insert_rows(
             ctx.workbook(),
@@ -500,7 +504,7 @@ fn edit_insert(ctx: &mut CommandContext<'_>, args: EditInsertArgs) -> Result<Eff
 
 fn edit_delcells(ctx: &mut CommandContext<'_>, args: EditInsertArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
-    let shift = parse_shift(&args.shift);
+    let shift = parse_shift(&args.shift)?;
     if whole_rows(r) || args.shift.eq_ignore_ascii_case("rows") {
         delete_rows(
             ctx.workbook(),
@@ -524,17 +528,13 @@ fn edit_delcells(ctx: &mut CommandContext<'_>, args: EditInsertArgs) -> Result<E
 fn edit_copy(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
     let grid = copy_range(ctx.workbook_ref(), r.sheet, to_range(r));
-    let cells: Vec<Vec<String>> = grid
-        .iter()
-        .map(|row| row.iter().map(|c| c.input.clone()).collect())
-        .collect();
     Ok(Effect::query(serde_json::json!({
         "payload": {
             "cut": false,
             "sheet": r.sheet.index(),
             "row": r.min_row,
             "col": r.min_col,
-            "cells": cells,
+            "cells": grid,
         }
     })))
 }
@@ -552,26 +552,82 @@ fn edit_paste(ctx: &mut CommandContext<'_>, args: EditPasteArgs) -> Result<Effec
     let cells = args
         .payload
         .get("cells")
-        .and_then(|v| v.as_array())
         .cloned()
-        .unwrap_or_default();
-    let mut grid: Vec<Vec<ClipCell>> = Vec::new();
-    for row in cells {
-        let mut out = Vec::new();
-        if let Some(arr) = row.as_array() {
-            for cell in arr {
-                let input = cell.as_str().unwrap_or("").to_string();
-                out.push(ClipCell {
-                    number: input.parse().ok(),
-                    input,
-                });
-            }
+        .ok_or_else(|| crate::error::args("clipboard payload is missing cells"))?;
+    let grid: Vec<Vec<ClipCell>> = serde_json::from_value(cells)
+        .map_err(|error| crate::error::args(format!("invalid clipboard cells: {error}")))?;
+    let origin = match (
+        args.payload.get("row").and_then(|value| value.as_u64()),
+        args.payload.get("col").and_then(|value| value.as_u64()),
+    ) {
+        (Some(row), Some(col)) => Some((
+            u32::try_from(row).map_err(|_| crate::error::args("clipboard row is out of range"))?,
+            u16::try_from(col)
+                .map_err(|_| crate::error::args("clipboard column is out of range"))?,
+        )),
+        _ => None,
+    };
+    if args
+        .payload
+        .get("cut")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let (Some((source_row, source_col)), Some(source_sheet)) =
+            (origin, args.payload.get("sheet").and_then(|v| v.as_u64()))
+        else {
+            return Err(crate::error::args(
+                "cut payload is missing its source location",
+            ));
+        };
+        let source_sheet = omacell_core::addr::SheetId::new(
+            u32::try_from(source_sheet)
+                .map_err(|_| crate::error::args("clipboard sheet is out of range"))?,
+        );
+        if source_sheet != r.sheet {
+            return Err(crate::error::args(
+                "cross-sheet cut/paste is not supported by WP-17",
+            ));
         }
-        grid.push(out);
+        let height =
+            u32::try_from(grid.len()).map_err(|_| crate::error::args("clipboard is too tall"))?;
+        let width = grid.iter().map(Vec::len).max().unwrap_or(0);
+        let width =
+            u16::try_from(width).map_err(|_| crate::error::args("clipboard is too wide"))?;
+        if height == 0 || width == 0 {
+            return Ok(Effect::query(serde_json::json!({"changed": 0})));
+        }
+        let source_end = CellRef::new(
+            source_row
+                .checked_add(height - 1)
+                .ok_or_else(|| crate::error::args("cut source row overflow"))?,
+            source_col
+                .checked_add(width - 1)
+                .ok_or_else(|| crate::error::args("cut source column overflow"))?,
+        )?;
+        let src = RangeRef::from_corners(CellRef::new(source_row, source_col)?, source_end);
+        let changed = move_range_cells(
+            ctx.workbook(),
+            source_sheet,
+            src,
+            CellRef::new(r.min_row, r.min_col)?,
+        )?;
+        return Ok(Effect {
+            result: serde_json::json!({"changed": changed}),
+            auto_recalc: true,
+            rebuild: true,
+            summary: ChangeSummary {
+                cells: u64::from(changed),
+                text: "cut/paste".into(),
+                ..ChangeSummary::default()
+            },
+            ..Effect::default()
+        });
     }
     let mut spec = PasteSpecial {
         values: true,
         formulas: true,
+        formats: true,
         ..PasteSpecial::default()
     };
     if let Some(kind) = args.special.as_deref() {
@@ -602,68 +658,70 @@ fn edit_paste(ctx: &mut CommandContext<'_>, args: EditPasteArgs) -> Result<Effec
                 paste_link: true,
                 ..PasteSpecial::default()
             },
-            _ => spec,
+            "formats" => PasteSpecial {
+                formats: true,
+                ..PasteSpecial::default()
+            },
+            "numberformats" => PasteSpecial {
+                number_formats: true,
+                ..PasteSpecial::default()
+            },
+            "columnwidths" => PasteSpecial {
+                column_widths: true,
+                ..PasteSpecial::default()
+            },
+            "subtract" => PasteSpecial {
+                operation: PasteOp::Sub,
+                ..PasteSpecial::default()
+            },
+            "multiply" => PasteSpecial {
+                operation: PasteOp::Mul,
+                ..PasteSpecial::default()
+            },
+            "divide" => PasteSpecial {
+                operation: PasteOp::Div,
+                ..PasteSpecial::default()
+            },
+            other => {
+                return Err(crate::error::args(format!(
+                    "unknown paste-special mode {other:?}"
+                )));
+            }
         };
     }
-    let origin = args
-        .payload
-        .get("row")
-        .and_then(|v| v.as_u64())
-        .and_then(|row| {
-            args.payload
-                .get("col")
-                .and_then(|v| v.as_u64())
-                .map(|col| (row as u32, col as u16))
-        });
     let n = paste_special(
         ctx.workbook(),
         r.sheet,
-        CellRef::new(r.min_row, r.min_col).unwrap(),
+        CellRef::new(r.min_row, r.min_col)?,
         &grid,
         spec,
         origin,
     )?;
-    if args
-        .payload
-        .get("cut")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        && let (Some(sr), Some(sc), Some(sid)) = (
-            args.payload.get("row").and_then(|v| v.as_u64()),
-            args.payload.get("col").and_then(|v| v.as_u64()),
-            args.payload.get("sheet").and_then(|v| v.as_u64()),
-        )
-    {
-        let h = grid.len() as u32;
-        let w = grid.first().map(|row| row.len() as u16).unwrap_or(0);
-        let src = RangeRef::from_corners(
-            CellRef::new(sr as u32, sc as u16).unwrap(),
-            CellRef::new(
-                sr as u32 + h.saturating_sub(1),
-                sc as u16 + w.saturating_sub(1),
-            )
-            .unwrap(),
-        );
-        let sheet = omacell_core::addr::SheetId::new(sid as u32);
-        let _ = move_range_cells(
-            ctx.workbook(),
-            sheet,
-            src,
-            CellRef::new(r.min_row, r.min_col).unwrap(),
-        );
-        let _ = n;
-    }
-    Ok(changed("paste"))
+    Ok(Effect {
+        result: serde_json::json!({"changed": n}),
+        auto_recalc: true,
+        summary: ChangeSummary {
+            cells: u64::from(n),
+            text: "paste".into(),
+            ..ChangeSummary::default()
+        },
+        ..Effect::default()
+    })
 }
 
 fn edit_move(ctx: &mut CommandContext<'_>, args: EditMoveArgs) -> Result<Effect, CoreError> {
     let src = resolve_range(ctx.workbook_ref(), &args.src)?;
     let dest = resolve_cell(ctx.workbook_ref(), &args.dest)?;
+    if src.sheet != dest.sheet {
+        return Err(crate::error::args(
+            "cross-sheet moves are not supported by WP-17",
+        ));
+    }
     let n = move_range_cells(
         ctx.workbook(),
         src.sheet,
         to_range(src),
-        CellRef::new(dest.row, dest.col).unwrap(),
+        CellRef::new(dest.row, dest.col)?,
     )?;
     Ok(Effect {
         result: serde_json::json!({"changed": n}),
@@ -678,22 +736,31 @@ fn edit_move(ctx: &mut CommandContext<'_>, args: EditMoveArgs) -> Result<Effect,
     })
 }
 
-fn parse_mode(s: Option<&str>, values: &[f64]) -> FillMode {
-    match s.unwrap_or("") {
-        "linear" => FillMode::Linear,
-        "growth" => FillMode::Growth,
-        "date" => FillMode::Date,
-        "weekday" => FillMode::Weekday,
-        "month" => FillMode::Month,
-        "year" => FillMode::Year,
-        "copy" => FillMode::Copy,
-        _ => detect_fill(values),
-    }
+fn parse_mode(mode: Option<&str>, values: &[f64]) -> Result<FillMode, CoreError> {
+    Ok(match mode {
+        None => detect_fill(values),
+        Some("linear") => FillMode::Linear,
+        Some("growth") => FillMode::Growth,
+        Some("date") => FillMode::Date,
+        Some("weekday") => FillMode::Weekday,
+        Some("month") => FillMode::Month,
+        Some("year") => FillMode::Year,
+        Some("copy") => FillMode::Copy,
+        Some("formats") => FillMode::Formats,
+        Some(other) => {
+            return Err(crate::error::args(format!("unknown fill mode {other:?}")));
+        }
+    })
 }
 
 fn edit_fill(ctx: &mut CommandContext<'_>, args: EditFillArgs) -> Result<Effect, CoreError> {
     let src = resolve_range(ctx.workbook_ref(), &args.src)?;
     let dest = resolve_range(ctx.workbook_ref(), &args.dest)?;
+    if src.sheet != dest.sheet {
+        return Err(crate::error::args(
+            "cross-sheet fill ranges are not supported by WP-17",
+        ));
+    }
     let mut nums = Vec::new();
     for r in src.min_row..=src.max_row {
         if let Ok(Some(slot)) = ctx.workbook_ref().get(src.sheet, r, src.min_col)
@@ -702,7 +769,7 @@ fn edit_fill(ctx: &mut CommandContext<'_>, args: EditFillArgs) -> Result<Effect,
             nums.push(n);
         }
     }
-    let mode = parse_mode(args.mode.as_deref(), &nums);
+    let mode = parse_mode(args.mode.as_deref(), &nums)?;
     let n = fill_range(
         ctx.workbook(),
         src.sheet,
@@ -783,11 +850,7 @@ fn hide_rows(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Effect
 fn hide_cols(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
     for col in r.min_col..=r.max_col {
-        ctx.workbook()
-            .sheet_mut_public(r.sheet)?
-            .geometry
-            .cols
-            .set_hidden(u32::from(col), true)?;
+        ctx.workbook().set_col_hidden(r.sheet, col, true)?;
     }
     Ok(changed("hide"))
 }
@@ -803,31 +866,28 @@ fn unhide_rows(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Effe
 fn unhide_cols(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
     for col in r.min_col..=r.max_col {
-        ctx.workbook()
-            .sheet_mut_public(r.sheet)?
-            .geometry
-            .cols
-            .set_hidden(u32::from(col), false)?;
+        ctx.workbook().set_col_hidden(r.sheet, col, false)?;
     }
     Ok(changed("unhide"))
 }
 
 fn edit_group(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
-    let sheet = ctx.workbook().sheet_mut_public(r.sheet)?;
     if whole_cols(r) {
         for c in r.min_col..=r.max_col {
-            let lvl = sheet
-                .geometry
-                .cols
-                .outline_level(u32::from(c))
+            let level = ctx
+                .workbook_ref()
+                .col_outline_level(r.sheet, c)?
                 .saturating_add(1);
-            sheet.geometry.cols.set_outline_level(u32::from(c), lvl)?;
+            ctx.workbook().set_col_outline_level(r.sheet, c, level)?;
         }
     } else {
         for row in r.min_row..=r.max_row {
-            let lvl = sheet.geometry.rows.outline_level(row).saturating_add(1);
-            sheet.geometry.rows.set_outline_level(row, lvl)?;
+            let level = ctx
+                .workbook_ref()
+                .row_outline_level(r.sheet, row)?
+                .saturating_add(1);
+            ctx.workbook().set_row_outline_level(r.sheet, row, level)?;
         }
     }
     Ok(changed("group"))
@@ -835,28 +895,37 @@ fn edit_group(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Effec
 
 fn edit_ungroup(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
-    let sheet = ctx.workbook().sheet_mut_public(r.sheet)?;
-    for row in r.min_row..=r.max_row {
-        let lvl = sheet.geometry.rows.outline_level(row).saturating_sub(1);
-        sheet.geometry.rows.set_outline_level(row, lvl)?;
+    if whole_cols(r) {
+        for col in r.min_col..=r.max_col {
+            let level = ctx
+                .workbook_ref()
+                .col_outline_level(r.sheet, col)?
+                .saturating_sub(1);
+            ctx.workbook().set_col_outline_level(r.sheet, col, level)?;
+        }
+    } else {
+        for row in r.min_row..=r.max_row {
+            let level = ctx
+                .workbook_ref()
+                .row_outline_level(r.sheet, row)?
+                .saturating_sub(1);
+            ctx.workbook().set_row_outline_level(r.sheet, row, level)?;
+        }
     }
     Ok(changed("ungroup"))
 }
 
 fn edit_note(ctx: &mut CommandContext<'_>, args: EditNoteArgs) -> Result<Effect, CoreError> {
     let c = resolve_cell(ctx.workbook_ref(), &args.cell_ref)?;
-    let sheet = ctx.workbook().sheet_mut_public(c.sheet)?;
-    if args.text.is_empty() {
-        sheet.notes.remove(&(c.row, c.col));
+    let note = if args.text.is_empty() {
+        None
     } else {
-        sheet.notes.insert(
-            (c.row, c.col),
-            Note {
-                author: args.author,
-                text: args.text,
-            },
-        );
-    }
+        Some(Note {
+            author: args.author,
+            text: args.text,
+        })
+    };
+    ctx.workbook().set_note(c.sheet, c.row, c.col, note)?;
     Ok(changed("note"))
 }
 
@@ -865,19 +934,17 @@ fn edit_hyperlink(
     args: EditHyperlinkArgs,
 ) -> Result<Effect, CoreError> {
     let c = resolve_cell(ctx.workbook_ref(), &args.cell_ref)?;
-    let sheet = ctx.workbook().sheet_mut_public(c.sheet)?;
-    if args.target.is_empty() {
-        sheet.hyperlinks.remove(&(c.row, c.col));
+    let hyperlink = if args.target.is_empty() {
+        None
     } else {
-        sheet.hyperlinks.insert(
-            (c.row, c.col),
-            Hyperlink {
-                target: args.target,
-                tooltip: None,
-                display: None,
-            },
-        );
-    }
+        Some(Hyperlink {
+            target: args.target,
+            tooltip: None,
+            display: None,
+        })
+    };
+    ctx.workbook()
+        .set_hyperlink(c.sheet, c.row, c.col, hyperlink)?;
     Ok(changed("hyperlink"))
 }
 
@@ -894,9 +961,14 @@ fn sheet_protect(
         None => ctx.workbook_ref().active_sheet(),
     };
     let hash = args.password.as_deref().map(excel_xor_hash);
-    let sheet = ctx.workbook().sheet_mut_public(id)?;
-    sheet.protection.enabled = args.enable;
-    sheet.protection.password = hash.map(|h| h.to_be_bytes().to_vec());
+    let mut protection = ctx
+        .workbook_ref()
+        .sheet(id)
+        .map(|sheet| sheet.protection.clone())
+        .ok_or_else(|| CoreError::sheet_id("unknown sheet"))?;
+    protection.enabled = args.enable;
+    protection.password = hash.map(|value| format!("{value:04X}").into_bytes());
+    ctx.workbook().set_sheet_protection(id, protection)?;
     Ok(Effect {
         result: serde_json::json!({
             "enabled": args.enable,
