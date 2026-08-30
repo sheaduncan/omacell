@@ -327,6 +327,8 @@ pub struct Sheet {
     pub page_setup: PageSetup,
     /// AutoFilter (WP-18).
     pub autofilter: Option<crate::filter::AutoFilter>,
+    /// Rows hidden by the active AutoFilter, distinct from manually hidden rows.
+    pub(crate) filter_hidden_rows: std::collections::BTreeSet<u32>,
     /// Data validations (WP-18).
     pub validations: Vec<crate::validation::DataValidation>,
     /// Conditional format rules, low priority number wins (WP-18).
@@ -337,7 +339,7 @@ pub struct Sheet {
 ///
 /// The fields are intentionally private: callers edit through [`crate::workbook::Workbook`]
 /// so mutations remain validated and undo tracked.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SheetEditState {
     rows: AxisEditState,
     cols: AxisEditState,
@@ -348,6 +350,8 @@ pub struct SheetEditState {
     hyperlinks: Vec<(u32, u16, Hyperlink)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     autofilter: Option<crate::filter::AutoFilter>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    filter_hidden_rows: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     validations: Vec<crate::validation::DataValidation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -374,6 +378,7 @@ impl SheetEditState {
             comments: sorted_map(&sheet.comments),
             hyperlinks: sorted_map(&sheet.hyperlinks),
             autofilter: sheet.autofilter.clone(),
+            filter_hidden_rows: sheet.filter_hidden_rows.iter().copied().collect(),
             validations: sheet.validations.clone(),
             cond_formats: sheet.cond_formats.clone(),
         }
@@ -400,6 +405,7 @@ impl SheetEditState {
             .map(|(row, col, value)| ((row, col), value))
             .collect();
         sheet.autofilter = self.autofilter;
+        sheet.filter_hidden_rows = self.filter_hidden_rows.into_iter().collect();
         sheet.validations = self.validations;
         sheet.cond_formats = self.cond_formats;
     }
@@ -441,6 +447,7 @@ impl SheetEditState {
             + self.validations.len() * 64
             + self.cond_formats.len() * 64
             + usize::from(self.autofilter.is_some()) * 64
+            + self.filter_hidden_rows.len() * std::mem::size_of::<u32>()
     }
 }
 
@@ -511,6 +518,7 @@ impl Sheet {
             sparklines: Vec::new(),
             page_setup: PageSetup::default(),
             autofilter: None,
+            filter_hidden_rows: std::collections::BTreeSet::new(),
             validations: Vec::new(),
             cond_formats: Vec::new(),
         })

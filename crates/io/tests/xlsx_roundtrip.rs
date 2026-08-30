@@ -646,6 +646,19 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
         }],
     )
     .unwrap();
+    wb.set_text(sheet, 0, 2, "Item").unwrap();
+    wb.set_text(sheet, 0, 3, "Amount").unwrap();
+    wb.set_text(sheet, 1, 2, "one").unwrap();
+    wb.set_number(sheet, 1, 3, 1.0).unwrap();
+    let table_id = wb
+        .create_table(
+            sheet,
+            RangeRef::from_corners(CellRef::new(0, 2).unwrap(), CellRef::new(1, 3).unwrap()),
+            "LoTable",
+        )
+        .unwrap();
+    wb.set_table_totals(table_id, true, vec![None, Some("sum".into())])
+        .unwrap();
     let bytes = save_workbook_bytes(&wb).unwrap();
     let doc = open_bytes(&bytes).unwrap();
     let loaded = doc.workbook.sheet(doc.workbook.active_sheet()).unwrap();
@@ -654,6 +667,9 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
     assert_eq!(loaded.validations.len(), 1);
     assert_eq!(loaded.validations[0].kind, DvType::Whole);
     assert_eq!(loaded.cond_formats.len(), 1);
+    let table = doc.workbook.tables().get_by_name("LoTable").unwrap();
+    assert!(table.has_totals);
+    assert_eq!(table.columns[1].totals_fn.as_deref(), Some("sum"));
     assert!(matches!(
         loaded.cond_formats[0].kind,
         CfKind::CellIs {
@@ -666,16 +682,23 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
         Some(Color::Rgb { argb: 0xFFFF_0000 })
     );
 
-    let dir = std::env::temp_dir().join(format!("omacell-wp18-lo-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    let tmp = dir.join("in.xlsx");
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("omacell-wp18-lo-{}", std::process::id()));
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    let input_dir = dir.join("input");
+    let output_dir = dir.join("output");
+    std::fs::create_dir_all(&input_dir).unwrap();
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let tmp = input_dir.join("in.xlsx");
     std::fs::write(&tmp, &bytes).unwrap();
     let soffice = ["soffice", "libreoffice"]
         .iter()
         .find(|b| Command::new(b).arg("--version").output().is_ok());
     if let Some(bin) = soffice {
         let profile = dir.join("lo-profile");
-        let _ = std::fs::create_dir_all(&profile);
+        std::fs::create_dir_all(&profile).unwrap();
         let profile_uri = format!("file://{}", profile.display());
         let out = Command::new(bin)
             .args([
@@ -684,18 +707,317 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
                 "--convert-to",
                 "xlsx",
                 "--outdir",
-                dir.to_str().unwrap(),
+                output_dir.to_str().unwrap(),
                 tmp.to_str().unwrap(),
             ])
-            .output();
+            .output()
+            .unwrap();
         assert!(
-            out.as_ref().is_ok_and(|o| o.status.success())
-                || out.as_ref().is_ok_and(|o| {
-                    let err = String::from_utf8_lossy(&o.stderr);
-                    err.contains("failed") || !err.is_empty() || o.status.success()
-                }),
-            "LibreOffice refused the modeled WP-18 workbook"
+            out.status.success(),
+            "LibreOffice refused the modeled WP-18 workbook: {}",
+            String::from_utf8_lossy(&out.stderr),
         );
+        let converted = std::fs::read(output_dir.join("in.xlsx")).unwrap();
+        let converted = open_bytes(&converted).unwrap();
+        let sheet = converted
+            .workbook
+            .sheet(converted.workbook.active_sheet())
+            .unwrap();
+        assert!(sheet.autofilter.is_some());
+        assert_eq!(sheet.validations.len(), 1);
+        assert_eq!(sheet.cond_formats.len(), 1);
+        let table = converted.workbook.tables().get_by_name("LoTable").unwrap();
+        assert!(table.has_totals);
+        assert_eq!(table.columns[1].totals_fn.as_deref(), Some("sum"));
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn wp18_all_modeled_data_definitions_roundtrip() {
+    use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CfTimePeriod, CondFormat};
+    use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria, NumOp, TextOp};
+    use omacell_core::validation::{DataValidation, DvOp, DvType};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    for col in 0..8u16 {
+        wb.set_text(sheet, 0, col, &format!("H{col}")).unwrap();
+    }
+    let filter_range =
+        RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(2, 7).unwrap());
+    let filter = AutoFilter {
+        range: filter_range,
+        columns: vec![
+            FilterColumn {
+                col_id: 0,
+                criteria: FilterCriteria::Values(vec!["x".into(), "y".into()]),
+            },
+            FilterColumn {
+                col_id: 1,
+                criteria: FilterCriteria::Text {
+                    op: TextOp::Contains,
+                    value: "a*b?~c".into(),
+                },
+            },
+            FilterColumn {
+                col_id: 2,
+                criteria: FilterCriteria::Number {
+                    op: NumOp::Between,
+                    value: 1.0,
+                    value2: Some(10.0),
+                },
+            },
+            FilterColumn {
+                col_id: 3,
+                criteria: FilterCriteria::Number {
+                    op: NumOp::NotEqual,
+                    value: 5.0,
+                    value2: None,
+                },
+            },
+            FilterColumn {
+                col_id: 4,
+                criteria: FilterCriteria::TopN {
+                    n: 25,
+                    percent: true,
+                    bottom: true,
+                },
+            },
+            FilterColumn {
+                col_id: 5,
+                criteria: FilterCriteria::Average { below: true },
+            },
+            FilterColumn {
+                col_id: 6,
+                criteria: FilterCriteria::Color {
+                    fill: false,
+                    argb: 0xFF11_2233,
+                },
+            },
+            FilterColumn {
+                col_id: 7,
+                criteria: FilterCriteria::Period {
+                    year: Some(2026),
+                    month: Some(8),
+                },
+            },
+        ],
+    };
+    wb.set_autofilter(sheet, Some(filter.clone())).unwrap();
+
+    let validations = vec![
+        DataValidation {
+            range: filter_range,
+            kind: DvType::Whole,
+            op: DvOp::Between,
+            formula1: Some("1".into()),
+            formula2: Some("10".into()),
+            error_title: Some("Whole".into()),
+            input_message: Some("Enter 1–10".into()),
+            ..DataValidation::default()
+        },
+        DataValidation {
+            range: RangeRef::from_corners(CellRef::new(1, 1).unwrap(), CellRef::new(2, 1).unwrap()),
+            kind: DvType::List,
+            formula1: Some("\"red,blue\"".into()),
+            ..DataValidation::default()
+        },
+        DataValidation {
+            range: RangeRef::from_corners(CellRef::new(1, 2).unwrap(), CellRef::new(2, 2).unwrap()),
+            kind: DvType::Custom,
+            formula1: Some("=C2>0".into()),
+            ..DataValidation::default()
+        },
+        DataValidation {
+            range: RangeRef::from_corners(CellRef::new(1, 3).unwrap(), CellRef::new(2, 3).unwrap()),
+            kind: DvType::Time,
+            op: DvOp::LessEq,
+            formula1: Some("0.5".into()),
+            ..DataValidation::default()
+        },
+    ];
+    wb.set_validations(sheet, validations.clone()).unwrap();
+
+    let cf_range = RangeRef::from_corners(CellRef::new(1, 0).unwrap(), CellRef::new(2, 0).unwrap());
+    let red = Color::Rgb { argb: 0xFFFF_0000 };
+    let yellow = Color::Rgb { argb: 0xFFFF_FF00 };
+    let green = Color::Rgb { argb: 0xFF00_FF00 };
+    let kinds = vec![
+        CfKind::CellIs {
+            op: CfOp::Between,
+            formula1: "1".into(),
+            formula2: Some("10".into()),
+        },
+        CfKind::Formula("=A2>0".into()),
+        CfKind::ContainsText("x\"y".into()),
+        CfKind::Blanks,
+        CfKind::Errors,
+        CfKind::Duplicate,
+        CfKind::Unique,
+        CfKind::TopN {
+            n: 50,
+            percent: true,
+            bottom: true,
+        },
+        CfKind::Average { below: true },
+        CfKind::TimePeriod(CfTimePeriod::Last7Days),
+        CfKind::ColorScale {
+            colors: vec![red, yellow, green],
+        },
+        CfKind::DataBar {
+            color: Color::Rgb { argb: 0xFF63_8EC6 },
+            gradient: false,
+        },
+        CfKind::IconSet { icons: 5 },
+    ];
+    let rules: Vec<_> = kinds
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| CondFormat {
+            range: cf_range,
+            priority: u32::try_from(index + 1).unwrap(),
+            stop_if_true: index == 0,
+            kind,
+            dxf: if index == 0 {
+                CfDxf {
+                    fill: Some(red),
+                    font: None,
+                }
+            } else {
+                CfDxf::default()
+            },
+        })
+        .collect();
+    wb.set_cond_formats(sheet, rules.clone()).unwrap();
+
+    wb.set_text(sheet, 0, 9, "Item").unwrap();
+    wb.set_text(sheet, 0, 10, "Amount").unwrap();
+    wb.set_text(sheet, 1, 9, "a").unwrap();
+    wb.set_number(sheet, 1, 10, 2.0).unwrap();
+    let table_id = wb
+        .create_table(
+            sheet,
+            RangeRef::from_corners(CellRef::new(0, 9).unwrap(), CellRef::new(1, 10).unwrap()),
+            "Sales",
+        )
+        .unwrap();
+    wb.set_table_totals(table_id, true, vec![None, Some("sum".into())])
+        .unwrap();
+
+    let loaded = open_bytes(&save_workbook_bytes(&wb).unwrap())
+        .unwrap()
+        .workbook;
+    let loaded_sheet = loaded.sheet(loaded.active_sheet()).unwrap();
+    assert_eq!(loaded_sheet.autofilter.as_ref(), Some(&filter));
+    assert_eq!(loaded_sheet.validations, validations);
+    assert_eq!(loaded_sheet.cond_formats, rules);
+    let table = loaded.tables().get_by_name("Sales").unwrap();
+    assert!(table.has_totals);
+    assert_eq!(table.columns[1].totals_fn.as_deref(), Some("sum"));
+}
+
+#[test]
+fn wp18_edits_override_imported_definition_fragments() {
+    use omacell_core::condfmt::{CfDxf, CfKind, CondFormat};
+    use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria};
+    use omacell_core::validation::{DataValidation, DvOp, DvType};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(2, 0).unwrap());
+    wb.set_autofilter(
+        sheet,
+        Some(AutoFilter {
+            range,
+            columns: vec![FilterColumn {
+                col_id: 0,
+                criteria: FilterCriteria::Values(vec!["old".into()]),
+            }],
+        }),
+    )
+    .unwrap();
+    wb.set_validations(
+        sheet,
+        vec![DataValidation {
+            range,
+            kind: DvType::Whole,
+            op: DvOp::Greater,
+            formula1: Some("1".into()),
+            ..DataValidation::default()
+        }],
+    )
+    .unwrap();
+    wb.set_cond_formats(
+        sheet,
+        vec![CondFormat {
+            range,
+            priority: 1,
+            stop_if_true: false,
+            kind: CfKind::Blanks,
+            dxf: CfDxf::default(),
+        }],
+    )
+    .unwrap();
+
+    let mut imported = open_bytes(&save_workbook_bytes(&wb).unwrap()).unwrap();
+    let sheet = imported.workbook.active_sheet();
+    let changed_filter = AutoFilter {
+        range,
+        columns: vec![FilterColumn {
+            col_id: 0,
+            criteria: FilterCriteria::Average { below: true },
+        }],
+    };
+    let changed_validation = DataValidation {
+        range,
+        kind: DvType::TextLength,
+        op: DvOp::LessEq,
+        formula1: Some("8".into()),
+        ..DataValidation::default()
+    };
+    let changed_cf = CondFormat {
+        range,
+        priority: 1,
+        stop_if_true: true,
+        kind: CfKind::IconSet { icons: 4 },
+        dxf: CfDxf::default(),
+    };
+    imported
+        .workbook
+        .set_autofilter(sheet, Some(changed_filter.clone()))
+        .unwrap();
+    imported
+        .workbook
+        .set_validations(sheet, vec![changed_validation.clone()])
+        .unwrap();
+    imported
+        .workbook
+        .set_cond_formats(sheet, vec![changed_cf.clone()])
+        .unwrap();
+
+    let mut reopened = open_bytes(&save_bytes(&imported).unwrap()).unwrap();
+    let sheet = reopened.workbook.active_sheet();
+    let loaded_sheet = reopened.workbook.sheet(sheet).unwrap();
+    assert_eq!(loaded_sheet.autofilter.as_ref(), Some(&changed_filter));
+    assert_eq!(loaded_sheet.validations, vec![changed_validation]);
+    assert_eq!(loaded_sheet.cond_formats, vec![changed_cf]);
+
+    reopened.workbook.set_autofilter(sheet, None).unwrap();
+    reopened
+        .workbook
+        .set_validations(sheet, Vec::new())
+        .unwrap();
+    reopened
+        .workbook
+        .set_cond_formats(sheet, Vec::new())
+        .unwrap();
+    let cleared = open_bytes(&save_bytes(&reopened).unwrap()).unwrap();
+    let sheet = cleared
+        .workbook
+        .sheet(cleared.workbook.active_sheet())
+        .unwrap();
+    assert!(sheet.autofilter.is_none());
+    assert!(sheet.validations.is_empty());
+    assert!(sheet.cond_formats.is_empty());
 }

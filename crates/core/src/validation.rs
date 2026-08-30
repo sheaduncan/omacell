@@ -1,9 +1,12 @@
 //! Data validation (F-6.4).
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use crate::addr::{RangeRef, SheetId};
 use crate::error::CoreError;
+use crate::eval::FnRegistry;
+use crate::graph::CellCoord;
 use crate::value::Value;
 use crate::workbook::Workbook;
 
@@ -67,7 +70,7 @@ pub enum DvOp {
 }
 
 /// One data-validation rule.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataValidation {
     /// Target range.
     pub range: RangeRef,
@@ -106,6 +109,11 @@ fn yes() -> bool {
     true
 }
 
+/// Excel displays at most 255 invalid-data circles at once.
+pub const MAX_INVALID_CIRCLES: usize = 255;
+/// Maximum values returned to a validation dropdown.
+pub const MAX_VALIDATION_LIST_ITEMS: usize = 32_767;
+
 impl Default for DataValidation {
     fn default() -> Self {
         Self {
@@ -129,10 +137,22 @@ impl Default for DataValidation {
 
 /// Whether `cell` satisfies validations on `sheet`.
 pub fn validate_cell(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> Result<(), CoreError> {
-    let Some(s) = wb.sheet(sheet) else {
-        return Ok(());
-    };
-    let slot = wb.get(sheet, row, col).ok().flatten();
+    let registry = FnRegistry::new();
+    validate_cell_with_registry(wb, sheet, row, col, &registry)
+}
+
+/// Validate a cell using the application's registered worksheet functions.
+pub fn validate_cell_with_registry(
+    wb: &Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+    registry: &FnRegistry,
+) -> Result<(), CoreError> {
+    let s = wb
+        .sheet(sheet)
+        .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", sheet.index())))?;
+    let slot = wb.get(sheet, row, col)?;
     let empty = slot.is_none() || matches!(slot.map(|c| c.value), Some(Value::Empty));
     for dv in &s.validations {
         if !in_range(dv.range, row, col) {
@@ -141,7 +161,15 @@ pub fn validate_cell(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> Resul
         if empty && dv.allow_blank {
             continue;
         }
-        if !ok_value(wb, sheet, slot.map(|c| c.value).unwrap_or(Value::Empty), dv) {
+        if !ok_value(
+            wb,
+            sheet,
+            row,
+            col,
+            slot.map(|c| c.value).unwrap_or(Value::Empty),
+            dv,
+            registry,
+        ) {
             return Err(CoreError::new(
                 "validation.failed",
                 dv.error_message
@@ -155,26 +183,90 @@ pub fn validate_cell(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> Resul
 
 /// Cells that fail validation (circle-invalid).
 pub fn invalid_cells(wb: &Workbook, sheet: SheetId) -> Vec<(u32, u16)> {
+    let registry = FnRegistry::new();
+    invalid_cells_with_registry(wb, sheet, &registry)
+}
+
+/// Cells that fail validation using the application's registered functions.
+pub fn invalid_cells_with_registry(
+    wb: &Workbook,
+    sheet: SheetId,
+    registry: &FnRegistry,
+) -> Vec<(u32, u16)> {
     let Some(s) = wb.sheet(sheet) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
+    let mut invalid = BTreeSet::new();
     for dv in &s.validations {
+        if dv.kind == DvType::Any {
+            continue;
+        }
         let (r0, c0, r1, c1) = norm(dv.range);
-        for r in r0..=r1 {
-            for c in c0..=c1 {
-                if validate_cell(wb, sheet, r, c).is_err() {
-                    out.push((r, c));
+        if dv.allow_blank {
+            for (row, col, _) in s.store.iter() {
+                if row >= r0
+                    && row <= r1
+                    && col >= c0
+                    && col <= c1
+                    && validate_cell_with_registry(wb, sheet, row, col, registry).is_err()
+                {
+                    invalid.insert((row, col));
+                    if invalid.len() >= MAX_INVALID_CIRCLES {
+                        break;
+                    }
+                }
+            }
+        } else {
+            'rows: for row in r0..=r1 {
+                for col in c0..=c1 {
+                    if validate_cell_with_registry(wb, sheet, row, col, registry).is_err() {
+                        invalid.insert((row, col));
+                    }
+                    if invalid.len() >= MAX_INVALID_CIRCLES {
+                        break 'rows;
+                    }
                 }
             }
         }
+        if invalid.len() >= MAX_INVALID_CIRCLES {
+            break;
+        }
     }
-    out.sort_unstable();
-    out.dedup();
-    out
+    invalid.into_iter().collect()
 }
 
-fn ok_value(wb: &Workbook, sheet: SheetId, value: Value, dv: &DataValidation) -> bool {
+/// Resolve the list-validation dropdown values for a cell.
+///
+/// Returns `None` when no list validation applies. Inline comma lists and A1
+/// ranges (including a sheet prefix) are supported and bounded to
+/// [`MAX_VALIDATION_LIST_ITEMS`].
+pub fn validation_list_values(
+    wb: &Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+) -> Result<Option<Vec<String>>, CoreError> {
+    let source = wb
+        .sheet(sheet)
+        .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", sheet.index())))?
+        .validations
+        .iter()
+        .find(|validation| validation.kind == DvType::List && in_range(validation.range, row, col))
+        .and_then(|validation| validation.formula1.as_deref());
+    source
+        .map(|source| resolve_list_source(wb, sheet, source))
+        .transpose()
+}
+
+fn ok_value(
+    wb: &Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+    value: Value,
+    dv: &DataValidation,
+    registry: &FnRegistry,
+) -> bool {
     match dv.kind {
         DvType::Any => true,
         DvType::Whole | DvType::Decimal | DvType::Date | DvType::Time => {
@@ -184,56 +276,87 @@ fn ok_value(wb: &Workbook, sheet: SheetId, value: Value, dv: &DataValidation) ->
             if dv.kind == DvType::Whole && n.fract().abs() > 1e-9 {
                 return false;
             }
-            let lo = parse_num(dv.formula1.as_deref());
-            let hi = parse_num(dv.formula2.as_deref());
+            if dv.kind == DvType::Date
+                && crate::dates::serial_to_date(n.trunc() as i64, wb.settings().date_system)
+                    .is_none()
+            {
+                return false;
+            }
+            if dv.kind == DvType::Time && !(0.0..1.0).contains(&n) {
+                return false;
+            }
+            let (origin_row, origin_col, _, _) = norm(dv.range);
+            let lo = formula_num(
+                wb,
+                CellCoord::new(sheet, row, col),
+                CellCoord::new(sheet, origin_row, origin_col),
+                dv.formula1.as_deref(),
+                registry,
+            );
+            let hi = formula_num(
+                wb,
+                CellCoord::new(sheet, row, col),
+                CellCoord::new(sheet, origin_row, origin_col),
+                dv.formula2.as_deref(),
+                registry,
+            );
             cmp_num(n, dv.op, lo, hi)
         }
         DvType::TextLength => {
             let len = match value {
-                Value::Text(id) => wb.intern().strings.get(id).map(str::len).unwrap_or(0),
+                Value::Text(id) => wb
+                    .intern()
+                    .strings
+                    .get(id)
+                    .map(|text| text.chars().count())
+                    .unwrap_or(0),
                 Value::Empty => 0,
-                _ => display(wb, value).len(),
+                _ => display(wb, value).chars().count(),
             } as f64;
+            let (origin_row, origin_col, _, _) = norm(dv.range);
             cmp_num(
                 len,
                 dv.op,
-                parse_num(dv.formula1.as_deref()),
-                parse_num(dv.formula2.as_deref()),
+                formula_num(
+                    wb,
+                    CellCoord::new(sheet, row, col),
+                    CellCoord::new(sheet, origin_row, origin_col),
+                    dv.formula1.as_deref(),
+                    registry,
+                ),
+                formula_num(
+                    wb,
+                    CellCoord::new(sheet, row, col),
+                    CellCoord::new(sheet, origin_row, origin_col),
+                    dv.formula2.as_deref(),
+                    registry,
+                ),
             )
         }
         DvType::List => {
             let text = display(wb, value);
             let Some(src) = dv.formula1.as_deref() else {
-                return true;
+                return false;
             };
-            let src = src.trim().trim_matches('"');
-            if src.contains(',') {
-                src.split(',').any(|p| p.trim() == text)
-            } else if let Ok(parsed) = crate::addr::parse_a1(src) {
-                let range = match parsed.kind {
-                    crate::addr::RefKind::Range(rg) => rg,
-                    crate::addr::RefKind::Cell(c) => crate::addr::RangeRef::from_corners(c, c),
-                };
-                let list_sheet = parsed
-                    .sheet
-                    .as_ref()
-                    .and_then(|spec| wb.sheet_by_name(&spec.start).map(|s| s.id))
-                    .unwrap_or(sheet);
-                list_contains(wb, list_sheet, range, &text)
-            } else {
-                src == text
-            }
+            resolve_list_source(wb, sheet, src)
+                .is_ok_and(|values| values.iter().any(|candidate| candidate == &text))
         }
-        DvType::Custom => formula_truthy(wb, dv.formula1.as_deref().unwrap_or("TRUE")),
+        DvType::Custom => formula_truthy_at(
+            wb,
+            CellCoord::new(sheet, row, col),
+            CellCoord::new(sheet, norm(dv.range).0, norm(dv.range).1),
+            dv.formula1.as_deref().unwrap_or("TRUE"),
+            registry,
+        ),
     }
 }
 
 fn cmp_num(n: f64, op: DvOp, lo: Option<f64>, hi: Option<f64>) -> bool {
     match op {
-        DvOp::Between => n >= lo.unwrap_or(n) && n <= hi.unwrap_or(n),
-        DvOp::NotBetween => n < lo.unwrap_or(n) || n > hi.unwrap_or(n),
+        DvOp::Between => lo.zip(hi).is_some_and(|(lo, hi)| n >= lo && n <= hi),
+        DvOp::NotBetween => lo.zip(hi).is_some_and(|(lo, hi)| n < lo || n > hi),
         DvOp::Equal => lo.is_some_and(|x| (n - x).abs() < 1e-12),
-        DvOp::NotEqual => lo.is_none_or(|x| (n - x).abs() >= 1e-12),
+        DvOp::NotEqual => lo.is_some_and(|x| (n - x).abs() >= 1e-12),
         DvOp::Greater => lo.is_some_and(|x| n > x),
         DvOp::Less => lo.is_some_and(|x| n < x),
         DvOp::GreaterEq => lo.is_some_and(|x| n >= x),
@@ -241,31 +364,78 @@ fn cmp_num(n: f64, op: DvOp, lo: Option<f64>, hi: Option<f64>) -> bool {
     }
 }
 
-fn parse_num(s: Option<&str>) -> Option<f64> {
-    s.and_then(|t| t.parse().ok())
+fn formula_num(
+    wb: &Workbook,
+    at: CellCoord,
+    origin: CellCoord,
+    src: Option<&str>,
+    registry: &FnRegistry,
+) -> Option<f64> {
+    crate::condfmt::eval_number_relative_with_registry(wb, at, origin, src?, registry)
 }
 
-fn list_contains(wb: &Workbook, sheet: SheetId, range: RangeRef, text: &str) -> bool {
+fn resolve_list_source(
+    wb: &Workbook,
+    default_sheet: SheetId,
+    source: &str,
+) -> Result<Vec<String>, CoreError> {
+    let source = source.trim().trim_start_matches('=');
+    if source.starts_with('"') && source.ends_with('"') && source.len() >= 2 {
+        return Ok(source[1..source.len() - 1]
+            .split(',')
+            .map(|value| value.trim().to_string())
+            .take(MAX_VALIDATION_LIST_ITEMS)
+            .collect());
+    }
+    let Ok(parsed) = crate::addr::parse_a1(source) else {
+        return Ok(vec![source.to_string()]);
+    };
+    let range = match parsed.kind {
+        crate::addr::RefKind::Range(range) => range,
+        crate::addr::RefKind::Cell(cell) => crate::addr::RangeRef::from_corners(cell, cell),
+    };
+    let sheet = if let Some(spec) = parsed.sheet {
+        wb.sheet_by_name(&spec.start)
+            .map(|sheet| sheet.id)
+            .ok_or_else(|| {
+                CoreError::sheet_name(format!("unknown list source sheet {:?}", spec.start))
+            })?
+    } else {
+        default_sheet
+    };
     let (r0, c0, r1, c1) = norm(range);
-    for r in r0..=r1 {
-        for c in c0..=c1 {
-            let slot = wb.get(sheet, r, c).ok().flatten();
-            let cell = display(wb, slot.map(|s| s.value).unwrap_or(Value::Empty));
-            if cell == text {
-                return true;
+    let sheet = wb
+        .sheet(sheet)
+        .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", sheet.index())))?;
+    let mut values = Vec::new();
+    values
+        .try_reserve(MAX_VALIDATION_LIST_ITEMS)
+        .map_err(|_| CoreError::new("validation.list", "dropdown allocation failed"))?;
+    for (_, _, slot) in sheet.store.iter_region(r0, c0, r1, c1) {
+        let value = display(wb, slot.value);
+        if !value.is_empty() {
+            values.push(value);
+            if values.len() >= MAX_VALIDATION_LIST_ITEMS {
+                break;
             }
         }
     }
-    false
+    Ok(values)
 }
 
-fn formula_truthy(wb: &Workbook, src: &str) -> bool {
+fn formula_truthy_at(
+    wb: &Workbook,
+    at: CellCoord,
+    origin: CellCoord,
+    src: &str,
+    registry: &FnRegistry,
+) -> bool {
     match src.trim() {
         "TRUE" | "1" => return true,
         "FALSE" | "0" | "" => return false,
         _ => {}
     }
-    crate::condfmt::eval_truthy(wb, src)
+    crate::condfmt::eval_truthy_relative_with_registry(wb, at, origin, src, registry)
 }
 
 fn display(wb: &Workbook, v: Value) -> String {

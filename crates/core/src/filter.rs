@@ -1,5 +1,7 @@
 //! AutoFilter model and apply (F-6.2).
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::addr::{RangeRef, SheetId};
@@ -8,7 +10,7 @@ use crate::value::Value;
 use crate::workbook::Workbook;
 
 /// One column's filter.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FilterColumn {
     /// 0-based column index inside the filter range.
     pub col_id: u16,
@@ -17,7 +19,7 @@ pub struct FilterColumn {
 }
 
 /// Filter criteria.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterCriteria {
     /// Inclusive value list (display text).
@@ -71,6 +73,84 @@ pub enum FilterCriteria {
     },
 }
 
+impl PartialEq for FilterCriteria {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Values(left), Self::Values(right)) => left == right,
+            (
+                Self::Text {
+                    op: left_op,
+                    value: left,
+                },
+                Self::Text {
+                    op: right_op,
+                    value: right,
+                },
+            ) => left_op == right_op && left == right,
+            (
+                Self::Number {
+                    op: left_op,
+                    value: left,
+                    value2: left2,
+                },
+                Self::Number {
+                    op: right_op,
+                    value: right,
+                    value2: right2,
+                },
+            ) => {
+                left_op == right_op
+                    && left.to_bits() == right.to_bits()
+                    && option_f64_bits_eq(*left2, *right2)
+            }
+            (
+                Self::TopN {
+                    n: left_n,
+                    percent: left_percent,
+                    bottom: left_bottom,
+                },
+                Self::TopN {
+                    n: right_n,
+                    percent: right_percent,
+                    bottom: right_bottom,
+                },
+            ) => left_n == right_n && left_percent == right_percent && left_bottom == right_bottom,
+            (Self::Average { below: left }, Self::Average { below: right }) => left == right,
+            (
+                Self::Color {
+                    fill: left_fill,
+                    argb: left_argb,
+                },
+                Self::Color {
+                    fill: right_fill,
+                    argb: right_argb,
+                },
+            ) => left_fill == right_fill && left_argb == right_argb,
+            (
+                Self::Period {
+                    year: left_year,
+                    month: left_month,
+                },
+                Self::Period {
+                    year: right_year,
+                    month: right_month,
+                },
+            ) => left_year == right_year && left_month == right_month,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for FilterCriteria {}
+
+fn option_f64_bits_eq(left: Option<f64>, right: Option<f64>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.to_bits() == right.to_bits(),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 /// Text match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -97,17 +177,52 @@ pub enum NumOp {
     LessEq,
     /// `=`.
     Equal,
+    /// `!=`.
+    NotEqual,
     /// Between.
     Between,
 }
 
 /// Saved AutoFilter.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFilter {
     /// Filtered range (usually includes header).
     pub range: RangeRef,
     /// Per-column criteria.
     pub columns: Vec<FilterColumn>,
+}
+
+/// Maximum distinct entries returned for a filter dropdown.
+pub const MAX_FILTER_VALUE_OPTIONS: usize = 10_000;
+
+/// Distinct display values for a filter column, optionally narrowed by search.
+pub fn filter_value_options(
+    wb: &Workbook,
+    sheet: SheetId,
+    range: RangeRef,
+    col_id: u16,
+    search: &str,
+) -> Result<Vec<String>, CoreError> {
+    let (r0, c0, r1, c1) = norm(range);
+    let col = c0
+        .checked_add(col_id)
+        .filter(|col| *col <= c1)
+        .ok_or_else(|| CoreError::new("filter.column", "filter column is outside the range"))?;
+    wb.sheet(sheet)
+        .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", sheet.index())))?;
+    let needle = search.to_lowercase();
+    let mut values = BTreeSet::new();
+    for row in r0.saturating_add(1)..=r1 {
+        let value = wb
+            .get(sheet, row, col)?
+            .map_or_else(String::new, |slot| display(wb, slot.value));
+        if (needle.is_empty() || value.to_lowercase().contains(&needle))
+            && values.len() < MAX_FILTER_VALUE_OPTIONS
+        {
+            values.insert(value);
+        }
+    }
+    Ok(values.into_iter().collect())
 }
 
 /// Apply `filter` by hiding non-matching data rows (header stays visible).
@@ -139,26 +254,60 @@ pub fn apply_filter(
     }
     let stored = filter.clone();
     wb.mutate_sheet_edit(sheet, |s| {
+        for row in std::mem::take(&mut s.filter_hidden_rows) {
+            s.geometry.rows.set_hidden(row, false)?;
+        }
         s.autofilter = Some(stored);
         for (row, hidden_row) in hide {
-            s.geometry.rows.set_hidden(row, hidden_row)?;
+            if hidden_row && !s.geometry.rows.is_hidden(row)? {
+                s.geometry.rows.set_hidden(row, true)?;
+                s.filter_hidden_rows.insert(row);
+            }
         }
         Ok(())
     })?;
     Ok(hidden)
 }
 
+/// Restore an imported AutoFilter and identify rows hidden by its criteria.
+///
+/// SpreadsheetML does not label row-hidden flags as manual versus filtered.
+/// A hidden row that fails the saved criteria is therefore treated as
+/// filter-hidden, while hidden rows that pass remain manual.
+pub fn restore_filter(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    filter: &AutoFilter,
+) -> Result<(), CoreError> {
+    let (r0, c0, r1, c1) = norm(filter.range);
+    let nums = collect_nums(wb, sheet, r0, c0, r1, c1, filter)?;
+    let mut filtered_rows = Vec::new();
+    for row in r0.saturating_add(1)..=r1 {
+        let fails = filter.columns.iter().any(|column| {
+            let col = c0.saturating_add(column.col_id);
+            col <= c1 && !matches_row(wb, sheet, row, col, column.col_id, &column.criteria, &nums)
+        });
+        if fails {
+            filtered_rows.push(row);
+        }
+    }
+    let stored = filter.clone();
+    wb.mutate_sheet_edit(sheet, |sheet| {
+        sheet.autofilter = Some(stored);
+        sheet.filter_hidden_rows.clear();
+        for row in filtered_rows {
+            sheet.geometry.rows.set_hidden(row, true)?;
+            sheet.filter_hidden_rows.insert(row);
+        }
+        Ok(())
+    })
+}
+
 /// Clear AutoFilter and unhide its rows.
 pub fn clear_filter(wb: &mut Workbook, sheet: SheetId) -> Result<(), CoreError> {
-    let range = wb
-        .sheet(sheet)
-        .and_then(|s| s.autofilter.as_ref().map(|f| f.range));
     wb.mutate_sheet_edit(sheet, |s| {
-        if let Some(range) = range {
-            let (r0, _, r1, _) = norm(range);
-            for r in r0..=r1 {
-                s.geometry.rows.set_hidden(r, false)?;
-            }
+        for row in std::mem::take(&mut s.filter_hidden_rows) {
+            s.geometry.rows.set_hidden(row, false)?;
         }
         s.autofilter = None;
         Ok(())
@@ -259,6 +408,7 @@ fn matches_row(
                 NumOp::Less => n < *value,
                 NumOp::LessEq => n <= *value,
                 NumOp::Equal => (n - *value).abs() < 1e-12,
+                NumOp::NotEqual => (n - *value).abs() >= 1e-12,
                 NumOp::Between => {
                     let hi = value2.unwrap_or(*value);
                     n >= *value && n <= hi
@@ -281,7 +431,7 @@ fn matches_row(
                 sorted.reverse();
             }
             let take = if *percent {
-                ((sorted.len() as u32 * *n) / 100).max(1) as usize
+                (sorted.len() as u32 * (*n).min(100)).div_ceil(100).max(1) as usize
             } else {
                 (*n as usize).min(sorted.len())
             };

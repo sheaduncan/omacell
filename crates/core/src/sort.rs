@@ -3,12 +3,16 @@
 use serde::{Deserialize, Serialize};
 
 use crate::addr::{RangeRef, SheetId};
+use crate::condfmt::{CfVisual, ResolvedCfOverlay, resolve_overlay};
 use crate::error::CoreError;
 use crate::formula::{RewriteOp, rewrite_print};
 use crate::storage::CellSlot;
 use crate::style::{Color, Fill};
 use crate::value::Value;
 use crate::workbook::Workbook;
+
+type RowRecord = (u32, usize, Vec<CellSlot>, Vec<Option<u8>>);
+type ColRecord = (u16, usize, Vec<CellSlot>, Vec<Option<u8>>);
 
 /// What a sort key compares.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +25,8 @@ pub enum SortBy {
     FillColor,
     /// Font colour ARGB.
     FontColor,
+    /// Resolved conditional-format icon bucket.
+    Icon,
 }
 
 /// One sort key.
@@ -56,6 +62,64 @@ pub struct SortSpec {
     pub left_to_right: bool,
 }
 
+/// Heuristically detect a header row (or column for left-to-right sorting).
+///
+/// A header is detected when the first record has text over non-text data, a
+/// distinct style, or a non-formula label over formula data. Ambiguous all-text
+/// data is left as data so callers can override explicitly.
+pub fn detect_header(
+    wb: &Workbook,
+    sheet: SheetId,
+    range: RangeRef,
+    left_to_right: bool,
+) -> Result<bool, CoreError> {
+    let (r0, c0, r1, c1) = norm(range);
+    if (!left_to_right && r0 == r1) || (left_to_right && c0 == c1) {
+        return Ok(false);
+    }
+    let mut style_signals = 0usize;
+    let pair_count = if left_to_right {
+        for row in r0..=r1 {
+            let (strong, style) = header_pair(wb, sheet, (row, c0), (row, c0 + 1))?;
+            if strong {
+                return Ok(true);
+            }
+            style_signals += usize::from(style);
+        }
+        usize::try_from(r1 - r0 + 1).unwrap_or(usize::MAX)
+    } else {
+        for col in c0..=c1 {
+            let (strong, style) = header_pair(wb, sheet, (r0, col), (r0 + 1, col))?;
+            if strong {
+                return Ok(true);
+            }
+            style_signals += usize::from(style);
+        }
+        usize::from(c1 - c0) + 1
+    };
+    Ok(style_signals > 0 && style_signals.saturating_mul(2) >= pair_count)
+}
+
+fn header_pair(
+    wb: &Workbook,
+    sheet: SheetId,
+    first: (u32, u16),
+    second: (u32, u16),
+) -> Result<(bool, bool), CoreError> {
+    let first = wb.get(sheet, first.0, first.1)?.copied();
+    let second = wb.get(sheet, second.0, second.1)?.copied();
+    let first_value = first.map(|slot| slot.value).unwrap_or(Value::Empty);
+    let second_value = second.map(|slot| slot.value).unwrap_or(Value::Empty);
+    let strong = (matches!(first_value, Value::Text(_))
+        && !matches!(second_value, Value::Text(_) | Value::Empty))
+        || (first.is_some_and(|slot| slot.formula.is_none())
+            && second.is_some_and(|slot| slot.formula.is_some()));
+    Ok((
+        strong,
+        first.map(|slot| slot.style) != second.map(|slot| slot.style),
+    ))
+}
+
 /// Sort `range` on `sheet`. Hidden rows/cols are left in place.
 pub fn sort_range(
     wb: &mut Workbook,
@@ -66,6 +130,21 @@ pub fn sort_range(
     let spec = spec.clone();
     wb.transact_try(move |wb| {
         let (r0, c0, r1, c1) = norm(range);
+        let max_offset = if spec.left_to_right {
+            r1 - r0
+        } else {
+            u32::from(c1 - c0)
+        };
+        if let Some(key) = spec
+            .keys
+            .iter()
+            .find(|key| u32::from(key.offset) > max_offset)
+        {
+            return Err(CoreError::new(
+                "sort.key",
+                format!("sort key offset {} is outside the range", key.offset),
+            ));
+        }
         if spec.left_to_right {
             sort_columns(wb, sheet, r0, c0, r1, c1, &spec)
         } else {
@@ -95,16 +174,36 @@ fn sort_rows(
     if rows.len() < 2 {
         return Ok(0);
     }
-    let mut decorated: Vec<(u32, usize, Vec<CellSlot>)> = Vec::new();
+    let icon_overlay = if spec.keys.iter().any(|key| key.by == SortBy::Icon) {
+        Some(resolve_overlay(
+            wb,
+            sheet,
+            RangeRef::from_corners(
+                crate::addr::CellRef::new(r0, c0)?,
+                crate::addr::CellRef::new(r1, c1)?,
+            ),
+        )?)
+    } else {
+        None
+    };
+    let mut decorated: Vec<RowRecord> = Vec::new();
     for (ord, &r) in rows.iter().enumerate() {
         let mut slots = Vec::new();
         for c in c0..=c1 {
             slots.push(wb.get(sheet, r, c)?.copied().unwrap_or(empty_slot()));
         }
-        decorated.push((r, ord, slots));
+        let icons = spec
+            .keys
+            .iter()
+            .map(|key| {
+                c0.checked_add(key.offset)
+                    .and_then(|col| icon_at(icon_overlay.as_ref(), r, col))
+            })
+            .collect();
+        decorated.push((r, ord, slots, icons));
     }
     decorated.sort_by(|a, b| {
-        let ord = cmp_records(wb, &a.2, &b.2, spec);
+        let ord = cmp_records(wb, &a.2, &b.2, &a.3, &b.3, spec);
         if ord == std::cmp::Ordering::Equal {
             a.1.cmp(&b.1)
         } else {
@@ -112,7 +211,7 @@ fn sort_rows(
         }
     });
     let mut moved = 0u32;
-    for (dest_row, (src_row, _, slots)) in rows.iter().zip(decorated) {
+    for (dest_row, (src_row, _, slots, _)) in rows.iter().zip(decorated) {
         let drow = *dest_row as i32 - src_row as i32;
         if drow != 0 {
             moved += 1;
@@ -146,16 +245,36 @@ fn sort_columns(
     if cols.len() < 2 {
         return Ok(0);
     }
-    let mut decorated: Vec<(u16, usize, Vec<CellSlot>)> = Vec::new();
+    let icon_overlay = if spec.keys.iter().any(|key| key.by == SortBy::Icon) {
+        Some(resolve_overlay(
+            wb,
+            sheet,
+            RangeRef::from_corners(
+                crate::addr::CellRef::new(r0, c0)?,
+                crate::addr::CellRef::new(r1, c1)?,
+            ),
+        )?)
+    } else {
+        None
+    };
+    let mut decorated: Vec<ColRecord> = Vec::new();
     for (ord, &c) in cols.iter().enumerate() {
         let mut slots = Vec::new();
         for r in r0..=r1 {
             slots.push(wb.get(sheet, r, c)?.copied().unwrap_or(empty_slot()));
         }
-        decorated.push((c, ord, slots));
+        let icons = spec
+            .keys
+            .iter()
+            .map(|key| {
+                r0.checked_add(u32::from(key.offset))
+                    .and_then(|row| icon_at(icon_overlay.as_ref(), row, c))
+            })
+            .collect();
+        decorated.push((c, ord, slots, icons));
     }
     decorated.sort_by(|a, b| {
-        let ord = cmp_records(wb, &a.2, &b.2, spec);
+        let ord = cmp_records(wb, &a.2, &b.2, &a.3, &b.3, spec);
         if ord == std::cmp::Ordering::Equal {
             a.1.cmp(&b.1)
         } else {
@@ -163,7 +282,7 @@ fn sort_columns(
         }
     });
     let mut moved = 0u32;
-    for (dest_col, (src_col, _, slots)) in cols.iter().zip(decorated) {
+    for (dest_col, (src_col, _, slots, _)) in cols.iter().zip(decorated) {
         let dcol = i32::from(*dest_col) - i32::from(src_col);
         if dcol != 0 {
             moved += 1;
@@ -212,24 +331,63 @@ fn cmp_records(
     wb: &Workbook,
     a: &[CellSlot],
     b: &[CellSlot],
+    a_icons: &[Option<u8>],
+    b_icons: &[Option<u8>],
     spec: &SortSpec,
 ) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    for key in &spec.keys {
+    for (key_index, key) in spec.keys.iter().enumerate() {
         let idx = usize::from(key.offset);
         let oa = a.get(idx);
         let ob = b.get(idx);
         let ord = match key.by {
-            SortBy::Value => cmp_value(wb, oa, ob, spec.case_sensitive, &key.custom_list),
+            SortBy::Value => cmp_value(
+                wb,
+                oa,
+                ob,
+                spec.case_sensitive,
+                &key.custom_list,
+                key.descending,
+            ),
             SortBy::FillColor => cmp_u32(fill_argb(wb, oa), fill_argb(wb, ob)),
             SortBy::FontColor => cmp_u32(font_argb(wb, oa), font_argb(wb, ob)),
+            SortBy::Icon => cmp_icon(
+                a_icons.get(key_index).copied().flatten(),
+                b_icons.get(key_index).copied().flatten(),
+                key.descending,
+            ),
         };
-        let ord = if key.descending { ord.reverse() } else { ord };
+        let ord = if key.descending && !matches!(key.by, SortBy::Value | SortBy::Icon) {
+            ord.reverse()
+        } else {
+            ord
+        };
         if ord != Ordering::Equal {
             return ord;
         }
     }
     Ordering::Equal
+}
+
+fn icon_at(cache: Option<&ResolvedCfOverlay>, row: u32, col: u16) -> Option<u8> {
+    match cache?.get(row, col)?.visual {
+        Some(CfVisual::Icon { index, .. }) => Some(index),
+        _ => None,
+    }
+}
+
+fn cmp_icon(a: Option<u8>, b: Option<u8>, descending: bool) -> std::cmp::Ordering {
+    let order = match (a, b) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    };
+    if descending && a.is_some() && b.is_some() {
+        order.reverse()
+    } else {
+        order
+    }
 }
 
 fn cmp_u32(a: u32, b: u32) -> std::cmp::Ordering {
@@ -279,14 +437,21 @@ fn cmp_value(
     b: Option<&CellSlot>,
     case: bool,
     list: &[String],
+    descending: bool,
 ) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let va = a.map(|s| s.value).unwrap_or(Value::Empty);
     let vb = b.map(|s| s.value).unwrap_or(Value::Empty);
     let ra = type_rank(&va);
     let rb = type_rank(&vb);
-    if ra != rb {
+    // Excel keeps blanks at the bottom for both ascending and descending
+    // sorts. Reversing the complete type comparator would put them first.
+    if ra == 4 || rb == 4 {
         return ra.cmp(&rb);
+    }
+    if ra != rb {
+        let order = ra.cmp(&rb);
+        return if descending { order.reverse() } else { order };
     }
     if !list.is_empty() {
         let sa = display(wb, &va);
@@ -294,10 +459,19 @@ fn cmp_value(
         let ia = list_rank(list, &sa);
         let ib = list_rank(list, &sb);
         if ia != ib {
-            return ia.cmp(&ib);
+            let matched = match (ia == usize::MAX, ib == usize::MAX) {
+                (false, true) => return Ordering::Less,
+                (true, false) => return Ordering::Greater,
+                _ => ia.cmp(&ib),
+            };
+            return if descending {
+                matched.reverse()
+            } else {
+                matched
+            };
         }
     }
-    match (va, vb) {
+    let order = match (va, vb) {
         (Value::Number(x), Value::Number(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(&y),
         (Value::Text(i), Value::Text(j)) => {
@@ -311,7 +485,8 @@ fn cmp_value(
         }
         (Value::Error(x), Value::Error(y)) => x.as_str().cmp(y.as_str()),
         _ => Ordering::Equal,
-    }
+    };
+    if descending { order.reverse() } else { order }
 }
 
 fn list_rank(list: &[String], s: &str) -> usize {

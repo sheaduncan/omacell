@@ -120,7 +120,7 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
             "threaded_comment" => load_threaded_comment(&mut wb, &fields[1..])?,
             "hyperlink" => load_hyperlink(&mut wb, &fields[1..])?,
             "table" => load_table(&mut wb, &fields[1..])?,
-            "extra" | "cf" | "validation" => load_extra(&wb, &mut extras, &fields)?,
+            "extra" | "cf" | "validation" => load_extra(&mut wb, &mut extras, &fields)?,
             "custom" => load_custom(&mut wb, &mut custom_names, &fields[1..])?,
             "aicache" => {}
             "changeset" => {
@@ -936,7 +936,7 @@ fn load_table(wb: &mut Workbook, fields: &[Field]) -> Result<(), CoreError> {
 }
 
 fn load_extra(
-    wb: &Workbook,
+    wb: &mut Workbook,
     extras: &mut HashMap<String, WorksheetExtras>,
     fields: &[Field],
 ) -> Result<(), CoreError> {
@@ -946,21 +946,55 @@ fn load_extra(
                 return Err(error::omc_parse("extra record needs sheet, kind, payload"));
             }
             let sheet = &fields[1].value;
-            wb.resolve_sheet_name(sheet)?;
+            let sheet_id = wb.resolve_sheet_name(sheet)?;
             let kind = &fields[2].value;
             let payload = &fields[3].value;
-            let extra = extras.entry(sheet.clone()).or_default();
             match kind.as_str() {
+                "autofilter_model" => {
+                    let filter = serde_json::from_str(payload)
+                        .map_err(|e| error::omc_parse(format!("invalid autofilter model: {e}")))?;
+                    wb.set_autofilter(sheet_id, Some(filter))?;
+                }
+                "validation_model" => {
+                    let rules = serde_json::from_str(payload)
+                        .map_err(|e| error::omc_parse(format!("invalid validation model: {e}")))?;
+                    wb.set_validations(sheet_id, rules)?;
+                }
+                "condfmt_model" => {
+                    let rules = serde_json::from_str(payload)
+                        .map_err(|e| error::omc_parse(format!("invalid condfmt model: {e}")))?;
+                    wb.set_cond_formats(sheet_id, rules)?;
+                }
                 "autofilter" => {
+                    let extra = extras.entry(sheet.clone()).or_default();
                     extra.autofilter = Some(
                         String::from_utf8(decode_blob(payload))
                             .map_err(|_| error::omc_parse("autofilter is not UTF-8"))?,
                     );
                 }
-                "cf" => extra.conditional_formatting_xml.push(decode_blob(payload)),
-                "dv" => extra.data_validations_xml.push(decode_blob(payload)),
-                "print" => extra.print_xml.push(decode_blob(payload)),
-                "sparkline" => extra.sparkline_xml.push(decode_blob(payload)),
+                "autofilter_xml" => {
+                    extras.entry(sheet.clone()).or_default().autofilter_xml = decode_blob(payload);
+                }
+                "cf" => extras
+                    .entry(sheet.clone())
+                    .or_default()
+                    .conditional_formatting_xml
+                    .push(decode_blob(payload)),
+                "dv" => extras
+                    .entry(sheet.clone())
+                    .or_default()
+                    .data_validations_xml
+                    .push(decode_blob(payload)),
+                "print" => extras
+                    .entry(sheet.clone())
+                    .or_default()
+                    .print_xml
+                    .push(decode_blob(payload)),
+                "sparkline" => extras
+                    .entry(sheet.clone())
+                    .or_default()
+                    .sparkline_xml
+                    .push(decode_blob(payload)),
                 _ => return Err(error::omc_parse(format!("unknown extra kind {kind}"))),
             }
         }

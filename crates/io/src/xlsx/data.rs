@@ -1,10 +1,11 @@
 //! Parse and emit AutoFilter, data validation, and conditional formatting.
 
 use omacell_core::addr::{RangeRef, RefKind, parse_a1};
-use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat};
+use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CfTimePeriod, CondFormat};
 use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria, NumOp, TextOp};
 use omacell_core::style::Color;
 use omacell_core::validation::{DataValidation, DvErrorStyle, DvOp, DvType};
+use omacell_core::workbook::Workbook;
 
 use super::xml::{XmlEvent, XmlReader, attr, escape};
 
@@ -16,11 +17,13 @@ pub(crate) struct AutoFilterParser {
     columns: Vec<FilterColumn>,
     col_id: u16,
     values: Vec<String>,
+    customs: Vec<(String, String)>,
+    custom_and: bool,
     pending: Option<FilterCriteria>,
 }
 
 impl AutoFilterParser {
-    pub(crate) fn feed(&mut self, ev: &XmlEvent) {
+    pub(crate) fn feed(&mut self, ev: &XmlEvent, dxfs: &[CfDxf]) {
         match ev {
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "autoFilter" =>
@@ -45,10 +48,15 @@ impl AutoFilterParser {
                     self.values.push(v.to_string());
                 }
             }
+            XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
+                if self.in_filter && name == "customFilters" =>
+            {
+                self.custom_and = attr(attrs, "and").is_some_and(truthy);
+            }
             XmlEvent::Empty { name, attrs } if self.in_filter && name == "customFilter" => {
                 let val = attr(attrs, "val").unwrap_or("").to_string();
                 let op = attr(attrs, "operator").unwrap_or("equal");
-                self.pending = Some(custom_criteria(op, &val));
+                self.customs.push((op.to_string(), val));
             }
             XmlEvent::Empty { name, attrs } if self.in_filter && name == "top10" => {
                 let n = attr(attrs, "val")
@@ -57,6 +65,29 @@ impl AutoFilterParser {
                 let percent = attr(attrs, "percent").is_some_and(truthy);
                 let bottom = attr(attrs, "top").is_some_and(|s| s == "0" || s == "false");
                 self.pending = Some(FilterCriteria::TopN { n, percent, bottom });
+            }
+            XmlEvent::Empty { name, attrs } if self.in_filter && name == "dynamicFilter" => {
+                self.pending = match attr(attrs, "type").unwrap_or("") {
+                    "aboveAverage" => Some(FilterCriteria::Average { below: false }),
+                    "belowAverage" => Some(FilterCriteria::Average { below: true }),
+                    _ => None,
+                };
+            }
+            XmlEvent::Empty { name, attrs } if self.in_filter && name == "colorFilter" => {
+                let fill = attr(attrs, "cellColor").is_none_or(truthy);
+                let argb = attr(attrs, "dxfId")
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .and_then(|index| dxfs.get(index))
+                    .and_then(|dxf| if fill { dxf.fill } else { dxf.font })
+                    .and_then(rgb_argb)
+                    .unwrap_or(0);
+                self.pending = Some(FilterCriteria::Color { fill, argb });
+            }
+            XmlEvent::Empty { name, attrs } if self.in_filter && name == "dateGroupItem" => {
+                self.pending = Some(FilterCriteria::Period {
+                    year: attr(attrs, "year").and_then(|value| value.parse().ok()),
+                    month: attr(attrs, "month").and_then(|value| value.parse().ok()),
+                });
             }
             XmlEvent::End { name } if self.in_filter && name == "filterColumn" => {
                 self.flush_column();
@@ -75,14 +106,20 @@ impl AutoFilterParser {
     }
 
     fn flush_column(&mut self) {
-        let criteria = self.pending.take().or_else(|| {
-            if self.values.is_empty() {
-                None
-            } else {
-                Some(FilterCriteria::Values(std::mem::take(&mut self.values)))
-            }
-        });
+        let criteria = self
+            .pending
+            .take()
+            .or_else(|| custom_criteria(&self.customs, self.custom_and))
+            .or_else(|| {
+                if self.values.is_empty() {
+                    None
+                } else {
+                    Some(FilterCriteria::Values(std::mem::take(&mut self.values)))
+                }
+            });
         self.values.clear();
+        self.customs.clear();
+        self.custom_and = false;
         if let Some(criteria) = criteria {
             self.columns.push(FilterColumn {
                 col_id: self.col_id,
@@ -92,30 +129,91 @@ impl AutoFilterParser {
     }
 }
 
-fn custom_criteria(op: &str, val: &str) -> FilterCriteria {
+fn custom_criteria(filters: &[(String, String)], custom_and: bool) -> Option<FilterCriteria> {
+    if custom_and && filters.len() >= 2 {
+        let mut low = None;
+        let mut high = None;
+        for (op, value) in filters {
+            let Ok(value) = value.parse::<f64>() else {
+                continue;
+            };
+            match op.as_str() {
+                "greaterThan" | "greaterThanOrEqual" => low = Some(value),
+                "lessThan" | "lessThanOrEqual" => high = Some(value),
+                _ => {}
+            }
+        }
+        if let (Some(value), Some(value2)) = (low, high) {
+            return Some(FilterCriteria::Number {
+                op: NumOp::Between,
+                value,
+                value2: Some(value2),
+            });
+        }
+    }
+    let (op, val) = filters.first()?;
     if let Ok(n) = val.parse::<f64>() {
-        let num_op = match op {
+        let num_op = match op.as_str() {
             "greaterThan" => NumOp::Greater,
             "greaterThanOrEqual" => NumOp::GreaterEq,
             "lessThan" => NumOp::Less,
             "lessThanOrEqual" => NumOp::LessEq,
-            "notEqual" => NumOp::Equal,
+            "notEqual" => NumOp::NotEqual,
             _ => NumOp::Equal,
         };
-        return FilterCriteria::Number {
+        return Some(FilterCriteria::Number {
             op: num_op,
             value: n,
             value2: None,
-        };
+        });
     }
-    let text_op = match op {
-        "beginsWith" => TextOp::Begins,
-        "endsWith" => TextOp::Ends,
-        _ => TextOp::Contains,
+    let leading = val.starts_with('*');
+    let trailing = has_unescaped_trailing_star(val) && val.len() > usize::from(leading);
+    if leading || trailing {
+        let text_op = match (leading, trailing) {
+            (true, true) => TextOp::Contains,
+            (true, false) => TextOp::Ends,
+            (false, true) => TextOp::Begins,
+            (false, false) => TextOp::Contains,
+        };
+        let start = usize::from(leading);
+        let end = val.len().saturating_sub(usize::from(trailing));
+        return Some(FilterCriteria::Text {
+            op: text_op,
+            value: wildcard_unescape(&val[start..end]),
+        });
+    }
+    Some(FilterCriteria::Values(vec![wildcard_unescape(val)]))
+}
+
+fn has_unescaped_trailing_star(value: &str) -> bool {
+    let Some(prefix) = value.strip_suffix('*') else {
+        return false;
     };
-    FilterCriteria::Text {
-        op: text_op,
-        value: val.trim_matches('*').to_string(),
+    prefix.chars().rev().take_while(|ch| *ch == '~').count() % 2 == 0
+}
+
+fn wildcard_unescape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '~' {
+            if let Some(escaped) = chars.next() {
+                out.push(escaped);
+            } else {
+                out.push(ch);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn rgb_argb(color: Color) -> Option<u32> {
+    match color {
+        Color::Rgb { argb } => Some(argb),
+        _ => None,
     }
 }
 
@@ -135,19 +233,27 @@ pub(crate) fn parse_validations(blobs: &[Vec<u8>]) -> Vec<DataValidation> {
                 XmlEvent::Empty { name, attrs } if name == "dataValidation" => {
                     out.push(parse_dv_attrs(&attrs));
                 }
-                XmlEvent::Start { name, .. } if name == "formula1" => in_f1 = true,
-                XmlEvent::Start { name, .. } if name == "formula2" => in_f2 = true,
+                XmlEvent::Start { name, .. } if name == "formula1" => {
+                    in_f1 = true;
+                    if let Some(dv) = current.as_mut() {
+                        dv.formula1 = Some(String::new());
+                    }
+                }
+                XmlEvent::Start { name, .. } if name == "formula2" => {
+                    in_f2 = true;
+                    if let Some(dv) = current.as_mut() {
+                        dv.formula2 = Some(String::new());
+                    }
+                }
                 XmlEvent::Text(t) if in_f1 => {
                     if let Some(dv) = current.as_mut() {
-                        dv.formula1 = Some(t);
+                        dv.formula1.get_or_insert_with(String::new).push_str(&t);
                     }
-                    in_f1 = false;
                 }
                 XmlEvent::Text(t) if in_f2 => {
                     if let Some(dv) = current.as_mut() {
-                        dv.formula2 = Some(t);
+                        dv.formula2.get_or_insert_with(String::new).push_str(&t);
                     }
-                    in_f2 = false;
                 }
                 XmlEvent::End { name } if name == "formula1" => in_f1 = false,
                 XmlEvent::End { name } if name == "formula2" => in_f2 = false,
@@ -190,17 +296,49 @@ pub(crate) fn parse_cond_formats(blobs: &[Vec<u8>], dxfs: &[CfDxf]) -> Vec<CondF
                     formulas.clear();
                     out.push(parse_cf_rule(&attrs, sqref, dxfs));
                 }
-                XmlEvent::Start { name, .. } if name == "formula" => in_formula = true,
+                XmlEvent::Start { name, .. } if name == "formula" => {
+                    in_formula = true;
+                    formulas.push(String::new());
+                }
                 XmlEvent::Text(t) if in_formula => {
-                    formulas.push(t);
-                    in_formula = false;
+                    if let Some(formula) = formulas.last_mut() {
+                        formula.push_str(&t);
+                    }
                 }
                 XmlEvent::End { name } if name == "formula" => in_formula = false,
                 XmlEvent::Empty { name, attrs } if name == "color" => {
+                    if let Some(rule) = current.as_mut() {
+                        let color = parse_cf_color(&attrs);
+                        match &mut rule.kind {
+                            CfKind::ColorScale { colors } => colors.push(color),
+                            CfKind::DataBar {
+                                color: bar_color, ..
+                            } => *bar_color = color,
+                            _ => {}
+                        }
+                    }
+                }
+                XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
+                    if name == "dataBar" =>
+                {
                     if let Some(rule) = current.as_mut()
-                        && let CfKind::ColorScale { colors } = &mut rule.kind
+                        && let CfKind::DataBar { gradient, .. } = &mut rule.kind
                     {
-                        colors.push(parse_rgb(attr(&attrs, "rgb")));
+                        *gradient = attr(&attrs, "gradient").is_none_or(truthy);
+                    }
+                }
+                XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
+                    if name == "iconSet" =>
+                {
+                    if let Some(rule) = current.as_mut()
+                        && let CfKind::IconSet { icons } = &mut rule.kind
+                    {
+                        *icons = attr(&attrs, "iconSet")
+                            .and_then(|name| name.as_bytes().first().copied())
+                            .and_then(|digit| char::from(digit).to_digit(10))
+                            .and_then(|count| u8::try_from(count).ok())
+                            .filter(|count| (3..=5).contains(count))
+                            .unwrap_or(3);
                     }
                 }
                 XmlEvent::End { name } if name == "cfRule" => {
@@ -242,7 +380,7 @@ fn parse_cf_rule(attrs: &[(String, String)], range: RangeRef, dxfs: &[CfDxf]) ->
     let kind_name = attr(attrs, "type").unwrap_or("cellIs");
     let op = cf_op(attr(attrs, "operator").unwrap_or(""));
     let kind = match kind_name {
-        "containsText" => CfKind::ContainsText(String::new()),
+        "containsText" => CfKind::ContainsText(attr(attrs, "text").unwrap_or("").to_string()),
         "containsBlanks" => CfKind::Blanks,
         "containsErrors" => CfKind::Errors,
         "duplicateValues" => CfKind::Duplicate,
@@ -257,17 +395,22 @@ fn parse_cf_rule(attrs: &[(String, String)], range: RangeRef, dxfs: &[CfDxf]) ->
         "aboveAverage" => CfKind::Average {
             below: attr(attrs, "aboveAverage").is_some_and(|s| s == "0"),
         },
-        "colorScale" => CfKind::ColorScale {
-            colors: vec![
-                Color::Rgb { argb: 0xFFF8_695E },
-                Color::Rgb { argb: 0xFF63_BE7B },
-            ],
-        },
+        "timePeriod" => CfKind::TimePeriod(parse_time_period(
+            attr(attrs, "timePeriod").unwrap_or("today"),
+        )),
+        "colorScale" => CfKind::ColorScale { colors: Vec::new() },
         "dataBar" => CfKind::DataBar {
             color: Color::Rgb { argb: 0xFF63_8EC6 },
-            gradient: true,
+            gradient: attr(attrs, "gradient").is_none_or(truthy),
         },
-        "iconSet" => CfKind::IconSet { icons: 3 },
+        "iconSet" => CfKind::IconSet {
+            icons: attr(attrs, "iconSet")
+                .and_then(|name| name.as_bytes().first().copied())
+                .and_then(|digit| char::from(digit).to_digit(10))
+                .and_then(|count| u8::try_from(count).ok())
+                .filter(|count| (3..=5).contains(count))
+                .unwrap_or(3),
+        },
         "expression" => CfKind::Formula(String::new()),
         _ => CfKind::CellIs {
             op,
@@ -300,7 +443,7 @@ fn finish_formulas(mut rule: CondFormat, formulas: &[String]) -> CondFormat {
             }
             *formula2 = formulas.get(1).cloned();
         }
-        CfKind::ContainsText(s) | CfKind::Formula(s) => {
+        CfKind::Formula(s) => {
             if let Some(f) = formulas.first() {
                 *s = f.clone();
             }
@@ -324,6 +467,24 @@ fn parse_rgb(s: Option<&str>) -> Color {
     Color::Rgb { argb }
 }
 
+fn parse_cf_color(attrs: &[(String, String)]) -> Color {
+    if let Some(rgb) = attr(attrs, "rgb") {
+        return parse_rgb(Some(rgb));
+    }
+    if let Some(theme) = attr(attrs, "theme").and_then(|value| value.parse().ok()) {
+        return Color::Theme {
+            theme,
+            tint: attr(attrs, "tint")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0.0),
+        };
+    }
+    if let Some(index) = attr(attrs, "indexed").and_then(|value| value.parse().ok()) {
+        return Color::Indexed { index };
+    }
+    Color::Auto
+}
+
 fn cf_op(s: &str) -> CfOp {
     match s {
         "lessThan" => CfOp::Less,
@@ -334,6 +495,21 @@ fn cf_op(s: &str) -> CfOp {
         "lessThanOrEqual" => CfOp::LessEq,
         "notEqual" => CfOp::NotEqual,
         _ => CfOp::Greater,
+    }
+}
+
+fn parse_time_period(value: &str) -> CfTimePeriod {
+    match value {
+        "yesterday" => CfTimePeriod::Yesterday,
+        "tomorrow" => CfTimePeriod::Tomorrow,
+        "last7Days" => CfTimePeriod::Last7Days,
+        "thisWeek" => CfTimePeriod::ThisWeek,
+        "lastWeek" => CfTimePeriod::LastWeek,
+        "nextWeek" => CfTimePeriod::NextWeek,
+        "thisMonth" => CfTimePeriod::ThisMonth,
+        "lastMonth" => CfTimePeriod::LastMonth,
+        "nextMonth" => CfTimePeriod::NextMonth,
+        _ => CfTimePeriod::Today,
     }
 }
 
@@ -393,7 +569,7 @@ fn truthy(s: &str) -> bool {
 }
 
 /// Modeled `<autoFilter>` XML.
-pub(crate) fn modeled_autofilter(filter: &AutoFilter) -> String {
+pub(crate) fn modeled_autofilter(filter: &AutoFilter, dxfs: &[CfDxf]) -> String {
     let mut s = format!(r#"<autoFilter ref="{}">"#, escape(&filter.range.to_a1()));
     for col in &filter.columns {
         s.push_str(&format!(r#"<filterColumn colId="{}">"#, col.col_id));
@@ -406,14 +582,15 @@ pub(crate) fn modeled_autofilter(filter: &AutoFilter) -> String {
                 s.push_str("</filters>");
             }
             FilterCriteria::Text { op, value } => {
-                let operator = match op {
-                    TextOp::Begins => "beginsWith",
-                    TextOp::Ends => "endsWith",
-                    TextOp::Contains => "contains",
+                let value = wildcard_escape(value);
+                let pattern = match op {
+                    TextOp::Begins => format!("{value}*"),
+                    TextOp::Ends => format!("*{value}"),
+                    TextOp::Contains => format!("*{value}*"),
                 };
                 s.push_str(&format!(
-                    r#"<customFilters><customFilter operator="{operator}" val="{}"/></customFilters>"#,
-                    escape(value)
+                    r#"<customFilters><customFilter operator="equal" val="{}"/></customFilters>"#,
+                    escape(&pattern)
                 ));
             }
             FilterCriteria::Number { op, value, value2 } => {
@@ -423,10 +600,16 @@ pub(crate) fn modeled_autofilter(filter: &AutoFilter) -> String {
                     NumOp::Less => "lessThan",
                     NumOp::LessEq => "lessThanOrEqual",
                     NumOp::Equal => "equal",
+                    NumOp::NotEqual => "notEqual",
                     NumOp::Between => "greaterThanOrEqual",
                 };
                 s.push_str(&format!(
-                    r#"<customFilters><customFilter operator="{operator}" val="{value}"/>"#
+                    r#"<customFilters{}><customFilter operator="{operator}" val="{value}"/>"#,
+                    if *op == NumOp::Between {
+                        r#" and="1""#
+                    } else {
+                        ""
+                    }
                 ));
                 if *op == NumOp::Between {
                     if let Some(hi) = value2 {
@@ -445,21 +628,46 @@ pub(crate) fn modeled_autofilter(filter: &AutoFilter) -> String {
                 ));
             }
             FilterCriteria::Average { below } => {
-                let _ = below;
-                s.push_str(r#"<filters/>"#);
+                s.push_str(&format!(
+                    r#"<dynamicFilter type="{}"/>"#,
+                    if *below {
+                        "belowAverage"
+                    } else {
+                        "aboveAverage"
+                    }
+                ));
             }
             FilterCriteria::Color { fill, argb } => {
+                let dxf = if *fill {
+                    CfDxf {
+                        fill: Some(Color::Rgb { argb: *argb }),
+                        font: None,
+                    }
+                } else {
+                    CfDxf {
+                        fill: None,
+                        font: Some(Color::Rgb { argb: *argb }),
+                    }
+                };
+                let dxf_id = dxfs
+                    .iter()
+                    .position(|candidate| candidate == &dxf)
+                    .unwrap_or(0);
                 s.push_str(&format!(
-                    r#"<colorFilter cellColor="{}" dxfId="0" rgb="{argb:08X}"/>"#,
-                    u8::from(*fill)
+                    r#"<colorFilter cellColor="{}" dxfId="{dxf_id}"/>"#,
+                    u8::from(*fill),
                 ));
             }
             FilterCriteria::Period { year, month } => {
-                s.push_str(&format!(
-                    r#"<filters year="{}" month="{}"/>"#,
-                    year.unwrap_or(0),
-                    month.unwrap_or(0)
-                ));
+                let grouping = if month.is_some() { "month" } else { "year" };
+                s.push_str("<filters><dateGroupItem");
+                if let Some(year) = year {
+                    s.push_str(&format!(r#" year="{year}""#));
+                }
+                if let Some(month) = month {
+                    s.push_str(&format!(r#" month="{month}""#));
+                }
+                s.push_str(&format!(r#" dateTimeGrouping="{grouping}"/></filters>"#));
             }
         }
         s.push_str("</filterColumn>");
@@ -468,8 +676,62 @@ pub(crate) fn modeled_autofilter(filter: &AutoFilter) -> String {
     s
 }
 
+fn wildcard_escape(value: &str) -> String {
+    value
+        .replace('~', "~~")
+        .replace('*', "~*")
+        .replace('?', "~?")
+}
+
+pub(crate) fn autofilter_extras_match(
+    blob: &[u8],
+    dxfs: &[CfDxf],
+    filter: Option<&AutoFilter>,
+) -> bool {
+    let mut parser = AutoFilterParser::default();
+    let mut reader = XmlReader::new(blob);
+    while let Ok(Some(event)) = reader.next() {
+        parser.feed(&event, dxfs);
+    }
+    parser.take().as_ref() == filter
+}
+
+pub(crate) fn validation_extras_match(blobs: &[Vec<u8>], rules: &[DataValidation]) -> bool {
+    let parsed = parse_validations(blobs);
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    if workbook.set_validations(sheet, parsed).is_err() {
+        // Preserve OOXML that the strict model rejected unless the caller has
+        // replaced it with a modeled rule. This is the extras-win contract.
+        return rules.is_empty();
+    }
+    workbook
+        .sheet(sheet)
+        .is_some_and(|sheet| sheet.validations == rules)
+}
+
+pub(crate) fn cond_format_extras_match(
+    blobs: &[Vec<u8>],
+    dxfs: &[CfDxf],
+    rules: &[CondFormat],
+) -> bool {
+    let parsed = parse_cond_formats(blobs, dxfs);
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    if workbook.set_cond_formats(sheet, parsed).is_err() {
+        return rules.is_empty();
+    }
+    workbook
+        .sheet(sheet)
+        .is_some_and(|sheet| sheet.cond_formats == rules)
+}
+
 /// Modeled `<dataValidations>` XML.
 pub(crate) fn modeled_validations(rules: &[DataValidation]) -> Option<String> {
+    let rules: Vec<_> = rules
+        .iter()
+        .filter(|rule| rule.kind != DvType::Any)
+        .collect();
     if rules.is_empty() {
         return None;
     }
@@ -534,7 +796,11 @@ pub(crate) fn modeled_validations(rules: &[DataValidation]) -> Option<String> {
 pub(crate) fn modeled_cond_formats(rules: &[CondFormat], dxfs: &[CfDxf]) -> Vec<String> {
     let mut out = Vec::new();
     for rule in rules {
-        let dxf_id = dxfs.iter().position(|d| d == &rule.dxf).unwrap_or(0);
+        let dxf_id = (rule.dxf.fill.is_some() || rule.dxf.font.is_some())
+            .then(|| dxfs.iter().position(|d| d == &rule.dxf))
+            .flatten()
+            .map(|id| format!(r#" dxfId="{id}""#))
+            .unwrap_or_default();
         let (ty, op, extra, formulas) = cf_xml_parts(rule);
         let stop = if rule.stop_if_true {
             r#" stopIfTrue="1""#
@@ -542,12 +808,50 @@ pub(crate) fn modeled_cond_formats(rules: &[CondFormat], dxfs: &[CfDxf]) -> Vec<
             ""
         };
         let mut s = format!(
-            r#"<conditionalFormatting sqref="{}"><cfRule type="{ty}" dxfId="{dxf_id}" priority="{}"{stop}{op}{extra}>"#,
+            r#"<conditionalFormatting sqref="{}"><cfRule type="{ty}"{dxf_id} priority="{}"{stop}{op}{extra}>"#,
             escape(&rule.range.to_a1()),
             rule.priority,
         );
         for f in formulas {
             s.push_str(&format!("<formula>{}</formula>", escape(&f)));
+        }
+        match &rule.kind {
+            CfKind::ColorScale { colors } => {
+                s.push_str("<colorScale>");
+                s.push_str(r#"<cfvo type="min"/>"#);
+                if colors.len() >= 3 {
+                    s.push_str(r#"<cfvo type="percentile" val="50"/>"#);
+                }
+                s.push_str(r#"<cfvo type="max"/>"#);
+                for color in colors.iter().take(3) {
+                    s.push_str(&color_element("color", *color));
+                }
+                s.push_str("</colorScale>");
+            }
+            CfKind::DataBar {
+                color, gradient, ..
+            } => {
+                s.push_str(&format!(
+                    r#"<dataBar gradient="{}"><cfvo type="min"/><cfvo type="max"/>{}</dataBar>"#,
+                    u8::from(*gradient),
+                    color_element("color", *color),
+                ));
+            }
+            CfKind::IconSet { icons } => {
+                let count = (*icons).clamp(3, 5);
+                let name = match count {
+                    4 => "4TrafficLights",
+                    5 => "5Arrows",
+                    _ => "3TrafficLights1",
+                };
+                s.push_str(&format!(r#"<iconSet iconSet="{name}">"#));
+                for index in 0..count {
+                    let threshold = u32::from(index) * 100 / u32::from(count);
+                    s.push_str(&format!(r#"<cfvo type="percent" val="{threshold}"/>"#));
+                }
+                s.push_str("</iconSet>");
+            }
+            _ => {}
         }
         s.push_str("</cfRule></conditionalFormatting>");
         out.push(s);
@@ -578,12 +882,16 @@ fn cf_xml_parts(rule: &CondFormat) -> (&'static str, String, String, Vec<String>
             }
             ("cellIs", format!(r#" operator="{name}""#), String::new(), f)
         }
-        CfKind::ContainsText(t) => (
-            "containsText",
-            r#" operator="containsText""#.into(),
-            String::new(),
-            vec![t.clone()],
-        ),
+        CfKind::ContainsText(t) => {
+            let needle = t.replace('"', "\"\"");
+            let anchor = rule.range.start.to_a1();
+            (
+                "containsText",
+                r#" operator="containsText""#.into(),
+                format!(r#" text="{}""#, escape(t)),
+                vec![format!(r#"NOT(ISERROR(SEARCH("{needle}",{anchor})))"#)],
+            )
+        }
         CfKind::Blanks => ("containsBlanks", String::new(), String::new(), Vec::new()),
         CfKind::Errors => ("containsErrors", String::new(), String::new(), Vec::new()),
         CfKind::Duplicate => ("duplicateValues", String::new(), String::new(), Vec::new()),
@@ -608,6 +916,12 @@ fn cf_xml_parts(rule: &CondFormat) -> (&'static str, String, String, Vec<String>
             },
             Vec::new(),
         ),
+        CfKind::TimePeriod(period) => (
+            "timePeriod",
+            String::new(),
+            format!(r#" timePeriod="{}""#, time_period_name(*period)),
+            Vec::new(),
+        ),
         CfKind::ColorScale { .. } => ("colorScale", String::new(), String::new(), Vec::new()),
         CfKind::DataBar { .. } => ("dataBar", String::new(), String::new(), Vec::new()),
         CfKind::IconSet { .. } => ("iconSet", String::new(), String::new(), Vec::new()),
@@ -617,6 +931,32 @@ fn cf_xml_parts(rule: &CondFormat) -> (&'static str, String, String, Vec<String>
             String::new(),
             vec![src.clone()],
         ),
+    }
+}
+
+fn time_period_name(period: CfTimePeriod) -> &'static str {
+    match period {
+        CfTimePeriod::Today => "today",
+        CfTimePeriod::Yesterday => "yesterday",
+        CfTimePeriod::Tomorrow => "tomorrow",
+        CfTimePeriod::Last7Days => "last7Days",
+        CfTimePeriod::ThisWeek => "thisWeek",
+        CfTimePeriod::LastWeek => "lastWeek",
+        CfTimePeriod::NextWeek => "nextWeek",
+        CfTimePeriod::ThisMonth => "thisMonth",
+        CfTimePeriod::LastMonth => "lastMonth",
+        CfTimePeriod::NextMonth => "nextMonth",
+    }
+}
+
+fn color_element(name: &str, color: Color) -> String {
+    match color {
+        Color::Rgb { argb } => format!(r#"<{name} rgb="{argb:08X}"/>"#),
+        Color::Theme { theme, tint } => {
+            format!(r#"<{name} theme="{theme}" tint="{tint}"/>"#)
+        }
+        Color::Indexed { index } => format!(r#"<{name} indexed="{index}"/>"#),
+        Color::Auto => format!(r#"<{name} auto="1"/>"#),
     }
 }
 

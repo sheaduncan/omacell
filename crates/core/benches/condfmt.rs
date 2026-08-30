@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use omacell_core::addr::{CellRef, RangeRef};
-use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat, overlay_range};
+use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat, resolve_overlay};
 use omacell_core::style::Color;
 use omacell_core::workbook::Workbook;
 
@@ -54,7 +54,7 @@ fn bench_condfmt(c: &mut Criterion) {
     group.bench_function("overlay_100k_20_rules_after_edit", |b| {
         b.iter(|| {
             let _ = wb.set_number(s, 0, 0, 42.0);
-            black_box(overlay_range(&wb, s, range(0, 0, 4999, 19)));
+            black_box(resolve_overlay(&wb, s, range(0, 0, 4999, 19)).unwrap());
         });
     });
     group.finish();

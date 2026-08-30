@@ -52,6 +52,8 @@ const REL_CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/r
 pub struct WorksheetExtras {
     /// AutoFilter `ref`.
     pub autofilter: Option<String>,
+    /// Raw `autoFilter` XML, retained until the modeled filter changes.
+    pub autofilter_xml: Vec<u8>,
     /// Raw `pageSetup` / `pageMargins` / `printOptions` / `headerFooter` XML.
     pub print_xml: Vec<Vec<u8>>,
     /// Raw `conditionalFormatting` XML blobs.
@@ -938,6 +940,7 @@ fn rgb_from_hex(s: &str) -> Color {
 
 #[derive(Clone, Copy)]
 enum FragmentKind {
+    AutoFilter,
     Print,
     ConditionalFormatting,
     DataValidations,
@@ -952,6 +955,7 @@ struct OpenFragment {
 
 fn fragment_kind(name: &str) -> Option<FragmentKind> {
     match name {
+        "autoFilter" => Some(FragmentKind::AutoFilter),
         "pageSetup" | "pageMargins" | "printOptions" | "headerFooter" | "rowBreaks"
         | "colBreaks" => Some(FragmentKind::Print),
         "conditionalFormatting" => Some(FragmentKind::ConditionalFormatting),
@@ -963,6 +967,7 @@ fn fragment_kind(name: &str) -> Option<FragmentKind> {
 
 fn store_fragment(extra: &mut WorksheetExtras, kind: FragmentKind, bytes: Vec<u8>) {
     match kind {
+        FragmentKind::AutoFilter => extra.autofilter_xml = bytes,
         FragmentKind::Print => extra.print_xml.push(bytes),
         FragmentKind::ConditionalFormatting => extra.conditional_formatting_xml.push(bytes),
         FragmentKind::DataValidations => extra.data_validations_xml.push(bytes),
@@ -1059,7 +1064,7 @@ fn load_sheet(
             r.last_span(),
             &part.bytes,
         )?;
-        af_parser.feed(&ev);
+        af_parser.feed(&ev, &styles.dxfs);
         match ev {
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "tabColor" =>
@@ -1422,7 +1427,7 @@ fn load_sheet(
     }
     wb.set_sheet_merges(id, merges)?;
     if let Some(filter) = af_parser.take() {
-        let _ = wb.set_autofilter(id, Some(filter));
+        omacell_core::filter::restore_filter(wb, id, &filter)?;
     }
     Ok(extra)
 }

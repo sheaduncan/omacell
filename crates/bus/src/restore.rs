@@ -10,6 +10,7 @@ use omacell_core::print::PageSetup;
 use omacell_core::sheet::{Sheet, SheetEditState, SheetVisibility, ViewState};
 use omacell_core::storage::CellSlot;
 use omacell_core::style::Color;
+use omacell_core::tables::Table;
 use omacell_core::workbook::{Workbook, WorkbookProtectionState};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,10 @@ struct RestorePatch {
     active: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workbook_protection: Option<WorkbookProtectionState>,
+    #[serde(default)]
+    restore_tables: Vec<Table>,
+    #[serde(default)]
+    remove_tables: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -132,6 +137,31 @@ fn diff(before: &Workbook, after: &Workbook) -> Result<RestorePatch, CoreError> 
     }
     if before.protection() != after.protection() {
         patch.workbook_protection = Some(before.protection().clone());
+    }
+    let before_tables: BTreeMap<_, _> = before
+        .tables()
+        .iter()
+        .map(|table| (table.id.index(), table))
+        .collect();
+    let after_tables: BTreeMap<_, _> = after
+        .tables()
+        .iter()
+        .map(|table| (table.id.index(), table))
+        .collect();
+    let table_ids: BTreeSet<_> = before_tables
+        .keys()
+        .chain(after_tables.keys())
+        .copied()
+        .collect();
+    for id in table_ids {
+        if before_tables.get(&id) == after_tables.get(&id) {
+            continue;
+        }
+        if let Some(table) = before_tables.get(&id) {
+            patch.restore_tables.push((*table).clone());
+        } else {
+            patch.remove_tables.push(id);
+        }
     }
     Ok(patch)
 }
@@ -223,6 +253,10 @@ fn restore(ctx: &mut CommandContext<'_>, args: RestoreWireArgs) -> Result<Effect
         ..Effect::default()
     };
 
+    for id in patch.remove_tables {
+        ctx.workbook()
+            .convert_table(omacell_core::tables::TableId::new(id))?;
+    }
     for name in patch.remove_sheets {
         let id = ctx
             .workbook_ref()
@@ -251,6 +285,9 @@ fn restore(ctx: &mut CommandContext<'_>, args: RestoreWireArgs) -> Result<Effect
     }
     if let Some(protection) = patch.workbook_protection {
         ctx.workbook().set_workbook_protection(protection)?;
+    }
+    for table in patch.restore_tables {
+        ctx.workbook().restore_table(table)?;
     }
     effect.result = serde_json::json!({"restored": true});
     Ok(effect)

@@ -297,6 +297,27 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
             }
             out.push('\n');
         }
+        if let Some(filter) = &sheet.autofilter {
+            out.push_str("extra\t");
+            push_field(out, &sheet.name);
+            out.push_str("\tautofilter_model\t");
+            push_json_field(out, filter)?;
+            out.push('\n');
+        }
+        if !sheet.validations.is_empty() {
+            out.push_str("extra\t");
+            push_field(out, &sheet.name);
+            out.push_str("\tvalidation_model\t");
+            push_json_field(out, &sheet.validations)?;
+            out.push('\n');
+        }
+        if !sheet.cond_formats.is_empty() {
+            out.push_str("extra\t");
+            push_field(out, &sheet.name);
+            out.push_str("\tcondfmt_model\t");
+            push_json_field(out, &sheet.cond_formats)?;
+            out.push('\n');
+        }
         if let Some(ex) = doc.extras.get(&sheet.name) {
             if let Some(af) = &ex.autofilter {
                 let json = serde_json::to_string(af)
@@ -304,6 +325,21 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
                 out.push_str("extra\t");
                 push_field(out, &sheet.name);
                 out.push_str("\tautofilter\t");
+                push_field(out, &json);
+                out.push('\n');
+            }
+            if !ex.autofilter_xml.is_empty() {
+                let text = std::str::from_utf8(&ex.autofilter_xml).map_err(|_| {
+                    crate::error::omc_format(format!(
+                        "{} autofilter extra is not valid UTF-8",
+                        sheet.name
+                    ))
+                })?;
+                let json = serde_json::to_string(text)
+                    .map_err(|e| crate::error::omc_parse(e.to_string()))?;
+                out.push_str("extra\t");
+                push_field(out, &sheet.name);
+                out.push_str("\tautofilter_xml\t");
                 push_field(out, &json);
                 out.push('\n');
             }

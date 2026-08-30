@@ -153,6 +153,27 @@ pub(crate) fn encode(
                 dxfs.push(rule.dxf);
             }
         }
+        if let Some(filter) = &sheet.autofilter {
+            for column in &filter.columns {
+                if let omacell_core::filter::FilterCriteria::Color { fill, argb } = &column.criteria
+                {
+                    let dxf = if *fill {
+                        CfDxf {
+                            fill: Some(Color::Rgb { argb: *argb }),
+                            font: None,
+                        }
+                    } else {
+                        CfDxf {
+                            fill: None,
+                            font: Some(Color::Rgb { argb: *argb }),
+                        }
+                    };
+                    if !dxfs.iter().any(|candidate| candidate == &dxf) {
+                        dxfs.push(dxf);
+                    }
+                }
+            }
+        }
     }
     parts.insert(
         "xl/styles.xml".into(),
@@ -1188,12 +1209,23 @@ fn worksheet_xml(
         }
         s.push_str("</protectedRanges>");
     }
-    if let Some(ex) = extras
-        && let Some(af) = &ex.autofilter
+    if let Some(raw) = extras
+        .map(|extra| extra.autofilter_xml.as_slice())
+        .filter(|raw| {
+            !raw.is_empty()
+                && super::data::autofilter_extras_match(raw, dxfs, sheet.autofilter.as_ref())
+        })
     {
-        s.push_str(&format!(r#"<autoFilter ref="{}"/>"#, xml::escape(af)));
+        push_fragment(&mut s, raw, "automatic filter", &["autoFilter"])?;
     } else if let Some(filter) = &sheet.autofilter {
-        s.push_str(&super::data::modeled_autofilter(filter));
+        if let Some(raw_ref) = extras.and_then(|extra| extra.autofilter.as_deref())
+            && filter.columns.is_empty()
+            && raw_ref == filter.range.to_a1()
+        {
+            s.push_str(&format!(r#"<autoFilter ref="{}"/>"#, xml::escape(raw_ref)));
+        } else {
+            s.push_str(&super::data::modeled_autofilter(filter, dxfs));
+        }
     }
     if !sheet.merges.is_empty() {
         s.push_str(&format!(r#"<mergeCells count="{}">"#, sheet.merges.len()));
@@ -1205,7 +1237,14 @@ fn worksheet_xml(
         }
         s.push_str("</mergeCells>");
     }
-    if let Some(ex) = extras.filter(|ex| !ex.conditional_formatting_xml.is_empty()) {
+    if let Some(ex) = extras.filter(|ex| {
+        !ex.conditional_formatting_xml.is_empty()
+            && super::data::cond_format_extras_match(
+                &ex.conditional_formatting_xml,
+                dxfs,
+                &sheet.cond_formats,
+            )
+    }) {
         for blob in &ex.conditional_formatting_xml {
             push_fragment(
                 &mut s,
@@ -1224,7 +1263,10 @@ fn worksheet_xml(
             )?;
         }
     }
-    if let Some(ex) = extras.filter(|ex| !ex.data_validations_xml.is_empty()) {
+    if let Some(ex) = extras.filter(|ex| {
+        !ex.data_validations_xml.is_empty()
+            && super::data::validation_extras_match(&ex.data_validations_xml, &sheet.validations)
+    }) {
         for blob in &ex.data_validations_xml {
             push_fragment(&mut s, blob, "data validation", &["dataValidations"])?;
         }

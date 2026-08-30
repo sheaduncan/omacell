@@ -1,0 +1,5 @@
+case	values	criterion	argument	expected_visible	source
+greater	1,5,10	greater	5	10	Spec §6.6 F-6.2
+not_equal	1,5,10	not_equal	5	1,10	Spec §6.6 F-6.2
+top_percent_ceiling	1,2,3	top_percent	34	2,3	Spec §6.6 F-6.2
+below_average	1,2,9	below_average	-	1,2	Spec §6.6 F-6.2
