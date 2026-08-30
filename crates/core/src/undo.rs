@@ -10,6 +10,7 @@ use crate::chart::{Chart, Sparkline};
 use crate::command::UndoUnitId;
 use crate::error::CoreError;
 use crate::names::{DefinedName, NameScope};
+use crate::pivot::PivotTable;
 use crate::print::PageSetup;
 use crate::sheet::{Sheet, SheetEditState, SheetVisibility};
 use crate::storage::CellSlot;
@@ -226,6 +227,13 @@ pub enum Delta {
         /// New (`None` = deleted).
         after: Option<Table>,
     },
+    /// Pivot upsert / remove.
+    Pivot {
+        /// Previous.
+        before: Option<Box<PivotTable>>,
+        /// New (`None` = deleted).
+        after: Option<Box<PivotTable>>,
+    },
     /// Chart appended to a sheet.
     ChartAdd {
         /// Sheet.
@@ -333,6 +341,10 @@ impl Delta {
                 128 + before.as_ref().map(|t| t.name.len()).unwrap_or(0)
                     + after.as_ref().map(|t| t.name.len()).unwrap_or(0)
             }
+            Self::Pivot { before, after } => {
+                128 + before.as_ref().map(|t| t.name.len()).unwrap_or(0)
+                    + after.as_ref().map(|t| t.name.len()).unwrap_or(0)
+            }
             Self::ChartAdd { chart, .. } | Self::ChartRemove { chart, .. } => {
                 128 + chart.title.as_ref().map(String::len).unwrap_or(0)
                     + chart
@@ -384,7 +396,9 @@ impl Delta {
             | Self::TabColor { id, .. } => AffectedRange::sheet(*id),
             Self::PageSetup { sheet, .. } => AffectedRange::sheet(*sheet),
             Self::SheetEdit { sheet, .. } => AffectedRange::sheet(*sheet),
-            Self::Name { .. } | Self::Table { .. } => AffectedRange::sheet(SheetId::new(0)),
+            Self::Name { .. } | Self::Table { .. } | Self::Pivot { .. } => {
+                AffectedRange::sheet(SheetId::new(0))
+            }
             Self::ChartAdd { sheet, .. }
             | Self::ChartRemove { sheet, .. }
             | Self::SparklineAdd { sheet, .. }

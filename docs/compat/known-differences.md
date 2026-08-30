@@ -42,6 +42,11 @@ encode.
 | `CONVERT` unknown/incompatible unit | `#N/A` | LibreOffice `Err:502` | WP-05c |
 | `CONVERT` `lbm`→`g` | Microsoft factor `453.59237` | LibreOffice uses a slightly different mass factor | WP-05c |
 | `BITLSHIFT` beyond 48 bits | `#NUM!` (`0..2^48-1`) | LibreOffice may return the untruncated shift | WP-05c |
+| Pivot compact layout | Nested row fields indent in one column | Multi-field row keys are joined with ` \| ` in the snapshot | WP-24 |
+| Pivot Distinct Count | Excel 2013+ distinct-count data field | Aggregates distinctly; OOXML export uses `subtotal="count"` with a Distinct-count caption | WP-24 |
+| Pivot % of total/row/column | Percent-formatted 0–1 values | Snapshot stores 0–100 numbers | WP-24 |
+| Goal Seek non-convergence | Status dialog; last trial remains | `converged: false` with a finite last trial; no error | WP-24 |
+| Data Tables / Scenario Manager | Excel what-if tools | Deferred (v1.x); only Goal Seek in this package | WP-24 |
 
 LibreOffice disagreements discovered by `scripts/lo-crosscheck.py` should be
 appended here rather than papered over in the corpus. Corpus rows for an

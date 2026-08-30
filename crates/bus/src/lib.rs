@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod analysis;
 pub mod args;
 pub mod audit;
 mod catalog;
@@ -31,6 +32,7 @@ mod runner;
 mod session;
 mod task;
 
+pub use analysis::register_analysis_commands;
 pub use audit::register_audit_commands;
 pub use catalog::{CommandJson, CommandsEnvelope, SCHEMA, commands_json};
 pub use changeset::{

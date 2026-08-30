@@ -1,0 +1,101 @@
+[
+  {
+    "name": "sum_region",
+    "headers": ["Region", "Amount"],
+    "rows": [
+      ["East", 10],
+      ["East", 20],
+      ["West", 70]
+    ],
+    "rows_fields": ["Region"],
+    "cols_fields": [],
+    "data": [{ "source": "Amount", "agg": "sum" }],
+    "expect": [
+      { "row": 0, "col": 1, "text": "Sum of Amount" },
+      { "row": 1, "col": 0, "text": "East" },
+      { "row": 1, "col": 1, "n": 30 },
+      { "row": 2, "col": 0, "text": "West" },
+      { "row": 2, "col": 1, "n": 70 },
+      { "row": 3, "col": 0, "text": "Grand Total" },
+      { "row": 3, "col": 1, "n": 100 }
+    ]
+  },
+  {
+    "name": "pct_of_total",
+    "headers": ["Region", "Amount"],
+    "rows": [
+      ["East", 10],
+      ["East", 20],
+      ["West", 70]
+    ],
+    "rows_fields": ["Region"],
+    "data": [{ "source": "Amount", "agg": "sum", "show_as": "pct_of_total" }],
+    "expect": [
+      { "row": 1, "col": 1, "n": 30 },
+      { "row": 2, "col": 1, "n": 70 }
+    ]
+  },
+  {
+    "name": "date_months",
+    "headers": ["Date", "Amount"],
+    "rows": [
+      ["2024-01-15", 10],
+      ["2024-01-20", 20],
+      ["2024-02-10", 70]
+    ],
+    "rows_fields": ["Date"],
+    "data": [{ "source": "Amount", "agg": "sum" }],
+    "groups": { "Date": { "date": "months" } },
+    "expect": [
+      { "row": 1, "col": 0, "text": "2024-01" },
+      { "row": 1, "col": 1, "n": 30 },
+      { "row": 2, "col": 0, "text": "2024-02" },
+      { "row": 2, "col": 1, "n": 70 }
+    ]
+  },
+  {
+    "name": "numeric_bins",
+    "headers": ["Bin", "Amount"],
+    "rows": [
+      [10, 10],
+      [20, 20],
+      [40, 40],
+      [30, 30]
+    ],
+    "rows_fields": ["Bin"],
+    "data": [{ "source": "Amount", "agg": "sum" }],
+    "groups": { "Bin": { "numeric": { "start": 0, "size": 25 } } },
+    "expect": [
+      { "row": 1, "col": 0, "text": "0" },
+      { "row": 1, "col": 1, "n": 30 },
+      { "row": 2, "col": 0, "text": "25" },
+      { "row": 2, "col": 1, "n": 70 }
+    ]
+  },
+  {
+    "name": "region_by_product",
+    "headers": ["Region", "Product", "Amount"],
+    "rows": [
+      ["East", "A", 10],
+      ["East", "B", 20],
+      ["West", "A", 70]
+    ],
+    "rows_fields": ["Region"],
+    "cols_fields": ["Product"],
+    "data": [{ "source": "Amount", "agg": "sum" }],
+    "expect": [
+      { "row": 0, "col": 1, "text": "A" },
+      { "row": 0, "col": 2, "text": "B" },
+      { "row": 0, "col": 3, "text": "Grand Total" },
+      { "row": 1, "col": 0, "text": "East" },
+      { "row": 1, "col": 1, "n": 10 },
+      { "row": 1, "col": 2, "n": 20 },
+      { "row": 1, "col": 3, "n": 30 },
+      { "row": 2, "col": 0, "text": "West" },
+      { "row": 2, "col": 1, "n": 70 },
+      { "row": 3, "col": 0, "text": "Grand Total" },
+      { "row": 3, "col": 1, "n": 80 },
+      { "row": 3, "col": 3, "n": 100 }
+    ]
+  }
+]
