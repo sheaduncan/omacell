@@ -727,7 +727,18 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
         // LibreOffice may change the active tab while rewriting the workbook,
         // so resolve the sheet that owns these definitions explicitly.
         let sheet = converted.workbook.sheet_by_name("Sheet1").unwrap();
-        assert!(sheet.autofilter.is_some());
+        let worksheet_xml = converted
+            .package
+            .parts
+            .values()
+            .filter(|part| part.name.starts_with("xl/worksheets/") && part.name.ends_with(".xml"))
+            .map(|part| format!("{}: {}", part.name, String::from_utf8_lossy(&part.bytes)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            sheet.autofilter.is_some(),
+            "LibreOffice removed or rewrote the AutoFilter:\n{worksheet_xml}"
+        );
         assert_eq!(sheet.validations.len(), 1);
         assert_eq!(sheet.cond_formats.len(), 1);
         let table = converted.workbook.tables().get_by_name("LoTable").unwrap();
