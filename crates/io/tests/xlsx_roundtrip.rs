@@ -197,6 +197,7 @@ fn new_workbook_preserves_modeled_l1_l2_fields() {
         ProtectionState {
             enabled: true,
             password: Some(b"ABCD".to_vec()),
+            allow: Default::default(),
         },
     )
     .unwrap();
@@ -321,6 +322,7 @@ fn new_workbook_preserves_modeled_l1_l2_fields() {
         ProtectionState {
             enabled: true,
             password: Some(b"ABCD".to_vec()),
+            allow: Default::default(),
         }
     );
     assert_eq!(sheet.geometry.rows.size(4).unwrap(), 31);
@@ -493,12 +495,21 @@ fn threaded_comments_are_reported_and_not_silently_dropped() {
                 author: "Ada".into(),
                 text: "review".into(),
                 replies: Vec::new(),
+                resolved: false,
             }),
         )
         .unwrap();
     assert!(!diff(&original, &changed).empty);
     assert!(!diff(&changed, &original).empty);
-    assert!(save_bytes(&changed).is_err());
+    let bytes = save_bytes(&changed).expect("WP-17 writes threaded comments as comments.xml");
+    let again = omacell_io::xlsx::open_bytes(&bytes).unwrap();
+    let note = again
+        .workbook
+        .sheet(again.workbook.active_sheet())
+        .unwrap()
+        .notes
+        .get(&(0, 0));
+    assert_eq!(note.map(|n| n.text.as_str()), Some("review"));
 }
 
 #[test]

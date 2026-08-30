@@ -488,6 +488,7 @@ fn load_sheet(
             ProtectionState {
                 enabled: parse_bool_kv(&kv, "protect", false)?,
                 password: None,
+                allow: Default::default(),
             },
         )?;
     }

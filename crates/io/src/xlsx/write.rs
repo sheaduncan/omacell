@@ -997,11 +997,6 @@ fn worksheet_xml(
     ),
     CoreError,
 > {
-    if !sheet.comments.is_empty() {
-        return Err(error::xlsx_write(
-            "threaded comments cannot be regenerated before WP-17",
-        ));
-    }
     if !sheet.view.zoom.is_finite() || sheet.view.zoom <= 0.0 {
         return Err(error::xlsx_write("sheet zoom is not finite and positive"));
     }
@@ -1051,6 +1046,13 @@ fn worksheet_xml(
         let mut attrs = format!(r#" r="{r1}""#);
         if hidden_rows.contains(&row) {
             attrs.push_str(r#" hidden="1""#);
+        }
+        let outline = sheet.geometry.rows.outline_level(row);
+        if outline > 0 {
+            attrs.push_str(&format!(r#" outlineLevel="{outline}""#));
+        }
+        if sheet.geometry.rows.is_collapsed(row) {
+            attrs.push_str(r#" collapsed="1""#);
         }
         if let Some((_, px)) = custom_rows.iter().find(|(i, _)| *i == row) {
             let ht = f64::from(*px) * 72.0 / 96.0;
@@ -1197,7 +1199,7 @@ fn worksheet_xml(
         rels.extend(parts.rels);
         extra_parts.extend(parts.parts);
     }
-    if !sheet.notes.is_empty() && vml_xml.is_empty() {
+    if (!sheet.notes.is_empty() || !sheet.comments.is_empty()) && vml_xml.is_empty() {
         let id = format!("rId{rid}");
         rid += 1;
         let number = sheet_ord + 1;
@@ -1243,7 +1245,7 @@ fn worksheet_xml(
     } else if let Some(blob) = drawing::sparkline_xml(wb, sheet) {
         push_fragment(&mut s, &blob, "sparkline", &["sparklineGroups"])?;
     }
-    if !sheet.notes.is_empty() {
+    if !sheet.notes.is_empty() || !sheet.comments.is_empty() {
         let id = format!("rId{rid}");
         let cname = format!("xl/comments{}.xml", sheet_ord + 1);
         rels.push((
@@ -1428,13 +1430,15 @@ fn is_internal_hyperlink(target: &str) -> bool {
 fn cols_xml(sheet: &Sheet) -> String {
     let hidden: Vec<u32> = sheet.geometry.cols.iter_hidden().collect();
     let custom: Vec<(u32, u32)> = sheet.geometry.cols.iter_custom().collect();
-    if hidden.is_empty() && custom.is_empty() {
+    let outline: Vec<(u32, u8)> = sheet.geometry.cols.iter_outline().collect();
+    if hidden.is_empty() && custom.is_empty() && outline.is_empty() {
         return String::new();
     }
     let mut idxs: Vec<u32> = hidden
         .iter()
         .copied()
         .chain(custom.iter().map(|(i, _)| *i))
+        .chain(outline.iter().map(|(i, _)| *i))
         .collect();
     idxs.sort_unstable();
     idxs.dedup();
@@ -1451,8 +1455,12 @@ fn cols_xml(sheet: &Sheet) -> String {
             .find(|(j, _)| *j == i)
             .map(|(_, px)| f64::from(*px) * 8.43 / f64::from(DEFAULT_COL_PX))
             .unwrap_or(8.43);
+        let outline_attr = match sheet.geometry.cols.outline_level(i) {
+            0 => String::new(),
+            level => format!(r#" outlineLevel="{level}""#),
+        };
         s.push_str(&format!(
-            r#"<col min="{min}" max="{min}" width="{width}" customWidth="1"{hidden_attr}/>"#
+            r#"<col min="{min}" max="{min}" width="{width}" customWidth="1"{hidden_attr}{outline_attr}/>"#
         ));
     }
     s.push_str("</cols>");
@@ -1591,6 +1599,13 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
             authors.push(a);
         }
     }
+    let mut comments: Vec<_> = sheet.comments.iter().collect();
+    comments.sort_by_key(|((r, c), _)| (*r, *c));
+    for (_, c) in &comments {
+        if !authors.iter().any(|x| x == &c.author) {
+            authors.push(c.author.clone());
+        }
+    }
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><comments xmlns="{NS}"><authors>"#
     );
@@ -1612,6 +1627,24 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
         s.push_str(&format!(
             r#"<comment ref="{addr}" authorId="{aid}"><text>{}</text></comment>"#,
             t_elem(&n.text)
+        ));
+    }
+    for ((row, col), c) in comments {
+        if sheet.notes.contains_key(&(*row, *col)) {
+            continue;
+        }
+        let addr = format!(
+            "{}{}",
+            col_to_letters(*col).unwrap_or_else(|_| "A".into()),
+            row + 1
+        );
+        let aid = authors
+            .iter()
+            .position(|candidate| candidate == &c.author)
+            .unwrap_or(0);
+        s.push_str(&format!(
+            r#"<comment ref="{addr}" authorId="{aid}"><text>{}</text></comment>"#,
+            t_elem(&c.text)
         ));
     }
     s.push_str("</commentList></comments>");

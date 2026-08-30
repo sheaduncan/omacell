@@ -137,6 +137,7 @@ impl App {
         files::register_file_commands(&mut bus, file_session.clone())?;
         reload::register_theme_reload(&mut bus, store.handle())?;
         omacell_bus::register_chart_commands(bus.registry_mut())?;
+        omacell_bus::register_edit_commands(bus.registry_mut())?;
         Ok(Self {
             paths,
             store,

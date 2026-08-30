@@ -415,6 +415,22 @@ impl Workbook {
             .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
     }
 
+    /// Mutable sheet borrow for structural ops (WP-17).
+    pub fn sheet_mut_public(&mut self, id: SheetId) -> Result<&mut Sheet, CoreError> {
+        self.sheet_mut(id)
+    }
+
+    /// Replace a slot and record undo (WP-17).
+    pub fn replace_slot_public(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        col: u16,
+        slot: Option<CellSlot>,
+    ) -> Result<Option<CellSlot>, CoreError> {
+        self.replace_slot(id, row, col, slot)
+    }
+
     /// Append a chart. Ids are assigned.
     pub fn add_chart(&mut self, mut chart: Chart) -> Result<ChartId, CoreError> {
         chart.values_valid()?;
@@ -1113,6 +1129,19 @@ impl Workbook {
             sheet: Box::new(sheet.clone()),
         });
         Ok(sheet)
+    }
+
+    /// Move `id` to tab index `index` (0-based).
+    pub fn reorder_sheet(&mut self, id: SheetId, index: usize) -> Result<(), CoreError> {
+        let from = self
+            .sheets
+            .get_index_of(&id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?;
+        let to = index.min(self.sheets.len().saturating_sub(1));
+        if from != to {
+            self.sheets.move_index(from, to);
+        }
+        Ok(())
     }
 
     /// Rename a sheet.

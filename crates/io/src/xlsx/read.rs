@@ -1026,6 +1026,19 @@ fn load_sheet(
                     if attr(&attrs, "hidden").is_some_and(truthy) {
                         wb.set_row_hidden(id, row, true)?;
                     }
+                    if let Some(level) =
+                        attr(&attrs, "outlineLevel").and_then(|s| s.parse::<u8>().ok())
+                        && level > 0
+                    {
+                        let _ = wb
+                            .sheet_mut_public(id)
+                            .and_then(|s| s.geometry.rows.set_outline_level(row, level));
+                    }
+                    if attr(&attrs, "collapsed").is_some_and(truthy) {
+                        let _ = wb
+                            .sheet_mut_public(id)
+                            .and_then(|s| s.geometry.rows.set_collapsed(row, true));
+                    }
                     if let Some(ht) = attr(&attrs, "ht")
                         .and_then(|s| s.parse::<f64>().ok())
                         .filter(|height| height.is_finite() && *height > 0.0)
@@ -1146,6 +1159,14 @@ fn load_sheet(
                     if hidden {
                         wb.set_col_hidden(id, idx, true)?;
                     }
+                    if let Some(level) =
+                        attr(&attrs, "outlineLevel").and_then(|s| s.parse::<u8>().ok())
+                        && level > 0
+                    {
+                        let _ = wb
+                            .sheet_mut_public(id)
+                            .and_then(|s| s.geometry.cols.set_outline_level(u32::from(idx), level));
+                    }
                     if let Some(w) = width {
                         let px = (w * f64::from(omacell_core::geometry::DEFAULT_COL_PX) / 8.43)
                             .round()
@@ -1263,6 +1284,7 @@ fn load_sheet(
                         password: attr(&attrs, "hashValue")
                             .or_else(|| attr(&attrs, "password"))
                             .map(|s| s.as_bytes().to_vec()),
+                        allow: Default::default(),
                     },
                 )?;
             }

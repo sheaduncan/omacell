@@ -265,6 +265,7 @@ fn omc_roundtrips_ambiguous_text_and_l2_metadata() {
         ProtectionState {
             enabled: true,
             password: Some(vec![0, 1, 2, 255]),
+            allow: Default::default(),
         },
     )
     .unwrap();
@@ -293,7 +294,9 @@ fn omc_roundtrips_ambiguous_text_and_l2_metadata() {
                 author: "Lin".into(),
                 text: "reply".into(),
                 replies: vec![],
+                resolved: false,
             }],
+            resolved: false,
         }),
     )
     .unwrap();

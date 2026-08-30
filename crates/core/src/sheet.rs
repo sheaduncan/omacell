@@ -136,9 +136,56 @@ impl Default for ViewState {
 pub struct ProtectionState {
     /// Protection is on.
     pub enabled: bool,
-    /// Opaque hash / verifier bytes.
+    /// Opaque hash / verifier bytes (Excel XOR hash, two bytes, not a secret).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<Vec<u8>>,
+    /// Actions still allowed while the sheet is protected.
+    #[serde(default)]
+    pub allow: ProtectionAllow,
+}
+
+/// Excel sheet-protection allow-list (compatibility only).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ProtectionAllow {
+    /// Select locked cells.
+    #[serde(default = "true_bool")]
+    pub select_locked: bool,
+    /// Select unlocked cells.
+    #[serde(default = "true_bool")]
+    pub select_unlocked: bool,
+    /// Format cells.
+    #[serde(default)]
+    pub format_cells: bool,
+    /// Insert rows.
+    #[serde(default)]
+    pub insert_rows: bool,
+    /// Insert columns.
+    #[serde(default)]
+    pub insert_cols: bool,
+    /// Sort.
+    #[serde(default)]
+    pub sort: bool,
+    /// AutoFilter.
+    #[serde(default)]
+    pub auto_filter: bool,
+}
+
+fn true_bool() -> bool {
+    true
+}
+
+impl Default for ProtectionAllow {
+    fn default() -> Self {
+        Self {
+            select_locked: true,
+            select_unlocked: true,
+            format_cells: false,
+            insert_rows: false,
+            insert_cols: false,
+            sort: false,
+            auto_filter: false,
+        }
+    }
 }
 
 /// Cell note (legacy comment).
@@ -161,7 +208,7 @@ pub struct Note {
 ///
 /// ```
 /// use omacell_core::sheet::Comment;
-/// let c = Comment { author: "Ada".into(), text: "hi".into(), replies: vec![] };
+/// let c = Comment { author: "Ada".into(), text: "hi".into(), replies: vec![], resolved: false };
 /// assert!(c.replies.is_empty());
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -173,6 +220,9 @@ pub struct Comment {
     /// Replies.
     #[serde(default)]
     pub replies: Vec<Comment>,
+    /// Thread is resolved.
+    #[serde(default)]
+    pub resolved: bool,
 }
 
 /// Hyperlink on a cell.

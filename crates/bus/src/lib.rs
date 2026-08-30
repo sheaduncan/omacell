@@ -14,6 +14,7 @@ mod catalog;
 mod changeset;
 pub mod chart;
 mod commands;
+pub mod edit;
 mod error;
 mod event;
 mod handler;
@@ -34,6 +35,7 @@ pub use changeset::{
 };
 pub use chart::register_chart_commands;
 pub use commands::register_core;
+pub use edit::register_edit_commands;
 pub use error::codes;
 pub use event::{EventBus, SubscriberId};
 pub use handler::{CommandContext, Effect, TaskCtl};

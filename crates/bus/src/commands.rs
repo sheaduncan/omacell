@@ -221,10 +221,10 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
     registry.register(
         CommandSpec {
             id: "sheet.remove",
-            doc: "Internal: remove a sheet (inverse of sheet.add)",
+            doc: "Remove a sheet",
             kind: CommandKind::Mutating,
-            changeset_eligible: false,
-            exposure: Exposure::Internal,
+            changeset_eligible: true,
+            exposure: Exposure::Public,
             default_keys: &[],
         },
         sheet_remove,
