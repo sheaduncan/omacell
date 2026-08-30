@@ -50,7 +50,6 @@ fn ipc_all_and_socket_are_mutually_exclusive() {
 fn stubs_exit_three_with_hint() {
     for args in [
         vec!["run", "x.lua", "x.xlsx"],
-        vec!["audit", "x.xlsx"],
         vec!["ai", "setup"],
         vec!["agent", "hello"],
         vec!["mcp"],
@@ -319,4 +318,129 @@ fn diff_two_identical_copies() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"empty\": true"));
+}
+
+#[test]
+fn audit_json_validates_against_committed_schema() {
+    let dir = TempDir::new().unwrap();
+    let book = dir.path().join("book.xlsx");
+    std::fs::copy(corpus_xlsx(), &book).unwrap();
+    let output = bin()
+        .env("HOME", dir.path())
+        .args(["--json", "audit", book.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let schema_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/schemas/audit.schema.json");
+    let schema: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(schema_path).unwrap()).unwrap();
+    validate_audit_schema(&json, &schema, &schema, "$").unwrap();
+}
+
+fn validate_audit_schema(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+    path: &str,
+) -> Result<(), String> {
+    if let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        let name = reference
+            .strip_prefix("#/$defs/")
+            .ok_or_else(|| format!("{path}: unsupported ref {reference}"))?;
+        let resolved = root
+            .get("$defs")
+            .and_then(|defs| defs.get(name))
+            .ok_or_else(|| format!("{path}: unresolved ref {reference}"))?;
+        return validate_audit_schema(value, resolved, root, path);
+    }
+    if let Some(expected) = schema.get("const")
+        && value != expected
+    {
+        return Err(format!("{path}: expected const {expected}, got {value}"));
+    }
+    if let Some(choices) = schema.get("enum").and_then(serde_json::Value::as_array)
+        && !choices.contains(value)
+    {
+        return Err(format!("{path}: {value} is not in enum"));
+    }
+    let types: Vec<&str> = match schema.get("type") {
+        Some(serde_json::Value::String(kind)) => vec![kind],
+        Some(serde_json::Value::Array(kinds)) => {
+            kinds.iter().filter_map(serde_json::Value::as_str).collect()
+        }
+        _ => Vec::new(),
+    };
+    if !types.is_empty() && !types.iter().any(|kind| schema_type_matches(value, kind)) {
+        return Err(format!("{path}: value does not match type {types:?}"));
+    }
+    if let Some(object) = value.as_object() {
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object);
+        if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+            for key in required.iter().filter_map(serde_json::Value::as_str) {
+                if !object.contains_key(key) {
+                    return Err(format!("{path}: missing {key}"));
+                }
+            }
+        }
+        if schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false))
+            && let Some(properties) = properties
+        {
+            for key in object.keys() {
+                if !properties.contains_key(key) {
+                    return Err(format!("{path}: unexpected property {key}"));
+                }
+            }
+        }
+        if let Some(properties) = properties {
+            for (key, child) in object {
+                if let Some(child_schema) = properties.get(key) {
+                    validate_audit_schema(child, child_schema, root, &format!("{path}.{key}"))?;
+                }
+            }
+        }
+    }
+    if let Some(array) = value.as_array()
+        && let Some(items) = schema.get("items")
+    {
+        for (index, item) in array.iter().enumerate() {
+            validate_audit_schema(item, items, root, &format!("{path}[{index}]"))?;
+        }
+    }
+    if let Some(string) = value.as_str() {
+        if let Some(minimum) = schema.get("minLength").and_then(serde_json::Value::as_u64)
+            && string.chars().count() < minimum as usize
+        {
+            return Err(format!("{path}: string is too short"));
+        }
+        if schema.get("pattern").and_then(serde_json::Value::as_str) == Some("^audit\\.[a-z0-9_]+$")
+            && (!string.starts_with("audit.")
+                || string.len() == "audit.".len()
+                || !string["audit.".len()..]
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_'))
+        {
+            return Err(format!("{path}: invalid audit finding id {string:?}"));
+        }
+    }
+    Ok(())
+}
+
+fn schema_type_matches(value: &serde_json::Value, kind: &str) -> bool {
+    match kind {
+        "array" => value.is_array(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "null" => value.is_null(),
+        "object" => value.is_object(),
+        "string" => value.is_string(),
+        _ => false,
+    }
 }
