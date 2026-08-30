@@ -1,7 +1,7 @@
 //! Sheet tabs, formula bar, status line, palette, and docked panels.
 
 use egui::{RichText, TextEdit, Ui};
-use omacell_core::addr::col_to_letters;
+use omacell_core::addr::{SheetId, col_to_letters};
 use omacell_core::workbook::Workbook;
 use omacell_ui::{EditSurface, Palette, PanelState, StatusLine, UiSession};
 
@@ -9,7 +9,8 @@ use crate::grid;
 use crate::theme::GuiTheme;
 
 /// Top sheet tabs.
-pub fn tabs(ui: &mut Ui, wb: &Workbook, session: &UiSession, theme: &GuiTheme) {
+pub fn tabs(ui: &mut Ui, wb: &Workbook, session: &UiSession, theme: &GuiTheme) -> Option<SheetId> {
+    let mut selected = None;
     ui.horizontal(|ui| {
         for sheet in wb.sheets() {
             if !sheet.visibility.is_visible() {
@@ -25,12 +26,11 @@ pub fn tabs(ui: &mut Ui, wb: &Workbook, session: &UiSession, theme: &GuiTheme) {
                 RichText::new(&sheet.name).color(theme.muted)
             };
             if ui.add(egui::Button::new(text).frame(false)).clicked() {
-                let mut sel = session.selection();
-                sel.sheet = sheet.id;
-                session.set_selection(sel);
+                selected = Some(sheet.id);
             }
         }
     });
+    selected
 }
 
 /// Formula bar. Returns new buffer text when the user edits it.
@@ -51,8 +51,13 @@ pub fn formula_bar(
     ui.horizontal(|ui| {
         ui.label(RichText::new(addr).color(theme.header_foreground).strong());
         ui.label(RichText::new("fx").color(theme.muted));
-        let response = ui.add(
+        let editor = if session.formula_bar_expanded() {
+            TextEdit::multiline(&mut text).desired_rows(3)
+        } else {
             TextEdit::singleline(&mut text)
+        };
+        let response = ui.add(
+            editor
                 .desired_width(f32::INFINITY)
                 .font(egui::TextStyle::Monospace)
                 .hint_text("Enter a value or formula"),

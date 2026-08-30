@@ -12,7 +12,7 @@ description = "Graphical front-end for Omacell."
 workspace = true
 
 [dependencies]
-eframe = { version = "0.32", default-features = false, features = ["wgpu", "accesskit", "default_fonts"] }
+eframe = { version = "0.32", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "wayland", "x11"] }
 egui = "0.32"
 omacell-bus = { path = "../bus", version = "0.0.0" }
 omacell-conf = { path = "../conf", version = "0.0.0" }

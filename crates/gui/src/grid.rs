@@ -1,13 +1,16 @@
 //! Virtualized grid painter (fills → gridlines → text → selection → outlines).
 
-use egui::{Align2, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType, pos2};
+use egui::{
+    Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType, pos2,
+};
 use omacell_core::addr::{SheetId, col_to_letters};
 use omacell_core::geometry::{DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::locale::LocaleId;
 use omacell_core::numfmt::{FormatValue, format};
 use omacell_core::spill::SpillTable;
-use omacell_core::style::HorizontalAlign;
+use omacell_core::style::{Border, BorderSide, BorderStyle};
+use omacell_core::style::{Color, Fill, HorizontalAlign, Style};
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_ui::{UiSession, Viewport};
@@ -234,6 +237,8 @@ pub fn paint(
 
     let active = sel.active();
     let (r0, c0, r1, c1) = active.normalized();
+    let last_visible_col = header_cols.last().map(|(col, _, _)| *col);
+    let last_visible_row = row_list.last().copied();
     let mut painted_rows: Vec<(u32, f32, f32)> = Vec::new();
     let mut fill_handle = None;
     let mut cursor_rect = None;
@@ -260,6 +265,14 @@ pub fn paint(
         );
         for (col, x0, x1) in &header_cols {
             let cell_rect = Rect::from_min_max(pos2(*x0, y0), pos2(*x1, y1));
+            let style = wb
+                .get(sheet, row, *col)
+                .ok()
+                .flatten()
+                .and_then(|slot| wb.intern().styles.get(slot.style));
+            if let Some(fill) = style.and_then(style_fill) {
+                painter.rect_filled(cell_rect, 0.0, fill);
+            }
             let in_sel = row >= r0 && row <= r1 && *col >= c0 && *col <= c1;
             let is_cursor = sel.cursor.row == row && sel.cursor.col == *col;
             if in_sel {
@@ -269,6 +282,10 @@ pub fn paint(
             let mut color = theme.foreground;
             if is_error {
                 color = theme.error;
+            } else if let Some(file_color) =
+                style.and_then(|style| explicit_color(style.font.color))
+            {
+                color = file_color;
             }
             if stale {
                 painter.rect_filled(cell_rect, 0.0, theme.stale.gamma_multiply(0.35));
@@ -304,11 +321,74 @@ pub fn paint(
                 Align::Right => Align2::RIGHT_CENTER,
                 Align::Center => Align2::CENTER_CENTER,
             };
-            painter.text(galley_pos, anchor, text, font.clone(), color);
+            let cell_font = style.map_or_else(
+                || font.clone(),
+                |style| FontId::monospace((style.font.size_pt as f32 * zoom).clamp(9.0, 72.0)),
+            );
+            painter.text(galley_pos, anchor, text, cell_font, color);
             if grid_lines {
                 let stroke = Stroke::new(hair, theme.grid_line);
                 painter.line_segment([pos2(*x0, y0), pos2(*x0, y1)], stroke);
                 painter.line_segment([pos2(*x0, y0), pos2(*x1, y0)], stroke);
+            }
+            let borders = cell_border(wb, sheet, row, *col);
+            let left = strongest_border(
+                borders.left,
+                col.checked_sub(1)
+                    .map(|neighbor| cell_border(wb, sheet, row, neighbor).right)
+                    .unwrap_or_default(),
+            );
+            let top = strongest_border(
+                borders.top,
+                row.checked_sub(1)
+                    .map(|neighbor| cell_border(wb, sheet, neighbor, *col).bottom)
+                    .unwrap_or_default(),
+            );
+            draw_border(
+                &painter,
+                [pos2(*x0, y0), pos2(*x0, y1)],
+                left,
+                theme.foreground,
+                ppp,
+            );
+            draw_border(
+                &painter,
+                [pos2(*x0, y0), pos2(*x1, y0)],
+                top,
+                theme.foreground,
+                ppp,
+            );
+            if Some(*col) == last_visible_col {
+                let right = strongest_border(
+                    borders.right,
+                    col.checked_add(1)
+                        .filter(|neighbor| *neighbor < MAX_COLS)
+                        .map(|neighbor| cell_border(wb, sheet, row, neighbor).left)
+                        .unwrap_or_default(),
+                );
+                draw_border(
+                    &painter,
+                    [pos2(*x1, y0), pos2(*x1, y1)],
+                    right,
+                    theme.foreground,
+                    ppp,
+                );
+            }
+            if Some(row) == last_visible_row {
+                let bottom = strongest_border(
+                    borders.bottom,
+                    row.checked_add(1)
+                        .filter(|neighbor| *neighbor < MAX_ROWS)
+                        .map(|neighbor| cell_border(wb, sheet, neighbor, *col).top)
+                        .unwrap_or_default(),
+                );
+                draw_border(
+                    &painter,
+                    [pos2(*x0, y1), pos2(*x1, y1)],
+                    bottom,
+                    theme.foreground,
+                    ppp,
+                );
             }
             if is_cursor {
                 painter.rect_stroke(
@@ -349,7 +429,8 @@ pub fn paint(
         let id = ui.id().with("focused-cell");
         let cell_resp = ui.interact(fr, id, Sense::focusable_noninteractive());
         cell_resp.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, a11y_label));
-        if !cell_resp.has_focus() {
+        let no_widget_has_focus = ui.ctx().memory(|memory| memory.focused().is_none());
+        if !cell_resp.has_focus() && no_widget_has_focus {
             cell_resp.request_focus();
         }
     }
@@ -363,6 +444,123 @@ pub fn paint(
         cols: header_cols,
         rows: painted_rows,
         fill_handle,
+    }
+}
+
+fn explicit_color(color: Color) -> Option<Color32> {
+    let Color::Rgb { argb } = color else {
+        return None;
+    };
+    let [a, r, g, b] = argb.to_be_bytes();
+    Some(Color32::from_rgba_unmultiplied(r, g, b, a))
+}
+
+fn style_fill(style: &Style) -> Option<Color32> {
+    match &style.fill {
+        Fill::Solid { fg } => explicit_color(*fg),
+        Fill::Pattern { fg, bg, .. } => explicit_color(*bg).or_else(|| explicit_color(*fg)),
+        Fill::Gradient(gradient) => gradient
+            .stops
+            .first()
+            .and_then(|stop| explicit_color(stop.color)),
+        Fill::None => None,
+    }
+}
+
+fn cell_border(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> Border {
+    wb.get(sheet, row, col)
+        .ok()
+        .flatten()
+        .and_then(|slot| wb.intern().styles.get(slot.style))
+        .map(|style| style.border)
+        .unwrap_or_default()
+}
+
+fn strongest_border(first: BorderSide, second: BorderSide) -> BorderSide {
+    if border_rank(second.style) > border_rank(first.style) {
+        second
+    } else {
+        first
+    }
+}
+
+fn border_rank(style: BorderStyle) -> u8 {
+    match style {
+        BorderStyle::None => 0,
+        BorderStyle::Hair => 1,
+        BorderStyle::Dotted => 2,
+        BorderStyle::DashDotDot => 3,
+        BorderStyle::DashDot | BorderStyle::Dashed => 4,
+        BorderStyle::Thin => 5,
+        BorderStyle::MediumDashDotDot => 6,
+        BorderStyle::MediumDashDot | BorderStyle::MediumDashed => 7,
+        BorderStyle::Medium | BorderStyle::SlantDashDot => 8,
+        BorderStyle::Thick => 9,
+        BorderStyle::Double => 10,
+    }
+}
+
+fn draw_border(
+    painter: &egui::Painter,
+    points: [Pos2; 2],
+    side: BorderSide,
+    fallback: Color32,
+    ppp: f32,
+) {
+    if side.style == BorderStyle::None {
+        return;
+    }
+    let color = explicit_color(side.color).unwrap_or(fallback);
+    let hair = 1.0 / ppp.max(1.0);
+    let width = match side.style {
+        BorderStyle::Hair => hair,
+        BorderStyle::Medium
+        | BorderStyle::MediumDashed
+        | BorderStyle::MediumDashDot
+        | BorderStyle::MediumDashDotDot
+        | BorderStyle::SlantDashDot => 2.0,
+        BorderStyle::Thick | BorderStyle::Double => 3.0,
+        _ => 1.0,
+    };
+    let stroke = Stroke::new(width, color);
+    match side.style {
+        BorderStyle::Dotted => painter.extend(egui::Shape::dotted_line(
+            &points,
+            color,
+            2.0 * width,
+            width * 0.5,
+        )),
+        BorderStyle::Dashed
+        | BorderStyle::MediumDashed
+        | BorderStyle::DashDot
+        | BorderStyle::MediumDashDot
+        | BorderStyle::DashDotDot
+        | BorderStyle::MediumDashDotDot
+        | BorderStyle::SlantDashDot => painter.extend(egui::Shape::dashed_line(
+            &points,
+            stroke,
+            4.0 * width,
+            2.0 * width,
+        )),
+        BorderStyle::Double => {
+            let delta = points[1] - points[0];
+            let normal = if delta.x.abs() > delta.y.abs() {
+                egui::vec2(0.0, 1.0)
+            } else {
+                egui::vec2(1.0, 0.0)
+            };
+            painter.line_segment(
+                [points[0] - normal, points[1] - normal],
+                Stroke::new(1.0_f32, color),
+            );
+            painter.line_segment(
+                [points[0] + normal, points[1] + normal],
+                Stroke::new(1.0_f32, color),
+            );
+        }
+        _ => {
+            painter.line_segment(points, stroke);
+        }
     }
 }
 
@@ -510,8 +708,9 @@ pub fn autofit_col_px(wb: &Workbook, session: &UiSession, col: u16) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::GridLayout;
-    use egui::{Rect, pos2};
+    use super::{GridLayout, explicit_color, strongest_border, style_fill};
+    use egui::{Color32, Rect, pos2};
+    use omacell_core::style::{BorderSide, BorderStyle, Color, Fill, Style};
     use omacell_ui::Viewport;
 
     #[test]
@@ -531,5 +730,37 @@ mod tests {
         assert_eq!(layout.hit(pos2(120.0, 45.0), &vp), Some((1, 1)));
         assert!(layout.in_col_header(pos2(80.0, 10.0)));
         assert_eq!(layout.col_edge(pos2(112.0, 10.0)), Some(0));
+    }
+
+    #[test]
+    fn explicit_file_colors_are_not_rethemed() {
+        let red = Color::Rgb { argb: 0x80FF_0000 };
+        assert_eq!(
+            explicit_color(red),
+            Some(Color32::from_rgba_unmultiplied(255, 0, 0, 128))
+        );
+        let style = Style {
+            fill: Fill::Solid { fg: red },
+            ..Style::default()
+        };
+        assert_eq!(
+            style_fill(&style),
+            Some(Color32::from_rgba_unmultiplied(255, 0, 0, 128))
+        );
+        assert_eq!(explicit_color(Color::Auto), None);
+    }
+
+    #[test]
+    fn shared_edges_use_the_stronger_excel_border() {
+        let thin = BorderSide {
+            style: BorderStyle::Thin,
+            color: Color::Auto,
+        };
+        let thick = BorderSide {
+            style: BorderStyle::Thick,
+            color: Color::Auto,
+        };
+        assert_eq!(strongest_border(thin, thick), thick);
+        assert_eq!(strongest_border(thick, thin), thick);
     }
 }

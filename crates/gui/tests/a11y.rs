@@ -25,17 +25,20 @@ fn focused_cell_is_in_the_accesskit_tree() {
 }
 
 #[test]
-fn first_frame_is_under_startup_budget() {
+fn first_frame_stays_within_software_ci_regression_budget() {
+    // The product's 300 ms target is gated on the fixed integrated-GPU
+    // reference host (WP-28). This catches large regressions on lavapipe CI.
     let start = std::time::Instant::now();
     let parts = launch_theme(None);
     let mut harness = Harness::builder()
         .with_size(egui::vec2(640.0, 400.0))
         .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
     harness.run();
+    let _ = harness.render().expect("render first frame");
     let ms = start.elapsed().as_secs_f64() * 1000.0;
     eprintln!("gui_first_frame_ms={ms:.2}");
     assert!(
-        ms < 5_000.0,
-        "first kittest frame took {ms:.2} ms (CI-safe bound; §12.1 is 300 ms on the reference)"
+        ms < 500.0,
+        "first software kittest frame took {ms:.2} ms (500 ms CI regression budget)"
     );
 }

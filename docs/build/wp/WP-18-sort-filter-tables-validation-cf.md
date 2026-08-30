@@ -26,6 +26,7 @@ The data features people open Excel for, with file-faithful storage so they surv
 ## Implementation notes
 
 - Excel's sort of formulas: cells move as units and relative references are adjusted as in a move — document the exact rule you implement with tests, and note any divergence in `docs/compat/known-differences.md`.
+- Expose the resolved conditional-format overlay for a visible cell/range as a read-only result/cache that a frontend can consume without evaluating rules on the UI thread. Commit a resolved-overlay fixture and record the API in the report for WP-28's GUI integration pass; the fixture must distinguish explicit file colors from evaluated rule priority and `stop-if-true`.
 
 ## Acceptance criteria
 

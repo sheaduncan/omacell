@@ -44,16 +44,23 @@ fn setup() -> Harness<'static, Gui> {
         .with_size(egui::vec2(800.0, 600.0))
         .build_eframe(|cc| Gui::new(launch, false, &cc.egui_ctx).unwrap());
     harness.step();
+    black_box(harness.render().expect("warm software render"));
     std::mem::forget(dir);
     harness
 }
 
 fn scroll_1m_software(c: &mut Criterion) {
     let mut harness = setup();
+    let mut row = 0u32;
     c.bench_function("gui_scroll_1m_software", |b| {
         b.iter(|| {
+            row = row.wrapping_add(7_919) % (omacell_core::limits::MAX_ROWS - 32);
+            let mut viewport = harness.state().ui_session().viewport();
+            viewport.first_row = row;
+            harness.state().ui_session().set_viewport(viewport);
             harness.step();
-            black_box(());
+            black_box(harness.render().expect("software render"));
+            black_box(row);
         });
     });
 }

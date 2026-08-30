@@ -26,6 +26,7 @@ The mutating operations of daily spreadsheet work, each as a registered command 
 
 - Write the expected-formula corpus before implementing: for each structural op, a fixture sheet, the op, and the formulas Excel would produce afterwards.
 - Every operation is a command with an inverse; `proptest` the op/undo identity.
+- Register the deferred WP-14 command ids used by frontends (`edit.copy`, `edit.paste`, `edit.fillselection`, and the remaining WP-17 entries in `crates/ui/src/deferred.rs`) with typed schemas. Expose one atomic move/copy operation for GUI drag-drop; do not require a frontend to emulate move as separate cut and paste tasks. Record the exact ids/schemas in the report for WP-28's GUI integration pass.
 
 ## Acceptance criteria
 

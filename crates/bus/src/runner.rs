@@ -65,6 +65,7 @@ struct Shared {
     tasks: Mutex<BTreeMap<TaskId, TaskState>>,
     cancels: Mutex<BTreeMap<TaskId, Arc<AtomicBool>>>,
     events: Mutex<VecDeque<TaskEvent>>,
+    event_waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     dropped: AtomicU64,
     task_slots: AtomicUsize,
     running: Mutex<Option<TaskId>>,
@@ -116,6 +117,7 @@ impl TaskRunner {
             tasks: Mutex::new(BTreeMap::new()),
             cancels: Mutex::new(BTreeMap::new()),
             events: Mutex::new(VecDeque::new()),
+            event_waker: Mutex::new(None),
             dropped: AtomicU64::new(0),
             task_slots: AtomicUsize::new(0),
             running: Mutex::new(None),
@@ -288,6 +290,18 @@ impl TaskRunnerHandle {
     pub fn drain_events(&self) -> Vec<TaskEvent> {
         let mut q = self.shared.events.lock().unwrap_or_else(|p| p.into_inner());
         q.drain(..).collect()
+    }
+
+    /// Wake a frontend whenever a task event is queued.
+    ///
+    /// This lets GUI event loops sleep while idle and still repaint for IPC or
+    /// worker-thread activity.
+    pub fn set_event_waker(&self, wake: impl Fn() + Send + Sync + 'static) {
+        *self
+            .shared
+            .event_waker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(wake));
     }
 
     /// Queue a command. Does not wait. Long TUI work uses this.
@@ -526,6 +540,19 @@ fn push_event(shared: &Shared, event: TaskEvent) {
         shared.dropped.fetch_add(1, Ordering::Relaxed);
     }
     q.push_back(event);
+    drop(q);
+    wake_event_consumer(shared);
+}
+
+fn wake_event_consumer(shared: &Shared) {
+    let wake = shared
+        .event_waker
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if let Some(wake) = wake {
+        wake();
+    }
 }
 
 fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
@@ -559,13 +586,16 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                     }
                     continue;
                 }
-                {
+                let running_event = {
                     let mut tasks = shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
-                    if let Some(state) = tasks.get_mut(&id) {
+                    tasks.get_mut(&id).map(|state| {
                         state.status = TaskStatus::Running;
-                        push_event(&shared, TaskEvent::Running(state.clone()));
-                    }
-                    *shared.running.lock().unwrap_or_else(|p| p.into_inner()) = Some(id);
+                        TaskEvent::Running(state.clone())
+                    })
+                };
+                *shared.running.lock().unwrap_or_else(|p| p.into_inner()) = Some(id);
+                if let Some(event) = running_event {
+                    push_event(&shared, event);
                 }
                 let progress_shared = Arc::clone(&shared);
                 let progress_id = id;
@@ -650,37 +680,39 @@ fn mark_cancelling(shared: &Shared, id: TaskId) {
 
 fn finish_execute(shared: &Shared, id: TaskId, outcome: &Outcome) {
     *shared.running.lock().unwrap_or_else(|p| p.into_inner()) = None;
-    let mut tasks = shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
-    let Some(state) = tasks.get_mut(&id) else {
-        return;
-    };
-    if outcome.ok {
-        state.status = TaskStatus::Completed;
-        push_event(
-            shared,
+    let event = {
+        let mut tasks = shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(state) = tasks.get_mut(&id) else {
+            return;
+        };
+        if outcome.ok {
+            state.status = TaskStatus::Completed;
             TaskEvent::Completed {
                 state: state.clone(),
                 outcome: outcome.clone(),
-            },
-        );
-    } else {
-        state.status = TaskStatus::Failed;
-        let (code, message) = outcome
-            .error
-            .as_ref()
-            .map(|e| (e.code.clone(), e.message.clone()))
-            .unwrap_or_else(|| ("task.failed".into(), "command failed".into()));
-        push_event(
-            shared,
+            }
+        } else {
+            state.status = TaskStatus::Failed;
+            let (code, message) = outcome
+                .error
+                .as_ref()
+                .map(|e| (e.code.clone(), e.message.clone()))
+                .unwrap_or_else(|| ("task.failed".into(), "command failed".into()));
             TaskEvent::Failed {
                 state: state.clone(),
                 code,
                 message,
-            },
-        );
-    }
-    tasks.remove(&id);
-    drop(tasks);
+            }
+        }
+    };
+    // Publish the terminal event before making `is_busy()` false, while still
+    // invoking the external waker without any task-map lock held.
+    push_event(shared, event);
+    shared
+        .tasks
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&id);
     shared
         .cancels
         .lock()
@@ -722,6 +754,7 @@ fn publish_snapshot(shared: &Shared, bus: &Bus) {
         spill: bus.engine().spill().clone(),
     });
     *shared.snapshot.lock().unwrap_or_else(|p| p.into_inner()) = next;
+    wake_event_consumer(shared);
 }
 
 fn coalesce_progress(shared: &Shared, id: TaskId, done: u64, total: Option<u64>, label: &str) {
@@ -741,6 +774,8 @@ fn coalesce_progress(shared: &Shared, id: TaskId, done: u64, total: Option<u64>,
         && existing.id == id
     {
         *existing = snapshot;
+        drop(q);
+        wake_event_consumer(shared);
         return;
     }
     if q.len() >= MAX_TASK_EVENTS {
@@ -748,6 +783,8 @@ fn coalesce_progress(shared: &Shared, id: TaskId, done: u64, total: Option<u64>,
         shared.dropped.fetch_add(1, Ordering::Relaxed);
     }
     q.push_back(TaskEvent::Progress(snapshot));
+    drop(q);
+    wake_event_consumer(shared);
 }
 
 /// Test helper: register `test.hold` which waits on `start` then spins until

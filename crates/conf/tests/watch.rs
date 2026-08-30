@@ -1,5 +1,7 @@
 //! Last-good config survives an invalid write.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use omacell_conf::layer::LoadOptions;
@@ -14,6 +16,24 @@ fn wait_for(store: &ConfigStore, predicate: impl Fn(&ReloadEvent) -> bool) -> bo
         }
     }
     false
+}
+
+#[test]
+fn reload_wakes_a_registered_frontend() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    std::fs::create_dir_all(&paths.user_config).unwrap();
+    let store = ConfigStore::load_with(paths, LoadOptions::default()).unwrap();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let wake_count = Arc::clone(&wakes);
+    store.set_event_waker(move || {
+        wake_count.fetch_add(1, Ordering::SeqCst);
+    });
+
+    store.reload().unwrap();
+
+    assert!(wakes.load(Ordering::SeqCst) > 0);
+    assert!(!store.drain_events().is_empty());
 }
 
 #[test]

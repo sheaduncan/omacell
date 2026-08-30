@@ -10,6 +10,30 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use crate::layer::{LoadOptions, LoadedConfig, load_with_options};
 use crate::paths::Paths;
 
+type EventWaker = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Clone)]
+struct EventSink {
+    tx: Sender<ReloadEvent>,
+    waker: Arc<Mutex<Option<EventWaker>>>,
+}
+
+impl EventSink {
+    fn send(&self, event: ReloadEvent) {
+        if self.tx.send(event).is_err() {
+            return;
+        }
+        let wake = self
+            .waker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+}
+
 /// Reload outcome.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReloadEvent {
@@ -38,7 +62,7 @@ pub struct ReloadHandle {
     paths: Paths,
     options: LoadOptions,
     inner: Arc<Mutex<LoadedConfig>>,
-    events: Sender<ReloadEvent>,
+    events: EventSink,
 }
 
 impl ReloadHandle {
@@ -57,7 +81,7 @@ impl ReloadHandle {
         let next = match load_with_options(&self.paths, &self.options) {
             Ok(next) => next,
             Err(err) => {
-                let _ = self.events.send(ReloadEvent::Invalid {
+                self.events.send(ReloadEvent::Invalid {
                     path,
                     message: err.message.clone(),
                 });
@@ -70,10 +94,10 @@ impl ReloadHandle {
             *current = next;
             changed
         };
-        let _ = self.events.send(ReloadEvent::Applied { path });
+        self.events.send(ReloadEvent::Applied { path });
         if theme_changed {
             let name = self.snapshot().theme.name;
-            let _ = self.events.send(ReloadEvent::ThemeChanged { name });
+            self.events.send(ReloadEvent::ThemeChanged { name });
         }
         Ok(())
     }
@@ -90,7 +114,7 @@ pub struct ConfigStore {
     paths: Paths,
     options: LoadOptions,
     inner: Arc<Mutex<LoadedConfig>>,
-    event_tx: Sender<ReloadEvent>,
+    event_sink: EventSink,
     events: Receiver<ReloadEvent>,
     _watcher: Option<RecommendedWatcher>,
 }
@@ -108,11 +132,15 @@ impl ConfigStore {
     ) -> Result<Self, omacell_core::error::CoreError> {
         let loaded = load_with_options(&paths, &options)?;
         let (tx, rx) = mpsc::channel();
+        let event_sink = EventSink {
+            tx,
+            waker: Arc::new(Mutex::new(None)),
+        };
         Ok(Self {
             paths,
             options,
             inner: Arc::new(Mutex::new(loaded)),
-            event_tx: tx,
+            event_sink,
             events: rx,
             _watcher: None,
         })
@@ -130,6 +158,10 @@ impl ConfigStore {
     ) -> Result<Self, omacell_core::error::CoreError> {
         let loaded = load_with_options(&paths, &options)?;
         let (tx, rx) = mpsc::channel();
+        let event_sink = EventSink {
+            tx,
+            waker: Arc::new(Mutex::new(None)),
+        };
         let inner = Arc::new(Mutex::new(loaded));
         let debounce = Duration::from_millis(
             inner
@@ -146,7 +178,7 @@ impl ConfigStore {
                 paths.clone(),
                 options.clone(),
                 inner.clone(),
-                tx.clone(),
+                event_sink.clone(),
                 debounce,
             )?)
         } else {
@@ -156,7 +188,7 @@ impl ConfigStore {
             paths,
             options,
             inner,
-            event_tx: tx,
+            event_sink,
             events: rx,
             _watcher: watcher,
         })
@@ -180,8 +212,20 @@ impl ConfigStore {
             paths: self.paths.clone(),
             options: self.options.clone(),
             inner: self.inner.clone(),
-            events: self.event_tx.clone(),
+            events: self.event_sink.clone(),
         }
+    }
+
+    /// Wake a frontend whenever a reload event is queued.
+    ///
+    /// GUI frontends use this to request a frame from watcher, signal, and
+    /// command threads without polling while idle.
+    pub fn set_event_waker(&self, wake: impl Fn() + Send + Sync + 'static) {
+        *self
+            .event_sink
+            .waker
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(wake));
     }
 
     /// Whether filesystem live reload is active.
@@ -204,7 +248,7 @@ fn spawn_watcher(
     paths: Paths,
     options: LoadOptions,
     inner: Arc<Mutex<LoadedConfig>>,
-    tx: Sender<ReloadEvent>,
+    events: EventSink,
     debounce: Duration,
 ) -> Result<RecommendedWatcher, omacell_core::error::CoreError> {
     let watch_dir = paths.user_config.clone();
@@ -300,7 +344,7 @@ fn spawn_watcher(
                         *g = next;
                     }
                     if config_changed || user_file_changed {
-                        let _ = tx.send(ReloadEvent::Applied {
+                        events.send(ReloadEvent::Applied {
                             path: changed_path.clone(),
                         });
                     }
@@ -309,11 +353,11 @@ fn spawn_watcher(
                             .lock()
                             .map(|loaded| loaded.theme.name.clone())
                             .unwrap_or_else(|poisoned| poisoned.into_inner().theme.name.clone());
-                        let _ = tx.send(ReloadEvent::ThemeChanged { name });
+                        events.send(ReloadEvent::ThemeChanged { name });
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(ReloadEvent::Invalid {
+                    events.send(ReloadEvent::Invalid {
                         path: changed_path,
                         message: e.message.clone(),
                     });

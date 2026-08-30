@@ -5,10 +5,11 @@ use std::path::PathBuf;
 use eframe::egui;
 use omacell_bus::ipc::{IpcHandle, default_runtime_dir, serve_runner};
 use omacell_bus::{
-    Bus, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskRunner, TaskRunnerHandle,
+    Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskRunner,
+    TaskRunnerHandle,
 };
 use omacell_conf::{ConfigStore, LoadedConfig, Paths, ReloadEvent};
-use omacell_core::addr::{SheetId, col_to_letters, parse_a1_cell};
+use omacell_core::addr::{SheetId, col_to_letters, parse_a1_cell, quote_sheet_name};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
 use omacell_core::{PRODUCT_DISPLAY_NAME, PRODUCT_NAME};
@@ -45,7 +46,7 @@ pub struct Launch {
 
 enum PointerDrag {
     Select { start: (u32, u16) },
-    Move { start: (u32, u16) },
+    Move { press: (u32, u16) },
     Fill { start: (u32, u16) },
     ColResize { col: u16, start_x: f32, orig: u32 },
     RowResize { row: u32, start_y: f32, orig: u32 },
@@ -65,10 +66,12 @@ pub struct Gui {
     active_sheet: SheetId,
     grid: GridLayout,
     palette_index: usize,
+    palette_command: Option<String>,
     context_menu: Option<egui::Pos2>,
     file: Option<PathBuf>,
     use_shell_font: bool,
     drag: Option<PointerDrag>,
+    focused_cancel: Option<CancelHandle>,
     last_title: String,
     _ipc: Option<IpcHandle>,
 }
@@ -76,9 +79,28 @@ pub struct Gui {
 impl Gui {
     /// Wrap a launch. `ipc` starts the in-process socket used by the theme hook.
     pub fn new(launch: Launch, ipc: bool, ctx: &egui::Context) -> Result<Self, CoreError> {
+        let requested_file = launch.file.clone();
         let loaded = launch.store.snapshot();
         let catalog = catalog_from_bus(&launch.bus)?;
         let runner = TaskRunner::spawn(launch.bus, launch.long_ops)?;
+        let config_repaint = ctx.clone();
+        launch
+            .store
+            .set_event_waker(move || config_repaint.request_repaint());
+        let task_repaint = ctx.clone();
+        runner
+            .handle()
+            .set_event_waker(move || task_repaint.request_repaint());
+        let (message, focused_cancel) = if let Some(path) = requested_file {
+            let (_, cancel) = runner.handle().submit(
+                Origin::User,
+                "file.open",
+                json!({"path": path.display().to_string()}),
+            )?;
+            (Some("opening…".into()), Some(cancel))
+        } else {
+            (None, None)
+        };
         let ipc_handle = if ipc {
             Some(serve_runner(default_runtime_dir(), runner.handle())?)
         } else {
@@ -108,15 +130,17 @@ impl Gui {
             roots: launch.roots,
             theme,
             catalog,
-            message: None,
+            message,
             dirty: false,
             active_sheet,
             grid: GridLayout::default(),
             palette_index: 0,
+            palette_command: None,
             context_menu: None,
-            file: launch.file,
+            file: None,
             use_shell_font: launch.use_shell_font,
             drag: None,
+            focused_cancel,
             last_title: String::new(),
             _ipc: ipc_handle,
         })
@@ -220,15 +244,21 @@ impl Gui {
         for event in self.runner.handle().drain_events() {
             match event {
                 TaskEvent::Completed { state, outcome } => {
+                    if self
+                        .focused_cancel
+                        .as_ref()
+                        .is_some_and(|cancel| cancel.id() == state.id)
+                    {
+                        self.focused_cancel = None;
+                    }
                     self.message = None;
                     if state.command == "file.open" || state.command == "file.save" {
                         self.dirty = false;
-                        if state.command == "file.open"
-                            && let Some(path) = outcome
-                                .result
-                                .as_ref()
-                                .and_then(|value| value.get("path"))
-                                .and_then(|value| value.as_str())
+                        if let Some(path) = outcome
+                            .result
+                            .as_ref()
+                            .and_then(|value| value.get("path"))
+                            .and_then(|value| value.as_str())
                         {
                             self.file = Some(PathBuf::from(path));
                         }
@@ -243,11 +273,21 @@ impl Gui {
                         }
                     }
                     self.ui.remember_command(&state.command);
-                    self.adopt_snapshot();
+                    if state.command == "file.open" {
+                        self.adopt_opened_snapshot();
+                    } else if matches!(state.command.as_str(), "sheet.next" | "sheet.prev") {
+                        self.adopt_snapshot();
+                    }
                 }
-                TaskEvent::Failed { message, .. } => {
+                TaskEvent::Failed { state, message, .. } => {
+                    if self
+                        .focused_cancel
+                        .as_ref()
+                        .is_some_and(|cancel| cancel.id() == state.id)
+                    {
+                        self.focused_cancel = None;
+                    }
                     self.message = Some(message);
-                    self.adopt_snapshot();
                 }
                 TaskEvent::Progress(state) => {
                     if let Some(progress) = state.progress {
@@ -273,10 +313,26 @@ impl Gui {
         }
     }
 
+    fn adopt_opened_snapshot(&mut self) {
+        let snapshot = self.runner.handle().snapshot();
+        let state = self.ui.session_state();
+        apply_sheet_view(
+            &self.ui,
+            &snapshot.workbook,
+            snapshot.workbook.active_sheet(),
+        );
+        apply_restored_session(&self.ui, &snapshot.workbook, &state);
+        self.active_sheet = self.ui.selection().sheet;
+    }
+
     /// Handle one toolkit-neutral key.
     pub fn step_key(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
         if event.code == KeyCode::Esc
-            && let Some(handle) = self.runner.handle().running_cancel()
+            && let Some(handle) = self
+                .runner
+                .handle()
+                .running_cancel()
+                .or_else(|| self.focused_cancel.clone())
         {
             handle.cancel();
             self.message = Some("cancelling…".into());
@@ -309,17 +365,19 @@ impl Gui {
             self.message = None;
             if cmd == "palette.open" {
                 self.refresh_palette("");
+                self.palette_command = None;
             }
             return Ok(Outcome::success(json!({"ok": true})));
         }
         match handle.submit(Origin::User, cmd, args) {
-            Ok(_) => {
+            Ok((id, cancel)) => {
+                self.focused_cancel = Some(cancel);
                 self.message = Some(if handle.long_ops().contains(cmd) {
                     "working…".into()
                 } else {
                     "queued…".into()
                 });
-                Ok(Outcome::success(json!({"queued": true})))
+                Ok(Outcome::success(json!({"queued": true, "task": id.get()})))
             }
             Err(err) => {
                 self.message = Some(err.message.clone());
@@ -329,21 +387,16 @@ impl Gui {
     }
 
     fn step_palette(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
+        if self.palette_command.is_some() {
+            return self.step_palette_args(event);
+        }
         match event.code {
-            KeyCode::Esc => {
-                let mut palette = self.ui.palette();
-                palette.close();
-                self.ui.set_palette(palette);
-                self.palette_index = 0;
-            }
+            KeyCode::Esc => self.close_palette(),
             KeyCode::Enter => {
                 let palette = self.ui.palette();
                 if let Some(hit) = palette.hits.get(self.palette_index) {
                     let id = hit.id.clone();
-                    let mut palette = palette;
-                    palette.close();
-                    self.ui.set_palette(palette);
-                    self.execute_cmd(&id, json!({}))?;
+                    self.choose_palette(&id)?;
                 }
             }
             KeyCode::Down => {
@@ -367,9 +420,90 @@ impl Gui {
                 self.ui.set_palette(palette);
                 self.refresh_palette(&q);
             }
+            KeyCode::Space => {
+                let mut palette = self.ui.palette();
+                palette.query.push(' ');
+                let q = palette.query.clone();
+                self.ui.set_palette(palette);
+                self.refresh_palette(&q);
+            }
             _ => {}
         }
         Ok(KeyOutcome::Pending)
+    }
+
+    fn step_palette_args(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
+        match event.code {
+            KeyCode::Esc => self.close_palette(),
+            KeyCode::Enter => {
+                let text = self.ui.palette().query;
+                let args = match serde_json::from_str::<serde_json::Value>(&text) {
+                    Ok(serde_json::Value::Object(fields)) => serde_json::Value::Object(fields),
+                    Ok(_) => {
+                        self.message = Some("palette arguments must be a JSON object".into());
+                        return Ok(KeyOutcome::Pending);
+                    }
+                    Err(err) => {
+                        self.message = Some(format!("invalid JSON arguments: {err}"));
+                        return Ok(KeyOutcome::Pending);
+                    }
+                };
+                if let Some(id) = self.palette_command.clone() {
+                    let outcome = self.execute_cmd(&id, args)?;
+                    if outcome.ok {
+                        self.close_palette();
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                let mut palette = self.ui.palette();
+                palette.query.pop();
+                self.ui.set_palette(palette);
+            }
+            KeyCode::Char(c) => {
+                let mut palette = self.ui.palette();
+                palette.query.push(c);
+                self.ui.set_palette(palette);
+            }
+            KeyCode::Space => {
+                let mut palette = self.ui.palette();
+                palette.query.push(' ');
+                self.ui.set_palette(palette);
+            }
+            _ => {}
+        }
+        Ok(KeyOutcome::Pending)
+    }
+
+    fn choose_palette(&mut self, id: &str) -> Result<(), CoreError> {
+        if let Some(command) = self
+            .catalog
+            .iter()
+            .find(|command| command.id == id)
+            .cloned()
+            && has_required_args(&command)
+        {
+            let mut palette = self.ui.palette();
+            palette.prompt_for(&command);
+            if let Some(fields) = palette.prompt.take() {
+                palette.prompt = Some(format!("{id} — {fields}; enter JSON object"));
+            }
+            palette.query.clear();
+            self.ui.set_palette(palette);
+            self.palette_command = Some(id.to_string());
+            return Ok(());
+        }
+        self.close_palette();
+        let _ = self.execute_cmd(id, json!({}))?;
+        Ok(())
+    }
+
+    fn close_palette(&mut self) {
+        let mut palette = self.ui.palette();
+        palette.close();
+        self.ui.set_palette(palette);
+        self.palette_index = 0;
+        self.palette_command = None;
     }
 
     fn refresh_palette(&mut self, query: &str) {
@@ -389,11 +523,10 @@ impl Gui {
         let busy = self.runner.handle().is_busy();
         let cfg = self.ui.config();
         let compact = ctx.screen_rect().width() < cfg.layout.compact_below_width as f32;
-        let formula_editing = self.ui.edit().surface == EditSurface::FormulaBar;
-
+        let edit = self.ui.edit();
         let input = ctx.input(|i| i.clone());
         for key in input::pressed_keys(&input.events) {
-            if formula_editing && matches!(key.code, KeyCode::Char(_)) {
+            if toolkit_owns_key(&edit, &key) {
                 continue;
             }
             let _ = self.step_key(key);
@@ -441,14 +574,22 @@ impl Gui {
                 picked = chrome::menu_bar(ui);
             });
             if let Some(cmd) = picked {
-                let _ = self.execute_cmd(cmd, json!({}));
+                if cmd == "edit.copy" {
+                    self.execute_if_available(cmd, "WP-17");
+                } else {
+                    let _ = self.execute_cmd(cmd, json!({}));
+                }
             }
         }
 
         if cfg.appearance.show_sheet_tabs && !compact {
+            let mut selected = None;
             egui::TopBottomPanel::top("omacell-tabs").show(ctx, |ui| {
-                chrome::tabs(ui, &snapshot.workbook, &self.ui, &self.theme);
+                selected = chrome::tabs(ui, &snapshot.workbook, &self.ui, &self.theme);
             });
+            if let Some(sheet) = selected {
+                self.activate_sheet(&snapshot.workbook, sheet);
+            }
         }
         if cfg.appearance.show_formula_bar {
             egui::TopBottomPanel::top("omacell-fx").show(ctx, |ui| {
@@ -513,11 +654,11 @@ impl Gui {
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         if ui.button("Copy").clicked() {
-                            let _ = self.execute_cmd("edit.copy", json!({}));
+                            self.execute_if_available("edit.copy", "WP-17");
                             close = true;
                         }
                         if ui.button("Paste").clicked() {
-                            let _ = self.execute_cmd("edit.paste", json!({}));
+                            self.execute_if_available("edit.paste", "WP-17");
                             close = true;
                         }
                     });
@@ -531,7 +672,36 @@ impl Gui {
             && let Some(id) =
                 chrome::palette(ctx, &self.ui.palette(), self.palette_index, &self.theme)
         {
-            let _ = self.execute_cmd(&id, json!({}));
+            let _ = self.choose_palette(&id);
+        }
+    }
+
+    fn execute_if_available(&mut self, command: &str, owner: &str) {
+        if self.catalog.iter().any(|entry| entry.id == command) {
+            let _ = self.execute_cmd(command, json!({}));
+        } else {
+            self.message = Some(format!("{command} arrives in {owner}"));
+        }
+    }
+
+    fn activate_sheet(&mut self, workbook: &omacell_core::workbook::Workbook, id: SheetId) {
+        let Some(sheet) = workbook.sheet(id) else {
+            return;
+        };
+        apply_sheet_view(&self.ui, workbook, id);
+        self.active_sheet = id;
+        let range = format!(
+            "{}!{}",
+            quote_sheet_name(&sheet.name),
+            sheet.view.selection.to_a1()
+        );
+        match self
+            .runner
+            .handle()
+            .submit(Origin::User, "view.select", json!({"range": range}))
+        {
+            Ok((_, cancel)) => self.focused_cancel = Some(cancel),
+            Err(err) => self.message = Some(err.message),
         }
     }
 
@@ -601,9 +771,7 @@ impl Gui {
         let (r0, c0, r1, c1) = sel.active().normalized();
         let inside = row >= r0 && row <= r1 && col >= c0 && col <= c1 && (r1 > r0 || c1 > c0);
         if inside && !shift {
-            self.drag = Some(PointerDrag::Move {
-                start: (sel.cursor.row, sel.cursor.col),
-            });
+            self.drag = Some(PointerDrag::Move { press: (row, col) });
             return;
         }
         let mut sel = sel;
@@ -620,6 +788,9 @@ impl Gui {
             if let Some(active) = sel.areas.last_mut() {
                 active.end = sel.cursor;
             }
+        } else if sel.extend == omacell_ui::ExtendMode::Add {
+            sel.areas.push(Area::cell(sel.cursor));
+            sel.extend = omacell_ui::ExtendMode::Extend;
         } else {
             sel.replace(Area::cell(sel.cursor));
         }
@@ -673,24 +844,23 @@ impl Gui {
         let drag = self.drag.take();
         match drag {
             Some(PointerDrag::Fill { .. }) => {
-                let _ = self.execute_cmd("edit.fillselection", json!({}));
+                self.execute_if_available("edit.fillselection", "WP-17");
             }
-            Some(PointerDrag::Move { start }) => {
+            Some(PointerDrag::Move { press }) => {
                 let vp = self.ui.viewport();
                 let Some((row, col)) = self.grid.hit(pos, &vp) else {
                     return;
                 };
-                if (row, col) == start {
+                if (row, col) == press {
+                    let mut selection = self.ui.selection();
+                    selection.cursor.row = row;
+                    selection.cursor.col = col;
+                    selection.replace(Area::cell(selection.cursor));
+                    self.ui.set_selection(selection);
                     return;
                 }
-                let copy = if ctrl { "edit.copy" } else { "edit.cut" };
-                let _ = self.execute_cmd(copy, json!({}));
-                let mut sel = self.ui.selection();
-                sel.cursor.row = row;
-                sel.cursor.col = col;
-                sel.replace(Area::cell(sel.cursor));
-                self.ui.set_selection(sel);
-                let _ = self.execute_cmd("edit.paste", json!({}));
+                let operation = if ctrl { "copy" } else { "move" };
+                self.message = Some(format!("drag {operation} arrives in WP-17"));
             }
             _ => {}
         }
@@ -728,7 +898,37 @@ impl eframe::App for Gui {
     }
 }
 
+impl Drop for Gui {
+    fn drop(&mut self) {
+        self.persist_session();
+    }
+}
+
 const DEFAULT_FIT_ROW: u32 = 20;
+
+fn toolkit_owns_key(edit: &omacell_ui::EditState, event: &KeyEvent) -> bool {
+    if edit.is_idle() {
+        return false;
+    }
+    match edit.surface {
+        EditSurface::Idle => false,
+        EditSurface::FormulaBar => !matches!(
+            event.code,
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::F(4)
+        ),
+        EditSurface::InCell => {
+            !event.ctrl && !event.alt && matches!(event.code, KeyCode::Char(_) | KeyCode::Space)
+        }
+    }
+}
+
+fn has_required_args(command: &CommandJson) -> bool {
+    command
+        .arg_schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|required| !required.is_empty())
+}
 
 fn catalog_from_bus(bus: &Bus) -> Result<Vec<CommandJson>, CoreError> {
     let text = bus

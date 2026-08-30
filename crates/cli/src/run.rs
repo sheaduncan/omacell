@@ -202,7 +202,9 @@ fn cmd_gui(cli: &Cli) -> Result<(), CliError> {
         .hint("set WAYLAND_DISPLAY or DISPLAY, or use omacell --tui"));
     }
     let book = cli.files.first().map(PathBuf::as_path);
-    let mut app = App::bootstrap_live(cli, book)?;
+    // File loading belongs to the GUI task runner so first paint, progress, and
+    // cancellation remain available for large workbooks.
+    let mut app = App::bootstrap_live(cli, None)?;
     log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
     let _sig = crate::reload::spawn_sigusr1_reloader(app.reload_handle())?;
     let (ui, roots) = app.attach_session(cli.config.as_deref())?;

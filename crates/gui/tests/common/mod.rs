@@ -1,6 +1,9 @@
 //! Shared GUI test harness (no second config load).
 #![allow(dead_code)]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use omacell_bus::{Bus, CommandKind, CommandSpec, Effect, Exposure, LongOps};
 use omacell_conf::{ConfigStore, LoadOptions, Paths};
 use omacell_core::eval::FnRegistry;
@@ -17,6 +20,7 @@ use serde_json::json;
 pub struct HarnessParts {
     pub _dir: tempfile::TempDir,
     pub launch: Launch,
+    pub open_count: Arc<AtomicUsize>,
 }
 
 pub fn fixture_theme(name: &str) -> std::path::PathBuf {
@@ -36,6 +40,12 @@ fn install_omarchy_theme(paths: &Paths, name: &str) {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ThemeReloadArgs {}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FileOpenArgs {
+    path: String,
+}
 
 fn register_theme_reload(
     bus: &mut Bus,
@@ -60,6 +70,32 @@ fn register_theme_reload(
                 events: vec![Event::ThemeChanged { name: name.clone() }],
                 result: json!({"name": name}),
                 auto_recalc: false,
+                ..Effect::default()
+            })
+        },
+    )
+}
+
+fn register_file_open(
+    bus: &mut Bus,
+    open_count: Arc<AtomicUsize>,
+) -> Result<(), omacell_core::error::CoreError> {
+    bus.registry_mut().register::<FileOpenArgs, _>(
+        CommandSpec {
+            id: "file.open",
+            doc: "Open a workbook from disk",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        move |ctx, args: FileOpenArgs| {
+            if ctx.is_preflight() {
+                return Ok(Effect::query(json!({"path": args.path})));
+            }
+            open_count.fetch_add(1, Ordering::SeqCst);
+            Ok(Effect {
+                result: json!({"path": args.path}),
                 ..Effect::default()
             })
         },
@@ -94,6 +130,8 @@ pub fn launch_opts(theme: Option<&str>, workbook: Workbook, watch: bool) -> Harn
     let mut bus = Bus::new(workbook, RecalcEngine::new(functions)).unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
     register_theme_reload(&mut bus, store.handle()).unwrap();
+    let open_count = Arc::new(AtomicUsize::new(0));
+    register_file_open(&mut bus, Arc::clone(&open_count)).unwrap();
     for (cell, input) in [
         ("A1", "Hello"),
         ("B1", "1234.5"),
@@ -110,6 +148,7 @@ pub fn launch_opts(theme: Option<&str>, workbook: Workbook, watch: bool) -> Harn
     }
     HarnessParts {
         _dir: dir,
+        open_count,
         launch: Launch {
             paths,
             store,

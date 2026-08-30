@@ -124,6 +124,9 @@ fn role(roles: &ThemeRoles, key: &str) -> Color32 {
 #[must_use]
 pub fn hex_color(hex: &str) -> Color32 {
     let h = hex.trim().trim_start_matches('#');
+    if !h.is_ascii() {
+        return Color32::GRAY;
+    }
     if h.len() == 6
         && let Ok(r) = u8::from_str_radix(&h[0..2], 16)
         && let Ok(g) = u8::from_str_radix(&h[2..4], 16)
@@ -177,5 +180,6 @@ mod tests {
             Color32::from_rgba_unmultiplied(255, 255, 255, 128)
         );
         assert_eq!(hex_color("not-a-color"), Color32::GRAY);
+        assert_eq!(hex_color("aéaaa"), Color32::GRAY);
     }
 }

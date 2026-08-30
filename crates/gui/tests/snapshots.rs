@@ -3,7 +3,7 @@
 mod common;
 
 use common::launch_theme;
-use egui_kittest::Harness;
+use egui_kittest::{Harness, SnapshotOptions};
 use omacell_gui::Gui;
 
 const THEMES: [&str; 3] = ["tokyo-night", "catppuccin-latte", "nord"];
@@ -20,7 +20,15 @@ fn grid_snapshots_across_scales_and_themes() {
                 .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
             harness.run();
             let name = format!("grid_{theme}_{scale}x");
-            harness.snapshot(&name);
+            // Glyph rasterization can move a small number of antialiased edge
+            // pixels between GPU and CI's lavapipe adapter. Keep the tolerance
+            // proportional to image area; geometry and hairlines are asserted
+            // independently below.
+            let raster_tolerance = (640.0 * 400.0 * scale * scale * 0.012).ceil() as usize;
+            harness.snapshot_options(
+                &name,
+                &SnapshotOptions::new().failed_pixel_count_threshold(raster_tolerance),
+            );
             if (scale - 1.0).abs() < f32::EPSILON {
                 let image = harness.render().expect("render snapshot");
                 assert_crisp_gridlines(
