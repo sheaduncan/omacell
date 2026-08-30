@@ -40,6 +40,9 @@ jobs:
       - name: just check
         run: just check
 
+      - name: GUI software-render performance gate
+        run: cargo test --release -p omacell-gui --test performance -- --nocapture
+
       - name: cargo deny
         run: cargo deny check
 

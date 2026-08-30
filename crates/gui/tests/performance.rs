@@ -28,7 +28,7 @@ fn scrolling_the_million_row_space_stays_within_the_regression_budget() {
     // frame measurement. Keep it bounded in `just check`; release owns the
     // actual software-render target.
     let budget = if cfg!(debug_assertions) {
-        release_budget * 2
+        release_budget * 7
     } else {
         release_budget
     };
