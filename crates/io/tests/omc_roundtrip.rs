@@ -321,9 +321,11 @@ fn omc_roundtrips_ambiguous_text_and_l2_metadata() {
     table.columns = vec![
         TableColumn {
             name: "Last, First".into(),
+            totals_fn: None,
         },
         TableColumn {
             name: "Amount\tUSD".into(),
+            totals_fn: None,
         },
     ];
     wb.add_table(table).unwrap();

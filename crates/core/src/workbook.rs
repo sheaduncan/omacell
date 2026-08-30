@@ -269,6 +269,9 @@ impl Workbook {
                 charts: Vec::new(),
                 sparklines: Vec::new(),
                 page_setup: PageSetup::default(),
+                autofilter: None,
+                validations: Vec::new(),
+                cond_formats: Vec::new(),
             },
         };
         let mut sheets = IndexMap::new();
@@ -660,7 +663,9 @@ impl Workbook {
         col: u16,
         n: f64,
     ) -> Result<Option<CellSlot>, CoreError> {
-        self.replace_slot(id, row, col, Some(CellSlot::number(n)))
+        let old = self.replace_slot(id, row, col, Some(CellSlot::number(n)))?;
+        self.expand_tables_at(id, row, col);
+        Ok(old)
     }
 
     /// Intern rich text and store it as the cell value.
@@ -701,6 +706,7 @@ impl Workbook {
         };
         self.replace_slot(id, row, col, Some(slot))?;
         self.intern_mut().strings.release(sid);
+        self.expand_tables_at(id, row, col);
         Ok(sid)
     }
 
@@ -732,6 +738,17 @@ impl Workbook {
         col: u16,
     ) -> Result<Option<CellSlot>, CoreError> {
         self.replace_slot(id, row, col, None)
+    }
+
+    /// Write a complete slot without auto-expand (sort / restore).
+    pub(crate) fn write_slot(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        col: u16,
+        slot: Option<CellSlot>,
+    ) -> Result<Option<CellSlot>, CoreError> {
+        self.replace_slot(id, row, col, slot)
     }
 
     fn replace_slot(
@@ -1633,6 +1650,42 @@ impl Workbook {
         Ok(())
     }
 
+    /// Replace AutoFilter.
+    pub fn set_autofilter(
+        &mut self,
+        id: SheetId,
+        filter: Option<crate::filter::AutoFilter>,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.autofilter = filter;
+            Ok(())
+        })
+    }
+
+    /// Replace data validations.
+    pub fn set_validations(
+        &mut self,
+        id: SheetId,
+        validations: Vec<crate::validation::DataValidation>,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.validations = validations;
+            Ok(())
+        })
+    }
+
+    /// Replace conditional format rules.
+    pub fn set_cond_formats(
+        &mut self,
+        id: SheetId,
+        rules: Vec<crate::condfmt::CondFormat>,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.cond_formats = rules;
+            Ok(())
+        })
+    }
+
     /// Insert a defined name.
     pub fn define_name(&mut self, name: DefinedName) -> Result<(), CoreError> {
         let scope = name.scope;
@@ -1686,6 +1739,153 @@ impl Workbook {
             after: stored,
         });
         Ok(id)
+    }
+
+    /// Create a table covering `range`, using the first row as headers.
+    pub fn create_table(
+        &mut self,
+        sheet: SheetId,
+        range: crate::addr::RangeRef,
+        name: impl Into<String>,
+    ) -> Result<TableId, CoreError> {
+        let r0 = range.start.row.min(range.end.row);
+        let r1 = range.start.row.max(range.end.row);
+        let c0 = range.start.col.min(range.end.col);
+        let c1 = range.start.col.max(range.end.col);
+        let mut table = Table::new(TableId::new(0), name, sheet, r0, c0, r1, c1);
+        for (i, col) in (c0..=c1).enumerate() {
+            let header = match self.get(sheet, r0, col)? {
+                Some(slot) => match slot.value {
+                    crate::value::Value::Text(id) => {
+                        self.intern().strings.get(id).unwrap_or("").to_string()
+                    }
+                    crate::value::Value::Number(n) => n.to_string(),
+                    _ => format!("Column{}", i + 1),
+                },
+                None => format!("Column{}", i + 1),
+            };
+            if let Some(c) = table.columns.get_mut(i) {
+                c.name = header;
+            }
+        }
+        self.add_table(table)
+    }
+
+    /// Drop a table, leaving cell values.
+    pub fn convert_table(&mut self, id: TableId) -> Result<Table, CoreError> {
+        let before = self
+            .tables
+            .remove(id)
+            .ok_or_else(|| CoreError::table_name("unknown table"))?;
+        self.undo.record(Delta::Table {
+            before: Some(before.clone()),
+            after: None,
+        });
+        Ok(before)
+    }
+
+    /// Resize a table's range.
+    pub fn resize_table(
+        &mut self,
+        id: TableId,
+        range: crate::addr::RangeRef,
+    ) -> Result<(), CoreError> {
+        let before = self
+            .tables
+            .get(id)
+            .cloned()
+            .ok_or_else(|| CoreError::table_name("unknown table"))?;
+        {
+            let table = self
+                .tables
+                .get_mut(id)
+                .ok_or_else(|| CoreError::table_name("unknown table"))?;
+            table.start_row = range.start.row.min(range.end.row);
+            table.end_row = range.start.row.max(range.end.row);
+            table.start_col = range.start.col.min(range.end.col);
+            table.end_col = range.start.col.max(range.end.col);
+            let width = u32::from(table.end_col - table.start_col) + 1;
+            while table.columns.len() < width as usize {
+                let n = table.columns.len() + 1;
+                table.columns.push(crate::tables::TableColumn {
+                    name: format!("Column{n}"),
+                    totals_fn: None,
+                });
+            }
+            table.columns.truncate(width as usize);
+        }
+        let after = self.tables.get(id).cloned();
+        if Some(&before) != after.as_ref() {
+            self.undo.record(Delta::Table {
+                before: Some(before),
+                after,
+            });
+        }
+        Ok(())
+    }
+
+    fn expand_tables_at(&mut self, sheet: SheetId, row: u32, col: u16) {
+        let ids: Vec<TableId> = self
+            .tables
+            .iter()
+            .filter(|t| t.sheet == sheet && t.auto_expand)
+            .map(|t| t.id)
+            .collect();
+        for id in ids {
+            let Some(t) = self.tables.get(id).cloned() else {
+                continue;
+            };
+            let mut end_row = t.end_row;
+            let mut end_col = t.end_col;
+            if col >= t.start_col && col <= t.end_col && row == t.end_row.saturating_add(1) {
+                end_row = row;
+            }
+            if row >= t.start_row && row <= t.end_row && col == t.end_col.saturating_add(1) {
+                end_col = col;
+            }
+            if end_row != t.end_row || end_col != t.end_col {
+                let grew_row = end_row == t.end_row.saturating_add(1);
+                let _ = self.resize_table(
+                    id,
+                    crate::addr::RangeRef::from_corners(
+                        crate::addr::CellRef::new(t.start_row, t.start_col).unwrap(),
+                        crate::addr::CellRef::new(end_row, end_col).unwrap(),
+                    ),
+                );
+                if grew_row {
+                    self.fill_calculated_row(sheet, &t, end_row, col);
+                }
+            }
+        }
+    }
+
+    fn fill_calculated_row(&mut self, sheet: SheetId, table: &Table, new_row: u32, skip_col: u16) {
+        let src_row = if table.has_totals {
+            table.end_row.saturating_sub(1)
+        } else {
+            table.end_row
+        };
+        if src_row == new_row {
+            return;
+        }
+        for c in table.start_col..=table.end_col {
+            if c == skip_col {
+                continue;
+            }
+            let Ok(Some(slot)) = self.get(sheet, src_row, c) else {
+                continue;
+            };
+            let Some(fid) = slot.formula else {
+                continue;
+            };
+            let src = self.intern().formulas.get(fid).unwrap_or("").to_string();
+            if let Ok(rewritten) = crate::formula::rewrite_print(
+                &src,
+                &crate::formula::RewriteOp::Copy { dcol: 0, drow: 1 },
+            ) {
+                let _ = self.set_cell_contents(sheet, new_row, c, &rewritten);
+            }
+        }
     }
 
     /// Insert rows. Formula rewrite is TODO(WP-03)/TODO(WP-17).
@@ -1985,6 +2185,7 @@ impl Workbook {
             };
             let old = self.replace_slot(id, row, col, Some(slot))?;
             self.release_formula(fid);
+            self.expand_tables_at(id, row, col);
             return Ok(old);
         } else if trimmed.eq_ignore_ascii_case("TRUE") {
             CellSlot {
@@ -2017,9 +2218,12 @@ impl Workbook {
             };
             let old = self.replace_slot(id, row, col, Some(slot))?;
             self.release_text(sid);
+            self.expand_tables_at(id, row, col);
             return Ok(old);
         };
-        self.replace_slot(id, row, col, Some(slot))
+        let old = self.replace_slot(id, row, col, Some(slot))?;
+        self.expand_tables_at(id, row, col);
+        Ok(old)
     }
 }
 

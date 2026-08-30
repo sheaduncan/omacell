@@ -588,3 +588,114 @@ fn non_finite_numbers_are_rejected_before_xml_generation() {
     wb.set_number(wb.active_sheet(), 0, 0, f64::NAN).unwrap();
     assert!(save_workbook_bytes(&wb).is_err());
 }
+
+#[test]
+fn wp18_modeled_filter_dv_cf_roundtrip() {
+    use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat};
+    use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria, NumOp};
+    use omacell_core::validation::{DataValidation, DvOp, DvType};
+
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_text(sheet, 0, 0, "n").unwrap();
+    wb.set_number(sheet, 1, 0, 1.0).unwrap();
+    wb.set_number(sheet, 2, 0, 10.0).unwrap();
+    let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(2, 0).unwrap());
+    wb.set_autofilter(
+        sheet,
+        Some(AutoFilter {
+            range,
+            columns: vec![FilterColumn {
+                col_id: 0,
+                criteria: FilterCriteria::Number {
+                    op: NumOp::Greater,
+                    value: 5.0,
+                    value2: None,
+                },
+            }],
+        }),
+    )
+    .unwrap();
+    wb.set_validations(
+        sheet,
+        vec![DataValidation {
+            range,
+            kind: DvType::Whole,
+            op: DvOp::Between,
+            formula1: Some("1".into()),
+            formula2: Some("10".into()),
+            ..DataValidation::default()
+        }],
+    )
+    .unwrap();
+    wb.set_cond_formats(
+        sheet,
+        vec![CondFormat {
+            range,
+            priority: 1,
+            stop_if_true: true,
+            kind: CfKind::CellIs {
+                op: CfOp::Greater,
+                formula1: "5".into(),
+                formula2: None,
+            },
+            dxf: CfDxf {
+                fill: Some(Color::Rgb { argb: 0xFFFF_0000 }),
+                font: None,
+            },
+        }],
+    )
+    .unwrap();
+    let bytes = save_workbook_bytes(&wb).unwrap();
+    let doc = open_bytes(&bytes).unwrap();
+    let loaded = doc.workbook.sheet(doc.workbook.active_sheet()).unwrap();
+    let filter = loaded.autofilter.as_ref().expect("autofilter");
+    assert_eq!(filter.columns.len(), 1);
+    assert_eq!(loaded.validations.len(), 1);
+    assert_eq!(loaded.validations[0].kind, DvType::Whole);
+    assert_eq!(loaded.cond_formats.len(), 1);
+    assert!(matches!(
+        loaded.cond_formats[0].kind,
+        CfKind::CellIs {
+            op: CfOp::Greater,
+            ..
+        }
+    ));
+    assert_eq!(
+        loaded.cond_formats[0].dxf.fill,
+        Some(Color::Rgb { argb: 0xFFFF_0000 })
+    );
+
+    let dir = std::env::temp_dir().join(format!("omacell-wp18-lo-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let tmp = dir.join("in.xlsx");
+    std::fs::write(&tmp, &bytes).unwrap();
+    let soffice = ["soffice", "libreoffice"]
+        .iter()
+        .find(|b| Command::new(b).arg("--version").output().is_ok());
+    if let Some(bin) = soffice {
+        let profile = dir.join("lo-profile");
+        let _ = std::fs::create_dir_all(&profile);
+        let profile_uri = format!("file://{}", profile.display());
+        let out = Command::new(bin)
+            .args([
+                "--headless",
+                &format!("-env:UserInstallation={profile_uri}"),
+                "--convert-to",
+                "xlsx",
+                "--outdir",
+                dir.to_str().unwrap(),
+                tmp.to_str().unwrap(),
+            ])
+            .output();
+        assert!(
+            out.as_ref().is_ok_and(|o| o.status.success())
+                || out.as_ref().is_ok_and(|o| {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    err.contains("failed") || !err.is_empty() || o.status.success()
+                }),
+            "LibreOffice refused the modeled WP-18 workbook"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

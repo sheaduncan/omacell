@@ -34,6 +34,7 @@ fn harness_with_keymap(keymap: &str) -> (tempfile::TempDir, UiSession, Bus) {
     let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(functions)).unwrap();
     omacell_bus::register_chart_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_edit_commands(bus.registry_mut()).unwrap();
+    omacell_bus::register_data_commands(bus.registry_mut()).unwrap();
     register_ui_commands(bus.registry_mut(), &session).unwrap();
     (dir, session, bus)
 }

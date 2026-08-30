@@ -37,13 +37,16 @@ impl TableId {
 ///
 /// ```
 /// use omacell_core::tables::TableColumn;
-/// let c = TableColumn { name: "Amount".into() };
+/// let c = TableColumn { name: "Amount".into(), totals_fn: None };
 /// assert_eq!(c.name, "Amount");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TableColumn {
     /// Header caption.
     pub name: String,
+    /// Totals-row function (`sum`, `count`, `average`, `none`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totals_fn: Option<String>,
 }
 
 /// A structured table.
@@ -80,8 +83,15 @@ pub struct Table {
     pub banded_cols: bool,
     /// Auto-expand on adjacent entry (WP-17).
     pub auto_expand: bool,
+    /// Table style name (`TableStyleMedium2`).
+    #[serde(default = "default_table_style")]
+    pub style_name: String,
     /// Column headers.
     pub columns: Vec<TableColumn>,
+}
+
+fn default_table_style() -> String {
+    "TableStyleMedium2".into()
 }
 
 impl Table {
@@ -100,6 +110,7 @@ impl Table {
         let columns = (0..n_cols)
             .map(|i| TableColumn {
                 name: format!("Column{}", i + 1),
+                totals_fn: None,
             })
             .collect();
         Self {
@@ -115,6 +126,7 @@ impl Table {
             banded_rows: true,
             banded_cols: false,
             auto_expand: true,
+            style_name: default_table_style(),
             columns,
         }
     }
@@ -197,6 +209,11 @@ impl TableRegistry {
     #[must_use]
     pub fn get(&self, id: TableId) -> Option<&Table> {
         self.tables.get(&id)
+    }
+
+    /// Mutable borrow.
+    pub fn get_mut(&mut self, id: TableId) -> Option<&mut Table> {
+        self.tables.get_mut(&id)
     }
 
     /// Lookup by name (case-insensitive).

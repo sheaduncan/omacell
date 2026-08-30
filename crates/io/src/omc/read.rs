@@ -920,6 +920,7 @@ fn load_table(wb: &mut Workbook, fields: &[Field]) -> Result<(), CoreError> {
             .split(',')
             .map(|n| TableColumn {
                 name: n.to_string(),
+                totals_fn: None,
             })
             .collect();
     }

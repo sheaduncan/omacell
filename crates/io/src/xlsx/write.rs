@@ -5,6 +5,7 @@ use std::io::{Cursor, Write};
 
 use indexmap::IndexMap;
 use omacell_core::addr::col_to_letters;
+use omacell_core::condfmt::CfDxf;
 use omacell_core::error::CoreError;
 use omacell_core::geometry::DEFAULT_COL_PX;
 use omacell_core::intern::{Interners, RichTextRun};
@@ -143,9 +144,19 @@ pub(crate) fn encode(
         sst_xml(&sst, intern, sst_count)?,
     );
     overrides.push(("/xl/sharedStrings.xml".into(), CT_SST.into()));
+    let mut dxfs: Vec<CfDxf> = Vec::new();
+    for sheet in &sheets {
+        for rule in &sheet.cond_formats {
+            if (rule.dxf.fill.is_some() || rule.dxf.font.is_some())
+                && !dxfs.iter().any(|d| d == &rule.dxf)
+            {
+                dxfs.push(rule.dxf);
+            }
+        }
+    }
     parts.insert(
         "xl/styles.xml".into(),
-        styles_xml(wb, &fonts, &fills, &borders, &xfs),
+        styles_xml(wb, &fonts, &fills, &borders, &xfs, &dxfs),
     );
     overrides.push(("/xl/styles.xml".into(), CT_STY.into()));
 
@@ -168,6 +179,7 @@ pub(crate) fn encode(
             i,
             package,
             &persons,
+            &dxfs,
         )?;
         parts.insert(format!("xl/{target}"), sheet_xml);
         overrides.push((format!("/xl/{target}"), CT_WS.into()));
@@ -675,6 +687,7 @@ fn styles_xml(
     fills: &[Fill],
     borders: &[omacell_core::style::Border],
     xfs: &[Style],
+    dxfs: &[CfDxf],
 ) -> Vec<u8> {
     let mut numfmts: Vec<(u32, String)> = Vec::new();
     for xf in xfs {
@@ -750,7 +763,9 @@ fn styles_xml(
             s.push_str(&format!("<xf{attrs}>{align}{prot}</xf>"));
         }
     }
-    s.push_str("</cellXfs></styleSheet>");
+    s.push_str("</cellXfs>");
+    s.push_str(&super::data::dxfs_xml(dxfs));
+    s.push_str("</styleSheet>");
     s.into_bytes()
 }
 
@@ -1039,6 +1054,7 @@ fn worksheet_xml(
     sheet_ord: usize,
     package: Option<&OpcPackage>,
     persons: &BTreeMap<String, String>,
+    dxfs: &[CfDxf],
 ) -> Result<
     (
         Vec<u8>,
@@ -1176,6 +1192,8 @@ fn worksheet_xml(
         && let Some(af) = &ex.autofilter
     {
         s.push_str(&format!(r#"<autoFilter ref="{}"/>"#, xml::escape(af)));
+    } else if let Some(filter) = &sheet.autofilter {
+        s.push_str(&super::data::modeled_autofilter(filter));
     }
     if !sheet.merges.is_empty() {
         s.push_str(&format!(r#"<mergeCells count="{}">"#, sheet.merges.len()));
@@ -1187,7 +1205,7 @@ fn worksheet_xml(
         }
         s.push_str("</mergeCells>");
     }
-    if let Some(ex) = extras {
+    if let Some(ex) = extras.filter(|ex| !ex.conditional_formatting_xml.is_empty()) {
         for blob in &ex.conditional_formatting_xml {
             push_fragment(
                 &mut s,
@@ -1196,9 +1214,27 @@ fn worksheet_xml(
                 &["conditionalFormatting"],
             )?;
         }
+    } else {
+        for xml in super::data::modeled_cond_formats(&sheet.cond_formats, dxfs) {
+            push_fragment(
+                &mut s,
+                xml.as_bytes(),
+                "conditional formatting",
+                &["conditionalFormatting"],
+            )?;
+        }
+    }
+    if let Some(ex) = extras.filter(|ex| !ex.data_validations_xml.is_empty()) {
         for blob in &ex.data_validations_xml {
             push_fragment(&mut s, blob, "data validation", &["dataValidations"])?;
         }
+    } else if let Some(xml) = super::data::modeled_validations(&sheet.validations) {
+        push_fragment(
+            &mut s,
+            xml.as_bytes(),
+            "data validation",
+            &["dataValidations"],
+        )?;
     }
     if !sheet.hyperlinks.is_empty() {
         s.push_str("<hyperlinks>");
@@ -1668,17 +1704,23 @@ fn table_xml(table: &Table, table_number: u32) -> Vec<u8> {
     };
     let mut cols = String::new();
     for (i, c) in table.columns.iter().enumerate() {
+        let totals = c
+            .totals_fn
+            .as_deref()
+            .map(|fn_name| format!(r#" totalsRowFunction="{fn_name}""#))
+            .unwrap_or_default();
         cols.push_str(&format!(
-            r#"<tableColumn id="{}" name="{}"/>"#,
+            r#"<tableColumn id="{}" name="{}"{totals}/>"#,
             i + 1,
             xml::escape(&c.name)
         ));
     }
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{NS}" id="{table_number}" name="{}" displayName="{}" ref="{start}:{end}" headerRowCount="{header}" totalsRowCount="{totals}">{autofilter}<tableColumns count="{}">{cols}</tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="{}" showColumnStripes="{}"/></table>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{NS}" id="{table_number}" name="{}" displayName="{}" ref="{start}:{end}" headerRowCount="{header}" totalsRowCount="{totals}">{autofilter}<tableColumns count="{}">{cols}</tableColumns><tableStyleInfo name="{}" showFirstColumn="0" showLastColumn="0" showRowStripes="{}" showColumnStripes="{}"/></table>"#,
         xml::escape(&table.name),
         xml::escape(&table.name),
         table.columns.len(),
+        xml::escape(&table.style_name),
         u8::from(table.banded_rows),
         u8::from(table.banded_cols)
     )

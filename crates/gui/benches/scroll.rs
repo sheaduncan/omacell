@@ -25,6 +25,7 @@ fn setup() -> Harness<'static, Gui> {
     let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(functions)).unwrap();
     omacell_bus::register_chart_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_edit_commands(bus.registry_mut()).unwrap();
+    omacell_bus::register_data_commands(bus.registry_mut()).unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
     let result = bus.execute(
         omacell_core::command::Origin::User,

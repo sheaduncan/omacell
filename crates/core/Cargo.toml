@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "recalc"
 harness = false
+
+[[bench]]
+name = "condfmt"
+harness = false
