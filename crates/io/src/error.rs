@@ -30,6 +30,8 @@ pub mod codes {
     pub const XLSX_WRITE: &str = "xlsx.write";
     /// A LibreOffice-compatible lock file blocked the save.
     pub const XLSX_LOCK: &str = "xlsx.lock";
+    /// SVG/PNG chart export failed or exceeded its raster limits.
+    pub const CHART_EXPORT: &str = "chart.export";
     /// `.omc` text could not be parsed.
     pub const OMC_PARSE: &str = "omc.parse";
     /// An `.omc` size or record limit was exceeded.
@@ -127,6 +129,13 @@ pub fn xlsx_write(message: impl Into<String>) -> CoreError {
 pub fn xlsx_lock(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::XLSX_LOCK, message)
         .with_hint("close the other editor or remove a stale .~lock.*# file")
+}
+
+/// Chart export error.
+#[must_use]
+pub fn chart_export(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::CHART_EXPORT, message)
+        .with_hint("use finite positive dimensions and keep raster exports below 64 megapixels")
 }
 
 /// `.omc` parse error.

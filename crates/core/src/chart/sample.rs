@@ -7,6 +7,9 @@ use crate::workbook::Workbook;
 
 use super::model::{Chart, ChartKind, Series};
 
+/// Maximum cells accepted by one sampled chart range.
+pub const MAX_CHART_POINTS: u64 = 1_000_000;
+
 /// One sampled series ready to plot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SampledSeries {
@@ -132,6 +135,7 @@ fn pad_nans(mut v: Vec<f64>, n: usize) -> Vec<f64> {
 
 fn read_numbers(wb: &Workbook, sheet: SheetId, range: RangeRef) -> Result<Vec<f64>, CoreError> {
     let (r0, c0, r1, c1) = corners(range);
+    enforce_point_limit(r0, c0, r1, c1)?;
     let sheet = range.start.sheet.unwrap_or(sheet);
     let mut out = Vec::new();
     for row in r0..=r1 {
@@ -152,6 +156,7 @@ fn read_numbers(wb: &Workbook, sheet: SheetId, range: RangeRef) -> Result<Vec<f6
 
 fn read_labels(wb: &Workbook, sheet: SheetId, range: RangeRef) -> Result<Vec<String>, CoreError> {
     let (r0, c0, r1, c1) = corners(range);
+    enforce_point_limit(r0, c0, r1, c1)?;
     let sheet = range.start.sheet.unwrap_or(sheet);
     let mut out = Vec::new();
     for row in r0..=r1 {
@@ -183,6 +188,20 @@ fn corners(range: RangeRef) -> (u32, u16, u32, u16) {
     )
 }
 
+fn enforce_point_limit(r0: u32, c0: u16, r1: u32, c1: u16) -> Result<(), CoreError> {
+    let rows = u64::from(r1 - r0) + 1;
+    let cols = u64::from(c1 - c0) + 1;
+    let points = rows.saturating_mul(cols);
+    if points > MAX_CHART_POINTS {
+        return Err(CoreError::new(
+            "chart.limit",
+            format!("chart range has {points} cells; maximum is {MAX_CHART_POINTS}"),
+        )
+        .with_hint("select a smaller range or aggregate the data before charting"));
+    }
+    Ok(())
+}
+
 /// Build a chart covering `range` using Excel-ish header detection.
 pub fn chart_from_range(
     wb: &Workbook,
@@ -192,48 +211,90 @@ pub fn chart_from_range(
     title: Option<String>,
 ) -> Result<Chart, CoreError> {
     let (r0, c0, r1, c1) = corners(range);
+    enforce_point_limit(r0, c0, r1, c1)?;
     if r0 == r1 && c0 == c1 {
         return Err(CoreError::new(
             crate::error::codes::ADDR_REF,
             "chart.fromselection needs more than one cell",
         ));
     }
-    let first = wb.get(sheet, r0, c0)?;
-    let header_row = first.is_some_and(|slot| matches!(slot.value, Value::Text(_)));
+    let header_row = if r0 < r1 && c0 < c1 {
+        let mut has_series_header = false;
+        for col in c0.saturating_add(1)..=c1 {
+            if wb
+                .get(sheet, r0, col)?
+                .is_some_and(|slot| matches!(slot.value, Value::Text(_)))
+            {
+                has_series_header = true;
+                break;
+            }
+        }
+        has_series_header
+    } else {
+        false
+    };
     let data_row0 = if header_row { r0 + 1 } else { r0 };
+    if data_row0 > r1 {
+        return Err(CoreError::new(
+            "chart.range",
+            "chart selection contains headers but no data rows",
+        ));
+    }
     let cat_col = c0;
     let mut series = Vec::new();
-    for col in c0.saturating_add(1)..=c1 {
-        let name = if header_row {
-            match wb.get(sheet, r0, col)? {
-                Some(slot) => match slot.value {
-                    Value::Text(id) => wb.intern().strings.get(id).unwrap_or("").to_string(),
-                    _ => format!("S{}", series.len() + 1),
-                },
-                None => format!("S{}", series.len() + 1),
+    if matches!(kind, ChartKind::Scatter | ChartKind::Bubble) {
+        let first_numeric_col = if header_row { c0.saturating_add(1) } else { c0 };
+        if first_numeric_col < c1 {
+            let x = column_range(data_row0, r1, first_numeric_col, sheet)?;
+            if kind == ChartKind::Bubble {
+                let y_col = first_numeric_col.saturating_add(1);
+                series.push(Series {
+                    name: series_name(wb, sheet, r0, y_col, header_row, 1)?,
+                    values: column_range(data_row0, r1, y_col, sheet)?,
+                    x: Some(x),
+                    size: (y_col < c1)
+                        .then(|| column_range(data_row0, r1, y_col + 1, sheet))
+                        .transpose()?,
+                    color: None,
+                    secondary_axis: false,
+                    trendline: None,
+                });
+            } else {
+                for col in first_numeric_col.saturating_add(1)..=c1 {
+                    series.push(Series {
+                        name: series_name(wb, sheet, r0, col, header_row, series.len() + 1)?,
+                        values: column_range(data_row0, r1, col, sheet)?,
+                        x: Some(x),
+                        size: None,
+                        color: None,
+                        secondary_axis: false,
+                        trendline: None,
+                    });
+                }
             }
         } else {
-            format!("S{}", series.len() + 1)
-        };
-        let mut s = Series {
-            name,
-            values: RangeRef::from_corners(
-                crate::addr::CellRef::new(data_row0, col)?.on_sheet(sheet),
-                crate::addr::CellRef::new(r1, col)?.on_sheet(sheet),
-            ),
-            x: None,
-            size: None,
-            color: None,
-            secondary_axis: kind == ChartKind::Combo && series.len() == 1,
-            trendline: None,
-        };
-        if matches!(kind, ChartKind::Scatter | ChartKind::Bubble) {
-            s.x = Some(RangeRef::from_corners(
-                crate::addr::CellRef::new(data_row0, cat_col)?.on_sheet(sheet),
-                crate::addr::CellRef::new(r1, cat_col)?.on_sheet(sheet),
-            ));
+            series.push(Series {
+                name: series_name(wb, sheet, r0, first_numeric_col, header_row, 1)?,
+                values: column_range(data_row0, r1, first_numeric_col, sheet)?,
+                x: None,
+                size: None,
+                color: None,
+                secondary_axis: false,
+                trendline: None,
+            });
         }
-        series.push(s);
+    } else {
+        for col in c0.saturating_add(1)..=c1 {
+            series.push(Series {
+                name: series_name(wb, sheet, r0, col, header_row, series.len() + 1)?,
+                values: column_range(data_row0, r1, col, sheet)?,
+                x: None,
+                size: None,
+                color: None,
+                secondary_axis: kind == ChartKind::Combo && series.len() == 1,
+                trendline: None,
+            });
+        }
     }
     if series.is_empty() {
         series.push(Series {
@@ -271,6 +332,30 @@ pub fn chart_from_range(
         anchor: super::model::ChartAnchor::default(),
         sheet,
     })
+}
+
+fn column_range(row0: u32, row1: u32, col: u16, sheet: SheetId) -> Result<RangeRef, CoreError> {
+    Ok(RangeRef::from_corners(
+        crate::addr::CellRef::new(row0, col)?.on_sheet(sheet),
+        crate::addr::CellRef::new(row1, col)?.on_sheet(sheet),
+    ))
+}
+
+fn series_name(
+    wb: &Workbook,
+    sheet: SheetId,
+    header_row: u32,
+    col: u16,
+    has_header: bool,
+    fallback_index: usize,
+) -> Result<String, CoreError> {
+    if has_header
+        && let Some(slot) = wb.get(sheet, header_row, col)?
+        && let Value::Text(id) = slot.value
+    {
+        return Ok(wb.intern().strings.get(id).unwrap_or("").to_string());
+    }
+    Ok(format!("S{fallback_index}"))
 }
 
 /// Parse an A1 range in `sheet`.
