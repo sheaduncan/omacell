@@ -592,7 +592,7 @@ fn non_finite_numbers_are_rejected_before_xml_generation() {
 #[test]
 fn wp18_modeled_filter_dv_cf_roundtrip() {
     use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat};
-    use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria, NumOp};
+    use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria, NumOp, apply_filter};
     use omacell_core::validation::{DataValidation, DvOp, DvType};
 
     let mut wb = Workbook::new();
@@ -601,9 +601,10 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
     wb.set_number(sheet, 1, 0, 1.0).unwrap();
     wb.set_number(sheet, 2, 0, 10.0).unwrap();
     let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(2, 0).unwrap());
-    wb.set_autofilter(
+    apply_filter(
+        &mut wb,
         sheet,
-        Some(AutoFilter {
+        &AutoFilter {
             range,
             columns: vec![FilterColumn {
                 col_id: 0,
@@ -613,7 +614,7 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
                     value2: None,
                 },
             }],
-        }),
+        },
     )
     .unwrap();
     wb.set_validations(
