@@ -46,3 +46,7 @@ harness = false
 [[bench]]
 name = "condfmt"
 harness = false
+
+[[bench]]
+name = "pivot"
+harness = false

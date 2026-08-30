@@ -608,6 +608,11 @@ fn workbook_xml(
         s.push_str(&names_xml);
         s.push_str("</definedNames>");
     }
+    match wb.settings().calc_mode {
+        CalcMode::Manual => s.push_str(r#"<calcPr calcMode="manual"/>"#),
+        CalcMode::AutomaticExceptTables => s.push_str(r#"<calcPr calcMode="autoNoTable"/>"#),
+        CalcMode::Automatic => {}
+    }
     if !pivot_caches.is_empty() {
         s.push_str(&format!(r#"<pivotCaches count="{}">"#, pivot_caches.len()));
         for (cache_id, rid) in pivot_caches {
@@ -616,11 +621,6 @@ fn workbook_xml(
             ));
         }
         s.push_str("</pivotCaches>");
-    }
-    match wb.settings().calc_mode {
-        CalcMode::Manual => s.push_str(r#"<calcPr calcMode="manual"/>"#),
-        CalcMode::AutomaticExceptTables => s.push_str(r#"<calcPr calcMode="autoNoTable"/>"#),
-        CalcMode::Automatic => {}
     }
     s.push_str("</workbook>");
     Ok(s.into_bytes())

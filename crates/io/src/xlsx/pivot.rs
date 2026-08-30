@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use omacell_core::addr::{SheetId, col_to_letters, parse_a1};
 use omacell_core::error::CoreError;
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::pivot::{
     CacheValue, DateGroup, PivotAgg, PivotDataField, PivotGroup, PivotLayout, PivotTable, ShowAs,
     cache_table,
@@ -31,6 +32,7 @@ pub(crate) const CT_PIVOT_TABLE: &str =
 const NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const NS_PKG: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+const MAX_PIVOT_CACHE_CELLS: usize = 1_000_000;
 
 /// Cache definition + records parts for one pivot.
 pub(crate) struct CacheParts {
@@ -124,7 +126,13 @@ pub(crate) fn table_parts(wb: &Workbook, pivot: &PivotTable) -> Result<TablePart
     let number = cache_id;
     let name = format!("xl/pivotTables/pivotTable{number}.xml");
     let rels_name = format!("xl/pivotTables/_rels/pivotTable{number}.xml.rels");
-    let (headers, _) = cache_table(wb, pivot).map_err(|e| error::xlsx_write(e.to_string()))?;
+    let (headers, rows) = cache_table(wb, pivot).map_err(|e| error::xlsx_write(e.to_string()))?;
+    let shared: Vec<Vec<CacheValue>> = (0..headers.len())
+        .map(|index| {
+            let values: Vec<&CacheValue> = rows.iter().filter_map(|row| row.get(index)).collect();
+            unique_items(&values)
+        })
+        .collect();
     let loc = a1_range(
         pivot.dest_row,
         pivot.dest_col,
@@ -134,7 +142,7 @@ pub(crate) fn table_parts(wb: &Workbook, pivot: &PivotTable) -> Result<TablePart
     let compact = u8::from(matches!(pivot.layout, PivotLayout::Compact));
     let outline = u8::from(matches!(pivot.layout, PivotLayout::Outline));
     let mut fields = String::new();
-    for header in &headers {
+    for (index, header) in headers.iter().enumerate() {
         let axis = if pivot.rows.iter().any(|n| n == header) {
             r#" axis="axisRow""#
         } else if pivot.cols.iter().any(|n| n == header) {
@@ -146,8 +154,34 @@ pub(crate) fn table_parts(wb: &Workbook, pivot: &PivotTable) -> Result<TablePart
         } else {
             ""
         };
+        let no_subtotals = if !pivot.subtotals && pivot.rows.iter().any(|name| name == header) {
+            r#" defaultSubtotal="0""#
+        } else {
+            ""
+        };
+        let filter = pivot.filters.iter().find(|(name, _)| name == header);
+        let multiple = if filter.is_some_and(|(_, allowed)| allowed.len() > 1) {
+            r#" multipleItemSelectionAllowed="1""#
+        } else {
+            ""
+        };
+        let items = if axis.is_empty() || axis.contains("dataField") {
+            String::new()
+        } else {
+            let values = shared.get(index).map(Vec::as_slice).unwrap_or(&[]);
+            let mut xml = String::new();
+            for (item, value) in values.iter().enumerate() {
+                let hidden = filter
+                    .filter(|(_, allowed)| !allowed.is_empty())
+                    .is_some_and(|(_, allowed)| !allowed.contains(&cache_value_text(value)));
+                let hidden_attr = if hidden { r#" h="1""# } else { "" };
+                xml.push_str(&format!(r#"<item x="{item}"{hidden_attr}/>"#));
+            }
+            xml.push_str(r#"<item t="default"/>"#);
+            format!(r#"<items count="{}">{xml}</items>"#, values.len() + 1)
+        };
         fields.push_str(&format!(
-            r#"<pivotField{axis} showAll="0"><items count="1"><item t="default"/></items></pivotField>"#
+            r#"<pivotField{axis}{no_subtotals}{multiple} showAll="0">{items}</pivotField>"#
         ));
     }
     let mut row_fields = String::new();
@@ -163,9 +197,22 @@ pub(crate) fn table_parts(wb: &Workbook, pivot: &PivotTable) -> Result<TablePart
         }
     }
     let mut page_fields = String::new();
-    for (name, _) in &pivot.filters {
+    for (name, allowed) in &pivot.filters {
         if let Some(i) = headers.iter().position(|h| h == name) {
-            page_fields.push_str(&format!(r#"<pageField fld="{i}" hier="-1"/>"#));
+            let selected = if allowed.len() == 1 {
+                shared
+                    .get(i)
+                    .and_then(|items| {
+                        items
+                            .iter()
+                            .position(|value| cache_value_text(value) == allowed[0])
+                    })
+                    .map(|item| format!(r#" item="{item}""#))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            page_fields.push_str(&format!(r#"<pageField fld="{i}" hier="-1"{selected}/>"#));
         }
     }
     let mut data_fields = String::new();
@@ -240,6 +287,7 @@ pub(crate) struct LoadedCache {
     source_sheet: String,
     source_ref: String,
     headers: Vec<String>,
+    shared: Vec<Vec<CacheValue>>,
     rows: Vec<Vec<CacheValue>>,
     groups: BTreeMap<String, PivotGroup>,
     refresh_on_load: bool,
@@ -268,6 +316,11 @@ pub(crate) fn load_caches(
                     .unwrap_or(0);
                 let rid = attr(&attrs, "id").unwrap_or("").to_string();
                 cache_ids.push((id, rid));
+                if cache_ids.len() > usize::from(MAX_COLS) {
+                    return Err(error::xlsx_limit(format!(
+                        "workbook has more than {MAX_COLS} pivot caches"
+                    )));
+                }
             }
             _ => {}
         }
@@ -300,8 +353,12 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
     let mut source_ref = String::new();
     let mut headers = Vec::new();
     let mut groups = BTreeMap::new();
+    let mut shared: Vec<Vec<CacheValue>> = Vec::new();
+    let mut shared_item_count = 0usize;
     let mut refresh_on_load = false;
     let mut current_field = String::new();
+    let mut current_field_index = None;
+    let mut in_shared_items = false;
     while let Some(ev) = r.next()? {
         match ev {
             XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
@@ -318,8 +375,33 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
             XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
                 if name == "cacheField" =>
             {
+                if headers.len() >= usize::from(MAX_COLS) {
+                    return Err(error::xlsx_limit(format!(
+                        "pivot cache has more than {MAX_COLS} fields"
+                    )));
+                }
                 current_field = attr(&attrs, "name").unwrap_or("Field").to_string();
                 headers.push(current_field.clone());
+                shared.push(Vec::new());
+                current_field_index = Some(headers.len() - 1);
+            }
+            XmlEvent::Start { name, .. } if name == "sharedItems" => in_shared_items = true,
+            XmlEvent::End { name } if name == "sharedItems" => in_shared_items = false,
+            XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
+                if in_shared_items =>
+            {
+                if let (Some(index), Some(value)) =
+                    (current_field_index, parse_cache_value(&name, &attrs)?)
+                    && let Some(items) = shared.get_mut(index)
+                {
+                    items.push(value);
+                    shared_item_count = shared_item_count.saturating_add(1);
+                    if shared_item_count > MAX_PIVOT_CACHE_CELLS {
+                        return Err(error::xlsx_limit(format!(
+                            "pivot cache has more than {MAX_PIVOT_CACHE_CELLS} shared items"
+                        )));
+                    }
+                }
             }
             XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
                 if name == "rangePr" =>
@@ -331,12 +413,18 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
             _ => {}
         }
     }
+    if headers.len() > usize::from(MAX_COLS) {
+        return Err(error::xlsx_limit(format!(
+            "pivot cache has {} fields; maximum is {MAX_COLS}",
+            headers.len()
+        )));
+    }
     let recs = package
         .rels_for(&rel.target)?
         .into_iter()
         .find(|r| r.rel_type == REL_PIVOT_CACHE_REC);
     let rows = if let Some(rec_rel) = recs {
-        parse_records(package, &rec_rel, headers.len())?
+        parse_records(package, &rec_rel, headers.len(), &shared)?
     } else {
         Vec::new()
     };
@@ -344,6 +432,7 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
         source_sheet,
         source_ref,
         headers,
+        shared,
         rows,
         groups,
         refresh_on_load,
@@ -354,6 +443,7 @@ fn parse_records(
     package: &OpcPackage,
     rel: &Relationship,
     width: usize,
+    shared: &[Vec<CacheValue>],
 ) -> Result<Vec<Vec<CacheValue>>, CoreError> {
     let Some(part) = package.part(&rel.target) else {
         return Ok(Vec::new());
@@ -368,24 +458,46 @@ fn parse_records(
             }
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs } => {
                 if let Some(row) = current.as_mut() {
-                    if name == "n" {
-                        row.push(CacheValue::Number(
-                            attr(&attrs, "v")
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(0.0),
+                    if row.len() >= width {
+                        return Err(error::xlsx_limit(
+                            "pivot cache record is wider than its field list",
                         ));
-                    } else if name == "s" {
-                        row.push(CacheValue::Text(
-                            attr(&attrs, "v").unwrap_or("").to_string(),
-                        ));
-                    } else if name == "m" {
-                        row.push(CacheValue::Empty);
+                    }
+                    if name == "x" {
+                        let item = attr(&attrs, "v")
+                            .and_then(|value| value.parse::<usize>().ok())
+                            .ok_or_else(|| {
+                                error::xlsx_format("pivot cache shared-item index is invalid")
+                            })?;
+                        let field = row.len();
+                        let value = shared
+                            .get(field)
+                            .and_then(|items| items.get(item))
+                            .cloned()
+                            .ok_or_else(|| {
+                                error::xlsx_format(
+                                    "pivot cache record references a missing shared item",
+                                )
+                            })?;
+                        row.push(value);
+                    } else if let Some(value) = parse_cache_value(&name, &attrs)? {
+                        row.push(value);
                     }
                 }
             }
             XmlEvent::End { name } if name == "r" => {
                 if let Some(mut row) = current.take() {
                     row.resize(width, CacheValue::Empty);
+                    let cells = rows
+                        .len()
+                        .checked_add(1)
+                        .and_then(|count| count.checked_mul(width))
+                        .ok_or_else(|| error::xlsx_limit("pivot cache size overflows"))?;
+                    if rows.len() >= MAX_ROWS as usize || cells > MAX_PIVOT_CACHE_CELLS {
+                        return Err(error::xlsx_limit(format!(
+                            "pivot cache has more than {MAX_PIVOT_CACHE_CELLS} cells"
+                        )));
+                    }
                     rows.push(row);
                 }
             }
@@ -393,6 +505,30 @@ fn parse_records(
         }
     }
     Ok(rows)
+}
+
+fn parse_cache_value(
+    name: &str,
+    attrs: &[(String, String)],
+) -> Result<Option<CacheValue>, CoreError> {
+    let value = match name {
+        "n" => {
+            let number = attr(attrs, "v")
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| error::xlsx_format("pivot cache number is invalid"))?;
+            CacheValue::Number(number)
+        }
+        "s" | "d" | "e" => CacheValue::Text(attr(attrs, "v").unwrap_or("").to_string()),
+        "b" => CacheValue::Number(if attr(attrs, "v").is_some_and(|value| value != "0") {
+            1.0
+        } else {
+            0.0
+        }),
+        "m" => CacheValue::Empty,
+        _ => return Ok(None),
+    };
+    Ok(Some(value))
 }
 
 /// Load pivot tables related from one worksheet.
@@ -433,8 +569,12 @@ fn load_table(
     let mut headers: Vec<String> = Vec::new();
     let mut row_idx: Vec<usize> = Vec::new();
     let mut col_idx: Vec<usize> = Vec::new();
-    let mut page_idx: Vec<usize> = Vec::new();
+    let mut page_specs: Vec<(usize, Option<usize>)> = Vec::new();
     let mut data = Vec::new();
+    let mut pivot_field_items: Vec<Vec<(usize, bool)>> = Vec::new();
+    let mut pivot_item_count = 0usize;
+    let mut current_pivot_field = None;
+    let mut no_subtotal_fields = std::collections::BTreeSet::new();
     let mut in_rows = false;
     let mut in_cols = false;
     let mut in_pages = false;
@@ -464,6 +604,50 @@ fn load_table(
             {
                 loc = attr(&attrs, "ref").unwrap_or("").to_string();
             }
+            XmlEvent::Start { name: n, attrs } if n == "pivotField" => {
+                if pivot_field_items.len() >= usize::from(MAX_COLS) {
+                    return Err(error::xlsx_limit(format!(
+                        "pivot table has more than {MAX_COLS} fields"
+                    )));
+                }
+                let index = pivot_field_items.len();
+                if attr(&attrs, "defaultSubtotal").is_some_and(|value| value == "0") {
+                    no_subtotal_fields.insert(index);
+                }
+                pivot_field_items.push(Vec::new());
+                current_pivot_field = Some(index);
+            }
+            XmlEvent::Empty { name: n, attrs } if n == "pivotField" => {
+                if pivot_field_items.len() >= usize::from(MAX_COLS) {
+                    return Err(error::xlsx_limit(format!(
+                        "pivot table has more than {MAX_COLS} fields"
+                    )));
+                }
+                let index = pivot_field_items.len();
+                if attr(&attrs, "defaultSubtotal").is_some_and(|value| value == "0") {
+                    no_subtotal_fields.insert(index);
+                }
+                pivot_field_items.push(Vec::new());
+                current_pivot_field = None;
+            }
+            XmlEvent::End { name: n } if n == "pivotField" => current_pivot_field = None,
+            XmlEvent::Empty { name: n, attrs } | XmlEvent::Start { name: n, attrs }
+                if n == "item" && current_pivot_field.is_some() =>
+            {
+                if let Some(shared_index) = attr(&attrs, "x").and_then(|value| value.parse().ok())
+                    && let Some(items) =
+                        current_pivot_field.and_then(|index| pivot_field_items.get_mut(index))
+                {
+                    let hidden = attr(&attrs, "h").is_some_and(|value| value != "0");
+                    items.push((shared_index, hidden));
+                    pivot_item_count = pivot_item_count.saturating_add(1);
+                    if pivot_item_count > MAX_PIVOT_CACHE_CELLS {
+                        return Err(error::xlsx_limit(format!(
+                            "pivot table has more than {MAX_PIVOT_CACHE_CELLS} items"
+                        )));
+                    }
+                }
+            }
             XmlEvent::Start { name: n, .. } if n == "rowFields" => in_rows = true,
             XmlEvent::End { name: n } if n == "rowFields" => in_rows = false,
             XmlEvent::Start { name: n, .. } if n == "colFields" => in_cols = true,
@@ -475,6 +659,9 @@ fn load_table(
             {
                 if let Some(x) = attr(&attrs, "x").and_then(|s| s.parse().ok()) {
                     row_idx.push(x);
+                    if row_idx.len() > usize::from(MAX_COLS) {
+                        return Err(error::xlsx_limit("too many pivot row fields"));
+                    }
                 }
             }
             XmlEvent::Empty { name: n, attrs } | XmlEvent::Start { name: n, attrs }
@@ -482,13 +669,20 @@ fn load_table(
             {
                 if let Some(x) = attr(&attrs, "x").and_then(|s| s.parse().ok()) {
                     col_idx.push(x);
+                    if col_idx.len() > usize::from(MAX_COLS) {
+                        return Err(error::xlsx_limit("too many pivot column fields"));
+                    }
                 }
             }
             XmlEvent::Empty { name: n, attrs } | XmlEvent::Start { name: n, attrs }
                 if n == "pageField" && in_pages =>
             {
                 if let Some(x) = attr(&attrs, "fld").and_then(|s| s.parse().ok()) {
-                    page_idx.push(x);
+                    let item = attr(&attrs, "item").and_then(|value| value.parse().ok());
+                    page_specs.push((x, item));
+                    if page_specs.len() > usize::from(MAX_COLS) {
+                        return Err(error::xlsx_limit("too many pivot page fields"));
+                    }
                 }
             }
             XmlEvent::Empty { name: n, attrs } | XmlEvent::Start { name: n, attrs }
@@ -504,6 +698,9 @@ fn load_table(
                     .and_then(ShowAs::parse)
                     .unwrap_or(ShowAs::Normal);
                 data.push((fld, agg, show_as));
+                if data.len() > usize::from(MAX_COLS) {
+                    return Err(error::xlsx_limit("too many pivot data fields"));
+                }
             }
             _ => {}
         }
@@ -516,18 +713,20 @@ fn load_table(
         return Err(error::xlsx_format("pivot location is not a valid A1 range"));
     };
     let (dr0, dc0, dr1, dc1) = match parsed.kind {
-        omacell_core::addr::RefKind::Range(rg) => {
-            (rg.start.row, rg.start.col, rg.end.row, rg.end.col)
-        }
+        omacell_core::addr::RefKind::Range(rg) => (
+            rg.start.row.min(rg.end.row),
+            rg.start.col.min(rg.end.col),
+            rg.start.row.max(rg.end.row),
+            rg.start.col.max(rg.end.col),
+        ),
         omacell_core::addr::RefKind::Cell(c) => (c.row, c.col, c.row, c.col),
     };
-    let source_sheet = cache
-        .and_then(|c| {
-            wb.sheets()
-                .find(|s| s.name.eq_ignore_ascii_case(&c.source_sheet))
-                .map(|s| s.id)
-        })
-        .unwrap_or(dest_sheet);
+    let source_sheet_found = cache.and_then(|c| {
+        wb.sheets()
+            .find(|s| s.name.eq_ignore_ascii_case(&c.source_sheet))
+            .map(|s| s.id)
+    });
+    let source_sheet = source_sheet_found.unwrap_or(dest_sheet);
     let source_ref = cache.map(|c| c.source_ref.as_str()).unwrap_or("A1");
     let source = match parse_a1(source_ref) {
         Ok(p) => match p.kind {
@@ -547,6 +746,9 @@ fn load_table(
     table.layout = layout;
     table.grand_rows = grand_rows;
     table.grand_cols = grand_cols;
+    table.subtotals = !row_idx
+        .iter()
+        .any(|index| no_subtotal_fields.contains(index));
     table.refresh_on_load = cache.is_some_and(|c| c.refresh_on_load);
     table.rows = row_idx
         .into_iter()
@@ -556,10 +758,38 @@ fn load_table(
         .into_iter()
         .filter_map(|i| headers.get(i).cloned())
         .collect();
-    table.filters = page_idx
+    table.filters = page_specs
         .into_iter()
-        .filter_map(|i| headers.get(i).cloned())
-        .map(|n| (n, Vec::new()))
+        .filter_map(|(field, selected)| {
+            let name = headers.get(field)?.clone();
+            let items = pivot_field_items
+                .get(field)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let shared = cache
+                .and_then(|cache| cache.shared.get(field))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let has_hidden = items.iter().any(|(_, hidden)| *hidden);
+            let allowed = if has_hidden {
+                items
+                    .iter()
+                    .filter(|(_, hidden)| !hidden)
+                    .filter_map(|(index, _)| shared.get(*index))
+                    .map(cache_value_text)
+                    .collect()
+            } else if let Some(selected) = selected {
+                items
+                    .get(selected)
+                    .and_then(|(index, _)| shared.get(*index))
+                    .map(cache_value_text)
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Some((name, allowed))
+        })
         .collect();
     table.data = data
         .into_iter()
@@ -574,7 +804,7 @@ fn load_table(
     if let Some(cache) = cache {
         table.groups = cache.groups.clone();
     }
-    let source_present = wb.sheet(source_sheet).is_some()
+    let source_present = source_sheet_found.is_some()
         && wb
             .get(source_sheet, source.start.row, source.start.col)
             .ok()
@@ -589,11 +819,14 @@ fn load_table(
         }
     };
     if refresh_on_load && source_present {
-        let _ = wb.refresh_pivot(id);
-    } else if !source_present {
-        if let Some(cache) = cache {
-            let _ = wb.refresh_pivot_from_cache(id, &cache.headers, &cache.rows);
+        if let Err(error) = wb.refresh_pivot(id) {
+            warnings.push("xlsx.pivot", error.message, Some(rel.target.clone()));
         }
+    } else if !source_present
+        && let Some(cache) = cache
+        && let Err(error) = wb.refresh_pivot_from_cache(id, &cache.headers, &cache.rows)
+    {
+        warnings.push("xlsx.pivot", error.message, Some(rel.target.clone()));
     }
     Ok(())
 }
@@ -614,22 +847,20 @@ fn parse_range_pr(attrs: &[(String, String)]) -> Option<PivotGroup> {
 fn shared_items(values: &[&CacheValue]) -> (String, String) {
     let mut has_num = false;
     let mut has_str = false;
-    let mut unique: BTreeMap<String, CacheValue> = BTreeMap::new();
+    let unique = unique_items(values);
     for value in values {
         match value {
-            CacheValue::Number(n) => {
+            CacheValue::Number(_) => {
                 has_num = true;
-                unique.insert(n.to_string(), CacheValue::Number(*n));
             }
             CacheValue::Text(t) if !t.is_empty() => {
                 has_str = true;
-                unique.insert(t.clone(), CacheValue::Text(t.clone()));
             }
             _ => {}
         }
     }
     let mut xml = String::new();
-    for v in unique.values() {
+    for v in &unique {
         match v {
             CacheValue::Number(n) => xml.push_str(&format!(r#"<n v="{n}"/>"#)),
             CacheValue::Text(t) => xml.push_str(&format!(r#"<s v="{}"/>"#, escape(t))),
@@ -642,10 +873,39 @@ fn shared_items(values: &[&CacheValue]) -> (String, String) {
         u8::from(has_str),
         u8::from(has_num)
     );
-    if has_num && !has_str {
+    if has_num
+        && !has_str
+        && unique
+            .iter()
+            .all(|value| matches!(value, CacheValue::Number(n) if n.fract() == 0.0))
+    {
         attrs.push_str(r#" containsInteger="1""#);
     }
     (xml, attrs)
+}
+
+fn unique_items(values: &[&CacheValue]) -> Vec<CacheValue> {
+    let mut unique: BTreeMap<(u8, String), CacheValue> = BTreeMap::new();
+    for value in values {
+        match value {
+            CacheValue::Number(number) if number.is_finite() => {
+                unique.insert((0, number.to_string()), CacheValue::Number(*number));
+            }
+            CacheValue::Text(text) if !text.is_empty() => {
+                unique.insert((1, text.clone()), CacheValue::Text(text.clone()));
+            }
+            CacheValue::Number(_) | CacheValue::Text(_) | CacheValue::Empty => {}
+        }
+    }
+    unique.into_values().collect()
+}
+
+fn cache_value_text(value: &CacheValue) -> String {
+    match value {
+        CacheValue::Number(number) => number.to_string(),
+        CacheValue::Text(text) => text.clone(),
+        CacheValue::Empty => String::new(),
+    }
 }
 
 fn field_group_xml(group: &PivotGroup) -> String {
@@ -676,11 +936,68 @@ fn agg_caption(agg: PivotAgg) -> &'static str {
 }
 
 fn a1_range(r0: u32, c0: u16, r1: u32, c1: u16) -> Result<String, CoreError> {
+    if r0 >= MAX_ROWS || r1 >= MAX_ROWS {
+        return Err(error::xlsx_write("pivot row exceeds the worksheet grid"));
+    }
+    let row0 = r0
+        .checked_add(1)
+        .ok_or_else(|| error::xlsx_write("pivot row exceeds the worksheet grid"))?;
+    let row1 = r1
+        .checked_add(1)
+        .ok_or_else(|| error::xlsx_write("pivot row exceeds the worksheet grid"))?;
     Ok(format!(
         "{}{}:{}{}",
         col_to_letters(c0).map_err(|e| error::xlsx_write(e.to_string()))?,
-        r0 + 1,
+        row0,
         col_to_letters(c1).map_err(|e| error::xlsx_write(e.to_string()))?,
-        r1 + 1
+        row1
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use indexmap::IndexMap;
+
+    use super::*;
+    use crate::xlsx::PreservedPart;
+
+    #[test]
+    fn cache_records_resolve_shared_item_indexes() {
+        let target = "xl/pivotCache/pivotCacheRecords1.xml";
+        let xml = br#"<pivotCacheRecords><r><x v="1"/><x v="0"/></r></pivotCacheRecords>"#;
+        let mut parts = IndexMap::new();
+        parts.insert(
+            target.to_string(),
+            PreservedPart {
+                name: target.to_string(),
+                content_type: None,
+                bytes: xml.to_vec(),
+            },
+        );
+        let package = OpcPackage {
+            parts,
+            package_rels: Vec::new(),
+        };
+        let rel = Relationship {
+            id: "rId1".into(),
+            rel_type: REL_PIVOT_CACHE_REC.into(),
+            target: target.into(),
+            external: false,
+        };
+        let shared = vec![
+            vec![
+                CacheValue::Text("East".into()),
+                CacheValue::Text("West".into()),
+            ],
+            vec![CacheValue::Number(10.0)],
+        ];
+        let rows = parse_records(&package, &rel, 2, &shared).unwrap();
+        assert_eq!(
+            rows,
+            vec![vec![
+                CacheValue::Text("West".into()),
+                CacheValue::Number(10.0)
+            ]]
+        );
+    }
 }

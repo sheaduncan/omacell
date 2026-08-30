@@ -55,6 +55,12 @@ pub fn describe_range(
     sheet: SheetId,
     range: RangeRef,
 ) -> Result<StatsSummary, CoreError> {
+    if wb.sheet(sheet).is_none() {
+        return Err(CoreError::sheet_id(format!(
+            "unknown sheet {}",
+            sheet.index()
+        )));
+    }
     let r0 = range.start.row.min(range.end.row);
     let r1 = range.start.row.max(range.end.row);
     let c0 = range.start.col.min(range.end.col);

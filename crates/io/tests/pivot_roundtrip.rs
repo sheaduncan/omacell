@@ -2,28 +2,34 @@
 
 use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::pivot::{PivotAgg, PivotDataField, PivotTable};
-use omacell_core::workbook::Workbook;
+use omacell_core::workbook::{CalcMode, Workbook};
 use omacell_io::xlsx::{open_bytes, save_workbook_bytes};
+use std::io::Read;
 
 fn seed() -> Workbook {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
     wb.set_text(s, 0, 0, "Region").unwrap();
     wb.set_text(s, 0, 1, "Amount").unwrap();
+    wb.set_text(s, 0, 2, "Channel").unwrap();
     wb.set_text(s, 1, 0, "East").unwrap();
     wb.set_number(s, 1, 1, 10.0).unwrap();
+    wb.set_text(s, 1, 2, "Online").unwrap();
     wb.set_text(s, 2, 0, "West").unwrap();
     wb.set_number(s, 2, 1, 70.0).unwrap();
+    wb.set_text(s, 2, 2, "Store").unwrap();
     let mut table = PivotTable::new(
         "Sales",
         s,
-        RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(2, 1).unwrap()),
+        RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(2, 2).unwrap()),
         s,
         0,
         4,
     );
     table.rows = vec!["Region".into()];
     table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    table.filters = vec![("Channel".into(), vec!["Online".into()])];
+    table.subtotals = false;
     table.refresh_on_load = true;
     wb.add_pivot(table).unwrap();
     wb
@@ -63,9 +69,28 @@ fn modeled_pivot_round_trips() {
     assert_eq!(pivot.rows, vec!["Region".to_string()]);
     assert_eq!(pivot.data[0].source, "Amount");
     assert_eq!(pivot.data[0].agg, PivotAgg::Sum);
+    assert_eq!(
+        pivot.filters,
+        vec![("Channel".to_string(), vec!["Online".to_string()])]
+    );
+    assert!(!pivot.subtotals);
     let again = save_workbook_bytes(&doc.workbook).unwrap();
     let doc2 = open_bytes(&again).unwrap();
     assert_eq!(doc2.workbook.pivots().len(), 1);
+}
+
+#[test]
+fn pivot_caches_follow_calc_properties_in_workbook_xml() {
+    let mut wb = seed();
+    wb.set_calc_mode(CalcMode::Manual).unwrap();
+    let bytes = save_workbook_bytes(&wb).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    zip.by_name("xl/workbook.xml")
+        .unwrap()
+        .read_to_string(&mut xml)
+        .unwrap();
+    assert!(xml.find("<calcPr").unwrap() < xml.find("<pivotCaches").unwrap());
 }
 
 #[test]
@@ -92,7 +117,7 @@ try:
     wb = openpyxl.load_workbook(r'{path}')
     ws = wb.active
     pivots = getattr(ws, '_pivots', None) or []
-    # openpyxl versions differ; the zip parts are the structure check.
+    assert len(pivots) == 1, pivots
     print('openpyxl pivots', len(pivots))
 except ImportError:
     print('openpyxl missing')
@@ -154,6 +179,16 @@ fn libreoffice_opens_modeled_pivot_if_present() {
     );
     let ods = dir.join("pivot.ods");
     assert!(ods.is_file(), "LibreOffice did not write {ods:?}");
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(ods).unwrap()).unwrap();
+    let mut content = String::new();
+    zip.by_name("content.xml")
+        .unwrap()
+        .read_to_string(&mut content)
+        .unwrap();
+    assert!(
+        content.contains("table:data-pilot-table") && content.contains("table:name=\"Sales\""),
+        "LibreOffice opened the workbook but did not retain a live pivot"
+    );
 }
 
 fn which(bin: &str) -> bool {

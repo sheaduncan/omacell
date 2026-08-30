@@ -9,6 +9,7 @@ use serde_json::json;
 
 fn analysis_bus() -> omacell_bus::Bus {
     let mut bus = common::bus();
+    omacell_bus::register_edit_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_analysis_commands(bus.registry_mut()).unwrap();
     bus
 }
@@ -86,6 +87,8 @@ fn pivot_output_edit_is_refused() {
     );
     let err = common::exec_err(&mut bus, "cell.set", json!({"ref": "F2", "input": "99"}));
     assert_eq!(err.code, "pivot.readonly");
+    let err = common::exec_err(&mut bus, "format.bold", json!({"range": "F2"}));
+    assert_eq!(err.code, "pivot.readonly");
 }
 
 #[test]
@@ -101,16 +104,50 @@ fn goal_seek_sets_input_and_reports_non_convergence() {
     assert_eq!(result["converged"], true);
     let input = common::cell_value(&bus, 0, 0);
     assert!(matches!(input, Some(Value::Number(n)) if (n - 5.0).abs() < 1e-4));
+    common::exec_ok(&mut bus, "edit.undo", json!({}));
+    let input = common::cell_value(&bus, 0, 0);
+    assert!(matches!(input, Some(Value::Number(n)) if (n - 1.0).abs() < 1e-9));
+    assert!(
+        bus.workbook()
+            .get(bus.workbook().active_sheet(), 0, 1)
+            .unwrap()
+            .unwrap()
+            .formula
+            .is_some()
+    );
 
     let mut bus = analysis_bus();
     common::exec_ok(&mut bus, "cell.set", json!({"ref": "A1", "input": "1"}));
-    common::exec_ok(&mut bus, "cell.set", json!({"ref": "B1", "input": "5"}));
+    common::exec_ok(&mut bus, "cell.set", json!({"ref": "B1", "input": "=5"}));
     let result = common::exec_ok(
         &mut bus,
         "whatif.goalseek",
         json!({"target": "B1", "goal": 10.0, "input": "A1"}),
     );
     assert_eq!(result["converged"], false);
+}
+
+#[test]
+fn pivot_create_validates_fields_during_dry_run() {
+    let mut bus = analysis_bus();
+    seed(&mut bus);
+    let dry = bus
+        .dry_run(
+            Origin::User,
+            "pivot.create",
+            json!({
+                "source": "A1:B3",
+                "dest": "E1",
+                "rows": ["Missing"],
+                "data": [{"source": "Amount", "agg": "sum"}]
+            }),
+        )
+        .unwrap();
+    assert!(!dry.outcome.ok);
+    assert_eq!(
+        dry.outcome.error.as_ref().map(|error| error.code.as_str()),
+        Some("pivot.field")
+    );
 }
 
 #[test]

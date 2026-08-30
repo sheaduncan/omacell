@@ -11,6 +11,8 @@ use omacell_core::pivot::{
 };
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::stats::describe_range;
+use omacell_core::storage::CellSlot;
+use omacell_core::style::{Font, Style};
 use omacell_core::value::Value;
 use omacell_core::whatif::{DEFAULT_MAX_ITER, DEFAULT_TOL, goal_seek};
 use omacell_core::workbook::{DateSystem, Workbook};
@@ -246,6 +248,39 @@ fn pivot_refresh_after_source_change() {
 }
 
 #[test]
+fn pivot_create_is_atomic_for_undo_and_blocks_sheet_removal() {
+    let mut wb = Workbook::new();
+    let source = wb.active_sheet();
+    let output = wb.add_sheet("Output").unwrap();
+    wb.set_text(source, 0, 0, "Region").unwrap();
+    wb.set_text(source, 0, 1, "Amount").unwrap();
+    wb.set_text(source, 1, 0, "East").unwrap();
+    wb.set_number(source, 1, 1, 10.0).unwrap();
+    let mut table = PivotTable::new("Sales", source, range(0, 0, 1, 1), output, 0, 0);
+    table.rows = vec!["Region".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    wb.add_pivot(table).unwrap();
+
+    assert_eq!(wb.remove_sheet(source).unwrap_err().code, "pivot.sheet");
+    assert_eq!(wb.remove_sheet(output).unwrap_err().code, "pivot.sheet");
+    assert_eq!(
+        wb.insert_rows(source, 0, 1).unwrap_err().code,
+        "pivot.readonly"
+    );
+    assert_eq!(
+        wb.insert_cols(output, 0, 1).unwrap_err().code,
+        "pivot.readonly"
+    );
+    wb.undo().unwrap();
+    assert!(wb.pivots().is_empty());
+    assert!(wb.get(output, 0, 0).unwrap().is_none());
+    assert!(wb.get(output, 1, 1).unwrap().is_none());
+    wb.redo().unwrap();
+    assert_eq!(wb.pivots().len(), 1);
+    assert_eq!(cell_num(&wb, output, 1, 1), Some(10.0));
+}
+
+#[test]
 fn pivot_output_is_read_only() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
@@ -263,6 +298,81 @@ fn pivot_output_is_read_only() {
     assert_eq!(err.code, "pivot.readonly");
     let err = wb.set_cell_contents(s, 0, 5, "x").unwrap_err();
     assert_eq!(err.code, "pivot.readonly");
+    let err = wb.set_slot(s, 1, 5, CellSlot::number(99.0)).unwrap_err();
+    assert_eq!(err.code, "pivot.readonly");
+    let err = wb
+        .set_cell_style(
+            s,
+            1,
+            5,
+            Style {
+                font: Font {
+                    bold: true,
+                    ..Font::default()
+                },
+                ..Style::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "pivot.readonly");
+}
+
+#[test]
+fn pivot_rejects_unknown_fields_and_unsafe_destinations() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_number(s, 1, 1, 10.0).unwrap();
+
+    let mut unknown = PivotTable::new("Unknown", s, range(0, 0, 1, 1), s, 0, 4);
+    unknown.rows = vec!["Missing".into()];
+    unknown.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let err = wb.add_pivot(unknown).unwrap_err();
+    assert_eq!(err.code, "pivot.field");
+
+    let mut overlap = PivotTable::new("Overlap", s, range(0, 0, 1, 1), s, 1, 1);
+    overlap.rows = vec!["Region".into()];
+    overlap.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let err = wb.add_pivot(overlap).unwrap_err();
+    assert_eq!(err.code, "pivot.output");
+
+    let mut overflow = PivotTable::new("Overflow", s, range(0, 0, 1, 1), s, 0, 16_383);
+    overflow.rows = vec!["Region".into()];
+    overflow.data = vec![
+        PivotDataField::new("Amount", PivotAgg::Sum),
+        PivotDataField::new("Amount", PivotAgg::Count),
+    ];
+    let err = wb.add_pivot(overflow).unwrap_err();
+    assert_eq!(err.code, "pivot.output");
+}
+
+#[test]
+fn percent_show_as_uses_fractional_values_and_percent_style() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_number(s, 1, 1, 30.0).unwrap();
+    wb.set_text(s, 2, 0, "West").unwrap();
+    wb.set_number(s, 2, 1, 70.0).unwrap();
+    let mut table = PivotTable::new("Percent", s, range(0, 0, 2, 1), s, 0, 4);
+    table.rows = vec!["Region".into()];
+    table.data = vec![PivotDataField {
+        source: "Amount".into(),
+        agg: PivotAgg::Sum,
+        show_as: ShowAs::PctOfTotal,
+    }];
+    wb.add_pivot(table).unwrap();
+
+    assert_eq!(cell_num(&wb, s, 1, 5), Some(0.3));
+    assert_eq!(cell_num(&wb, s, 2, 5), Some(0.7));
+    assert_eq!(cell_num(&wb, s, 3, 5), Some(1.0));
+    let slot = wb.get(s, 1, 5).unwrap().unwrap();
+    let style = wb.intern().styles.get(slot.style).unwrap();
+    assert_eq!(wb.num_fmt_code(style.num_fmt).as_deref(), Some("0.00%"));
 }
 
 #[test]
@@ -354,6 +464,71 @@ fn goal_seek_corpus_converges_within_tolerance() {
 }
 
 #[test]
+fn goal_seek_is_one_undo_unit_and_honors_iteration_cap() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_number(s, 0, 0, 1.0).unwrap();
+    wb.set_cell_style(
+        s,
+        0,
+        0,
+        Style {
+            font: Font {
+                bold: true,
+                ..Font::default()
+            },
+            ..Style::default()
+        },
+    )
+    .unwrap();
+    wb.set_cell_contents(s, 0, 1, "=A1*2").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+
+    wb.transact_try(|workbook| {
+        goal_seek(
+            workbook,
+            &mut engine,
+            CellCoord::new(s, 0, 1),
+            10.0,
+            CellCoord::new(s, 0, 0),
+            DEFAULT_MAX_ITER,
+            DEFAULT_TOL,
+        )
+        .map(|_| ())
+    })
+    .unwrap();
+    assert_eq!(cell_num(&wb, s, 0, 0), Some(5.0));
+    let style = wb
+        .intern()
+        .styles
+        .get(wb.get(s, 0, 0).unwrap().unwrap().style)
+        .unwrap();
+    assert!(style.font.bold);
+    wb.undo().unwrap();
+    assert_eq!(cell_num(&wb, s, 0, 0), Some(1.0));
+    let style = wb
+        .intern()
+        .styles
+        .get(wb.get(s, 0, 0).unwrap().unwrap().style)
+        .unwrap();
+    assert!(style.font.bold);
+    assert!(wb.get(s, 0, 1).unwrap().unwrap().formula.is_some());
+
+    let result = goal_seek(
+        &mut wb,
+        &mut engine,
+        CellCoord::new(s, 0, 1),
+        10.0,
+        CellCoord::new(s, 0, 0),
+        1,
+        DEFAULT_TOL,
+    )
+    .unwrap();
+    assert_eq!(result.iterations, 1);
+}
+
+#[test]
 fn stats_describe_known_range() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
@@ -374,4 +549,11 @@ fn stats_describe_known_range() {
     assert!((summary.stdev.unwrap() - var.sqrt()).abs() < 1e-12);
     assert!(!summary.histogram.is_empty());
     assert!(summary.histogram.iter().map(|b| b.count).sum::<u32>() == 5);
+}
+
+#[test]
+fn stats_rejects_an_unknown_sheet() {
+    let wb = Workbook::new();
+    let err = describe_range(&wb, SheetId::new(999), range(0, 0, 0, 0)).unwrap_err();
+    assert_eq!(err.code, omacell_core::error::codes::SHEET_ID);
 }

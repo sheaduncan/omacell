@@ -10,6 +10,7 @@ use omacell_core::condfmt::{CfDxf, CfKind, CondFormat};
 use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria};
 use omacell_core::intern::{ArrayPayload, RichTextRun};
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
+use omacell_core::pivot::{PivotAgg, PivotDataField, PivotTable};
 use omacell_core::print::{Orientation, PageSetup, PaperSize};
 use omacell_core::sheet::{Comment, Hyperlink, Note, ProtectionState, SplitView};
 use omacell_core::storage::{CellFlags, CellSlot};
@@ -77,6 +78,44 @@ fn modeled_page_setup_round_trips_through_omc() {
             .unwrap()
             .page_setup,
         setup
+    );
+}
+
+#[test]
+fn modeled_pivot_round_trips_through_omc() {
+    let mut wb = Workbook::new();
+    let source = wb.active_sheet();
+    let removed = wb.add_sheet("Removed before save").unwrap();
+    wb.remove_sheet(removed).unwrap();
+    let output = wb.add_sheet("Pivot output").unwrap();
+    wb.set_text(source, 0, 0, "Region").unwrap();
+    wb.set_text(source, 0, 1, "Amount").unwrap();
+    wb.set_text(source, 1, 0, "East").unwrap();
+    wb.set_number(source, 1, 1, 12.0).unwrap();
+    let source_range = omacell_core::addr::RangeRef::from_corners(
+        omacell_core::addr::CellRef::new(0, 0).unwrap(),
+        omacell_core::addr::CellRef::new(1, 1).unwrap(),
+    );
+    let mut pivot = PivotTable::new("Sales", source, source_range, output, 0, 0);
+    pivot.rows = vec!["Region".into()];
+    pivot.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let id = wb.add_pivot(pivot).unwrap();
+    let expected = wb.pivots().get(id).unwrap().clone();
+
+    let text = to_string(&OmcDocument::from_workbook(wb)).unwrap();
+    assert!(text.lines().any(|line| line.starts_with("pivot\t")));
+    let reopened = open_str(&text).unwrap();
+
+    let actual = reopened.workbook.pivots().get(id).unwrap();
+    assert_eq!(actual.name, expected.name);
+    assert_eq!(actual.source, expected.source);
+    assert_eq!(
+        reopened.workbook.sheet(actual.source_sheet).unwrap().name,
+        "Sheet1"
+    );
+    assert_eq!(
+        reopened.workbook.sheet(actual.dest_sheet).unwrap().name,
+        "Pivot output"
     );
 }
 

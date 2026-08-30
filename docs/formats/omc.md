@@ -45,6 +45,7 @@ after a closing quote are parse errors.
 | `threaded_comment` | `threaded_comment	Sheet!A1	<json>` | Full threaded comment and replies. |
 | `hyperlink` | `hyperlink	Sheet!A1	<target>	display=?	tooltip=?` | |
 | `table` | `table	<name>	<range>	k=v…` | Header/totals/banding/auto-expand flags and JSON `columns`. Legacy comma-separated `cols` is accepted. |
+| `pivot` | `pivot	<json>` | Full native `PivotTable` model plus source/output sheet names (ids are remapped on read), including its stable pivot id, fields, grouping, filters, layout, and output bounds. |
 | `extra` | `extra	<sheet>	<kind>	<json-string>` | Opaque CF/DV/print/sparkline/autofilter fragments (`kind` = `cf`/`dv`/`print`/`sparkline`/`autofilter`). |
 | `custom` | `custom	<part>	<utf8>` | `Workbook::custom_parts` (e.g. `xl/omacell/meta.json`). Non-UTF-8 is dropped. |
 | `cf` / `validation` | sketch forms | Accepted as `extra` of kind `cf` / `dv` (raw remainder). |
@@ -74,7 +75,7 @@ are JSON in `rich=` / `v_rich=` and use UTF-8 byte offsets.
 2. `book`
 3. `numfmt` records, id order
 4. `style` records, id order
-5. Each sheet in workbook order: `sheet`, then `cell` row-major, then `merge` / `comment` / `threaded_comment` / `hyperlink` / `table` / `extra`
+5. Each sheet in workbook order: `sheet`, then `cell` row-major, then `merge` / `comment` / `threaded_comment` / `hyperlink` / `table` / `pivot` / `extra`
 6. `name` records (after sheets so `scope=` can resolve)
 7. `custom`
 8. `changeset` / `change`

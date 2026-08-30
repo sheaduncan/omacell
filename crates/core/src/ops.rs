@@ -211,6 +211,7 @@ pub fn insert_cells(
     range: RangeRef,
     shift: Shift,
 ) -> Result<(), CoreError> {
+    wb.ensure_sheet_not_used_by_pivot(sheet)?;
     let (r0, c0, r1, c1) = norm(range);
     match shift {
         Shift::Down => {
@@ -255,6 +256,7 @@ pub fn delete_cells(
     range: RangeRef,
     shift: Shift,
 ) -> Result<(), CoreError> {
+    wb.ensure_sheet_not_used_by_pivot(sheet)?;
     let (r0, c0, r1, c1) = norm(range);
     match shift {
         Shift::Down => {
@@ -994,12 +996,15 @@ fn shift_range_cols(range: RangeRef, at: u16, count: i32) -> Option<RangeRef> {
 
 /// Merge `range` into one merged area.
 pub fn merge(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Result<(), CoreError> {
+    let (r0, c0, r1, c1) = norm(range);
+    wb.ensure_range_not_pivot_output(sheet, r0, c0, r1, c1)?;
     wb.mutate_sheet_edit(sheet, |target| target.add_merge(range))
 }
 
 /// Merge each row of `range` independently (Excel merge-across).
 pub fn merge_across(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Result<(), CoreError> {
     let (r0, c0, r1, c1) = norm(range);
+    wb.ensure_range_not_pivot_output(sheet, r0, c0, r1, c1)?;
     wb.mutate_sheet_edit(sheet, |target| {
         for r in r0..=r1 {
             let row_range = RangeRef::from_corners(CellRef::new(r, c0)?, CellRef::new(r, c1)?);
@@ -1011,6 +1016,8 @@ pub fn merge_across(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Resul
 
 /// Unmerge any merge overlapping `range`.
 pub fn unmerge(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Result<usize, CoreError> {
+    let (r0, c0, r1, c1) = norm(range);
+    wb.ensure_range_not_pivot_output(sheet, r0, c0, r1, c1)?;
     wb.mutate_sheet_edit(sheet, |target| {
         let before = target.merges.len();
         target.merges.retain(|m| !overlaps(*m, range));

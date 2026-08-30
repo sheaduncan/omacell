@@ -366,9 +366,6 @@ fn pivot_create(ctx: &mut CommandContext<'_>, args: PivotCreateArgs) -> Result<E
         table.subtotals = v;
     }
     table.refresh_on_load = args.refresh_on_load;
-    if ctx.is_preflight() {
-        return Ok(Effect::query(serde_json::json!({"ok": true})));
-    }
     let id = ctx.workbook().add_pivot(table)?;
     Ok(Effect {
         inverse: vec![call("pivot.remove", serde_json::json!({"id": id.index()}))?],
@@ -384,9 +381,6 @@ fn pivot_create(ctx: &mut CommandContext<'_>, args: PivotCreateArgs) -> Result<E
 
 fn pivot_refresh(ctx: &mut CommandContext<'_>, args: PivotIdArgs) -> Result<Effect, CoreError> {
     let id = resolve_pivot_id(ctx, &args)?;
-    if ctx.is_preflight() {
-        return Ok(Effect::query(serde_json::json!({"ok": true})));
-    }
     ctx.workbook().refresh_pivot(id)?;
     Ok(Effect {
         summary: ChangeSummary {
@@ -401,9 +395,6 @@ fn pivot_refresh(ctx: &mut CommandContext<'_>, args: PivotIdArgs) -> Result<Effe
 
 fn pivot_remove(ctx: &mut CommandContext<'_>, args: PivotIdArgs) -> Result<Effect, CoreError> {
     let id = resolve_pivot_id(ctx, &args)?;
-    if ctx.is_preflight() {
-        return Ok(Effect::query(serde_json::json!({"ok": true})));
-    }
     let table = ctx.workbook().remove_pivot(id)?;
     Ok(Effect {
         inverse: vec![call("pivot.restore", serde_json::json!({"table": table}))?],
@@ -422,7 +413,7 @@ fn pivot_restore(
     args: PivotRestoreArgs,
 ) -> Result<Effect, CoreError> {
     if ctx.is_preflight() {
-        return Ok(Effect::query(serde_json::json!({"ok": true})));
+        ctx.recalc_rebuild();
     }
     let table: PivotTable = serde_json::from_value(args.table)
         .map_err(|error| CoreError::new("pivot.restore", error.to_string()))?;

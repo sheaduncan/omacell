@@ -342,8 +342,14 @@ impl Delta {
                     + after.as_ref().map(|t| t.name.len()).unwrap_or(0)
             }
             Self::Pivot { before, after } => {
-                128 + before.as_ref().map(|t| t.name.len()).unwrap_or(0)
-                    + after.as_ref().map(|t| t.name.len()).unwrap_or(0)
+                128 + before
+                    .as_ref()
+                    .map(|table| table.estimated_bytes())
+                    .unwrap_or(0)
+                    + after
+                        .as_ref()
+                        .map(|table| table.estimated_bytes())
+                        .unwrap_or(0)
             }
             Self::ChartAdd { chart, .. } | Self::ChartRemove { chart, .. } => {
                 128 + chart.title.as_ref().map(String::len).unwrap_or(0)

@@ -677,11 +677,43 @@ impl Workbook {
     }
 
     fn ensure_not_pivot_output(&self, id: SheetId, row: u32, col: u16) -> Result<(), CoreError> {
-        if self.pivots.iter().any(|p| p.contains(id, row, col)) {
+        self.ensure_range_not_pivot_output(id, row, col, row, col)
+    }
+
+    pub(crate) fn ensure_range_not_pivot_output(
+        &self,
+        id: SheetId,
+        min_row: u32,
+        min_col: u16,
+        max_row: u32,
+        max_col: u16,
+    ) -> Result<(), CoreError> {
+        if self.pivots.iter().any(|pivot| {
+            pivot.dest_sheet == id
+                && min_row <= pivot.out_end_row
+                && pivot.dest_row <= max_row
+                && min_col <= pivot.out_end_col
+                && pivot.dest_col <= max_col
+        }) {
             return Err(
                 CoreError::new("pivot.readonly", "pivot output cells are read-only")
                     .with_hint("change the source range and run pivot.refresh"),
             );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ensure_sheet_not_used_by_pivot(&self, id: SheetId) -> Result<(), CoreError> {
+        if let Some(pivot) = self
+            .pivots
+            .iter()
+            .find(|pivot| pivot.source_sheet == id || pivot.dest_sheet == id)
+        {
+            return Err(CoreError::new(
+                "pivot.readonly",
+                format!("structural edit would invalidate pivot {:?}", pivot.name),
+            )
+            .with_hint("remove the pivot before inserting or deleting cells, rows, or columns"));
         }
         Ok(())
     }
@@ -834,6 +866,7 @@ impl Workbook {
         col: u16,
         style: Style,
     ) -> Result<StyleId, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         let sid = self.intern_mut().styles.intern(style);
         let mut slot = self
             .get(id, row, col)?
@@ -1329,6 +1362,17 @@ impl Workbook {
     /// Remove a sheet. The last remaining sheet cannot be removed. The last
     /// visible sheet cannot be removed if it is the only visible one.
     pub fn remove_sheet(&mut self, id: SheetId) -> Result<Sheet, CoreError> {
+        if let Some(pivot) = self
+            .pivots
+            .iter()
+            .find(|pivot| pivot.source_sheet == id || pivot.dest_sheet == id)
+        {
+            return Err(CoreError::new(
+                "pivot.sheet",
+                format!("sheet is used by pivot {:?}", pivot.name),
+            )
+            .with_hint("remove the pivot table before deleting its source or output sheet"));
+        }
         if self.sheets.len() == 1 {
             return Err(CoreError::sheet_name(
                 "a workbook must contain at least one sheet",
@@ -1875,7 +1919,12 @@ impl Workbook {
     }
 
     /// Insert a pivot table and materialize its output region.
-    pub fn add_pivot(&mut self, mut table: PivotTable) -> Result<PivotId, CoreError> {
+    pub fn add_pivot(&mut self, table: PivotTable) -> Result<PivotId, CoreError> {
+        self.transact_try(move |workbook| workbook.add_pivot_inner(table))
+    }
+
+    fn add_pivot_inner(&mut self, mut table: PivotTable) -> Result<PivotId, CoreError> {
+        self.pivots.validate_insert(&table)?;
         let cells = materialize(self, &table)?;
         write_output(self, &mut table, &cells)?;
         let id = self.pivots.insert(table.clone())?;
@@ -1889,6 +1938,10 @@ impl Workbook {
 
     /// Rebuild a pivot from its source range.
     pub fn refresh_pivot(&mut self, id: PivotId) -> Result<(), CoreError> {
+        self.transact_try(|workbook| workbook.refresh_pivot_inner(id))
+    }
+
+    fn refresh_pivot_inner(&mut self, id: PivotId) -> Result<(), CoreError> {
         let mut table =
             self.pivots.get(id).cloned().ok_or_else(|| {
                 CoreError::new("pivot.id", format!("unknown pivot {}", id.index()))
@@ -1911,6 +1964,15 @@ impl Workbook {
         headers: &[String],
         rows: &[Vec<CacheValue>],
     ) -> Result<(), CoreError> {
+        self.transact_try(|workbook| workbook.refresh_pivot_from_cache_inner(id, headers, rows))
+    }
+
+    fn refresh_pivot_from_cache_inner(
+        &mut self,
+        id: PivotId,
+        headers: &[String],
+        rows: &[Vec<CacheValue>],
+    ) -> Result<(), CoreError> {
         let mut table =
             self.pivots.get(id).cloned().ok_or_else(|| {
                 CoreError::new("pivot.id", format!("unknown pivot {}", id.index()))
@@ -1928,6 +1990,10 @@ impl Workbook {
 
     /// Drop a pivot and clear its output region.
     pub fn remove_pivot(&mut self, id: PivotId) -> Result<PivotTable, CoreError> {
+        self.transact_try(|workbook| workbook.remove_pivot_inner(id))
+    }
+
+    fn remove_pivot_inner(&mut self, id: PivotId) -> Result<PivotTable, CoreError> {
         let mut table = self
             .pivots
             .remove(id)
@@ -1981,6 +2047,7 @@ impl Workbook {
         let r1 = range.start.row.max(range.end.row);
         let c0 = range.start.col.min(range.end.col);
         let c1 = range.start.col.max(range.end.col);
+        self.ensure_range_not_pivot_output(sheet, r0, c0, r1, c1)?;
         if self.tables.iter().any(|existing| {
             existing.sheet == sheet
                 && ranges_overlap(
@@ -2100,6 +2167,13 @@ impl Workbook {
             range.start.row.max(range.end.row),
             range.start.col.max(range.end.col),
         );
+        self.ensure_range_not_pivot_output(
+            before.sheet,
+            new_bounds.0,
+            new_bounds.1,
+            new_bounds.2,
+            new_bounds.3,
+        )?;
         if self.tables.iter().any(|existing| {
             existing.id != id
                 && existing.sheet == before.sheet
@@ -2350,6 +2424,7 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
+        self.ensure_sheet_not_used_by_pivot(id)?;
         let n = i32::try_from(count).map_err(|_| CoreError::addr_ref("row count too large"))?;
         self.sheet_mut(id)?.store.shift_rows(at, n)?;
         self.undo.record(Delta::ShiftRows {
@@ -2366,6 +2441,7 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
+        self.ensure_sheet_not_used_by_pivot(id)?;
         if at >= crate::limits::MAX_ROWS {
             return Err(CoreError::addr_ref("row delete anchor is out of range"));
         }
@@ -2392,6 +2468,7 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
+        self.ensure_sheet_not_used_by_pivot(id)?;
         let n = i32::from(count);
         self.sheet_mut(id)?.store.shift_cols(at, n)?;
         self.undo.record(Delta::ShiftCols {
@@ -2408,6 +2485,7 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
+        self.ensure_sheet_not_used_by_pivot(id)?;
         if u32::from(at) >= u32::from(crate::limits::MAX_COLS) {
             return Err(CoreError::addr_ref("column delete anchor is out of range"));
         }
@@ -2438,6 +2516,7 @@ impl Workbook {
         note: Option<Note>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
+        self.ensure_not_pivot_output(id, row, col)?;
         self.mutate_sheet_edit(id, |sheet| {
             match note {
                 Some(n) => {
@@ -2460,6 +2539,7 @@ impl Workbook {
         comment: Option<Comment>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
+        self.ensure_not_pivot_output(id, row, col)?;
         self.mutate_sheet_edit(id, |sheet| {
             match comment {
                 Some(c) => {
@@ -2482,6 +2562,7 @@ impl Workbook {
         link: Option<Hyperlink>,
     ) -> Result<(), CoreError> {
         CellRef::new(row, col)?;
+        self.ensure_not_pivot_output(id, row, col)?;
         self.mutate_sheet_edit(id, |sheet| {
             match link {
                 Some(h) => {
@@ -2522,6 +2603,7 @@ impl Workbook {
         col: u16,
         slot: CellSlot,
     ) -> Result<Option<CellSlot>, CoreError> {
+        self.ensure_not_pivot_output(id, row, col)?;
         self.replace_slot(id, row, col, Some(slot))
     }
 

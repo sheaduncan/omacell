@@ -31,8 +31,89 @@
     "rows_fields": ["Region"],
     "data": [{ "source": "Amount", "agg": "sum", "show_as": "pct_of_total" }],
     "expect": [
-      { "row": 1, "col": 1, "n": 30 },
-      { "row": 2, "col": 1, "n": 70 }
+      { "row": 1, "col": 1, "n": 0.3 },
+      { "row": 2, "col": 1, "n": 0.7 },
+      { "row": 3, "col": 1, "n": 1 }
+    ]
+  },
+  {
+    "name": "pct_of_row",
+    "headers": ["Region", "Product", "Amount"],
+    "rows": [
+      ["East", "A", 10],
+      ["East", "B", 30],
+      ["West", "A", 20],
+      ["West", "B", 40]
+    ],
+    "rows_fields": ["Region"],
+    "cols_fields": ["Product"],
+    "data": [{ "source": "Amount", "agg": "sum", "show_as": "pct_of_row" }],
+    "expect": [
+      { "row": 1, "col": 1, "n": 0.25 },
+      { "row": 1, "col": 2, "n": 0.75 },
+      { "row": 1, "col": 3, "n": 1 },
+      { "row": 2, "col": 1, "n": 0.3333333333333333 },
+      { "row": 2, "col": 2, "n": 0.6666666666666666 },
+      { "row": 2, "col": 3, "n": 1 }
+    ]
+  },
+  {
+    "name": "pct_of_col",
+    "headers": ["Region", "Product", "Amount"],
+    "rows": [
+      ["East", "A", 10],
+      ["East", "B", 30],
+      ["West", "A", 20],
+      ["West", "B", 40]
+    ],
+    "rows_fields": ["Region"],
+    "cols_fields": ["Product"],
+    "data": [{ "source": "Amount", "agg": "sum", "show_as": "pct_of_col" }],
+    "expect": [
+      { "row": 1, "col": 1, "n": 0.3333333333333333 },
+      { "row": 1, "col": 2, "n": 0.42857142857142855 },
+      { "row": 2, "col": 1, "n": 0.6666666666666666 },
+      { "row": 2, "col": 2, "n": 0.5714285714285714 },
+      { "row": 3, "col": 1, "n": 1 },
+      { "row": 3, "col": 2, "n": 1 }
+    ]
+  },
+  {
+    "name": "running_total_numeric_order",
+    "headers": ["Sequence", "Amount"],
+    "rows": [
+      [10, 30],
+      [1, 10],
+      [2, 20]
+    ],
+    "rows_fields": ["Sequence"],
+    "data": [{ "source": "Amount", "agg": "sum", "show_as": "running_total" }],
+    "expect": [
+      { "row": 1, "col": 0, "text": "1" },
+      { "row": 1, "col": 1, "n": 10 },
+      { "row": 2, "col": 0, "text": "2" },
+      { "row": 2, "col": 1, "n": 30 },
+      { "row": 3, "col": 0, "text": "10" },
+      { "row": 3, "col": 1, "n": 60 }
+    ]
+  },
+  {
+    "name": "difference_from_numeric_order",
+    "headers": ["Sequence", "Amount"],
+    "rows": [
+      [10, 45],
+      [1, 10],
+      [2, 25]
+    ],
+    "rows_fields": ["Sequence"],
+    "data": [{ "source": "Amount", "agg": "sum", "show_as": "difference_from" }],
+    "expect": [
+      { "row": 1, "col": 0, "text": "1" },
+      { "row": 1, "col": 1, "text": "" },
+      { "row": 2, "col": 0, "text": "2" },
+      { "row": 2, "col": 1, "n": 15 },
+      { "row": 3, "col": 0, "text": "10" },
+      { "row": 3, "col": 1, "n": 20 }
     ]
   },
   {
