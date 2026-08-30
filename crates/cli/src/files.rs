@@ -1,9 +1,10 @@
-//! `file.open` / `file.save` / `file.export` adapters over `omacell-io`.
+//! `file.open` / `file.save` / `file.export` / `file.print` adapters over `omacell-io`.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,6 +26,7 @@ enum FileKind {
     Xlsx,
     Csv,
     Omc,
+    Pdf,
 }
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -100,6 +102,18 @@ pub struct FileExportArgs {
     pub range: Option<String>,
 }
 
+/// `file.print`
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FilePrintArgs {
+    /// Optional PDF destination. Omitted with no printer → preview data only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// CUPS printer name (`lp -d`). Omitted → do not print.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub printer: Option<String>,
+}
+
 /// Register file adapters on an existing bus.
 pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(), CoreError> {
     let open_session = session.clone();
@@ -137,6 +151,18 @@ pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(),
             default_keys: &[],
         },
         move |ctx, args| file_export(ctx, &export_session, args),
+    )?;
+    let print_session = session.clone();
+    bus.registry_mut().register::<FilePrintArgs, _>(
+        CommandSpec {
+            id: "file.print",
+            doc: "Print-preview page boxes, export PDF, or send a PDF to CUPS",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+P"],
+        },
+        move |ctx, args| file_print(ctx, &print_session, args),
     )?;
     Ok(())
 }
@@ -266,7 +292,7 @@ fn file_export(
             "file.format",
             format!("cannot infer export format from {}", path.display()),
         )
-        .with_hint("use a .xlsx, .csv, .tsv, or .omc destination")
+        .with_hint("use a .xlsx, .csv, .tsv, .omc, or .pdf destination")
     })?;
     let (package, extras, keep_backups) = {
         let state = session.lock();
@@ -313,6 +339,20 @@ fn file_export(
                     keep_backups,
                     ctx.cancel_flag().map(Arc::as_ref),
                 )?;
+            }
+        }
+        FileKind::Pdf => {
+            let options = pdf_options_for(session, &path);
+            if ctx.is_preflight() {
+                let _ = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
+            } else {
+                if ctx.is_cancelled() {
+                    return Err(cancelled());
+                }
+                ctx.report_progress(0, Some(1), "pdf");
+                let bytes = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
+                atomic_write_bytes(&path, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
+                ctx.report_progress(1, Some(1), "pdf");
             }
         }
     }
@@ -409,6 +449,11 @@ fn open_kind(
                 package: None,
             })
         }
+        FileKind::Pdf => Err(
+            CoreError::new("file.format", "cannot open a PDF as a workbook").with_hint(
+                "export TO pdf with convert or file.print; open an .xlsx, .csv, or .omc",
+            ),
+        ),
         FileKind::Csv => {
             let sniffed;
             let plan = if let Some(plan) = import_plan {
@@ -494,6 +539,12 @@ fn write_kind(
             }
             let bytes = csv::export(wb, &plan)?;
             atomic_write_bytes(path, &bytes, cancel)?;
+        }
+        FileKind::Pdf => {
+            return Err(CoreError::new(
+                "file.format",
+                "PDF export is handled by file.export / file.print",
+            ));
         }
     }
     Ok(())
@@ -584,6 +635,9 @@ fn validate_kind(
             }
             let _ = csv::export(wb, &plan)?;
         }
+        FileKind::Pdf => {
+            let _ = omacell_io::pdf::write_pdf(wb, &omacell_io::pdf::PdfOptions::default())?;
+        }
     }
     Ok(())
 }
@@ -598,6 +652,228 @@ fn kind_from_path(path: &Path) -> Option<FileKind> {
         Some("xlsx" | "xlsm") => Some(FileKind::Xlsx),
         Some("csv" | "tsv" | "txt") => Some(FileKind::Csv),
         Some("omc") => Some(FileKind::Omc),
+        Some("pdf") => Some(FileKind::Pdf),
         _ => None,
+    }
+}
+
+fn file_print(
+    ctx: &mut CommandContext<'_>,
+    session: &FileSession,
+    args: FilePrintArgs,
+) -> Result<Effect, CoreError> {
+    let mut pages = Vec::new();
+    for sheet in ctx.workbook_ref().sheets() {
+        for page in omacell_core::print::paginate(sheet, &sheet.page_setup)? {
+            pages.push(serde_json::json!({
+                "sheet": sheet.name,
+                "page": page.page,
+                "pages": page.pages,
+                "row0": page.row0,
+                "row1": page.row1,
+                "col0": page.col0,
+                "col1": page.col1,
+                "scale": page.scale,
+            }));
+        }
+    }
+    let printers = list_printers();
+    let printer = args.printer.as_deref().map(validate_printer).transpose()?;
+    if ctx.is_preflight() {
+        return Ok(Effect::query(serde_json::json!({
+            "pages": pages,
+            "printers": printers,
+            "dry_run": ctx.is_dry_run(),
+        })));
+    }
+    let explicit_dest = args.path.as_deref().map(PathBuf::from);
+    if explicit_dest.is_some() || printer.is_some() {
+        let ephemeral = explicit_dest.is_none();
+        let dest = match explicit_dest.as_ref() {
+            Some(path) => path.clone(),
+            None => print_spool_path()?,
+        };
+        let options = pdf_options_for(session, &dest);
+        let bytes = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
+        if ephemeral {
+            write_private_spool(&dest, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
+        } else {
+            atomic_write_bytes(&dest, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
+        }
+        let print_result = printer.map_or(Ok(()), |printer| send_to_printer(printer, &dest));
+        let cleanup_result = if ephemeral {
+            std::fs::remove_file(&dest)
+                .map_err(|err| CoreError::new("file.print", format!("remove spool PDF: {err}")))
+        } else {
+            Ok(())
+        };
+        print_result?;
+        cleanup_result?;
+    }
+    Ok(Effect {
+        result: serde_json::json!({
+            "pages": pages,
+            "printers": printers,
+            "path": explicit_dest.map(|path| path.display().to_string()),
+        }),
+        auto_recalc: false,
+        ..Effect::default()
+    })
+}
+
+fn validate_printer(printer: &str) -> Result<&str, CoreError> {
+    if printer.is_empty()
+        || printer.len() > 127
+        || printer.starts_with('-')
+        || !printer
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err(CoreError::new(
+            "file.print",
+            "printer must be a non-empty CUPS name using letters, digits, '.', '_', or '-'",
+        ));
+    }
+    Ok(printer)
+}
+
+fn print_spool_path() -> Result<PathBuf, CoreError> {
+    let root = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| {
+            CoreError::new(
+                "file.print",
+                "printer output requires an absolute XDG_RUNTIME_DIR",
+            )
+            .with_hint("set XDG_RUNTIME_DIR or provide an explicit PDF path")
+        })?;
+    let app_dir = root.join("omacell");
+    let dir = app_dir.join("print");
+    for candidate in [&root, &app_dir, &dir] {
+        omacell_bus::ipc::prepare_runtime_dir(candidate)
+            .map_err(|err| CoreError::new("file.print", err.message))?;
+    }
+    loop {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("job-{}-{sequence}.pdf", std::process::id()));
+        if std::fs::symlink_metadata(&path).is_err() {
+            return Ok(path);
+        }
+    }
+}
+
+fn write_private_spool(
+    path: &Path,
+    bytes: &[u8],
+    cancel: Option<&AtomicBool>,
+) -> Result<(), CoreError> {
+    if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err(cancelled());
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|err| CoreError::new("file.print", format!("create spool PDF: {err}")))?;
+    let result = (|| {
+        file.write_all(bytes)
+            .map_err(|err| CoreError::new("file.print", format!("write spool PDF: {err}")))?;
+        file.sync_all()
+            .map_err(|err| CoreError::new("file.print", format!("sync spool PDF: {err}")))?;
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err(cancelled());
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+fn send_to_printer(printer: &str, path: &Path) -> Result<(), CoreError> {
+    let status = std::process::Command::new("lp")
+        .arg("-d")
+        .arg(printer)
+        .arg(path)
+        .status()
+        .map_err(|err| CoreError::new("file.print", format!("lp: {err}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CoreError::new(
+            "file.print",
+            format!("lp exited {}", status.code().unwrap_or(-1)),
+        ))
+    }
+}
+
+fn pdf_options_for(session: &FileSession, dest: &Path) -> omacell_io::pdf::PdfOptions {
+    let font_path = session
+        .lock()
+        .config
+        .as_ref()
+        .and_then(|cfg| cfg.snapshot().shell.ui_font_path.clone());
+    omacell_io::pdf::PdfOptions {
+        font_path,
+        file_name: dest
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workbook.pdf")
+            .to_string(),
+        ..omacell_io::pdf::PdfOptions::default()
+    }
+}
+
+fn list_printers() -> Vec<String> {
+    let Ok(out) = std::process::Command::new("lpstat").arg("-a").output() else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn printer_names_cannot_be_parsed_as_options() {
+        assert_eq!(validate_printer("office-2").unwrap(), "office-2");
+        assert!(validate_printer("-o").is_err());
+        assert!(validate_printer("office name").is_err());
+        assert!(validate_printer("office\nname").is_err());
+    }
+
+    #[test]
+    fn private_spool_is_exclusive_and_mode_0600() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join(format!("omacell-spool-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!(
+            "job-{}.pdf",
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        write_private_spool(&path, b"private", None).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(write_private_spool(&path, b"replace", None).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"private");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
 }

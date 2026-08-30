@@ -7,7 +7,7 @@ A spreadsheet for Omarchy Linux
 Usage: omacell [OPTIONS] [FILE]... [COMMAND]
 
 Commands:
-  convert    Convert a workbook between `.xlsx`, CSV, and `.omc`
+  convert    Convert a workbook between `.xlsx`, CSV, `.omc`, and PDF
   query      Print a range as json, csv, or markdown
   set        Set a cell or range from formula-bar text
   eval       Evaluate a formula in a workbook

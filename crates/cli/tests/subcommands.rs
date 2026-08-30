@@ -144,6 +144,7 @@ fn commands_json_includes_file_and_theme() {
         .stdout(predicate::str::contains("file.open"))
         .stdout(predicate::str::contains("file.save"))
         .stdout(predicate::str::contains("file.export"))
+        .stdout(predicate::str::contains("file.print"))
         .stdout(predicate::str::contains("theme.reload"));
 }
 
@@ -192,6 +193,15 @@ fn query_eval_set_recalc_convert() {
         .assert()
         .success();
     assert!(out.is_file());
+
+    let pdf = dir.path().join("out.pdf");
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args(["convert", book.to_str().unwrap(), pdf.to_str().unwrap()])
+        .assert()
+        .success();
+    let pdf_bytes = std::fs::read(&pdf).unwrap();
+    assert!(pdf_bytes.starts_with(b"%PDF-"));
 }
 
 #[test]

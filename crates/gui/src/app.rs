@@ -12,6 +12,7 @@ use omacell_conf::{ConfigStore, LoadedConfig, Paths, ReloadEvent};
 use omacell_core::addr::{SheetId, col_to_letters, parse_a1_cell, quote_sheet_name};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
+use omacell_core::print::paginate;
 use omacell_core::{PRODUCT_DISPLAY_NAME, PRODUCT_NAME};
 use omacell_ui::{
     Area, EditSurface, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, SessionState, UiSession,
@@ -73,6 +74,7 @@ pub struct Gui {
     drag: Option<PointerDrag>,
     focused_cancel: Option<CancelHandle>,
     last_title: String,
+    print_preview: bool,
     _ipc: Option<IpcHandle>,
 }
 
@@ -142,6 +144,7 @@ impl Gui {
             drag: None,
             focused_cancel,
             last_title: String::new(),
+            print_preview: false,
             _ipc: ipc_handle,
         })
     }
@@ -370,6 +373,9 @@ impl Gui {
             return Ok(Outcome::success(json!({"ok": true})));
         }
         let args = inject_chart_range(&self.ui, cmd, args);
+        if cmd == "file.print" {
+            self.toggle_print_preview();
+        }
         match handle.submit(Origin::User, cmd, args) {
             Ok((id, cancel)) => {
                 self.focused_cancel = Some(cancel);
@@ -654,6 +660,26 @@ impl Gui {
                     }
                 }
             }
+            if self.print_preview
+                && let Some(ws) = snapshot.workbook.sheet(sheet)
+                && let Ok(pages) = paginate(ws, &ws.page_setup)
+            {
+                let painter = ui.painter();
+                for page in pages {
+                    if page.row1 >= page.row0 && page.col1 >= page.col0 {
+                        let from = self.grid.cell_rect(page.row0, page.col0);
+                        let to = self.grid.cell_rect(page.row1, page.col1);
+                        if let (Some(a), Some(b)) = (from, to) {
+                            painter.rect_stroke(
+                                egui::Rect::from_two_pos(a.min, b.max),
+                                0.0,
+                                egui::Stroke::new(1.5_f32, self.theme.warning),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                    }
+                }
+            }
         });
 
         let double = input
@@ -698,6 +724,25 @@ impl Gui {
                 chrome::palette(ctx, &self.ui.palette(), self.palette_index, &self.theme)
         {
             let _ = self.choose_palette(&id);
+        }
+    }
+
+    fn toggle_print_preview(&mut self) {
+        if self.print_preview {
+            self.print_preview = false;
+            self.message = Some("print preview off".into());
+            return;
+        }
+        let snap = self.runner.handle().snapshot();
+        let Some(sheet) = snap.workbook.sheet(self.active_sheet) else {
+            return;
+        };
+        match paginate(sheet, &sheet.page_setup) {
+            Ok(pages) => {
+                self.message = Some(format!("print preview · {} page(s)", pages.len()));
+                self.print_preview = true;
+            }
+            Err(err) => self.message = Some(err.message),
         }
     }
 
@@ -1058,6 +1103,7 @@ fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutatin
                 | "file.open"
                 | "file.save"
                 | "file.export"
+                | "file.print"
                 | "theme.reload"
         )
     {

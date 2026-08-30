@@ -169,6 +169,9 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
             &styles,
             &mut warnings,
         )?;
+        let mut setup = omacell_core::print::PageSetup::default();
+        super::print::apply_print_xml(&mut setup, &extra.print_xml);
+        let _ = wb.set_page_setup(id, setup);
         let sparklines = super::drawing::parse_sparklines(&extra.sparkline_xml, &wb, id);
         for sparkline in sparklines {
             let _ = wb.add_sparkline(sparkline);
@@ -179,6 +182,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
         load_charts(&mut wb, id, &package, &sheet_rels);
     }
 
+    apply_print_defined_names(&mut wb);
     load_omacell_parts(&mut wb, &package);
 
     let mut doc = XlsxDocument {
@@ -328,6 +332,35 @@ fn parse_name_ref(text: &str, wb: &mut Workbook) -> NameReferent {
 
 fn truthy(s: &str) -> bool {
     matches!(s, "1" | "true" | "True" | "TRUE")
+}
+
+fn apply_print_defined_names(wb: &mut Workbook) {
+    let collected: Vec<_> = wb
+        .names()
+        .iter()
+        .map(|n| {
+            let text = match &n.referent {
+                NameReferent::Range(r) => r.to_a1(),
+                NameReferent::Formula(f) => f.clone(),
+                NameReferent::Constant(_) => String::new(),
+            };
+            (n.name.clone(), n.scope, text)
+        })
+        .collect();
+    for (name, scope, text) in collected {
+        if text.is_empty() {
+            continue;
+        }
+        let NameScope::Sheet(sheet_id) = scope else {
+            continue;
+        };
+        let Some(sheet) = wb.sheet(sheet_id) else {
+            continue;
+        };
+        let mut setup = sheet.page_setup.clone();
+        super::print::apply_print_name(&mut setup, &name, &text);
+        let _ = wb.set_page_setup(sheet_id, setup);
+    }
 }
 
 struct Sst(Vec<(String, Vec<RichTextRun>)>);

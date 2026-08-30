@@ -3096,6 +3096,7 @@ dependencies = [
  "encoding_rs",
  "indexmap",
  "omacell-core",
+ "pdf-writer",
  "proptest",
  "quick-xml 0.41.0",
  "resvg",
@@ -3103,6 +3104,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tiny-skia",
+ "ttf-parser",
  "usvg",
  "zip 2.4.2",
 ]
@@ -3238,6 +3240,18 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pdf-writer"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5df03c7d216de06f93f398ef06f1385a60f2c597bb96f8195c8d98e08a26b1d5"
+dependencies = [
+ "bitflags 2.13.1",
+ "itoa",
+ "memchr",
+ "ryu",
+]
 
 [[package]]
 name = "percent-encoding"

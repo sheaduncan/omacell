@@ -19,6 +19,7 @@ use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
 use crate::locale::LocaleId;
 use crate::names::{DefinedName, NameRegistry, NameScope};
 use crate::numfmt;
+use crate::print::PageSetup;
 use crate::sheet::{
     Comment, Hyperlink, Note, ProtectionState, Sheet, SheetVisibility, ViewState,
     validate_sheet_name,
@@ -243,6 +244,7 @@ impl Workbook {
                 geometry: crate::geometry::SheetGeometry::new(),
                 charts: Vec::new(),
                 sparklines: Vec::new(),
+                page_setup: PageSetup::default(),
             },
         };
         let mut sheets = IndexMap::new();
@@ -466,6 +468,22 @@ impl Workbook {
             sheet,
             index,
             sparkline: spark,
+        });
+        Ok(())
+    }
+
+    /// Replace a sheet's page setup (print / PDF).
+    pub fn set_page_setup(&mut self, id: SheetId, setup: PageSetup) -> Result<(), CoreError> {
+        setup.validate()?;
+        let before = self.sheet_mut(id)?.page_setup.clone();
+        if before == setup {
+            return Ok(());
+        }
+        self.sheet_mut(id)?.page_setup = setup.clone();
+        self.undo.record(Delta::PageSetup {
+            sheet: id,
+            before: Box::new(before),
+            after: Box::new(setup),
         });
         Ok(())
     }
@@ -826,6 +844,18 @@ impl Workbook {
             Delta::TabColor { id, before, after } => {
                 let c = if inverse { *before } else { *after };
                 self.sheet_mut(*id)?.tab_color = c;
+                Ok(())
+            }
+            Delta::PageSetup {
+                sheet,
+                before,
+                after,
+            } => {
+                self.sheet_mut(*sheet)?.page_setup = if inverse {
+                    (**before).clone()
+                } else {
+                    (**after).clone()
+                };
                 Ok(())
             }
             Delta::Name {

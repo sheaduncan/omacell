@@ -17,6 +17,7 @@ mod atomic;
 mod diff;
 mod drawing;
 mod opc;
+pub(crate) mod print;
 mod read;
 mod warnings;
 mod write;
