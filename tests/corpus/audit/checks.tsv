@@ -1,0 +1,17 @@
+# Seeded-defect corpus for WP-19 deterministic audit. Each row is a finding
+# the seeded workbook must emit (100% precision and recall). note cites the
+# documented check.
+id	severity	sheet	ref	note
+audit.hardcoded_constant	warning	Sheet1	B1	constant 2 inside =A1+2
+audit.hardcoded_constant	warning	Sheet1	C1	constant 1 inside =A1+1
+audit.hardcoded_constant	warning	Sheet1	C2	constant 1 inside =A2+1
+audit.hardcoded_constant	warning	Sheet1	C3	constant 1 inside =A3+1
+audit.hardcoded_constant	warning	Sheet1	C4	constant 99 inside =A4+99
+audit.inconsistent_formula	warning	Sheet1	C4	R1C1 pattern differs from majority in column C
+audit.range_short	warning	Sheet1	D1	SUM(A1:A2) stops short of data in A
+audit.unused_name	info	Sheet1	A1	defined name Orphan is never referenced
+audit.circular	error	Sheet1	E1	E1 and E2 form a cycle
+audit.circular	error	Sheet1	E2	E1 and E2 form a cycle
+audit.external_link	info	Sheet1	F1	formula references [Other.xlsx]
+audit.volatile	info	Sheet1	G1	NOW() is volatile
+audit.merge_in_table	warning	Sheet1	A10:B10	merged cells overlap table Sales

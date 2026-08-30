@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omacell.dev/schemas/audit.schema.json",
+  "title": "Omacell deterministic audit report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "findings"],
+  "properties": {
+    "schema": { "type": "integer", "const": 1 },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "severity", "sheet", "ref", "message"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^audit\\.[a-z0-9_]+$"
+        },
+        "severity": { "type": "string", "enum": ["error", "warning", "info"] },
+        "sheet": { "type": "string", "minLength": 1 },
+        "ref": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "fix": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["id", "args"],
+          "properties": {
+            "id": { "type": "string", "minLength": 3 },
+            "args": { "type": "object" }
+          }
+        }
+      }
+    }
+  }
+}

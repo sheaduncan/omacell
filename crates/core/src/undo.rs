@@ -642,6 +642,11 @@ impl UndoLog {
         self.used
     }
 
+    /// Committed undo units, oldest first (WP-19 diagnostic bundle).
+    pub fn history(&self) -> impl Iterator<Item = &Transaction> {
+        self.undo.iter()
+    }
+
     fn clear_redo(&mut self) {
         for tx in self.redo.drain(..) {
             self.used = self.used.saturating_sub(tx.bytes);

@@ -50,7 +50,6 @@ fn ipc_all_and_socket_are_mutually_exclusive() {
 fn stubs_exit_three_with_hint() {
     for args in [
         vec!["run", "x.lua", "x.xlsx"],
-        vec!["audit", "x.xlsx"],
         vec!["ai", "setup"],
         vec!["agent", "hello"],
         vec!["mcp"],
@@ -319,4 +318,33 @@ fn diff_two_identical_copies() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"empty\": true"));
+}
+
+#[test]
+fn audit_json_matches_schema_shape() {
+    let dir = TempDir::new().unwrap();
+    let book = dir.path().join("book.xlsx");
+    std::fs::copy(corpus_xlsx(), &book).unwrap();
+    let output = bin()
+        .env("HOME", dir.path())
+        .args(["--json", "audit", book.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["schema"], 1);
+    let findings = json["findings"].as_array().expect("findings");
+    for finding in findings {
+        let id = finding["id"].as_str().unwrap();
+        assert!(id.starts_with("audit."));
+        let sev = finding["severity"].as_str().unwrap();
+        assert!(matches!(sev, "error" | "warning" | "info"));
+        assert!(finding["sheet"].as_str().is_some());
+        assert!(finding["ref"].as_str().is_some());
+        assert!(finding["message"].as_str().is_some());
+    }
 }

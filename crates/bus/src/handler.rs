@@ -64,6 +64,12 @@ impl<'a> CommandContext<'a> {
         self.engine
     }
 
+    /// Shared engine borrow for queries (WP-19).
+    #[must_use]
+    pub fn engine_ref(&self) -> &RecalcEngine {
+        self.engine
+    }
+
     /// Full recalculation (explicit `calc.recalc`).
     pub fn recalc_full(&mut self) -> RecalcResult {
         self.engine.recalc_full_with_ctl(

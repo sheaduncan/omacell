@@ -98,7 +98,6 @@ fn dispatch(cli: &Cli, output: Output) -> Result<(), CliError> {
     match &cli.command {
         None => cmd_gui(cli),
         Some(Commands::Run { .. }) => Err(CliError::nyi("omacell run", "WP-20")),
-        Some(Commands::Audit { .. }) => Err(CliError::nyi("omacell audit", "WP-19")),
         Some(Commands::Ai { .. }) => Err(CliError::nyi("omacell ai", "WP-22")),
         Some(Commands::Agent { .. }) => Err(CliError::nyi("omacell agent", "WP-21")),
         Some(Commands::Mcp { .. }) => Err(CliError::nyi("omacell mcp", "WP-21")),
@@ -167,8 +166,8 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
         Commands::Keys { cmd } => cmd_keys(cli, cmd, output),
         Commands::Setup { cmd } => cmd_setup(cli, cmd, output),
         Commands::Catalog => cmd_commands(cli, output),
+        Commands::Audit { book } => cmd_audit(cli, book, output),
         Commands::Run { .. }
-        | Commands::Audit { .. }
         | Commands::Ai { .. }
         | Commands::Agent { .. }
         | Commands::Mcp { .. } => unreachable!("stubs handled earlier"),
@@ -939,6 +938,24 @@ fn cmd_eval(cli: &Cli, book: &Path, formula: &str, output: Output) -> Result<(),
     );
     let text = format_runtime(&value);
     output.success(serde_json::json!({"value": text}), &text)?;
+    Ok(())
+}
+
+fn cmd_audit(cli: &Cli, book: &Path, output: Output) -> Result<(), CliError> {
+    let mut app = init_app_book(cli, book)?;
+    let outcome = app.execute("audit.run", serde_json::json!({}));
+    if !outcome.ok {
+        return finish_outcome(outcome, output);
+    }
+    let json = outcome
+        .result
+        .unwrap_or(serde_json::json!({"schema": 1, "findings": []}));
+    let n = json
+        .get("findings")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    output.success(json, &format!("{n} findings"))?;
     Ok(())
 }
 

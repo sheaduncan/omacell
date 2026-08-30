@@ -139,6 +139,7 @@ impl App {
         omacell_bus::register_chart_commands(bus.registry_mut())?;
         omacell_bus::register_edit_commands(bus.registry_mut())?;
         omacell_bus::register_data_commands(bus.registry_mut())?;
+        omacell_bus::register_audit_commands(bus.registry_mut())?;
         Ok(Self {
             paths,
             store,

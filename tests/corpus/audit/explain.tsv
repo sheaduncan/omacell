@@ -1,0 +1,6 @@
+# Error-explanation corpus (F-3.8). note cites the documented payload.
+kind	setup	needle	note
+NAME	=NO_SUCH_FN(1)	NO_SUCH_FN	#NAME? names the unknown token
+REF	=#REF!	#REF!	#REF! names the deleted range
+SPILL	SEQUENCE blocked	blocker	#SPILL! names the blocker
+DIV0	=1/0	divisor	#DIV/0! names the operand

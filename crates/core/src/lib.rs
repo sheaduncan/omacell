@@ -12,6 +12,7 @@
 #![warn(rustdoc::broken_intra_doc_links)]
 
 pub mod addr;
+pub mod audit;
 pub mod changeset;
 pub mod chart;
 pub mod coerce;
@@ -23,6 +24,7 @@ pub mod error;
 pub mod eval;
 pub mod event;
 pub mod filter;
+pub mod find;
 pub mod flashfill;
 pub mod formula;
 pub mod geometry;

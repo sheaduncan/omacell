@@ -10,6 +10,7 @@
 #![deny(missing_docs)]
 
 pub mod args;
+pub mod audit;
 mod catalog;
 mod changeset;
 pub mod chart;
@@ -30,6 +31,7 @@ mod runner;
 mod session;
 mod task;
 
+pub use audit::register_audit_commands;
 pub use catalog::{CommandJson, CommandsEnvelope, SCHEMA, commands_json};
 pub use changeset::{
     ChangesetStore, MAX_CHANGESET_BYTES, MAX_CHANGESET_COMMANDS, MAX_CHANGESET_STORE_BYTES,
