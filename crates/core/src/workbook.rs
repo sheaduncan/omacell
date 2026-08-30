@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
 use crate::addr::{CellRef, ParsedRef, RefKind, SheetId, SheetSpec};
+use crate::chart::{Chart, ChartId, Sparkline};
 pub use crate::date_system::DateSystem;
 use crate::error::CoreError;
 use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
@@ -240,6 +241,8 @@ impl Workbook {
                 hyperlinks: FxHashMap::default(),
                 store: crate::storage::SheetStore::new(),
                 geometry: crate::geometry::SheetGeometry::new(),
+                charts: Vec::new(),
+                sparklines: Vec::new(),
             },
         };
         let mut sheets = IndexMap::new();
@@ -408,6 +411,85 @@ impl Workbook {
         self.sheets
             .get_mut(&id)
             .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))
+    }
+
+    /// Append a chart. Ids are assigned.
+    pub fn add_chart(&mut self, mut chart: Chart) -> Result<ChartId, CoreError> {
+        chart.values_valid()?;
+        let next = self
+            .sheets
+            .values()
+            .flat_map(|sheet| sheet.charts.iter().map(|c| c.id.index()))
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| CoreError::new("chart.id", "chart id space is exhausted"))?;
+        let id = ChartId::new(next);
+        chart.id = id;
+        let sheet = chart.sheet;
+        let target = self.sheet_mut(sheet)?;
+        let index = target.charts.len();
+        target.charts.push(chart.clone());
+        self.undo.record(crate::undo::Delta::ChartAdd {
+            sheet,
+            index,
+            chart: Box::new(chart),
+        });
+        Ok(id)
+    }
+
+    /// Remove a chart by id, returning the exact record for inverse commands.
+    pub fn remove_chart(&mut self, sheet: SheetId, id: ChartId) -> Result<Chart, CoreError> {
+        let target = self.sheet_mut(sheet)?;
+        let index = target
+            .charts
+            .iter()
+            .position(|chart| chart.id == id)
+            .ok_or_else(|| CoreError::new("chart.id", format!("unknown chart {}", id.index())))?;
+        let chart = target.charts.remove(index);
+        self.undo.record(crate::undo::Delta::ChartRemove {
+            sheet,
+            index,
+            chart: Box::new(chart.clone()),
+        });
+        Ok(chart)
+    }
+
+    /// Append a sparkline.
+    pub fn add_sparkline(&mut self, spark: Sparkline) -> Result<(), CoreError> {
+        spark.values_valid()?;
+        let sheet = spark.sheet;
+        let target = self.sheet_mut(sheet)?;
+        let index = target.sparklines.len();
+        target.sparklines.push(spark.clone());
+        self.undo.record(crate::undo::Delta::SparklineAdd {
+            sheet,
+            index,
+            sparkline: spark,
+        });
+        Ok(())
+    }
+
+    /// Remove a sparkline by its stable list position.
+    pub fn remove_sparkline(
+        &mut self,
+        sheet: SheetId,
+        index: usize,
+    ) -> Result<Sparkline, CoreError> {
+        let target = self.sheet_mut(sheet)?;
+        if index >= target.sparklines.len() {
+            return Err(CoreError::new(
+                "sparkline.id",
+                format!("unknown sparkline index {index}"),
+            ));
+        }
+        let sparkline = target.sparklines.remove(index);
+        self.undo.record(crate::undo::Delta::SparklineRemove {
+            sheet,
+            index,
+            sparkline: sparkline.clone(),
+        });
+        Ok(sparkline)
     }
 
     /// Borrow a cell.
@@ -766,6 +848,118 @@ impl Workbook {
                 }
                 if let Some(t) = target {
                     self.tables.restore(t.clone())?;
+                }
+                Ok(())
+            }
+            Delta::ChartAdd {
+                sheet,
+                index,
+                chart,
+            } => {
+                let charts = &mut self.sheet_mut(*sheet)?.charts;
+                if inverse {
+                    let removed = charts.get(*index).ok_or_else(|| {
+                        CoreError::new("undo.chart", "chart undo index is out of range")
+                    })?;
+                    if removed.id != chart.id {
+                        return Err(CoreError::new(
+                            "undo.chart",
+                            "chart undo identity does not match",
+                        ));
+                    }
+                    charts.remove(*index);
+                } else if *index <= charts.len() {
+                    charts.insert(*index, (**chart).clone());
+                } else {
+                    return Err(CoreError::new(
+                        "undo.chart",
+                        "chart redo index is out of range",
+                    ));
+                }
+                Ok(())
+            }
+            Delta::ChartRemove {
+                sheet,
+                index,
+                chart,
+            } => {
+                let charts = &mut self.sheet_mut(*sheet)?.charts;
+                if inverse {
+                    if *index <= charts.len() {
+                        charts.insert(*index, (**chart).clone());
+                    } else {
+                        return Err(CoreError::new(
+                            "undo.chart",
+                            "chart restore index is out of range",
+                        ));
+                    }
+                } else {
+                    let removed = charts.get(*index).ok_or_else(|| {
+                        CoreError::new("undo.chart", "chart redo index is out of range")
+                    })?;
+                    if removed.id != chart.id {
+                        return Err(CoreError::new(
+                            "undo.chart",
+                            "chart redo identity does not match",
+                        ));
+                    }
+                    charts.remove(*index);
+                }
+                Ok(())
+            }
+            Delta::SparklineAdd {
+                sheet,
+                index,
+                sparkline,
+            } => {
+                let sparklines = &mut self.sheet_mut(*sheet)?.sparklines;
+                if inverse {
+                    let removed = sparklines.get(*index).ok_or_else(|| {
+                        CoreError::new("undo.sparkline", "sparkline undo index is out of range")
+                    })?;
+                    if removed != sparkline {
+                        return Err(CoreError::new(
+                            "undo.sparkline",
+                            "sparkline undo identity does not match",
+                        ));
+                    }
+                    sparklines.remove(*index);
+                } else if *index <= sparklines.len() {
+                    sparklines.insert(*index, sparkline.clone());
+                } else {
+                    return Err(CoreError::new(
+                        "undo.sparkline",
+                        "sparkline redo index is out of range",
+                    ));
+                }
+                Ok(())
+            }
+            Delta::SparklineRemove {
+                sheet,
+                index,
+                sparkline,
+            } => {
+                let sparklines = &mut self.sheet_mut(*sheet)?.sparklines;
+                if inverse {
+                    if *index <= sparklines.len() {
+                        sparklines.insert(*index, sparkline.clone());
+                    } else {
+                        return Err(CoreError::new(
+                            "undo.sparkline",
+                            "sparkline restore index is out of range",
+                        ));
+                    }
+                } else {
+                    let removed = sparklines.get(*index).ok_or_else(|| {
+                        CoreError::new("undo.sparkline", "sparkline redo index is out of range")
+                    })?;
+                    if removed != sparkline {
+                        return Err(CoreError::new(
+                            "undo.sparkline",
+                            "sparkline redo identity does not match",
+                        ));
+                    }
+                    sparklines.remove(*index);
                 }
                 Ok(())
             }

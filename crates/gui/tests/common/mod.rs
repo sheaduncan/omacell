@@ -128,6 +128,7 @@ pub fn launch_opts(theme: Option<&str>, workbook: Workbook, watch: bool) -> Harn
     let mut functions = FnRegistry::new();
     register_all(&mut functions);
     let mut bus = Bus::new(workbook, RecalcEngine::new(functions)).unwrap();
+    omacell_bus::register_chart_commands(bus.registry_mut()).unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
     register_theme_reload(&mut bus, store.handle()).unwrap();
     let open_count = Arc::new(AtomicUsize::new(0));

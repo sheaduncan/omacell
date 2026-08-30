@@ -25,6 +25,7 @@ fn setup() -> (tempfile::TempDir, Tui, Terminal<TestBackend>) {
     let mut functions = FnRegistry::new();
     register_all(&mut functions);
     let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(functions)).unwrap();
+    omacell_bus::register_chart_commands(bus.registry_mut()).unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
     let mut tui = Tui::new(
         Launch {

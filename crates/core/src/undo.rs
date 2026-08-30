@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 
 use crate::addr::SheetId;
+use crate::chart::{Chart, Sparkline};
 use crate::command::UndoUnitId;
 use crate::error::CoreError;
 use crate::names::{DefinedName, NameScope};
@@ -185,6 +186,42 @@ pub enum Delta {
         /// New (`None` = deleted).
         after: Option<Table>,
     },
+    /// Chart appended to a sheet.
+    ChartAdd {
+        /// Sheet.
+        sheet: SheetId,
+        /// Position in the chart list.
+        index: usize,
+        /// Exact chart record.
+        chart: Box<Chart>,
+    },
+    /// Chart removed from a sheet.
+    ChartRemove {
+        /// Sheet.
+        sheet: SheetId,
+        /// Position in the chart list.
+        index: usize,
+        /// Exact chart record.
+        chart: Box<Chart>,
+    },
+    /// Sparkline appended to a sheet.
+    SparklineAdd {
+        /// Sheet.
+        sheet: SheetId,
+        /// Position in the sparkline list.
+        index: usize,
+        /// Exact sparkline record.
+        sparkline: Sparkline,
+    },
+    /// Sparkline removed from a sheet.
+    SparklineRemove {
+        /// Sheet.
+        sheet: SheetId,
+        /// Position in the sparkline list.
+        index: usize,
+        /// Exact sparkline record.
+        sparkline: Sparkline,
+    },
     /// Row insert/delete (inverse is the opposite count).
     ShiftRows {
         /// Sheet.
@@ -234,6 +271,17 @@ impl Delta {
                 128 + before.as_ref().map(|t| t.name.len()).unwrap_or(0)
                     + after.as_ref().map(|t| t.name.len()).unwrap_or(0)
             }
+            Self::ChartAdd { chart, .. } | Self::ChartRemove { chart, .. } => {
+                128 + chart.title.as_ref().map(String::len).unwrap_or(0)
+                    + chart
+                        .series
+                        .iter()
+                        .map(|series| {
+                            series.name.len() + series.color.as_ref().map(String::len).unwrap_or(0)
+                        })
+                        .sum::<usize>()
+            }
+            Self::SparklineAdd { .. } | Self::SparklineRemove { .. } => 64,
             Self::ShiftRows { removed, .. } | Self::ShiftCols { removed, .. } => {
                 24 + removed.len() * std::mem::size_of::<(u32, u16, CellSlot)>()
             }
@@ -268,6 +316,10 @@ impl Delta {
             | Self::SheetVisibility { id, .. }
             | Self::TabColor { id, .. } => AffectedRange::sheet(*id),
             Self::Name { .. } | Self::Table { .. } => AffectedRange::sheet(SheetId::new(0)),
+            Self::ChartAdd { sheet, .. }
+            | Self::ChartRemove { sheet, .. }
+            | Self::SparklineAdd { sheet, .. }
+            | Self::SparklineRemove { sheet, .. } => AffectedRange::sheet(*sheet),
             Self::ShiftRows { sheet, .. } | Self::ShiftCols { sheet, .. } => {
                 AffectedRange::sheet(*sheet)
             }

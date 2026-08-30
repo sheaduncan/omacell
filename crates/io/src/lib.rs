@@ -5,6 +5,7 @@
 #![deny(missing_docs)]
 #![warn(rustdoc::broken_intra_doc_links)]
 
+pub mod chart_export;
 pub mod csv;
 pub mod error;
 pub mod omc;

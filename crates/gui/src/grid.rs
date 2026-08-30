@@ -129,6 +129,14 @@ impl GridLayout {
     pub fn in_fill_handle(&self, pos: Pos2) -> bool {
         self.fill_handle.is_some_and(|rect| rect.contains(pos))
     }
+
+    /// Screen rect covering `row`/`col` if those cells were painted.
+    #[must_use]
+    pub fn cell_rect(&self, row: u32, col: u16) -> Option<Rect> {
+        let (_, x0, x1) = self.cols.iter().find(|(c, _, _)| *c == col)?;
+        let (_, y0, y1) = self.rows.iter().find(|(r, _, _)| *r == row)?;
+        Some(Rect::from_min_max(pos2(*x0, *y0), pos2(*x1, *y1)))
+    }
 }
 
 /// Paint the visible window. Returns layout for the next pointer event.

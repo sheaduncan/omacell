@@ -17,6 +17,9 @@ encoding_rs = "0.8"
 indexmap = { workspace = true }
 omacell-core = { path = "../core", version = "0.0.0" }
 quick-xml = "0.41"
+resvg = "0.45"
+tiny-skia = "0.11"
+usvg = "0.45"
 rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

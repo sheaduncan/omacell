@@ -12,6 +12,7 @@
 pub mod args;
 mod catalog;
 mod changeset;
+pub mod chart;
 mod commands;
 mod error;
 mod event;
@@ -31,6 +32,7 @@ pub use changeset::{
     ChangesetStore, MAX_CHANGESET_BYTES, MAX_CHANGESET_COMMANDS, MAX_CHANGESET_STORE_BYTES,
     MAX_CHANGESETS, MAX_EFFECT_RECORDS,
 };
+pub use chart::register_chart_commands;
 pub use commands::register_core;
 pub use error::codes;
 pub use event::{EventBus, SubscriberId};

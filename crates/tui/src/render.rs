@@ -906,6 +906,38 @@ fn cell_text(
     locale: LocaleId,
     width: Option<usize>,
 ) -> (String, Align) {
+    if let Some(spark) = wb.sheet(sheet).and_then(|s| {
+        s.sparklines
+            .iter()
+            .find(|sp| sp.row == row && sp.col == col)
+    }) && let Ok(sampled) = omacell_core::chart::sample(
+        wb,
+        &omacell_core::chart::Chart {
+            id: omacell_core::chart::ChartId::new(0),
+            kind: omacell_core::chart::ChartKind::Line,
+            title: None,
+            categories: None,
+            series: vec![omacell_core::chart::Series {
+                name: String::new(),
+                values: spark.data,
+                x: None,
+                size: None,
+                color: None,
+                secondary_axis: false,
+                trendline: None,
+            }],
+            category_axis: omacell_core::chart::Axis::default(),
+            value_axis: omacell_core::chart::Axis::default(),
+            secondary_axis: None,
+            legend: omacell_core::chart::LegendPos::None,
+            data_labels: false,
+            anchor: omacell_core::chart::ChartAnchor::default(),
+            sheet,
+        },
+    ) && let Some(series) = sampled.series.first()
+    {
+        return (spark_glyphs(&series.y, spark.kind), Align::Left);
+    }
     let Ok(Some(slot)) = wb.get(sheet, row, col) else {
         return (String::new(), Align::Left);
     };
@@ -939,6 +971,41 @@ fn cell_text(
         Value::Array(_) => (String::new(), Align::Left),
     };
     (text, style_align(wb, slot, value_align))
+}
+
+fn spark_glyphs(values: &[f64], kind: omacell_core::chart::SparklineKind) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    match kind {
+        omacell_core::chart::SparklineKind::WinLoss => values
+            .iter()
+            .map(|v| {
+                if *v > 0.0 {
+                    '▲'
+                } else if *v < 0.0 {
+                    '▼'
+                } else {
+                    '•'
+                }
+            })
+            .collect(),
+        _ => {
+            let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+            let min = finite.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = finite.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let span = (max - min).max(1e-9);
+            values
+                .iter()
+                .map(|v| {
+                    if !v.is_finite() {
+                        ' '
+                    } else {
+                        let t = ((*v - min) / span * 7.0).round() as usize;
+                        BARS[t.min(7)]
+                    }
+                })
+                .collect()
+        }
+    }
 }
 
 fn style_align(wb: &Workbook, slot: &CellSlot, fallback: Align) -> Align {

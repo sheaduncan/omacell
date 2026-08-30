@@ -152,6 +152,20 @@ fn compare_sheet(
     if a.merges != b.merges {
         report.views.push(format!("{name} merges differ"));
     }
+    if a.charts.len() != b.charts.len() {
+        report.views.push(format!("{name} chart count differs"));
+    } else {
+        for (ca, cb) in a.charts.iter().zip(&b.charts) {
+            if ca.kind != cb.kind || ca.title != cb.title || ca.series.len() != cb.series.len() {
+                report
+                    .views
+                    .push(format!("{name} chart {} differs", ca.id.index()));
+            }
+        }
+    }
+    if a.sparklines.len() != b.sparklines.len() {
+        report.views.push(format!("{name} sparkline count differs"));
+    }
     if a.geometry.rows.iter_hidden().collect::<Vec<_>>()
         != b.geometry.rows.iter_hidden().collect::<Vec<_>>()
         || a.geometry.rows.iter_custom().collect::<Vec<_>>()
@@ -418,6 +432,8 @@ fn is_modeled_part(n: &str) -> bool {
     ) || n.starts_with("xl/worksheets/")
         || n.starts_with("xl/tables/")
         || n.starts_with("xl/comments")
+        || n.starts_with("xl/charts/")
+        || n.starts_with("xl/drawings/")
         || n.starts_with("xl/omacell/")
 }
 

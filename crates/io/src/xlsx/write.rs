@@ -21,6 +21,7 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 use super::WorksheetExtras;
+use super::drawing;
 use super::opc::{
     MAX_ENTRY_BYTES, MAX_PACKAGE_BYTES, MAX_UNCOMPRESSED_TOTAL, MAX_ZIP_ENTRIES, OpcPackage,
     sanitize_path,
@@ -169,7 +170,9 @@ pub(crate) fn encode(
             );
         }
         for (name, bytes, ct) in extra_parts {
-            overrides.push((format!("/{name}"), ct));
+            if !ct.is_empty() {
+                overrides.push((format!("/{name}"), ct));
+            }
             parts.insert(name, bytes);
         }
     }
@@ -1118,7 +1121,9 @@ fn worksheet_xml(
     }
     let mut drawing_xml = String::new();
     let mut vml_xml = String::new();
+    let modeled = drawing::chart_parts(wb, sheet, sheet_ord)?;
     if let Some(pkg) = package
+        && modeled.is_none()
         && let Ok(orig) = original_sheet_rels(pkg, &sheet.name, sheet_ord)
     {
         for rel in orig {
@@ -1142,6 +1147,11 @@ fn worksheet_xml(
             }
             rels.push((id, rel.rel_type, target, rel.external));
         }
+    }
+    if let Some(parts) = modeled {
+        drawing_xml = format!(r#"<drawing r:id="{}"/>"#, parts.drawing_rid);
+        rels.extend(parts.rels);
+        extra_parts.extend(parts.parts);
     }
     if !sheet.notes.is_empty() && vml_xml.is_empty() {
         let id = format!("rId{rid}");
@@ -1179,10 +1189,15 @@ fn worksheet_xml(
         }
         s.push_str("</tableParts>");
     }
-    if let Some(ex) = extras {
+    if let Some(ex) = extras.filter(|ex| {
+        !ex.sparkline_xml.is_empty()
+            && drawing::sparkline_extras_match(&ex.sparkline_xml, wb, sheet)
+    }) {
         for blob in &ex.sparkline_xml {
             push_fragment(&mut s, blob, "sparkline", &["sparklineGroups"])?;
         }
+    } else if let Some(blob) = drawing::sparkline_xml(wb, sheet) {
+        push_fragment(&mut s, &blob, "sparkline", &["sparklineGroups"])?;
     }
     if !sheet.notes.is_empty() {
         let id = format!("rId{rid}");

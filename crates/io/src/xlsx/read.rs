@@ -39,6 +39,9 @@ const REL_COMMENTS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
 const REL_HYPER: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+const REL_DRAWING: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
+const REL_CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
 
 /// Unmodeled worksheet fragments for WP-10.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -166,9 +169,14 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
             &styles,
             &mut warnings,
         )?;
+        let sparklines = super::drawing::parse_sparklines(&extra.sparkline_xml, &wb, id);
+        for sparkline in sparklines {
+            let _ = wb.add_sparkline(sparkline);
+        }
         extras.insert(meta.name.clone(), extra);
         load_tables(&mut wb, id, &package, &sheet_rels, &mut warnings)?;
         load_comments(&mut wb, id, &package, &sheet_rels, &mut warnings)?;
+        load_charts(&mut wb, id, &package, &sheet_rels);
     }
 
     load_omacell_parts(&mut wb, &package);
@@ -1725,6 +1733,32 @@ fn load_comments(
         }
     }
     Ok(())
+}
+
+fn load_charts(
+    wb: &mut Workbook,
+    sheet: omacell_core::addr::SheetId,
+    package: &OpcPackage,
+    rels: &[Relationship],
+) {
+    for drawing in rels.iter().filter(|r| r.rel_type == REL_DRAWING) {
+        let anchors = package
+            .part(&drawing.target)
+            .map(|part| super::drawing::parse_drawing_anchors(&part.bytes))
+            .unwrap_or_default();
+        let Ok(drels) = package.rels_for(&drawing.target) else {
+            continue;
+        };
+        for crel in drels.iter().filter(|r| r.rel_type == REL_CHART) {
+            let Some(part) = package.part(&crel.target) else {
+                continue;
+            };
+            let anchor = anchors.get(&crel.id).copied().unwrap_or_default();
+            if let Some(chart) = super::drawing::parse_chart_part(&part.bytes, wb, sheet, anchor) {
+                let _ = wb.add_chart(chart);
+            }
+        }
+    }
 }
 
 fn load_omacell_parts(wb: &mut Workbook, package: &OpcPackage) {
