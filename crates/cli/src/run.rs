@@ -947,9 +947,12 @@ fn cmd_audit(cli: &Cli, book: &Path, output: Output) -> Result<(), CliError> {
     if !outcome.ok {
         return finish_outcome(outcome, output);
     }
-    let json = outcome
-        .result
-        .unwrap_or(serde_json::json!({"schema": 1, "findings": []}));
+    let json = outcome.result.ok_or_else(|| {
+        CliError::new(
+            "audit.output",
+            "audit.run succeeded without returning an audit report",
+        )
+    })?;
     let n = json
         .get("findings")
         .and_then(serde_json::Value::as_array)

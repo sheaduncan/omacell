@@ -14,17 +14,14 @@ use serde::{Deserialize, Serialize};
 use crate::args::EmptyArgs;
 use crate::handler::{CommandContext, Effect};
 use crate::registry::{CommandKind, CommandRegistry, CommandSpec, Exposure};
-use crate::resolve::resolve_cell;
+use crate::resolve::{ResolvedCell, format_cell, resolve_cell};
 
-/// `edit.find` / `edit.replace`
+/// `edit.findall` options.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FindArgs {
     /// Needle.
     pub query: String,
-    /// Replacement (replace only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replace: Option<String>,
     /// Search formulas.
     #[serde(default)]
     pub formulas: bool,
@@ -40,9 +37,17 @@ pub struct FindArgs {
     /// Whole workbook.
     #[serde(default)]
     pub workbook: bool,
-    /// Apply replacements (else preview).
-    #[serde(default)]
-    pub apply: bool,
+}
+
+/// `edit.replacepreview` / `edit.replaceall` options.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReplaceArgs {
+    /// Find options.
+    #[serde(flatten)]
+    pub find: FindArgs,
+    /// Replacement text.
+    pub replacement: String,
 }
 
 /// `nav.goto`
@@ -57,17 +62,68 @@ pub struct GotoArgs {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GotoSpecialArgs {
-    /// Kind name.
-    pub kind: String,
+    /// Selection kind.
+    pub kind: GotoSpecialKind,
     /// Visible cells only.
     #[serde(default)]
     pub visible: bool,
+    /// Origin cell for precedent/dependent selection.
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub cell_ref: Option<String>,
+    /// Walk the full dependency chain.
+    #[serde(default)]
+    pub transitive: bool,
 }
 
-/// `formula.explain` / `formula.trace` / precedents
+/// Typed Go To Special selection.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GotoSpecialKind {
+    /// Empty cells.
+    Blanks,
+    /// Numeric constants.
+    Numbers,
+    /// Text constants.
+    Text,
+    /// Logical constants.
+    Logicals,
+    /// Error constants.
+    Errors,
+    /// All formulas.
+    Formulas,
+    /// Formulas with numeric results.
+    FormulaNumbers,
+    /// Formulas with text results.
+    FormulaText,
+    /// Formulas with logical results.
+    FormulaLogicals,
+    /// Formulas with error results.
+    FormulaErrors,
+    /// Visible stored cells.
+    Visible,
+    /// Direct or transitive precedents of `ref`.
+    Precedents,
+    /// Direct or transitive dependents of `ref`.
+    Dependents,
+    /// Cells covered by conditional formatting.
+    CondFormats,
+    /// Cells covered by data validation.
+    Validation,
+}
+
+/// One cell argument.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CellRefArgs {
+pub struct CellArgs {
+    /// A1 cell.
+    #[serde(rename = "ref")]
+    pub cell_ref: String,
+}
+
+/// One cell plus dependency traversal options.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceCellArgs {
     /// A1 cell.
     #[serde(rename = "ref")]
     pub cell_ref: String,
@@ -157,6 +213,17 @@ pub fn register_audit_commands(registry: &mut CommandRegistry) -> Result<(), Cor
     )?;
     registry.register(
         CommandSpec {
+            id: "edit.replacepreview",
+            doc: "Preview replacements without changing the workbook",
+            kind: CommandKind::Query,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        edit_replace_preview,
+    )?;
+    registry.register(
+        CommandSpec {
             id: "edit.replaceall",
             doc: "Replace matching cells",
             kind: CommandKind::Mutating,
@@ -204,50 +271,42 @@ fn spec_from(args: &FindArgs) -> FindSpec {
 
 fn audit_run(ctx: &mut CommandContext<'_>, _args: EmptyArgs) -> Result<Effect, CoreError> {
     let report = audit_workbook(ctx.workbook_ref(), ctx.engine_ref());
-    Ok(Effect::query(
-        serde_json::to_value(&report).unwrap_or_default(),
-    ))
+    Ok(Effect::query(to_json(&report)?))
 }
 
-fn audit_diagnose(ctx: &mut CommandContext<'_>, args: CellRefArgs) -> Result<Effect, CoreError> {
+fn audit_diagnose(ctx: &mut CommandContext<'_>, args: CellArgs) -> Result<Effect, CoreError> {
     let cell = resolve_cell(ctx.workbook_ref(), &args.cell_ref)?;
     let bundle = diagnose(
         ctx.workbook_ref(),
         ctx.engine_ref(),
         CellCoord::new(cell.sheet, cell.row, cell.col),
     );
-    Ok(Effect::query(
-        serde_json::to_value(&bundle).unwrap_or_default(),
-    ))
+    Ok(Effect::query(to_json(&bundle)?))
 }
 
-fn formula_explain(ctx: &mut CommandContext<'_>, args: CellRefArgs) -> Result<Effect, CoreError> {
+fn formula_explain(ctx: &mut CommandContext<'_>, args: CellArgs) -> Result<Effect, CoreError> {
     let cell = resolve_cell(ctx.workbook_ref(), &args.cell_ref)?;
     let exp = explain_error(
         ctx.workbook_ref(),
         ctx.engine_ref(),
         CellCoord::new(cell.sheet, cell.row, cell.col),
     );
-    Ok(Effect::query(
-        serde_json::to_value(&exp).unwrap_or_default(),
-    ))
+    Ok(Effect::query(to_json(&exp)?))
 }
 
-fn formula_trace(ctx: &mut CommandContext<'_>, args: CellRefArgs) -> Result<Effect, CoreError> {
+fn formula_trace(ctx: &mut CommandContext<'_>, args: CellArgs) -> Result<Effect, CoreError> {
     let cell = resolve_cell(ctx.workbook_ref(), &args.cell_ref)?;
     let steps = eval_steps(
         ctx.workbook_ref(),
         ctx.engine_ref(),
         CellCoord::new(cell.sheet, cell.row, cell.col),
     );
-    Ok(Effect::query(
-        serde_json::to_value(&steps).unwrap_or_default(),
-    ))
+    Ok(Effect::query(to_json(&steps)?))
 }
 
 fn formula_precedents(
     ctx: &mut CommandContext<'_>,
-    args: CellRefArgs,
+    args: TraceCellArgs,
 ) -> Result<Effect, CoreError> {
     let cell = resolve_cell(ctx.workbook_ref(), &args.cell_ref)?;
     let list = precedents_of(
@@ -261,7 +320,7 @@ fn formula_precedents(
 
 fn formula_dependents(
     ctx: &mut CommandContext<'_>,
-    args: CellRefArgs,
+    args: TraceCellArgs,
 ) -> Result<Effect, CoreError> {
     let cell = resolve_cell(ctx.workbook_ref(), &args.cell_ref)?;
     let list = dependents_of(
@@ -278,30 +337,37 @@ fn edit_find(ctx: &mut CommandContext<'_>, args: FindArgs) -> Result<Effect, Cor
     let hits = find_cells(ctx.workbook_ref(), ctx.workbook_ref().active_sheet(), &spec)?;
     let cells: Vec<String> = hits
         .iter()
-        .map(|h| {
-            format!(
-                "{}{}",
-                omacell_core::addr::col_to_letters(h.col).unwrap_or_else(|_| "A".into()),
-                h.row + 1
-            )
-        })
+        .map(|hit| format_hit(ctx.workbook_ref(), hit))
         .collect();
     Ok(Effect::query(
         serde_json::json!({"count": cells.len(), "cells": cells}),
     ))
 }
 
-fn edit_replace(ctx: &mut CommandContext<'_>, args: FindArgs) -> Result<Effect, CoreError> {
-    let spec = spec_from(&args);
-    let replacement = args.replace.clone().unwrap_or_default();
+fn edit_replace_preview(
+    ctx: &mut CommandContext<'_>,
+    args: ReplaceArgs,
+) -> Result<Effect, CoreError> {
+    let spec = spec_from(&args.find);
     let sheet = ctx.workbook_ref().active_sheet();
-    if ctx.is_preflight() || !args.apply {
-        let n = replace_preview(ctx.workbook_ref(), sheet, &spec, &replacement)?;
-        return Ok(Effect::query(
-            serde_json::json!({"count": n, "preview": true}),
-        ));
-    }
-    let n = replace_apply(ctx.workbook(), sheet, &spec, &replacement)?;
+    let count = replace_preview(ctx.workbook_ref(), sheet, &spec, &args.replacement)?;
+    Ok(Effect::query(
+        serde_json::json!({"count": count, "preview": true}),
+    ))
+}
+
+fn edit_replace(ctx: &mut CommandContext<'_>, args: ReplaceArgs) -> Result<Effect, CoreError> {
+    let spec = spec_from(&args.find);
+    let sheet = ctx.workbook_ref().active_sheet();
+    let hits = find_cells(ctx.workbook_ref(), sheet, &spec)?;
+    let n = replace_apply(ctx.workbook(), sheet, &spec, &args.replacement)?;
+    let dirty = if n == 0 {
+        Vec::new()
+    } else {
+        hits.into_iter()
+            .map(|hit| CellCoord::new(hit.sheet, hit.row, hit.col))
+            .collect()
+    };
     Ok(Effect {
         result: serde_json::json!({"count": n}),
         summary: omacell_core::changeset::ChangeSummary {
@@ -309,6 +375,8 @@ fn edit_replace(ctx: &mut CommandContext<'_>, args: FindArgs) -> Result<Effect, 
             cells: u64::from(n),
             ..omacell_core::changeset::ChangeSummary::default()
         },
+        dirty,
+        rebuild: spec.formulas,
         ..Effect::default()
     })
 }
@@ -326,21 +394,42 @@ fn nav_gotospecial(
     ctx: &mut CommandContext<'_>,
     args: GotoSpecialArgs,
 ) -> Result<Effect, CoreError> {
-    let kind = match args.kind.as_str() {
-        "blanks" => GotoKind::Blanks,
-        "numbers" => GotoKind::Numbers,
-        "text" => GotoKind::Text,
-        "logicals" => GotoKind::Logicals,
-        "errors" => GotoKind::Errors,
-        "formulas" => GotoKind::Formulas,
-        "formula_errors" => GotoKind::FormulaErrors,
-        "visible" => GotoKind::Visible,
-        "cond_formats" => GotoKind::CondFormats,
-        "validation" => GotoKind::Validation,
-        other => {
+    match args.kind {
+        GotoSpecialKind::Precedents | GotoSpecialKind::Dependents => {
+            let cell_ref = args.cell_ref.as_deref().ok_or_else(|| {
+                CoreError::new("goto.ref", "precedents and dependents require ref")
+            })?;
+            let cell = resolve_cell(ctx.workbook_ref(), cell_ref)?;
+            let coord = CellCoord::new(cell.sheet, cell.row, cell.col);
+            let cells = if matches!(args.kind, GotoSpecialKind::Precedents) {
+                precedents_of(ctx.workbook_ref(), ctx.engine_ref(), coord, args.transitive)
+            } else {
+                dependents_of(ctx.workbook_ref(), ctx.engine_ref(), coord, args.transitive)
+            };
+            return Ok(Effect::query(
+                serde_json::json!({"count": cells.len(), "cells": cells}),
+            ));
+        }
+        _ => {}
+    }
+    let kind = match args.kind {
+        GotoSpecialKind::Blanks => GotoKind::Blanks,
+        GotoSpecialKind::Numbers => GotoKind::Numbers,
+        GotoSpecialKind::Text => GotoKind::Text,
+        GotoSpecialKind::Logicals => GotoKind::Logicals,
+        GotoSpecialKind::Errors => GotoKind::Errors,
+        GotoSpecialKind::Formulas => GotoKind::Formulas,
+        GotoSpecialKind::FormulaNumbers => GotoKind::FormulaNumbers,
+        GotoSpecialKind::FormulaText => GotoKind::FormulaText,
+        GotoSpecialKind::FormulaLogicals => GotoKind::FormulaLogicals,
+        GotoSpecialKind::FormulaErrors => GotoKind::FormulaErrors,
+        GotoSpecialKind::Visible => GotoKind::Visible,
+        GotoSpecialKind::CondFormats => GotoKind::CondFormats,
+        GotoSpecialKind::Validation => GotoKind::Validation,
+        GotoSpecialKind::Precedents | GotoSpecialKind::Dependents => {
             return Err(CoreError::new(
                 "goto.kind",
-                format!("unknown Go To Special kind {other}"),
+                "dependency selection was not resolved",
             ));
         }
     };
@@ -350,5 +439,27 @@ fn nav_gotospecial(
         kind,
         args.visible,
     )?;
-    Ok(Effect::query(serde_json::json!({"count": hits.len()})))
+    let cells: Vec<_> = hits
+        .iter()
+        .map(|hit| format_hit(ctx.workbook_ref(), hit))
+        .collect();
+    Ok(Effect::query(
+        serde_json::json!({"count": cells.len(), "cells": cells}),
+    ))
+}
+
+fn format_hit(wb: &omacell_core::workbook::Workbook, hit: &omacell_core::find::FindHit) -> String {
+    format_cell(
+        wb,
+        ResolvedCell {
+            sheet: hit.sheet,
+            row: hit.row,
+            col: hit.col,
+        },
+    )
+}
+
+fn to_json<T: Serialize>(value: &T) -> Result<serde_json::Value, CoreError> {
+    serde_json::to_value(value)
+        .map_err(|error| CoreError::new("audit.serialize", error.to_string()))
 }

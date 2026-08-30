@@ -6,7 +6,7 @@ use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::audit::{audit_workbook, eval_steps, explain_error};
 use omacell_core::eval::FnRegistry;
 use omacell_core::find::{
-    FindSpec, GotoKind, find_cells, goto_special, replace_apply, replace_preview,
+    FindSpec, GotoKind, find_cells, goto_spec, goto_special, replace_apply, replace_preview,
 };
 use omacell_core::graph::CellCoord;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
@@ -111,22 +111,34 @@ fn explanations_corpus_needles() {
     wb.set_number(s, 4, 0, 1.0).unwrap();
     let mut engine = RecalcEngine::new(FnRegistry::new());
     engine.recalc_rebuild(&mut wb);
-    let name = explain_error(&wb, &engine, CellCoord::new(s, 0, 0)).unwrap();
-    assert!(name.message.contains("NO_SUCH_FN"), "{}", name.message);
-    let rf = explain_error(&wb, &engine, CellCoord::new(s, 1, 0)).unwrap();
-    assert!(rf.message.contains("#REF!"), "{}", rf.message);
-    let div = explain_error(&wb, &engine, CellCoord::new(s, 2, 0)).unwrap();
-    assert!(
-        div.message.to_lowercase().contains("divisor") || div.kind == "#DIV/0!",
-        "{}",
-        div.message
-    );
-    let spill = explain_error(&wb, &engine, CellCoord::new(s, 3, 0));
-    if let Some(exp) = spill {
+    let explanations = [
+        ("NAME", explain_error(&wb, &engine, CellCoord::new(s, 0, 0))),
+        ("REF", explain_error(&wb, &engine, CellCoord::new(s, 1, 0))),
+        ("DIV0", explain_error(&wb, &engine, CellCoord::new(s, 2, 0))),
+        (
+            "SPILL",
+            explain_error(&wb, &engine, CellCoord::new(s, 3, 0)),
+        ),
+    ];
+    let corpus = std::fs::read_to_string(corpus("audit/explain.tsv")).unwrap();
+    for line in corpus.lines().filter(|line| {
+        let line = line.trim();
+        !line.is_empty() && !line.starts_with('#') && !line.starts_with("kind\t")
+    }) {
+        let columns: Vec<_> = line.split('\t').collect();
+        let (kind, needle) = (columns[0], columns[2]);
+        let explanation = explanations
+            .iter()
+            .find(|(candidate, _)| *candidate == kind)
+            .and_then(|(_, explanation)| explanation.as_ref())
+            .unwrap_or_else(|| panic!("missing {kind} explanation"));
         assert!(
-            exp.message.to_lowercase().contains("block"),
-            "{}",
-            exp.message
+            explanation
+                .message
+                .to_lowercase()
+                .contains(&needle.to_lowercase()),
+            "{kind}: {}",
+            explanation.message
         );
     }
 }
@@ -182,4 +194,202 @@ fn goto_special_blanks_and_formulas() {
     assert_eq!(formulas.len(), 1);
     let numbers = goto_special(&wb, s, GotoKind::Numbers, false).unwrap();
     assert_eq!(numbers.len(), 1);
+}
+
+#[test]
+fn find_rejects_empty_queries_and_unknown_sheets() {
+    let wb = Workbook::new();
+    let s = wb.active_sheet();
+    let err = find_cells(&wb, s, &FindSpec::default()).unwrap_err();
+    assert_eq!(err.code, "find.query");
+
+    let err = goto_spec(&wb, "Missing!A1").unwrap_err();
+    assert_eq!(err.code, "goto.spec");
+}
+
+#[test]
+fn find_whole_regex_and_replace_preview_are_exact() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "foobar").unwrap();
+    wb.set_text(s, 1, 0, "foo").unwrap();
+    let whole_regex = FindSpec {
+        query: "foo".into(),
+        regex: true,
+        whole: true,
+        ..FindSpec::default()
+    };
+    let hits = find_cells(&wb, s, &whole_regex).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!((hits[0].row, hits[0].col), (1, 0));
+
+    let no_op = FindSpec {
+        query: "foo".into(),
+        whole: true,
+        ..FindSpec::default()
+    };
+    assert_eq!(replace_preview(&wb, s, &no_op, "foo").unwrap(), 0);
+    assert_eq!(replace_apply(&mut wb, s, &no_op, "foo").unwrap(), 0);
+}
+
+#[test]
+fn case_insensitive_replace_is_unicode_safe() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "İX").unwrap();
+    let spec = FindSpec {
+        query: "x".into(),
+        ..FindSpec::default()
+    };
+    assert_eq!(replace_preview(&wb, s, &spec, "y").unwrap(), 1);
+    assert_eq!(replace_apply(&mut wb, s, &spec, "y").unwrap(), 1);
+    let slot = wb.get(s, 0, 0).unwrap().unwrap();
+    let Value::Text(id) = slot.value else {
+        panic!("replacement should remain text");
+    };
+    assert_eq!(wb.intern().strings.get(id), Some("İy"));
+}
+
+#[test]
+fn formula_search_skips_non_formula_cells_even_when_regex_matches_empty() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "constant").unwrap();
+    wb.set_cell_contents(s, 1, 0, "=1").unwrap();
+    let spec = FindSpec {
+        query: "^$".into(),
+        formulas: true,
+        regex: true,
+        ..FindSpec::default()
+    };
+    assert!(find_cells(&wb, s, &spec).unwrap().is_empty());
+}
+
+#[test]
+fn range_short_uses_the_referenced_column_not_the_sheet_extent() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_number(s, 0, 0, 1.0).unwrap();
+    wb.set_number(s, 1, 0, 2.0).unwrap();
+    wb.set_cell_contents(s, 99, 3, "=SUM(A1:A2)").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+    let report = audit_workbook(&wb, &engine);
+    assert!(
+        report
+            .findings
+            .iter()
+            .all(|finding| finding.id != "audit.range_short"),
+        "{:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn circular_audit_reports_each_strongly_connected_set_separately() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_cell_contents(s, 0, 0, "=B1").unwrap();
+    wb.set_cell_contents(s, 0, 1, "=A1").unwrap();
+    wb.set_cell_contents(s, 0, 3, "=E1").unwrap();
+    wb.set_cell_contents(s, 0, 4, "=D1").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+    assert_eq!(
+        engine.graph().circular_set(&engine.graph().formula_cells()),
+        [
+            CellCoord::new(s, 0, 0),
+            CellCoord::new(s, 0, 1),
+            CellCoord::new(s, 0, 3),
+            CellCoord::new(s, 0, 4),
+        ]
+    );
+    let report = audit_workbook(&wb, &engine);
+    let a1 = report
+        .findings
+        .iter()
+        .find(|finding| finding.id == "audit.circular" && finding.cell_ref == "A1")
+        .unwrap();
+    assert!(a1.message.contains("Sheet1!A1"), "{}", a1.message);
+    assert!(a1.message.contains("Sheet1!B1"), "{}", a1.message);
+    assert!(!a1.message.contains("Sheet1!D1"), "{}", a1.message);
+}
+
+#[test]
+fn inconsistent_formula_audit_checks_contiguous_rows() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_cell_contents(s, 1, 0, "=A1").unwrap();
+    wb.set_cell_contents(s, 1, 1, "=B1").unwrap();
+    wb.set_cell_contents(s, 1, 2, "=C1").unwrap();
+    wb.set_cell_contents(s, 1, 3, "=A1").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+    let anomalies: Vec<_> = audit_workbook(&wb, &engine)
+        .findings
+        .into_iter()
+        .filter(|finding| finding.id == "audit.inconsistent_formula")
+        .map(|finding| finding.cell_ref)
+        .collect();
+    assert_eq!(anomalies, ["D2"]);
+}
+
+#[test]
+fn unused_names_respect_sheet_scope_and_fix_scope() {
+    let mut wb = Workbook::new();
+    let sheet1 = wb.active_sheet();
+    let sheet2 = wb.add_sheet("Second").unwrap();
+    for sheet in [sheet1, sheet2] {
+        wb.define_name(DefinedName {
+            name: "LocalValue".into(),
+            scope: NameScope::Sheet(sheet),
+            referent: NameReferent::Constant(Value::Number(1.0)),
+            comment: None,
+        })
+        .unwrap();
+    }
+    wb.set_cell_contents(sheet1, 0, 0, "=LocalValue").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+
+    let unused: Vec<_> = audit_workbook(&wb, &engine)
+        .findings
+        .into_iter()
+        .filter(|finding| finding.id == "audit.unused_name")
+        .collect();
+    assert_eq!(unused.len(), 1, "{unused:?}");
+    assert_eq!(unused[0].sheet, "Second");
+    assert_eq!(
+        unused[0].fix.as_ref().unwrap().args,
+        serde_json::json!({"name": "LocalValue", "sheet": "Second"})
+    );
+}
+
+#[test]
+fn goto_named_range_uses_the_ranges_sheet() {
+    let mut wb = Workbook::new();
+    let second = wb.add_sheet("Second Sheet").unwrap();
+    let mut named_range = range(2, 3, 2, 3);
+    named_range.start.sheet = Some(second);
+    named_range.end.sheet = Some(second);
+    wb.define_name(DefinedName {
+        name: "Target".into(),
+        scope: NameScope::Workbook,
+        referent: NameReferent::Range(named_range),
+        comment: None,
+    })
+    .unwrap();
+    assert_eq!(goto_spec(&wb, "Target").unwrap(), (second, 2, 3));
+
+    wb.define_name(DefinedName {
+        name: "LocalTarget".into(),
+        scope: NameScope::Sheet(second),
+        referent: NameReferent::Range(range(4, 5, 4, 5)),
+        comment: None,
+    })
+    .unwrap();
+    assert_eq!(
+        goto_spec(&wb, "'Second Sheet'!LocalTarget").unwrap(),
+        (second, 4, 5)
+    );
 }

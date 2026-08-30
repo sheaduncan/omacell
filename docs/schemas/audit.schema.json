@@ -4,9 +4,10 @@
   "title": "Omacell deterministic audit report",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "findings"],
+  "required": ["schema", "findings", "truncated"],
   "properties": {
     "schema": { "type": "integer", "const": 1 },
+    "truncated": { "type": "boolean" },
     "findings": {
       "type": "array",
       "items": { "$ref": "#/$defs/finding" }

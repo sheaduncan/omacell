@@ -17,6 +17,8 @@ pub const MAX_REGEX_BYTES: usize = 1024 * 1024;
 /// Wall-clock budget for a find/replace scan.
 pub const FIND_TIMEOUT: Duration = Duration::from_millis(250);
 
+const MAX_FIND_RESULTS: usize = 100_000;
+
 /// Find options.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindSpec {
@@ -68,6 +70,12 @@ pub enum GotoKind {
     Formulas,
     /// Formula cells whose cached value is an error.
     FormulaErrors,
+    /// Formula cells whose cached value is numeric.
+    FormulaNumbers,
+    /// Formula cells whose cached value is text.
+    FormulaText,
+    /// Formula cells whose cached value is logical.
+    FormulaLogicals,
     /// Visible cells only (not hidden).
     Visible,
     /// Cells with conditional formats.
@@ -85,24 +93,40 @@ pub fn find_cells(
     let matcher = compile(spec)?;
     let deadline = Instant::now() + FIND_TIMEOUT;
     let mut hits = Vec::new();
-    for sh in sheets(wb, sheet, spec.workbook) {
-        if Instant::now() > deadline {
-            return Err(timeout());
-        }
+    let searched_sheets: Vec<_> = if spec.workbook {
+        wb.sheets().collect()
+    } else {
+        vec![
+            wb.sheet(sheet)
+                .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", sheet.index())))?,
+        ]
+    };
+    for sh in searched_sheets {
         for (row, col, slot) in sh.store.iter() {
+            if Instant::now() > deadline {
+                return Err(timeout());
+            }
             let text = if spec.formulas {
-                slot.formula
-                    .and_then(|id| wb.intern().formulas.get(id).map(str::to_string))
+                let Some(id) = slot.formula else {
+                    continue;
+                };
+                wb.intern()
+                    .formulas
+                    .get(id)
+                    .map(str::to_string)
                     .unwrap_or_default()
             } else {
                 display(wb, slot.value)
             };
             if matcher.matches(&text) {
-                hits.push(FindHit {
-                    sheet: sh.id,
-                    row,
-                    col,
-                });
+                push_hit(
+                    &mut hits,
+                    FindHit {
+                        sheet: sh.id,
+                        row,
+                        col,
+                    },
+                )?;
             }
         }
     }
@@ -117,8 +141,18 @@ pub fn replace_preview(
     spec: &FindSpec,
     replacement: &str,
 ) -> Result<u32, CoreError> {
-    let _ = replacement;
-    Ok(u32::try_from(find_cells(wb, sheet, spec)?.len()).unwrap_or(u32::MAX))
+    let hits = find_cells(wb, sheet, spec)?;
+    let matcher = compile(spec)?;
+    let mut count = 0u32;
+    for hit in hits {
+        let Some(text) = hit_text(wb, &hit, spec.formulas) else {
+            continue;
+        };
+        if matcher.replace(&text, replacement) != text {
+            count = count.saturating_add(1);
+        }
+    }
+    Ok(count)
 }
 
 /// Apply replacements. Returns the number of cells written.
@@ -132,19 +166,8 @@ pub fn replace_apply(
     let matcher = compile(spec)?;
     let mut n = 0u32;
     for hit in hits {
-        let text = if spec.formulas {
-            wb.get(hit.sheet, hit.row, hit.col)
-                .ok()
-                .flatten()
-                .and_then(|slot| slot.formula)
-                .and_then(|id| wb.intern().formulas.get(id).map(str::to_string))
-                .unwrap_or_default()
-        } else {
-            wb.get(hit.sheet, hit.row, hit.col)
-                .ok()
-                .flatten()
-                .map(|slot| display(wb, slot.value))
-                .unwrap_or_default()
+        let Some(text) = hit_text(wb, &hit, spec.formulas) else {
+            continue;
         };
         let next = matcher.replace(&text, replacement);
         if next != text {
@@ -158,19 +181,59 @@ pub fn replace_apply(
 /// Resolve Go To by A1 or defined name.
 pub fn goto_spec(wb: &Workbook, spec: &str) -> Result<(SheetId, u32, u16), CoreError> {
     if let Ok(parsed) = parse_a1(spec) {
-        let sheet = parsed
-            .sheet
-            .as_ref()
-            .and_then(|s| wb.sheet_by_name(&s.start).map(|sh| sh.id))
-            .unwrap_or_else(|| wb.active_sheet());
+        let sheet = if let Some(sheet_spec) = &parsed.sheet {
+            if sheet_spec.end.is_some() {
+                return Err(CoreError::new(
+                    "goto.spec",
+                    "Go To does not accept a 3-D sheet span",
+                ));
+            }
+            wb.sheet_by_name(&sheet_spec.start)
+                .map(|sh| sh.id)
+                .ok_or_else(|| {
+                    CoreError::new("goto.spec", format!("unknown sheet {:?}", sheet_spec.start))
+                })?
+        } else {
+            wb.active_sheet()
+        };
         return match parsed.kind {
             crate::addr::RefKind::Cell(c) => Ok((sheet, c.row, c.col)),
             crate::addr::RefKind::Range(r) => Ok((sheet, r.start.row, r.start.col)),
         };
     }
-    if let Some(name) = wb.names().resolve(wb.active_sheet(), spec) {
-        if let crate::names::NameReferent::Range(r) = &name.referent {
-            return Ok((wb.active_sheet(), r.start.row, r.start.col));
+    if let Ok(parsed_name) = crate::formula::parse(&format!("={spec}"))
+        && let crate::formula::ExprKind::Name {
+            sheet: name_sheet,
+            name: name_text,
+        } = &parsed_name.ast.kind
+    {
+        let lookup_sheet = if let Some(sheet_spec) = name_sheet {
+            wb.sheet_by_name(&sheet_spec.start)
+                .map(|sheet| sheet.id)
+                .ok_or_else(|| {
+                    CoreError::new("goto.spec", format!("unknown sheet {:?}", sheet_spec.start))
+                })?
+        } else {
+            wb.active_sheet()
+        };
+        if let Some(name) = wb.names().resolve(lookup_sheet, name_text)
+            && let crate::names::NameReferent::Range(r) = &name.referent
+        {
+            let sheet = r
+                .start
+                .sheet
+                .or(r.end.sheet)
+                .unwrap_or_else(|| match name.scope {
+                    crate::names::NameScope::Workbook => wb.active_sheet(),
+                    crate::names::NameScope::Sheet(sheet) => sheet,
+                });
+            if wb.sheet(sheet).is_none() {
+                return Err(CoreError::new(
+                    "goto.spec",
+                    format!("defined name {spec:?} points to an unknown sheet"),
+                ));
+            }
+            return Ok((sheet, r.start.row, r.start.col));
         }
     }
     Err(
@@ -200,12 +263,18 @@ pub fn goto_special(
             };
             for r in used.min_row..=used.max_row {
                 for c in used.min_col..=used.max_col {
-                    if s.store.get(r, c).ok().flatten().is_none() {
-                        hits.push(FindHit {
-                            sheet,
-                            row: r,
-                            col: c,
-                        });
+                    let blank = s.store.get(r, c).ok().flatten().is_none_or(|slot| {
+                        slot.formula.is_none() && matches!(slot.value, Value::Empty)
+                    });
+                    if blank {
+                        push_hit(
+                            &mut hits,
+                            FindHit {
+                                sheet,
+                                row: r,
+                                col: c,
+                            },
+                        )?;
                     }
                 }
             }
@@ -220,11 +289,14 @@ pub fn goto_special(
                 );
                 for r in r0..=r1 {
                     for c in c0..=c1 {
-                        hits.push(FindHit {
-                            sheet,
-                            row: r,
-                            col: c,
-                        });
+                        push_hit(
+                            &mut hits,
+                            FindHit {
+                                sheet,
+                                row: r,
+                                col: c,
+                            },
+                        )?;
                     }
                 }
             }
@@ -239,11 +311,14 @@ pub fn goto_special(
                 );
                 for r in r0..=r1 {
                     for c in c0..=c1 {
-                        hits.push(FindHit {
-                            sheet,
-                            row: r,
-                            col: c,
-                        });
+                        push_hit(
+                            &mut hits,
+                            FindHit {
+                                sheet,
+                                row: r,
+                                col: c,
+                            },
+                        )?;
                     }
                 }
             }
@@ -260,16 +335,27 @@ pub fn goto_special(
                     GotoKind::Logicals => {
                         slot.formula.is_none() && matches!(slot.value, Value::Bool(_))
                     }
-                    GotoKind::Errors => matches!(slot.value, Value::Error(_)),
+                    GotoKind::Errors => {
+                        slot.formula.is_none() && matches!(slot.value, Value::Error(_))
+                    }
                     GotoKind::Formulas => slot.formula.is_some(),
                     GotoKind::FormulaErrors => {
                         slot.formula.is_some() && matches!(slot.value, Value::Error(_))
+                    }
+                    GotoKind::FormulaNumbers => {
+                        slot.formula.is_some() && matches!(slot.value, Value::Number(_))
+                    }
+                    GotoKind::FormulaText => {
+                        slot.formula.is_some() && matches!(slot.value, Value::Text(_))
+                    }
+                    GotoKind::FormulaLogicals => {
+                        slot.formula.is_some() && matches!(slot.value, Value::Bool(_))
                     }
                     GotoKind::Visible => true,
                     _ => false,
                 };
                 if keep {
-                    hits.push(FindHit { sheet, row, col });
+                    push_hit(&mut hits, FindHit { sheet, row, col })?;
                 }
             }
         }
@@ -290,6 +376,7 @@ struct Matcher {
     needle: String,
     whole: bool,
     case: bool,
+    regex_replacement: bool,
 }
 
 impl Matcher {
@@ -311,7 +398,18 @@ impl Matcher {
 
     fn replace(&self, text: &str, replacement: &str) -> String {
         if let Some(re) = &self.regex {
-            return re.replace_all(text, replacement).into_owned();
+            if self.regex_replacement {
+                return re.replace_all(text, replacement).into_owned();
+            }
+            let mut out = String::with_capacity(text.len());
+            let mut end = 0;
+            for matched in re.find_iter(text) {
+                out.push_str(&text[end..matched.start()]);
+                out.push_str(replacement);
+                end = matched.end();
+            }
+            out.push_str(&text[end..]);
+            return out;
         }
         if self.whole {
             if self.matches(text) {
@@ -322,17 +420,27 @@ impl Matcher {
         } else if self.case {
             text.replace(&self.needle, replacement)
         } else {
-            replace_ignore_case(text, &self.needle, replacement)
+            // Case-insensitive literal matchers are compiled as escaped regexes.
+            text.to_string()
         }
     }
 }
 
 fn compile(spec: &FindSpec) -> Result<Matcher, CoreError> {
+    if spec.query.is_empty() {
+        return Err(CoreError::new("find.query", "find query cannot be empty")
+            .with_hint("enter at least one character"));
+    }
     if spec.regex {
         if spec.query.chars().count() > MAX_PATTERN_CHARS {
             return Err(timeout());
         }
-        let re = RegexBuilder::new(&spec.query)
+        let pattern = if spec.whole {
+            format!(r"\A(?:{})\z", spec.query)
+        } else {
+            spec.query.clone()
+        };
+        let re = RegexBuilder::new(&pattern)
             .case_insensitive(!spec.case)
             .size_limit(MAX_REGEX_BYTES)
             .dfa_size_limit(MAX_REGEX_BYTES)
@@ -347,6 +455,28 @@ fn compile(spec: &FindSpec) -> Result<Matcher, CoreError> {
             needle: spec.query.clone(),
             whole: spec.whole,
             case: spec.case,
+            regex_replacement: true,
+        });
+    }
+    if !spec.case {
+        let escaped = regex::escape(&spec.query);
+        let pattern = if spec.whole {
+            format!(r"\A(?:{escaped})\z")
+        } else {
+            escaped
+        };
+        let re = RegexBuilder::new(&pattern)
+            .case_insensitive(true)
+            .size_limit(MAX_REGEX_BYTES)
+            .dfa_size_limit(MAX_REGEX_BYTES)
+            .build()
+            .map_err(|e| CoreError::new("find.query", e.to_string()))?;
+        return Ok(Matcher {
+            regex: Some(re),
+            needle: spec.query.clone(),
+            whole: spec.whole,
+            case: spec.case,
+            regex_replacement: false,
         });
     }
     Ok(Matcher {
@@ -354,31 +484,30 @@ fn compile(spec: &FindSpec) -> Result<Matcher, CoreError> {
         needle: spec.query.clone(),
         whole: spec.whole,
         case: spec.case,
+        regex_replacement: false,
     })
 }
 
-fn replace_ignore_case(text: &str, needle: &str, replacement: &str) -> String {
-    let lower = text.to_lowercase();
-    let n = needle.to_lowercase();
-    let mut out = String::new();
-    let mut rest = text;
-    let mut rest_l = lower.as_str();
-    while let Some(at) = rest_l.find(&n) {
-        out.push_str(&rest[..at]);
-        out.push_str(replacement);
-        rest = &rest[at + needle.len()..];
-        rest_l = &rest_l[at + n.len()..];
+fn hit_text(wb: &Workbook, hit: &FindHit, formulas: bool) -> Option<String> {
+    let slot = wb.get(hit.sheet, hit.row, hit.col).ok().flatten()?;
+    if formulas {
+        let id = slot.formula?;
+        wb.intern().formulas.get(id).map(str::to_string)
+    } else {
+        Some(display(wb, slot.value))
     }
-    out.push_str(rest);
-    out
 }
 
-fn sheets(wb: &Workbook, sheet: SheetId, workbook: bool) -> Vec<&crate::sheet::Sheet> {
-    if workbook {
-        wb.sheets().collect()
-    } else {
-        wb.sheet(sheet).into_iter().collect()
+fn push_hit(hits: &mut Vec<FindHit>, hit: FindHit) -> Result<(), CoreError> {
+    if hits.len() >= MAX_FIND_RESULTS {
+        return Err(CoreError::new(
+            "find.limit",
+            format!("find result exceeds {MAX_FIND_RESULTS} cells"),
+        )
+        .with_hint("narrow the sheet, range, or match criteria"));
     }
+    hits.push(hit);
+    Ok(())
 }
 
 fn display(wb: &Workbook, v: Value) -> String {

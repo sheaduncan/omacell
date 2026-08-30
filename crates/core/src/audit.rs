@@ -5,15 +5,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 
-use crate::addr::{RangeRef, SheetId, col_to_letters};
+use crate::addr::{RangeRef, SheetId, col_to_letters, quote_sheet_name};
 use crate::eval::{FnRegistry, eval_formula, format_runtime};
 use crate::formula::{
-    BinOp, Callee, ExprKind, PrintOptions, RefStyle, collect_deps, parse, print_expr, print_with,
+    BinOp, Callee, ExprKind, PrintOptions, RefStyle, VOLATILE_FUNCS, collect_deps, parse,
+    print_expr, print_with,
 };
 use crate::graph::{CellCoord, DepGraph, Precedent};
 use crate::recalc::RecalcEngine;
 use crate::value::Value;
 use crate::workbook::Workbook;
+
+const MAX_AUDIT_FINDINGS: usize = 100_000;
+const MAX_DIAGNOSTIC_ERRORS: usize = 1_000;
+const MAX_DIAGNOSTIC_UNDO: usize = 100;
 
 /// Finding severity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -62,6 +67,8 @@ pub struct AuditReport {
     pub schema: u32,
     /// Findings in deterministic order.
     pub findings: Vec<Finding>,
+    /// Whether the bounded report omitted additional findings.
+    pub truncated: bool,
 }
 
 /// Evaluate-Formula step.
@@ -133,6 +140,7 @@ pub fn audit_workbook(wb: &Workbook, engine: &RecalcEngine) -> AuditReport {
     });
     AuditReport {
         schema: 1,
+        truncated: findings.len() >= MAX_AUDIT_FINDINGS,
         findings,
     }
 }
@@ -252,9 +260,11 @@ pub fn diagnose(wb: &Workbook, engine: &RecalcEngine, origin: CellCoord) -> Diag
             .cmp(&b.sheet)
             .then_with(|| a.cell_ref.cmp(&b.cell_ref))
     });
-    let undo = wb
-        .undo_log()
-        .history()
+    errors.truncate(MAX_DIAGNOSTIC_ERRORS);
+    let history: Vec<_> = wb.undo_log().history().collect();
+    let undo_start = history.len().saturating_sub(MAX_DIAGNOSTIC_UNDO);
+    let undo = history[undo_start..]
+        .iter()
         .map(|tx| tx.id.index().to_string())
         .collect();
     DiagnosticBundle {
@@ -290,14 +300,17 @@ fn hardcoded_constants(wb: &Workbook, out: &mut Vec<Finding>) {
                 }
             });
             if let Some(n) = hit {
-                out.push(finding(
-                    "audit.hardcoded_constant",
-                    Severity::Warning,
-                    &sheet.name,
-                    &cell_a1(row, col),
-                    format!("formula embeds constant {n}"),
-                    None,
-                ));
+                add_finding(
+                    out,
+                    finding(
+                        "audit.hardcoded_constant",
+                        Severity::Warning,
+                        &sheet.name,
+                        &cell_a1(row, col),
+                        format!("formula embeds constant {n}"),
+                        None,
+                    ),
+                );
             }
         }
     }
@@ -305,7 +318,7 @@ fn hardcoded_constants(wb: &Workbook, out: &mut Vec<Finding>) {
 
 fn inconsistent_formulas(wb: &Workbook, out: &mut Vec<Finding>) {
     for sheet in wb.sheets() {
-        let mut by_col: BTreeMap<u16, Vec<(u32, String)>> = BTreeMap::new();
+        let mut patterns = BTreeMap::new();
         for (row, col, slot) in sheet.store.iter() {
             let Some(fid) = slot.formula else {
                 continue;
@@ -324,45 +337,69 @@ fn inconsistent_formulas(wb: &Workbook, out: &mut Vec<Finding>) {
                     base_col: col,
                 },
             );
-            by_col.entry(col).or_default().push((row, r1c1));
+            patterns.insert((row, col), r1c1);
         }
-        for (col, mut cells) in by_col {
-            if cells.len() < 3 {
-                continue;
-            }
-            cells.sort_by_key(|(r, _)| *r);
-            let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-            for (_, p) in &cells {
-                *counts.entry(p.as_str()).or_insert(0) += 1;
-            }
-            let Some((majority, count)) = counts.iter().max_by_key(|(_, n)| *n) else {
-                continue;
-            };
-            if *count < 3 || *count == cells.len() {
-                continue;
-            }
-            let majority = (*majority).to_string();
-            for (row, pat) in &cells {
-                if pat != &majority {
-                    out.push(finding(
-                        "audit.inconsistent_formula",
-                        Severity::Warning,
-                        &sheet.name,
-                        &cell_a1(*row, col),
-                        format!("R1C1 {pat} differs from majority {majority}"),
-                        None,
-                    ));
+        let mut flagged = BTreeSet::new();
+        let mut by_col: BTreeMap<u16, Vec<(u32, u32, u16, &str)>> = BTreeMap::new();
+        let mut by_row: BTreeMap<u32, Vec<(u32, u32, u16, &str)>> = BTreeMap::new();
+        for (&(row, col), pattern) in &patterns {
+            by_col
+                .entry(col)
+                .or_default()
+                .push((row, row, col, pattern));
+            by_row
+                .entry(row)
+                .or_default()
+                .push((u32::from(col), row, col, pattern));
+        }
+        for cells in by_col.values().chain(by_row.values()) {
+            mark_run_anomalies(cells, &mut flagged);
+        }
+        for (row, col) in flagged {
+            let pattern = &patterns[&(row, col)];
+            add_finding(
+                out,
+                finding(
+                    "audit.inconsistent_formula",
+                    Severity::Warning,
+                    &sheet.name,
+                    &cell_a1(row, col),
+                    format!("R1C1 {pattern} differs from a contiguous row or column pattern"),
+                    None,
+                ),
+            );
+        }
+    }
+}
+
+fn mark_run_anomalies(cells: &[(u32, u32, u16, &str)], flagged: &mut BTreeSet<(u32, u16)>) {
+    let mut start = 0;
+    for end in 1..=cells.len() {
+        let boundary = end == cells.len() || cells[end].0 != cells[end - 1].0.saturating_add(1);
+        if !boundary {
+            continue;
+        }
+        let run = &cells[start..end];
+        let mut counts = BTreeMap::new();
+        for (_, _, _, pattern) in run {
+            *counts.entry(*pattern).or_insert(0usize) += 1;
+        }
+        let max = counts.values().copied().max().unwrap_or(0);
+        let mut majorities = counts.iter().filter(|(_, count)| **count == max);
+        let majority = majorities.next().map(|(pattern, _)| *pattern);
+        if max >= 3 && majorities.next().is_none() {
+            for (_, row, col, pattern) in run {
+                if Some(*pattern) != majority {
+                    flagged.insert((*row, *col));
                 }
             }
         }
+        start = end;
     }
 }
 
 fn range_short(wb: &Workbook, out: &mut Vec<Finding>) {
     for sheet in wb.sheets() {
-        let Some(used) = sheet.used_range() else {
-            continue;
-        };
         for (row, col, slot) in sheet.store.iter() {
             let Some(fid) = slot.formula else {
                 continue;
@@ -375,36 +412,83 @@ fn range_short(wb: &Workbook, out: &mut Vec<Finding>) {
             };
             let mut short = None;
             parsed.ast.walk(&mut |expr| {
-                if let ExprKind::Range { range, .. } = expr.kind
+                if let ExprKind::Range {
+                    sheet: range_sheet,
+                    range,
+                } = &expr.kind
                     && range.start.col == range.end.col
                 {
                     let c = range.start.col;
                     let end = range.start.row.max(range.end.row);
-                    if end < used.max_row && c >= used.min_col && c <= used.max_col {
-                        short = Some((c, end, used.max_row));
+                    let target_id = match range_sheet {
+                        Some(spec) if spec.end.is_some() => return,
+                        Some(spec) => wb.sheet_by_name(&spec.start).map(|target| target.id),
+                        None => Some(sheet.id),
+                    };
+                    let Some(target_id) = target_id else {
+                        return;
+                    };
+                    let Some(next_row) = end.checked_add(1) else {
+                        return;
+                    };
+                    if target_id == sheet.id && next_row == row && c == col {
+                        return;
                     }
+                    let Some(target) = wb.sheet(target_id) else {
+                        return;
+                    };
+                    if !target
+                        .store
+                        .get(next_row, c)
+                        .ok()
+                        .flatten()
+                        .is_some_and(slot_has_contents)
+                    {
+                        return;
+                    }
+                    let mut data_end = next_row;
+                    while let Some(candidate) = data_end.checked_add(1) {
+                        if !target
+                            .store
+                            .get(candidate, c)
+                            .ok()
+                            .flatten()
+                            .is_some_and(slot_has_contents)
+                        {
+                            break;
+                        }
+                        data_end = candidate;
+                    }
+                    short = Some((target_id, c, end, data_end));
                 }
             });
-            if let Some((c, end, data_end)) = short {
-                out.push(finding(
-                    "audit.range_short",
-                    Severity::Warning,
-                    &sheet.name,
-                    &cell_a1(row, col),
-                    format!(
-                        "range ends at {} while data continues to {}",
-                        cell_a1(end, c),
-                        cell_a1(data_end, c)
+            if let Some((target_id, c, end, data_end)) = short {
+                let target = sheet_name(wb, target_id);
+                add_finding(
+                    out,
+                    finding(
+                        "audit.range_short",
+                        Severity::Warning,
+                        &sheet.name,
+                        &cell_a1(row, col),
+                        format!(
+                            "range ends at {}!{} while data continues to {}!{}",
+                            quote_sheet_name(&target),
+                            cell_a1(end, c),
+                            quote_sheet_name(&target),
+                            cell_a1(data_end, c)
+                        ),
+                        None,
                     ),
-                    None,
-                ));
+                );
             }
         }
     }
 }
 
 fn unused_names(wb: &Workbook, out: &mut Vec<Finding>) {
-    let mut used = BTreeSet::new();
+    let mut used = FxHashSet::default();
+    let mut visiting = FxHashSet::default();
     for sheet in wb.sheets() {
         for (_, _, slot) in sheet.store.iter() {
             let Some(fid) = slot.formula else {
@@ -416,9 +500,7 @@ fn unused_names(wb: &Workbook, out: &mut Vec<Finding>) {
             let Ok(parsed) = parse(src) else {
                 continue;
             };
-            for (_, name) in collect_deps(&parsed.ast).names {
-                used.insert(name.to_lowercase());
-            }
+            mark_used_names(wb, sheet.id, &parsed.ast, &mut used, &mut visiting);
         }
     }
     let first = wb
@@ -427,34 +509,99 @@ fn unused_names(wb: &Workbook, out: &mut Vec<Finding>) {
         .map(|s| s.name.clone())
         .unwrap_or_else(|| "Sheet1".into());
     for name in wb.names().iter() {
-        if used.contains(&name.name.to_lowercase()) {
+        if used.contains(&(name.scope, name.name.to_lowercase())) {
             continue;
         }
-        out.push(finding(
-            "audit.unused_name",
-            Severity::Info,
-            &first,
-            "A1",
-            format!("defined name {} is never referenced", name.name),
-            Some(FixCommand {
-                id: "name.remove".into(),
-                args: serde_json::json!({"name": name.name}),
-            }),
-        ));
+        let (location, fix) = match name.scope {
+            crate::names::NameScope::Workbook => {
+                (first.clone(), serde_json::json!({"name": name.name}))
+            }
+            crate::names::NameScope::Sheet(sheet) => {
+                let location = sheet_name(wb, sheet);
+                (
+                    location.clone(),
+                    serde_json::json!({"name": name.name, "sheet": location}),
+                )
+            }
+        };
+        add_finding(
+            out,
+            finding(
+                "audit.unused_name",
+                Severity::Info,
+                &location,
+                "A1",
+                format!("defined name {} is never referenced", name.name),
+                Some(FixCommand {
+                    id: "name.remove".into(),
+                    args: fix,
+                }),
+            ),
+        );
+    }
+}
+
+fn mark_used_names(
+    wb: &Workbook,
+    context_sheet: SheetId,
+    expr: &crate::formula::Expr,
+    used: &mut FxHashSet<(crate::names::NameScope, String)>,
+    visiting: &mut FxHashSet<(crate::names::NameScope, String, SheetId)>,
+) {
+    for (sheet_spec, referenced_name) in collect_deps(expr).names {
+        let target_sheet = sheet_spec
+            .as_ref()
+            .and_then(|spec| wb.sheet_by_name(&spec.start).map(|sheet| sheet.id))
+            .unwrap_or(context_sheet);
+        let defined = if sheet_spec.is_some() {
+            wb.names()
+                .get(
+                    crate::names::NameScope::Sheet(target_sheet),
+                    &referenced_name,
+                )
+                .or_else(|| wb.names().resolve(target_sheet, &referenced_name))
+        } else {
+            wb.names().resolve(context_sheet, &referenced_name)
+        };
+        let Some(defined) = defined else {
+            continue;
+        };
+        let lower = defined.name.to_lowercase();
+        used.insert((defined.scope, lower.clone()));
+        let visit = (defined.scope, lower, context_sheet);
+        if !visiting.insert(visit.clone()) {
+            continue;
+        }
+        if let crate::names::NameReferent::Formula(source) = &defined.referent
+            && let Ok(parsed) = parse(source)
+        {
+            mark_used_names(wb, context_sheet, &parsed.ast, used, visiting);
+        }
+        visiting.remove(&visit);
     }
 }
 
 fn circular(wb: &Workbook, graph: &DepGraph, out: &mut Vec<Finding>) {
     let cells = graph.formula_cells();
-    for coord in graph.circular_set(&cells) {
-        out.push(finding(
-            "audit.circular",
-            Severity::Error,
-            &sheet_name(wb, coord.sheet),
-            &cell_a1(coord.row, coord.col),
-            "cell is part of a circular reference".into(),
-            None,
-        ));
+    for component in graph.circular_components(&cells) {
+        let members = component
+            .iter()
+            .map(|coord| coord_a1(wb, *coord))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for coord in component {
+            add_finding(
+                out,
+                finding(
+                    "audit.circular",
+                    Severity::Error,
+                    &sheet_name(wb, coord.sheet),
+                    &cell_a1(coord.row, coord.col),
+                    format!("circular reference set: {members}"),
+                    None,
+                ),
+            );
+        }
     }
 }
 
@@ -477,28 +624,34 @@ fn external_links(wb: &Workbook, out: &mut Vec<Finding>) {
                 }
             });
             if let Some(workbook) = book {
-                out.push(finding(
-                    "audit.external_link",
-                    Severity::Info,
-                    &sheet.name,
-                    &cell_a1(row, col),
-                    format!("formula references [{workbook}]"),
-                    None,
-                ));
+                add_finding(
+                    out,
+                    finding(
+                        "audit.external_link",
+                        Severity::Info,
+                        &sheet.name,
+                        &cell_a1(row, col),
+                        format!("formula references [{workbook}]"),
+                        None,
+                    ),
+                );
             }
         }
         let mut hrefs: Vec<_> = sheet.hyperlinks.iter().collect();
         hrefs.sort_by_key(|(k, _)| *k);
         for ((row, col), link) in hrefs {
             if is_external_hyperlink(&link.target) {
-                out.push(finding(
-                    "audit.external_link",
-                    Severity::Info,
-                    &sheet.name,
-                    &cell_a1(*row, *col),
-                    format!("hyperlink {}", link.target),
-                    None,
-                ));
+                add_finding(
+                    out,
+                    finding(
+                        "audit.external_link",
+                        Severity::Info,
+                        &sheet.name,
+                        &cell_a1(*row, *col),
+                        format!("hyperlink {}", link.target),
+                        None,
+                    ),
+                );
             }
         }
     }
@@ -506,14 +659,43 @@ fn external_links(wb: &Workbook, out: &mut Vec<Finding>) {
 
 fn volatiles(wb: &Workbook, graph: &DepGraph, out: &mut Vec<Finding>) {
     for coord in graph.volatiles() {
-        out.push(finding(
-            "audit.volatile",
-            Severity::Info,
-            &sheet_name(wb, coord.sheet),
-            &cell_a1(coord.row, coord.col),
-            "formula is volatile".into(),
-            None,
-        ));
+        let mut counts = BTreeMap::new();
+        if let Some(src) = formula_src(wb, coord)
+            && let Ok(parsed) = parse(&src)
+        {
+            parsed.ast.walk(&mut |expr| {
+                if let ExprKind::Call {
+                    callee: Callee::Name(name),
+                    ..
+                } = &expr.kind
+                {
+                    let upper = name.to_ascii_uppercase();
+                    if VOLATILE_FUNCS.iter().any(|candidate| *candidate == upper) {
+                        *counts.entry(upper).or_insert(0usize) += 1;
+                    }
+                }
+            });
+        }
+        let detail = counts
+            .iter()
+            .map(|(name, count)| format!("{name}={count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        add_finding(
+            out,
+            finding(
+                "audit.volatile",
+                Severity::Info,
+                &sheet_name(wb, coord.sheet),
+                &cell_a1(coord.row, coord.col),
+                if detail.is_empty() {
+                    "formula has a volatile dependency (count 1)".into()
+                } else {
+                    format!("volatile function counts: {detail}")
+                },
+                None,
+            ),
+        );
     }
 }
 
@@ -522,24 +704,30 @@ fn merges_in_tables(wb: &Workbook, out: &mut Vec<Finding>) {
         let Some(sheet) = wb.sheet(table.sheet) else {
             continue;
         };
-        let tr = RangeRef::from_corners(
-            crate::addr::CellRef::new(table.start_row, table.start_col)
-                .unwrap_or(unreachable_cell()),
-            crate::addr::CellRef::new(table.end_row, table.end_col).unwrap_or(unreachable_cell()),
-        );
+        let (Ok(start), Ok(end)) = (
+            crate::addr::CellRef::new(table.start_row, table.start_col),
+            crate::addr::CellRef::new(table.end_row, table.end_col),
+        ) else {
+            continue;
+        };
+        let tr = RangeRef::from_corners(start, end);
         for merge in &sheet.merges {
             if ranges_overlap(*merge, tr) {
-                out.push(finding(
-                    "audit.merge_in_table",
-                    Severity::Warning,
-                    &sheet.name,
-                    &merge.to_a1(),
-                    format!("merged cells overlap table {}", table.name),
-                    Some(FixCommand {
-                        id: "range.unmerge".into(),
-                        args: serde_json::json!({"range": merge.to_a1()}),
-                    }),
-                ));
+                let qualified = format!("{}!{}", quote_sheet_name(&sheet.name), merge.to_a1());
+                add_finding(
+                    out,
+                    finding(
+                        "audit.merge_in_table",
+                        Severity::Warning,
+                        &sheet.name,
+                        &merge.to_a1(),
+                        format!("merged cells overlap table {}", table.name),
+                        Some(FixCommand {
+                            id: "range.unmerge".into(),
+                            args: serde_json::json!({"range": qualified}),
+                        }),
+                    ),
+                );
             }
         }
     }
@@ -590,8 +778,8 @@ fn expand_prec(p: &Precedent) -> Vec<CellCoord> {
         Precedent::Range { sheet, range, .. } => {
             let (r0, c0, r1, c1) = norm(*range);
             let mut v = Vec::new();
-            let r1 = r1.min(r0.saturating_add(256));
-            let c1 = c1.min(c0.saturating_add(32));
+            let r1 = r1.min(r0.saturating_add(255));
+            let c1 = c1.min(c0.saturating_add(31));
             for r in r0..=r1 {
                 for c in c0..=c1 {
                     v.push(CellCoord::new(*sheet, r, c));
@@ -671,9 +859,9 @@ fn explain_spill(wb: &Workbook, engine: &RecalcEngine, cell: CellCoord) -> Strin
     if let Some(region) = engine.spill().get(cell)
         && let Some(blocker) = region.blocked_by
     {
-        return format!("#SPILL! blocked by {}", coord_a1(wb, blocker));
+        return format!("#SPILL! blocker is {}", coord_a1(wb, blocker));
     }
-    "#SPILL! blocked".into()
+    "#SPILL! blocker could not be identified".into()
 }
 
 fn explain_div0(wb: &Workbook, _engine: &RecalcEngine, cell: CellCoord) -> String {
@@ -748,7 +936,7 @@ fn cell_a1(row: u32, col: u16) -> String {
 fn coord_a1(wb: &Workbook, cell: CellCoord) -> String {
     format!(
         "{}!{}",
-        sheet_name(wb, cell.sheet),
+        quote_sheet_name(&sheet_name(wb, cell.sheet)),
         cell_a1(cell.row, cell.col)
     )
 }
@@ -758,12 +946,12 @@ fn is_external_hyperlink(target: &str) -> bool {
     t.contains("://") || t.starts_with("file:") || t.starts_with("\\\\")
 }
 
-fn unreachable_cell() -> crate::addr::CellRef {
-    crate::addr::CellRef {
-        sheet: None,
-        row: 0,
-        col: 0,
-        row_abs: false,
-        col_abs: false,
+fn add_finding(out: &mut Vec<Finding>, value: Finding) {
+    if out.len() < MAX_AUDIT_FINDINGS {
+        out.push(value);
     }
+}
+
+fn slot_has_contents(slot: &crate::storage::CellSlot) -> bool {
+    slot.formula.is_some() || !matches!(slot.value, Value::Empty)
 }

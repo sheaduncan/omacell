@@ -378,9 +378,22 @@ impl DepGraph {
         list
     }
 
-    /// Strongly connected components among `cells` with size > 1 or a self-loop.
+    /// Cells in strongly connected components with size > 1 or a self-loop.
     #[must_use]
     pub fn circular_set(&self, cells: &[CellCoord]) -> Vec<CellCoord> {
+        let mut circular: Vec<_> = self
+            .circular_components(cells)
+            .into_iter()
+            .flatten()
+            .collect();
+        circular.sort_unstable();
+        circular
+    }
+
+    /// Strongly connected components among `cells` with size > 1 or a self-loop.
+    /// Components and their cells are returned in deterministic coordinate order.
+    #[must_use]
+    pub fn circular_components(&self, cells: &[CellCoord]) -> Vec<Vec<CellCoord>> {
         let mut vertices = cells.to_vec();
         vertices.sort_unstable();
         vertices.dedup();
@@ -486,10 +499,11 @@ impl DepGraph {
                     .get(&component[0])
                     .is_some_and(|edges| edges.contains(&component[0]));
             if component.len() > 1 || self_loop {
-                circular.extend(component);
+                component.sort_unstable();
+                circular.push(component);
             }
         }
-        circular.sort_unstable();
+        circular.sort_by_key(|component| component.first().copied());
         circular
     }
 
