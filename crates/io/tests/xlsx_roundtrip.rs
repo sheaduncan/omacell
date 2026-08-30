@@ -646,14 +646,18 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
         }],
     )
     .unwrap();
-    wb.set_text(sheet, 0, 2, "Item").unwrap();
-    wb.set_text(sheet, 0, 3, "Amount").unwrap();
-    wb.set_text(sheet, 1, 2, "one").unwrap();
-    wb.set_number(sheet, 1, 3, 1.0).unwrap();
+    // Keep the worksheet AutoFilter and table on separate sheets. Some
+    // LibreOffice versions discard a sheet-level AutoFilter when they also
+    // rewrite a table on that same sheet.
+    let table_sheet = wb.add_sheet("TableSheet").unwrap();
+    wb.set_text(table_sheet, 0, 0, "Item").unwrap();
+    wb.set_text(table_sheet, 0, 1, "Amount").unwrap();
+    wb.set_text(table_sheet, 1, 0, "one").unwrap();
+    wb.set_number(table_sheet, 1, 1, 1.0).unwrap();
     let table_id = wb
         .create_table(
-            sheet,
-            RangeRef::from_corners(CellRef::new(0, 2).unwrap(), CellRef::new(1, 3).unwrap()),
+            table_sheet,
+            RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(1, 1).unwrap()),
             "LoTable",
         )
         .unwrap();
