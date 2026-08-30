@@ -269,6 +269,10 @@ impl Workbook {
                 charts: Vec::new(),
                 sparklines: Vec::new(),
                 page_setup: PageSetup::default(),
+                autofilter: None,
+                filter_hidden_rows: std::collections::BTreeSet::new(),
+                validations: Vec::new(),
+                cond_formats: Vec::new(),
             },
         };
         let mut sheets = IndexMap::new();
@@ -660,7 +664,9 @@ impl Workbook {
         col: u16,
         n: f64,
     ) -> Result<Option<CellSlot>, CoreError> {
-        self.replace_slot(id, row, col, Some(CellSlot::number(n)))
+        let old = self.replace_slot(id, row, col, Some(CellSlot::number(n)))?;
+        self.expand_tables_at(id, row, col);
+        Ok(old)
     }
 
     /// Intern rich text and store it as the cell value.
@@ -681,6 +687,7 @@ impl Workbook {
         };
         self.replace_slot(id, row, col, Some(slot))?;
         self.intern_mut().strings.release(sid);
+        self.expand_tables_at(id, row, col);
         Ok(sid)
     }
 
@@ -701,6 +708,7 @@ impl Workbook {
         };
         self.replace_slot(id, row, col, Some(slot))?;
         self.intern_mut().strings.release(sid);
+        self.expand_tables_at(id, row, col);
         Ok(sid)
     }
 
@@ -732,6 +740,17 @@ impl Workbook {
         col: u16,
     ) -> Result<Option<CellSlot>, CoreError> {
         self.replace_slot(id, row, col, None)
+    }
+
+    /// Write a complete slot without auto-expand (sort / restore).
+    pub(crate) fn write_slot(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        col: u16,
+        slot: Option<CellSlot>,
+    ) -> Result<Option<CellSlot>, CoreError> {
+        self.replace_slot(id, row, col, slot)
     }
 
     fn replace_slot(
@@ -1633,6 +1652,123 @@ impl Workbook {
         Ok(())
     }
 
+    /// Replace AutoFilter.
+    pub fn set_autofilter(
+        &mut self,
+        id: SheetId,
+        filter: Option<crate::filter::AutoFilter>,
+    ) -> Result<(), CoreError> {
+        self.mutate_sheet_edit(id, |sheet| {
+            for row in std::mem::take(&mut sheet.filter_hidden_rows) {
+                sheet.geometry.rows.set_hidden(row, false)?;
+            }
+            sheet.autofilter = filter;
+            Ok(())
+        })
+    }
+
+    /// Replace data validations.
+    pub fn set_validations(
+        &mut self,
+        id: SheetId,
+        validations: Vec<crate::validation::DataValidation>,
+    ) -> Result<(), CoreError> {
+        for validation in &validations {
+            if validation.kind != crate::validation::DvType::Any
+                && validation.formula1.as_deref().is_none_or(str::is_empty)
+            {
+                return Err(CoreError::new(
+                    "validation.formula1",
+                    "validation requires formula1",
+                ));
+            }
+            if matches!(
+                validation.op,
+                crate::validation::DvOp::Between | crate::validation::DvOp::NotBetween
+            ) && !matches!(
+                validation.kind,
+                crate::validation::DvType::Any
+                    | crate::validation::DvType::List
+                    | crate::validation::DvType::Custom
+            ) && validation.formula2.as_deref().is_none_or(str::is_empty)
+            {
+                return Err(CoreError::new(
+                    "validation.formula2",
+                    "between validation requires formula2",
+                ));
+            }
+        }
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.validations = validations;
+            Ok(())
+        })
+    }
+
+    /// Replace conditional format rules.
+    pub fn set_cond_formats(
+        &mut self,
+        id: SheetId,
+        mut rules: Vec<crate::condfmt::CondFormat>,
+    ) -> Result<(), CoreError> {
+        rules.sort_by_key(|rule| rule.priority);
+        for (index, rule) in rules.iter_mut().enumerate() {
+            rule.priority = u32::try_from(index)
+                .ok()
+                .and_then(|index| index.checked_add(1))
+                .ok_or_else(|| CoreError::new("condfmt.limit", "too many conditional formats"))?;
+            match &rule.kind {
+                crate::condfmt::CfKind::CellIs {
+                    op,
+                    formula1,
+                    formula2,
+                } if formula1.is_empty()
+                    || (matches!(
+                        op,
+                        crate::condfmt::CfOp::Between | crate::condfmt::CfOp::NotBetween
+                    ) && formula2.as_deref().is_none_or(str::is_empty)) =>
+                {
+                    return Err(CoreError::new(
+                        "condfmt.formula",
+                        "cell-is rule is missing a required formula",
+                    ));
+                }
+                crate::condfmt::CfKind::Formula(formula) if formula.is_empty() => {
+                    return Err(CoreError::new(
+                        "condfmt.formula",
+                        "formula rule cannot be empty",
+                    ));
+                }
+                crate::condfmt::CfKind::ColorScale { colors }
+                    if !(2..=3).contains(&colors.len()) =>
+                {
+                    return Err(CoreError::new(
+                        "condfmt.colors",
+                        "color scales require two or three colors",
+                    ));
+                }
+                crate::condfmt::CfKind::IconSet { icons } if !(3..=5).contains(icons) => {
+                    return Err(CoreError::new(
+                        "condfmt.icons",
+                        "icon sets require three to five icons",
+                    ));
+                }
+                crate::condfmt::CfKind::TopN { n, percent, .. }
+                    if *n == 0 || (*percent && *n > 100) =>
+                {
+                    return Err(CoreError::new(
+                        "condfmt.top_n",
+                        "top-N rank must be positive and percent must be at most 100",
+                    ));
+                }
+                _ => {}
+            }
+        }
+        self.mutate_sheet_edit(id, |sheet| {
+            sheet.cond_formats = rules;
+            Ok(())
+        })
+    }
+
     /// Insert a defined name.
     pub fn define_name(&mut self, name: DefinedName) -> Result<(), CoreError> {
         let scope = name.scope;
@@ -1686,6 +1822,381 @@ impl Workbook {
             after: stored,
         });
         Ok(id)
+    }
+
+    /// Create a table covering `range`, using the first row as headers.
+    pub fn create_table(
+        &mut self,
+        sheet: SheetId,
+        range: crate::addr::RangeRef,
+        name: impl Into<String>,
+    ) -> Result<TableId, CoreError> {
+        let r0 = range.start.row.min(range.end.row);
+        let r1 = range.start.row.max(range.end.row);
+        let c0 = range.start.col.min(range.end.col);
+        let c1 = range.start.col.max(range.end.col);
+        if self.tables.iter().any(|existing| {
+            existing.sheet == sheet
+                && ranges_overlap(
+                    (r0, c0, r1, c1),
+                    (
+                        existing.start_row,
+                        existing.start_col,
+                        existing.end_row,
+                        existing.end_col,
+                    ),
+                )
+        }) {
+            return Err(CoreError::table_name(
+                "table range overlaps an existing table",
+            ));
+        }
+        let mut table = Table::new(TableId::new(0), name, sheet, r0, c0, r1, c1);
+        for (i, col) in (c0..=c1).enumerate() {
+            let header = match self.get(sheet, r0, col)? {
+                Some(slot) => match slot.value {
+                    crate::value::Value::Text(id) => {
+                        self.intern().strings.get(id).unwrap_or("").to_string()
+                    }
+                    crate::value::Value::Number(n) => n.to_string(),
+                    _ => format!("Column{}", i + 1),
+                },
+                None => format!("Column{}", i + 1),
+            };
+            let base = if header.is_empty() {
+                format!("Column{}", i + 1)
+            } else {
+                header
+            };
+            let unique = unique_table_column_name(&table.columns, i, &base);
+            if let Some(c) = table.columns.get_mut(i) {
+                c.name = unique;
+            }
+        }
+        self.add_table(table)
+    }
+
+    /// Drop a table, leaving cell values.
+    pub fn convert_table(&mut self, id: TableId) -> Result<Table, CoreError> {
+        let before = self
+            .tables
+            .remove(id)
+            .ok_or_else(|| CoreError::table_name("unknown table"))?;
+        self.undo.record(Delta::Table {
+            before: Some(before.clone()),
+            after: None,
+        });
+        Ok(before)
+    }
+
+    /// Restore or replace a table while preserving its stable id.
+    ///
+    /// This is used by trusted undo and changeset restoration payloads. Normal
+    /// callers should use [`Self::create_table`], [`Self::resize_table`], or
+    /// [`Self::convert_table`].
+    pub fn restore_table(&mut self, table: Table) -> Result<(), CoreError> {
+        if self.tables.iter().any(|existing| {
+            existing.id != table.id
+                && existing.sheet == table.sheet
+                && ranges_overlap(
+                    (
+                        table.start_row,
+                        table.start_col,
+                        table.end_row,
+                        table.end_col,
+                    ),
+                    (
+                        existing.start_row,
+                        existing.start_col,
+                        existing.end_row,
+                        existing.end_col,
+                    ),
+                )
+        }) {
+            return Err(CoreError::table_name(
+                "restored table would overlap an existing table",
+            ));
+        }
+        let before = self.tables.get(table.id).cloned();
+        if before.as_ref() == Some(&table) {
+            return Ok(());
+        }
+        if before.is_some() {
+            let _ = self.tables.remove(table.id);
+        }
+        if let Err(error) = self.tables.restore(table.clone()) {
+            if let Some(previous) = before.clone() {
+                let _ = self.tables.restore(previous);
+            }
+            return Err(error);
+        }
+        self.undo.record(Delta::Table {
+            before,
+            after: Some(table),
+        });
+        Ok(())
+    }
+
+    /// Resize a table's range.
+    pub fn resize_table(
+        &mut self,
+        id: TableId,
+        range: crate::addr::RangeRef,
+    ) -> Result<(), CoreError> {
+        let before = self
+            .tables
+            .get(id)
+            .cloned()
+            .ok_or_else(|| CoreError::table_name("unknown table"))?;
+        let new_bounds = (
+            range.start.row.min(range.end.row),
+            range.start.col.min(range.end.col),
+            range.start.row.max(range.end.row),
+            range.start.col.max(range.end.col),
+        );
+        if self.tables.iter().any(|existing| {
+            existing.id != id
+                && existing.sheet == before.sheet
+                && ranges_overlap(
+                    new_bounds,
+                    (
+                        existing.start_row,
+                        existing.start_col,
+                        existing.end_row,
+                        existing.end_col,
+                    ),
+                )
+        }) {
+            return Err(CoreError::table_name(
+                "resized table would overlap an existing table",
+            ));
+        }
+        {
+            let table = self
+                .tables
+                .get_mut(id)
+                .ok_or_else(|| CoreError::table_name("unknown table"))?;
+            table.start_row = range.start.row.min(range.end.row);
+            table.end_row = range.start.row.max(range.end.row);
+            table.start_col = range.start.col.min(range.end.col);
+            table.end_col = range.start.col.max(range.end.col);
+            let width = u32::from(table.end_col - table.start_col) + 1;
+            while table.columns.len() < width as usize {
+                let n = table.columns.len() + 1;
+                table.columns.push(crate::tables::TableColumn {
+                    name: format!("Column{n}"),
+                    totals_fn: None,
+                });
+            }
+            table.columns.truncate(width as usize);
+        }
+        let after = self.tables.get(id).cloned();
+        if Some(&before) != after.as_ref() {
+            self.undo.record(Delta::Table {
+                before: Some(before),
+                after,
+            });
+        }
+        Ok(())
+    }
+
+    /// Rename a table and update structured references in workbook formulas.
+    pub fn rename_table(&mut self, id: TableId, name: impl Into<String>) -> Result<(), CoreError> {
+        let before = self
+            .tables
+            .get(id)
+            .cloned()
+            .ok_or_else(|| CoreError::table_name("unknown table"))?;
+        let mut after = before.clone();
+        after.name = name.into();
+        if after.name == before.name {
+            return Ok(());
+        }
+        let mut formulas = Vec::new();
+        for sheet in self.sheets() {
+            for (row, col, slot) in sheet.store.iter() {
+                let Some(formula) = slot.formula else {
+                    continue;
+                };
+                let source = self.intern().formulas.get(formula).unwrap_or("");
+                let rewritten = crate::formula::rewrite_print(
+                    source,
+                    &crate::formula::RewriteOp::TableRename {
+                        old: before.name.clone(),
+                        new: after.name.clone(),
+                    },
+                )
+                .map_err(|error| {
+                    CoreError::new(
+                        "table.rename",
+                        format!("could not rewrite structured reference: {error}"),
+                    )
+                })?;
+                if rewritten != source {
+                    formulas.push((sheet.id, row, col, rewritten));
+                }
+            }
+        }
+        self.transact_try(move |workbook| {
+            workbook.restore_table(after)?;
+            for (sheet, row, col, source) in formulas {
+                let formula = workbook.intern_formula(&source)?;
+                let mut slot = workbook
+                    .get(sheet, row, col)?
+                    .copied()
+                    .ok_or_else(|| CoreError::new("table.rename", "formula cell vanished"))?;
+                slot.formula = Some(formula);
+                workbook.write_slot(sheet, row, col, Some(slot))?;
+                workbook.release_formula(formula);
+            }
+            Ok(())
+        })
+    }
+
+    /// Show or hide a table totals row and set per-column total functions.
+    pub fn set_table_totals(
+        &mut self,
+        id: TableId,
+        show: bool,
+        functions: Vec<Option<String>>,
+    ) -> Result<(), CoreError> {
+        let mut table = self
+            .tables
+            .get(id)
+            .cloned()
+            .ok_or_else(|| CoreError::table_name("unknown table"))?;
+        if functions.len() > table.columns.len() {
+            return Err(CoreError::table_name(
+                "more totals functions than table columns",
+            ));
+        }
+        for function in functions.iter().flatten() {
+            if !matches!(
+                function.as_str(),
+                "average"
+                    | "count"
+                    | "countNums"
+                    | "max"
+                    | "min"
+                    | "stdDev"
+                    | "sum"
+                    | "var"
+                    | "custom"
+                    | "none"
+            ) {
+                return Err(CoreError::table_name(format!(
+                    "unsupported table totals function {function:?}"
+                )));
+            }
+        }
+        if show && !table.has_totals {
+            table.end_row = table
+                .end_row
+                .checked_add(1)
+                .filter(|row| *row < crate::limits::MAX_ROWS)
+                .ok_or_else(|| CoreError::table_name("table totals row exceeds the grid"))?;
+        } else if !show && table.has_totals {
+            table.end_row = table.end_row.saturating_sub(1).max(table.start_row);
+        }
+        table.has_totals = show;
+        for (column, function) in table.columns.iter_mut().zip(functions) {
+            column.totals_fn = function.filter(|function| function != "none");
+        }
+        if !show {
+            for column in &mut table.columns {
+                column.totals_fn = None;
+            }
+        }
+        if self.tables.iter().any(|existing| {
+            existing.id != id
+                && existing.sheet == table.sheet
+                && ranges_overlap(
+                    (
+                        table.start_row,
+                        table.start_col,
+                        table.end_row,
+                        table.end_col,
+                    ),
+                    (
+                        existing.start_row,
+                        existing.start_col,
+                        existing.end_row,
+                        existing.end_col,
+                    ),
+                )
+        }) {
+            return Err(CoreError::table_name(
+                "table totals row would overlap an existing table",
+            ));
+        }
+        self.restore_table(table)
+    }
+
+    fn expand_tables_at(&mut self, sheet: SheetId, row: u32, col: u16) {
+        let ids: Vec<TableId> = self
+            .tables
+            .iter()
+            .filter(|t| t.sheet == sheet && t.auto_expand)
+            .map(|t| t.id)
+            .collect();
+        for id in ids {
+            let Some(t) = self.tables.get(id).cloned() else {
+                continue;
+            };
+            let mut end_row = t.end_row;
+            let mut end_col = t.end_col;
+            if col >= t.start_col && col <= t.end_col && row == t.end_row.saturating_add(1) {
+                end_row = row;
+            }
+            if row >= t.start_row && row <= t.end_row && col == t.end_col.saturating_add(1) {
+                end_col = col;
+            }
+            if end_row != t.end_row || end_col != t.end_col {
+                let grew_row = end_row == t.end_row.saturating_add(1);
+                let (Ok(start), Ok(end)) = (
+                    crate::addr::CellRef::new(t.start_row, t.start_col),
+                    crate::addr::CellRef::new(end_row, end_col),
+                ) else {
+                    continue;
+                };
+                if self
+                    .resize_table(id, crate::addr::RangeRef::from_corners(start, end))
+                    .is_ok()
+                    && grew_row
+                {
+                    self.fill_calculated_row(sheet, &t, end_row, col);
+                }
+            }
+        }
+    }
+
+    fn fill_calculated_row(&mut self, sheet: SheetId, table: &Table, new_row: u32, skip_col: u16) {
+        let src_row = if table.has_totals {
+            table.end_row.saturating_sub(1)
+        } else {
+            table.end_row
+        };
+        if src_row == new_row {
+            return;
+        }
+        for c in table.start_col..=table.end_col {
+            if c == skip_col {
+                continue;
+            }
+            let Ok(Some(slot)) = self.get(sheet, src_row, c) else {
+                continue;
+            };
+            let Some(fid) = slot.formula else {
+                continue;
+            };
+            let src = self.intern().formulas.get(fid).unwrap_or("").to_string();
+            if let Ok(rewritten) = crate::formula::rewrite_print(
+                &src,
+                &crate::formula::RewriteOp::Copy { dcol: 0, drow: 1 },
+            ) {
+                let _ = self.set_cell_contents(sheet, new_row, c, &rewritten);
+            }
+        }
     }
 
     /// Insert rows. Formula rewrite is TODO(WP-03)/TODO(WP-17).
@@ -1985,6 +2496,7 @@ impl Workbook {
             };
             let old = self.replace_slot(id, row, col, Some(slot))?;
             self.release_formula(fid);
+            self.expand_tables_at(id, row, col);
             return Ok(old);
         } else if trimmed.eq_ignore_ascii_case("TRUE") {
             CellSlot {
@@ -2017,9 +2529,12 @@ impl Workbook {
             };
             let old = self.replace_slot(id, row, col, Some(slot))?;
             self.release_text(sid);
+            self.expand_tables_at(id, row, col);
             return Ok(old);
         };
-        self.replace_slot(id, row, col, Some(slot))
+        let old = self.replace_slot(id, row, col, Some(slot))?;
+        self.expand_tables_at(id, row, col);
+        Ok(old)
     }
 }
 
@@ -2035,4 +2550,33 @@ fn content_flags(prev: Option<CellSlot>) -> CellFlags {
 fn parse_finite_number(text: &str) -> Option<f64> {
     let number: f64 = text.parse().ok()?;
     number.is_finite().then_some(number)
+}
+
+fn ranges_overlap(a: (u32, u16, u32, u16), b: (u32, u16, u32, u16)) -> bool {
+    a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3
+}
+
+fn unique_table_column_name(
+    columns: &[crate::tables::TableColumn],
+    before: usize,
+    base: &str,
+) -> String {
+    if !columns[..before.min(columns.len())]
+        .iter()
+        .any(|column| column.name.eq_ignore_ascii_case(base))
+    {
+        return base.to_string();
+    }
+    for suffix in 2u32..=u32::MAX {
+        let candidate = format!("{base}{suffix}");
+        if !columns[..before.min(columns.len())]
+            .iter()
+            .any(|column| column.name.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+    }
+    // Every possible suffix being occupied is only theoretical, but returning a
+    // deterministic fallback keeps this input-facing path panic-free.
+    format!("{base}_unique")
 }

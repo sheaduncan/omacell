@@ -325,9 +325,17 @@ pub struct Sheet {
     pub sparklines: Vec<Sparkline>,
     /// Page setup used by print preview and PDF export.
     pub page_setup: PageSetup,
+    /// AutoFilter (WP-18).
+    pub autofilter: Option<crate::filter::AutoFilter>,
+    /// Rows hidden by the active AutoFilter, distinct from manually hidden rows.
+    pub(crate) filter_hidden_rows: std::collections::BTreeSet<u32>,
+    /// Data validations (WP-18).
+    pub validations: Vec<crate::validation::DataValidation>,
+    /// Conditional format rules, low priority number wins (WP-18).
+    pub cond_formats: Vec<crate::condfmt::CondFormat>,
 }
 
-/// Undo snapshot of the WP-17 sheet metadata that lives outside the cell store.
+/// Undo snapshot of the WP-17/WP-18 sheet metadata that lives outside the cell store.
 ///
 /// The fields are intentionally private: callers edit through [`crate::workbook::Workbook`]
 /// so mutations remain validated and undo tracked.
@@ -340,6 +348,14 @@ pub struct SheetEditState {
     notes: Vec<(u32, u16, Note)>,
     comments: Vec<(u32, u16, Comment)>,
     hyperlinks: Vec<(u32, u16, Hyperlink)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    autofilter: Option<crate::filter::AutoFilter>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    filter_hidden_rows: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    validations: Vec<crate::validation::DataValidation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    cond_formats: Vec<crate::condfmt::CondFormat>,
 }
 
 /// Portable sparse state for one row or column axis.
@@ -361,6 +377,10 @@ impl SheetEditState {
             notes: sorted_map(&sheet.notes),
             comments: sorted_map(&sheet.comments),
             hyperlinks: sorted_map(&sheet.hyperlinks),
+            autofilter: sheet.autofilter.clone(),
+            filter_hidden_rows: sheet.filter_hidden_rows.iter().copied().collect(),
+            validations: sheet.validations.clone(),
+            cond_formats: sheet.cond_formats.clone(),
         }
     }
 
@@ -384,6 +404,10 @@ impl SheetEditState {
             .into_iter()
             .map(|(row, col, value)| ((row, col), value))
             .collect();
+        sheet.autofilter = self.autofilter;
+        sheet.filter_hidden_rows = self.filter_hidden_rows.into_iter().collect();
+        sheet.validations = self.validations;
+        sheet.cond_formats = self.cond_formats;
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {
@@ -420,6 +444,10 @@ impl SheetEditState {
             + note_bytes
             + comment_bytes
             + hyperlink_bytes
+            + self.validations.len() * 64
+            + self.cond_formats.len() * 64
+            + usize::from(self.autofilter.is_some()) * 64
+            + self.filter_hidden_rows.len() * std::mem::size_of::<u32>()
     }
 }
 
@@ -489,6 +517,10 @@ impl Sheet {
             charts: Vec::new(),
             sparklines: Vec::new(),
             page_setup: PageSetup::default(),
+            autofilter: None,
+            filter_hidden_rows: std::collections::BTreeSet::new(),
+            validations: Vec::new(),
+            cond_formats: Vec::new(),
         })
     }
 

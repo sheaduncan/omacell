@@ -14,6 +14,7 @@
 //! ```
 
 mod atomic;
+pub(crate) mod data;
 mod diff;
 mod drawing;
 mod opc;

@@ -1,0 +1,5 @@
+case	kind	values	expected	source
+duplicate	duplicate	2,2,3	match,match,none	Spec §6.6 F-6.5
+unique	unique	2,2,3	none,none,match	Spec §6.6 F-6.5
+icon_set	icon_set	1,50,100	icon:0,icon:1,icon:2	Spec §6.6 F-6.5
+data_bar	data_bar	0,5,10	bar:0,bar:0.5,bar:1	Spec §6.6 F-6.5

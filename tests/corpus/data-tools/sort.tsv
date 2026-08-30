@@ -1,0 +1,4 @@
+case	input	descending	custom_list	expected	source
+numeric_stable	3,1,2,1	false	-	1,1,2,3	Spec §6.6 F-6.1
+descending_blanks_last	1,_,2	true	-	2,1,_	Spec §6.6 F-6.1
+custom_list	medium,low,high	false	low,medium,high	low,medium,high	Spec §6.6 F-6.1

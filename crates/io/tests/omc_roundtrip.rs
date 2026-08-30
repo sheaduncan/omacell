@@ -6,6 +6,8 @@ use omacell_core::changeset::{
     ChangeSummary, Changeset, ChangesetId, ChangesetStatus, CommandCall,
 };
 use omacell_core::command::{CommandId, Origin};
+use omacell_core::condfmt::{CfDxf, CfKind, CondFormat};
+use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria};
 use omacell_core::intern::{ArrayPayload, RichTextRun};
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::print::{Orientation, PageSetup, PaperSize};
@@ -13,6 +15,7 @@ use omacell_core::sheet::{Comment, Hyperlink, Note, ProtectionState, SplitView};
 use omacell_core::storage::{CellFlags, CellSlot};
 use omacell_core::style::{Color, Font, StyleId};
 use omacell_core::tables::{Table, TableColumn, TableId};
+use omacell_core::validation::{DataValidation, DvOp, DvType};
 use omacell_core::value::{Array2D, Value};
 use omacell_core::workbook::Workbook;
 use omacell_io::omc::{
@@ -75,6 +78,63 @@ fn modeled_page_setup_round_trips_through_omc() {
             .page_setup,
         setup
     );
+}
+
+#[test]
+fn modeled_data_tools_round_trip_through_omc() {
+    let mut wb = Workbook::new();
+    let sheet_id = wb.active_sheet();
+    let range = omacell_core::addr::RangeRef::from_corners(
+        omacell_core::addr::CellRef::new(0, 0).unwrap(),
+        omacell_core::addr::CellRef::new(3, 1).unwrap(),
+    );
+    wb.set_autofilter(
+        sheet_id,
+        Some(AutoFilter {
+            range,
+            columns: vec![FilterColumn {
+                col_id: 0,
+                criteria: FilterCriteria::Values(vec!["keep".into()]),
+            }],
+        }),
+    )
+    .unwrap();
+    wb.set_validations(
+        sheet_id,
+        vec![DataValidation {
+            range,
+            kind: DvType::Whole,
+            op: DvOp::Equal,
+            formula1: Some("1".into()),
+            ..DataValidation::default()
+        }],
+    )
+    .unwrap();
+    wb.set_cond_formats(
+        sheet_id,
+        vec![CondFormat {
+            range,
+            priority: 1,
+            stop_if_true: true,
+            kind: CfKind::Formula("A1>0".into()),
+            dxf: CfDxf {
+                fill: Some(Color::Rgb { argb: 0xFFFF_0000 }),
+                font: None,
+            },
+        }],
+    )
+    .unwrap();
+
+    let original = OmcDocument::from_workbook(wb);
+    let reopened = open_str(&to_string(&original).unwrap()).unwrap();
+    let before = original.workbook.sheet(sheet_id).unwrap();
+    let after = reopened
+        .workbook
+        .sheet(reopened.workbook.active_sheet())
+        .unwrap();
+    assert_eq!(after.autofilter, before.autofilter);
+    assert_eq!(after.validations, before.validations);
+    assert_eq!(after.cond_formats, before.cond_formats);
 }
 
 #[test]
@@ -321,9 +381,11 @@ fn omc_roundtrips_ambiguous_text_and_l2_metadata() {
     table.columns = vec![
         TableColumn {
             name: "Last, First".into(),
+            totals_fn: None,
         },
         TableColumn {
             name: "Amount\tUSD".into(),
+            totals_fn: None,
         },
     ];
     wb.add_table(table).unwrap();

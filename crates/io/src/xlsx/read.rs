@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use omacell_core::addr::{CellRef, RangeRef, RefKind, parse_a1, parse_a1_cell};
+use omacell_core::condfmt::CfDxf;
 use omacell_core::error::{CoreError, ErrorKind};
 use omacell_core::formula::{copy_delta, parse, print};
 use omacell_core::intern::RichTextRun;
@@ -51,6 +52,8 @@ const REL_CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/r
 pub struct WorksheetExtras {
     /// AutoFilter `ref`.
     pub autofilter: Option<String>,
+    /// Raw `autoFilter` XML, retained until the modeled filter changes.
+    pub autofilter_xml: Vec<u8>,
     /// Raw `pageSetup` / `pageMargins` / `printOptions` / `headerFooter` XML.
     pub print_xml: Vec<Vec<u8>>,
     /// Raw `conditionalFormatting` XML blobs.
@@ -118,6 +121,9 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
     wb.set_active_sheet(sheet_ids[active_index])?;
 
     for name in workbook_meta.names {
+        if name.local_sheet_index.is_some() && super::data::is_filter_database_name(&name.name) {
+            continue;
+        }
         let scope = match name.local_sheet_index {
             Some(idx) => match sheet_ids.get(idx).copied() {
                 Some(id) => NameScope::Sheet(id),
@@ -176,6 +182,15 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
         let mut setup = omacell_core::print::PageSetup::default();
         super::print::apply_print_xml(&mut setup, &extra.print_xml);
         let _ = wb.set_page_setup(id, setup);
+        let validations = super::data::parse_validations(&extra.data_validations_xml);
+        if !validations.is_empty() {
+            let _ = wb.set_validations(id, validations);
+        }
+        let cond_formats =
+            super::data::parse_cond_formats(&extra.conditional_formatting_xml, &styles.dxfs);
+        if !cond_formats.is_empty() {
+            let _ = wb.set_cond_formats(id, cond_formats);
+        }
         let sparklines = super::drawing::parse_sparklines(&extra.sparkline_xml, &wb, id);
         for sparkline in sparklines {
             let _ = wb.add_sparkline(sparkline);
@@ -485,6 +500,7 @@ fn apply_font_tag(font: &mut Font, name: &str, attrs: &[(String, String)]) {
 
 struct StyleTable {
     cell_xfs: Vec<Style>,
+    dxfs: Vec<CfDxf>,
 }
 
 fn load_styles(
@@ -497,6 +513,7 @@ fn load_styles(
     let Some(rel) = rels.iter().find(|r| r.rel_type == REL_STYLES) else {
         return Ok(StyleTable {
             cell_xfs: vec![Style::default()],
+            dxfs: Vec::new(),
         });
     };
     let Some(part) = package.part(&rel.target) else {
@@ -507,6 +524,7 @@ fn load_styles(
         );
         return Ok(StyleTable {
             cell_xfs: vec![Style::default()],
+            dxfs: Vec::new(),
         });
     };
     let mut r = XmlReader::new(&part.bytes);
@@ -520,6 +538,10 @@ fn load_styles(
     let mut in_fills = false;
     let mut in_borders = false;
     let mut in_xfs = false;
+    let mut in_dxfs = false;
+    let mut in_dxf = false;
+    let mut cur_dxf = CfDxf::default();
+    let mut dxfs: Vec<CfDxf> = Vec::new();
     let mut in_font = false;
     let mut cur_font = Font::default();
     let mut in_fill = false;
@@ -710,13 +732,33 @@ fn load_styles(
                     };
                 }
             }
+            XmlEvent::Start { name, .. } if name == "dxfs" => in_dxfs = true,
+            XmlEvent::End { name } if name == "dxfs" => in_dxfs = false,
+            XmlEvent::Start { name, .. } if in_dxfs && name == "dxf" => {
+                in_dxf = true;
+                cur_dxf = CfDxf::default();
+            }
+            XmlEvent::End { name } if in_dxf && name == "dxf" => {
+                in_dxf = false;
+                dxfs.push(cur_dxf);
+            }
+            XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
+                if in_dxf && name == "color" =>
+            {
+                cur_dxf.font = Some(parse_color(&attrs, Some(theme)));
+            }
+            XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
+                if in_dxf && (name == "fgColor" || name == "fgcolor") =>
+            {
+                cur_dxf.fill = Some(parse_color(&attrs, Some(theme)));
+            }
             _ => {}
         }
     }
     if cell_xfs.is_empty() {
         cell_xfs.push(Style::default());
     }
-    Ok(StyleTable { cell_xfs })
+    Ok(StyleTable { cell_xfs, dxfs })
 }
 
 fn xf_to_style(
@@ -901,6 +943,7 @@ fn rgb_from_hex(s: &str) -> Color {
 
 #[derive(Clone, Copy)]
 enum FragmentKind {
+    AutoFilter,
     Print,
     ConditionalFormatting,
     DataValidations,
@@ -915,6 +958,7 @@ struct OpenFragment {
 
 fn fragment_kind(name: &str) -> Option<FragmentKind> {
     match name {
+        "autoFilter" => Some(FragmentKind::AutoFilter),
         "pageSetup" | "pageMargins" | "printOptions" | "headerFooter" | "rowBreaks"
         | "colBreaks" => Some(FragmentKind::Print),
         "conditionalFormatting" => Some(FragmentKind::ConditionalFormatting),
@@ -926,6 +970,7 @@ fn fragment_kind(name: &str) -> Option<FragmentKind> {
 
 fn store_fragment(extra: &mut WorksheetExtras, kind: FragmentKind, bytes: Vec<u8>) {
     match kind {
+        FragmentKind::AutoFilter => extra.autofilter_xml = bytes,
         FragmentKind::Print => extra.print_xml.push(bytes),
         FragmentKind::ConditionalFormatting => extra.conditional_formatting_xml.push(bytes),
         FragmentKind::DataValidations => extra.data_validations_xml.push(bytes),
@@ -1012,6 +1057,7 @@ fn load_sheet(
     let mut merges: Vec<RangeRef> = Vec::new();
     let mut in_hyperlinks = false;
     let mut open_fragments = Vec::new();
+    let mut af_parser = super::data::AutoFilterParser::default();
 
     while let Some(ev) = r.next()? {
         capture_fragment(
@@ -1021,6 +1067,7 @@ fn load_sheet(
             r.last_span(),
             &part.bytes,
         )?;
+        af_parser.feed(&ev, &styles.dxfs);
         match ev {
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "tabColor" =>
@@ -1382,6 +1429,9 @@ fn load_sheet(
         ));
     }
     wb.set_sheet_merges(id, merges)?;
+    if let Some(filter) = af_parser.take() {
+        omacell_core::filter::restore_filter(wb, id, &filter)?;
+    }
     Ok(extra)
 }
 
@@ -1708,7 +1758,8 @@ fn load_tables(
         let mut totals = false;
         let mut banded_rows = true;
         let mut banded_cols = false;
-        let mut cols: Vec<String> = Vec::new();
+        let mut cols: Vec<(String, Option<String>)> = Vec::new();
+        let mut style_name = String::from("TableStyleMedium2");
         while let Some(ev) = r.next()? {
             match ev {
                 XmlEvent::Start { name: n, attrs } | XmlEvent::Empty { name: n, attrs }
@@ -1727,11 +1778,17 @@ fn load_tables(
                 XmlEvent::Empty { name: n, attrs } | XmlEvent::Start { name: n, attrs }
                     if n == "tableColumn" =>
                 {
-                    cols.push(attr(&attrs, "name").unwrap_or("Column").to_string());
+                    cols.push((
+                        attr(&attrs, "name").unwrap_or("Column").to_string(),
+                        attr(&attrs, "totalsRowFunction").map(ToOwned::to_owned),
+                    ));
                 }
                 XmlEvent::Empty { name: n, attrs } | XmlEvent::Start { name: n, attrs }
                     if n == "tableStyleInfo" =>
                 {
+                    if let Some(name) = attr(&attrs, "name") {
+                        style_name = name.to_string();
+                    }
                     banded_rows = attr(&attrs, "showRowStripes").is_none_or(truthy);
                     banded_cols = attr(&attrs, "showColumnStripes").is_some_and(truthy);
                 }
@@ -1756,8 +1813,12 @@ fn load_tables(
             table.has_totals = totals;
             table.banded_rows = banded_rows;
             table.banded_cols = banded_cols;
+            table.style_name = style_name;
             if !cols.is_empty() {
-                table.columns = cols.into_iter().map(|name| TableColumn { name }).collect();
+                table.columns = cols
+                    .into_iter()
+                    .map(|(name, totals_fn)| TableColumn { name, totals_fn })
+                    .collect();
             }
             if let Err(e) = wb.add_table(table) {
                 warnings.push("xlsx.table", e.message, Some(rel.target.clone()));

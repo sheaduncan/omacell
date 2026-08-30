@@ -418,7 +418,10 @@ fn run_omc(path: &Path) {
                 if !headers.is_empty() {
                     t.columns = headers
                         .into_iter()
-                        .map(|n| omacell_core::tables::TableColumn { name: n })
+                        .map(|n| omacell_core::tables::TableColumn {
+                            name: n,
+                            totals_fn: None,
+                        })
                         .collect();
                 }
                 wb.add_table(t).unwrap_or_else(|e| panic!("table: {e}"));

@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{Cursor, Write};
 
 use indexmap::IndexMap;
-use omacell_core::addr::col_to_letters;
+use omacell_core::addr::{col_to_letters, quote_sheet_name};
+use omacell_core::condfmt::CfDxf;
 use omacell_core::error::CoreError;
 use omacell_core::geometry::DEFAULT_COL_PX;
 use omacell_core::intern::{Interners, RichTextRun};
@@ -143,9 +144,40 @@ pub(crate) fn encode(
         sst_xml(&sst, intern, sst_count)?,
     );
     overrides.push(("/xl/sharedStrings.xml".into(), CT_SST.into()));
+    let mut dxfs: Vec<CfDxf> = Vec::new();
+    for sheet in &sheets {
+        for rule in &sheet.cond_formats {
+            if (rule.dxf.fill.is_some() || rule.dxf.font.is_some())
+                && !dxfs.iter().any(|d| d == &rule.dxf)
+            {
+                dxfs.push(rule.dxf);
+            }
+        }
+        if let Some(filter) = &sheet.autofilter {
+            for column in &filter.columns {
+                if let omacell_core::filter::FilterCriteria::Color { fill, argb } = &column.criteria
+                {
+                    let dxf = if *fill {
+                        CfDxf {
+                            fill: Some(Color::Rgb { argb: *argb }),
+                            font: None,
+                        }
+                    } else {
+                        CfDxf {
+                            fill: None,
+                            font: Some(Color::Rgb { argb: *argb }),
+                        }
+                    };
+                    if !dxfs.iter().any(|candidate| candidate == &dxf) {
+                        dxfs.push(dxf);
+                    }
+                }
+            }
+        }
+    }
     parts.insert(
         "xl/styles.xml".into(),
-        styles_xml(wb, &fonts, &fills, &borders, &xfs),
+        styles_xml(wb, &fonts, &fills, &borders, &xfs, &dxfs),
     );
     overrides.push(("/xl/styles.xml".into(), CT_STY.into()));
 
@@ -168,6 +200,7 @@ pub(crate) fn encode(
             i,
             package,
             &persons,
+            &dxfs,
         )?;
         parts.insert(format!("xl/{target}"), sheet_xml);
         overrides.push((format!("/xl/{target}"), CT_WS.into()));
@@ -499,6 +532,11 @@ fn workbook_xml(
         .collect();
     let mut names_xml = String::new();
     for n in &names {
+        if matches!(n.scope, omacell_core::names::NameScope::Sheet(_))
+            && super::data::is_filter_database_name(&n.name)
+        {
+            continue;
+        }
         let rewrite = match n.scope {
             omacell_core::names::NameScope::Workbook => false,
             omacell_core::names::NameScope::Sheet(id) => sheets
@@ -537,6 +575,7 @@ fn workbook_xml(
         if rewrite_print_names[i] {
             names_xml.push_str(&xlsx_print::print_names_xml(sheet, i));
         }
+        names_xml.push_str(&filter_database_name_xml(sheet, i)?);
     }
     if !names_xml.is_empty() {
         s.push_str("<definedNames>");
@@ -550,6 +589,28 @@ fn workbook_xml(
     }
     s.push_str("</workbook>");
     Ok(s.into_bytes())
+}
+
+fn filter_database_name_xml(sheet: &Sheet, local_sheet_id: usize) -> Result<String, CoreError> {
+    let Some(filter) = &sheet.autofilter else {
+        return Ok(String::new());
+    };
+    let start_col = col_to_letters(filter.range.start.col)
+        .map_err(|source| error::xlsx_write(source.to_string()))?;
+    let end_col = col_to_letters(filter.range.end.col)
+        .map_err(|source| error::xlsx_write(source.to_string()))?;
+    let referent = format!(
+        "{}!${}${}:${}${}",
+        quote_sheet_name(&sheet.name),
+        start_col,
+        filter.range.start.row + 1,
+        end_col,
+        filter.range.end.row + 1,
+    );
+    Ok(format!(
+        r#"<definedName name="_xlnm._FilterDatabase" localSheetId="{local_sheet_id}" hidden="1">{}</definedName>"#,
+        xml::escape(&referent),
+    ))
 }
 
 fn constant_name_text(intern: &omacell_core::intern::Interners, v: Value) -> String {
@@ -675,6 +736,7 @@ fn styles_xml(
     fills: &[Fill],
     borders: &[omacell_core::style::Border],
     xfs: &[Style],
+    dxfs: &[CfDxf],
 ) -> Vec<u8> {
     let mut numfmts: Vec<(u32, String)> = Vec::new();
     for xf in xfs {
@@ -750,7 +812,9 @@ fn styles_xml(
             s.push_str(&format!("<xf{attrs}>{align}{prot}</xf>"));
         }
     }
-    s.push_str("</cellXfs></styleSheet>");
+    s.push_str("</cellXfs>");
+    s.push_str(&super::data::dxfs_xml(dxfs));
+    s.push_str("</styleSheet>");
     s.into_bytes()
 }
 
@@ -1039,6 +1103,7 @@ fn worksheet_xml(
     sheet_ord: usize,
     package: Option<&OpcPackage>,
     persons: &BTreeMap<String, String>,
+    dxfs: &[CfDxf],
 ) -> Result<
     (
         Vec<u8>,
@@ -1071,11 +1136,20 @@ fn worksheet_xml(
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="{NS}" xmlns:r="{NS_R}">"#
     );
-    if let Some(color) = sheet.tab_color {
-        s.push_str(&format!(
-            "<sheetPr>{}</sheetPr>",
-            color_tag("tabColor", &color)
-        ));
+    let filter_mode = sheet
+        .autofilter
+        .as_ref()
+        .is_some_and(|filter| !filter.columns.is_empty());
+    if sheet.tab_color.is_some() || filter_mode {
+        s.push_str("<sheetPr");
+        if filter_mode {
+            s.push_str(r#" filterMode="1""#);
+        }
+        s.push('>');
+        if let Some(color) = sheet.tab_color {
+            s.push_str(&color_tag("tabColor", &color));
+        }
+        s.push_str("</sheetPr>");
     }
     s.push_str(&sheet_views_xml(sheet));
     s.push_str(&cols_xml(sheet));
@@ -1172,10 +1246,23 @@ fn worksheet_xml(
         }
         s.push_str("</protectedRanges>");
     }
-    if let Some(ex) = extras
-        && let Some(af) = &ex.autofilter
+    if let Some(raw) = extras
+        .map(|extra| extra.autofilter_xml.as_slice())
+        .filter(|raw| {
+            !raw.is_empty()
+                && super::data::autofilter_extras_match(raw, dxfs, sheet.autofilter.as_ref())
+        })
     {
-        s.push_str(&format!(r#"<autoFilter ref="{}"/>"#, xml::escape(af)));
+        push_fragment(&mut s, raw, "automatic filter", &["autoFilter"])?;
+    } else if let Some(filter) = &sheet.autofilter {
+        if let Some(raw_ref) = extras.and_then(|extra| extra.autofilter.as_deref())
+            && filter.columns.is_empty()
+            && raw_ref == filter.range.to_a1()
+        {
+            s.push_str(&format!(r#"<autoFilter ref="{}"/>"#, xml::escape(raw_ref)));
+        } else {
+            s.push_str(&super::data::modeled_autofilter(filter, dxfs));
+        }
     }
     if !sheet.merges.is_empty() {
         s.push_str(&format!(r#"<mergeCells count="{}">"#, sheet.merges.len()));
@@ -1187,7 +1274,14 @@ fn worksheet_xml(
         }
         s.push_str("</mergeCells>");
     }
-    if let Some(ex) = extras {
+    if let Some(ex) = extras.filter(|ex| {
+        !ex.conditional_formatting_xml.is_empty()
+            && super::data::cond_format_extras_match(
+                &ex.conditional_formatting_xml,
+                dxfs,
+                &sheet.cond_formats,
+            )
+    }) {
         for blob in &ex.conditional_formatting_xml {
             push_fragment(
                 &mut s,
@@ -1196,9 +1290,30 @@ fn worksheet_xml(
                 &["conditionalFormatting"],
             )?;
         }
+    } else {
+        for xml in super::data::modeled_cond_formats(&sheet.cond_formats, dxfs) {
+            push_fragment(
+                &mut s,
+                xml.as_bytes(),
+                "conditional formatting",
+                &["conditionalFormatting"],
+            )?;
+        }
+    }
+    if let Some(ex) = extras.filter(|ex| {
+        !ex.data_validations_xml.is_empty()
+            && super::data::validation_extras_match(&ex.data_validations_xml, &sheet.validations)
+    }) {
         for blob in &ex.data_validations_xml {
             push_fragment(&mut s, blob, "data validation", &["dataValidations"])?;
         }
+    } else if let Some(xml) = super::data::modeled_validations(&sheet.validations) {
+        push_fragment(
+            &mut s,
+            xml.as_bytes(),
+            "data validation",
+            &["dataValidations"],
+        )?;
     }
     if !sheet.hyperlinks.is_empty() {
         s.push_str("<hyperlinks>");
@@ -1668,17 +1783,23 @@ fn table_xml(table: &Table, table_number: u32) -> Vec<u8> {
     };
     let mut cols = String::new();
     for (i, c) in table.columns.iter().enumerate() {
+        let totals = c
+            .totals_fn
+            .as_deref()
+            .map(|fn_name| format!(r#" totalsRowFunction="{fn_name}""#))
+            .unwrap_or_default();
         cols.push_str(&format!(
-            r#"<tableColumn id="{}" name="{}"/>"#,
+            r#"<tableColumn id="{}" name="{}"{totals}/>"#,
             i + 1,
             xml::escape(&c.name)
         ));
     }
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{NS}" id="{table_number}" name="{}" displayName="{}" ref="{start}:{end}" headerRowCount="{header}" totalsRowCount="{totals}">{autofilter}<tableColumns count="{}">{cols}</tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="{}" showColumnStripes="{}"/></table>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="{NS}" id="{table_number}" name="{}" displayName="{}" ref="{start}:{end}" headerRowCount="{header}" totalsRowCount="{totals}">{autofilter}<tableColumns count="{}">{cols}</tableColumns><tableStyleInfo name="{}" showFirstColumn="0" showLastColumn="0" showRowStripes="{}" showColumnStripes="{}"/></table>"#,
         xml::escape(&table.name),
         xml::escape(&table.name),
         table.columns.len(),
+        xml::escape(&table.style_name),
         u8::from(table.banded_rows),
         u8::from(table.banded_cols)
     )

@@ -38,6 +38,7 @@ encode.
 | LibreOffice `EFFECT`/`NOMINAL` CSV | `0.1025` | `10.25%` (script compares numerically) | WP-05c |
 | Oversize `SEQUENCE` | `#NUM!` before allocation | LibreOffice CSV may return `1` | WP-05c |
 | `INDEX` of an empty cell | blank | LibreOffice CSV may show `0` | WP-05c |
+| Sort of formula cells | Cells move as units; relative refs adjust by the row/col delta of the move (same as copy/fill) | Same: `RewriteOp::Copy { drow, dcol }` after the permutation. Absolute refs stay. Notes/comments do not follow the sort. | WP-18 |
 | `CONVERT` unknown/incompatible unit | `#N/A` | LibreOffice `Err:502` | WP-05c |
 | `CONVERT` `lbm`→`g` | Microsoft factor `453.59237` | LibreOffice uses a slightly different mass factor | WP-05c |
 | `BITLSHIFT` beyond 48 bits | `#NUM!` (`0..2^48-1`) | LibreOffice may return the untruncated shift | WP-05c |

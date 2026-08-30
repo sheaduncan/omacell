@@ -113,6 +113,10 @@ pub fn logical_dump(bus: &Bus) -> String {
     let mut names: Vec<_> = wb.names().iter().map(|n| n.name.clone()).collect();
     names.sort();
     lines.push(format!("names={names:?}"));
+    lines.push(format!(
+        "tables={:?}",
+        wb.tables().iter().cloned().collect::<Vec<_>>()
+    ));
     lines.join("\n")
 }
 

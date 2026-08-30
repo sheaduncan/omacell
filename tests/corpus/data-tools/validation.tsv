@@ -1,0 +1,6 @@
+case	kind	op	formula1	formula2	value	valid	source
+whole_between	whole	between	1	10	5	true	Spec §6.6 F-6.4
+whole_fraction	whole	between	1	10	1.5	false	Spec §6.6 F-6.4
+unicode_text_length	text_length	equal	1	-	é	true	Spec §6.6 F-6.4
+time_domain	time	less_eq	1	-	1.25	false	Spec §6.6 F-6.4
+date_domain	date	greater_eq	0	-	-1	false	Spec §6.6 F-6.4

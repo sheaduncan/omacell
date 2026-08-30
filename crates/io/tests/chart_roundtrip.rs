@@ -243,8 +243,9 @@ fn unsupported_drawing_parts_stay_on_package() {
     .unwrap();
     let bytes = omacell_io::xlsx::save_bytes(&doc).unwrap();
     let again = omacell_io::xlsx::open_bytes(&bytes).unwrap();
+    let report = diff(&doc, &again);
     assert!(
-        diff(&doc, &again).empty,
-        "corpus without modeled charts must stay L3-identical"
+        report.empty,
+        "corpus without modeled charts must stay L3-identical: {report:?}"
     );
 }
