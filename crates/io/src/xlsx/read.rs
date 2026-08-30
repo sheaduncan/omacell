@@ -121,6 +121,9 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
     wb.set_active_sheet(sheet_ids[active_index])?;
 
     for name in workbook_meta.names {
+        if name.local_sheet_index.is_some() && super::data::is_filter_database_name(&name.name) {
+            continue;
+        }
         let scope = match name.local_sheet_index {
             Some(idx) => match sheet_ids.get(idx).copied() {
                 Some(id) => NameScope::Sheet(id),

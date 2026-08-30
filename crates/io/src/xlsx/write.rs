@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{Cursor, Write};
 
 use indexmap::IndexMap;
-use omacell_core::addr::col_to_letters;
+use omacell_core::addr::{col_to_letters, quote_sheet_name};
 use omacell_core::condfmt::CfDxf;
 use omacell_core::error::CoreError;
 use omacell_core::geometry::DEFAULT_COL_PX;
@@ -532,6 +532,11 @@ fn workbook_xml(
         .collect();
     let mut names_xml = String::new();
     for n in &names {
+        if matches!(n.scope, omacell_core::names::NameScope::Sheet(_))
+            && super::data::is_filter_database_name(&n.name)
+        {
+            continue;
+        }
         let rewrite = match n.scope {
             omacell_core::names::NameScope::Workbook => false,
             omacell_core::names::NameScope::Sheet(id) => sheets
@@ -570,6 +575,7 @@ fn workbook_xml(
         if rewrite_print_names[i] {
             names_xml.push_str(&xlsx_print::print_names_xml(sheet, i));
         }
+        names_xml.push_str(&filter_database_name_xml(sheet, i)?);
     }
     if !names_xml.is_empty() {
         s.push_str("<definedNames>");
@@ -583,6 +589,28 @@ fn workbook_xml(
     }
     s.push_str("</workbook>");
     Ok(s.into_bytes())
+}
+
+fn filter_database_name_xml(sheet: &Sheet, local_sheet_id: usize) -> Result<String, CoreError> {
+    let Some(filter) = &sheet.autofilter else {
+        return Ok(String::new());
+    };
+    let start_col = col_to_letters(filter.range.start.col)
+        .map_err(|source| error::xlsx_write(source.to_string()))?;
+    let end_col = col_to_letters(filter.range.end.col)
+        .map_err(|source| error::xlsx_write(source.to_string()))?;
+    let referent = format!(
+        "{}!${}${}:${}${}",
+        quote_sheet_name(&sheet.name),
+        start_col,
+        filter.range.start.row + 1,
+        end_col,
+        filter.range.end.row + 1,
+    );
+    Ok(format!(
+        r#"<definedName name="_xlnm._FilterDatabase" localSheetId="{local_sheet_id}" hidden="1">{}</definedName>"#,
+        xml::escape(&referent),
+    ))
 }
 
 fn constant_name_text(intern: &omacell_core::intern::Interners, v: Value) -> String {

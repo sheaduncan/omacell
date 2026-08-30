@@ -568,6 +568,10 @@ fn truthy(s: &str) -> bool {
     matches!(s, "1" | "true" | "True" | "TRUE")
 }
 
+pub(crate) fn is_filter_database_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("_xlnm._FilterDatabase")
+}
+
 /// Modeled `<autoFilter>` XML.
 pub(crate) fn modeled_autofilter(filter: &AutoFilter, dxfs: &[CfDxf]) -> String {
     let mut s = format!(r#"<autoFilter ref="{}">"#, escape(&filter.range.to_a1()));

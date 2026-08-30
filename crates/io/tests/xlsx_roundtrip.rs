@@ -666,6 +666,24 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
         .unwrap();
     let bytes = save_workbook_bytes(&wb).unwrap();
     let doc = open_bytes(&bytes).unwrap();
+    let workbook_xml = String::from_utf8_lossy(
+        &doc.package
+            .part("xl/workbook.xml")
+            .expect("workbook part")
+            .bytes,
+    );
+    assert!(workbook_xml.contains(
+        r#"<definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Sheet1!$A$1:$A$3</definedName>"#
+    ));
+    assert!(
+        doc.workbook
+            .names()
+            .get(
+                omacell_core::names::NameScope::Sheet(sheet),
+                "_xlnm._FilterDatabase"
+            )
+            .is_none()
+    );
     let sheet_xml = String::from_utf8_lossy(
         &doc.package
             .part("xl/worksheets/sheet1.xml")
