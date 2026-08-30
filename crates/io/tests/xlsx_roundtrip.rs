@@ -7,10 +7,12 @@ use calamine::Reader;
 use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::intern::RichTextRun;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
-use omacell_core::sheet::{Comment, Hyperlink, Note, ProtectionState};
+use omacell_core::sheet::{
+    Comment, Hyperlink, Note, ProtectedRange, ProtectionAllow, ProtectionState,
+};
 use omacell_core::style::{Color, Fill, Font, GradientFill, GradientKind, GradientStop, Style};
 use omacell_core::tables::{Table, TableId};
-use omacell_core::workbook::Workbook;
+use omacell_core::workbook::{Workbook, WorkbookProtectionState};
 use omacell_io::xlsx::{
     SaveOptions, diff, open, open_bytes, save, save_bytes, save_workbook_bytes,
 };
@@ -198,6 +200,7 @@ fn new_workbook_preserves_modeled_l1_l2_fields() {
             enabled: true,
             password: Some(b"ABCD".to_vec()),
             allow: Default::default(),
+            protected_ranges: Vec::new(),
         },
     )
     .unwrap();
@@ -323,6 +326,7 @@ fn new_workbook_preserves_modeled_l1_l2_fields() {
             enabled: true,
             password: Some(b"ABCD".to_vec()),
             allow: Default::default(),
+            protected_ranges: Vec::new(),
         }
     );
     assert_eq!(sheet.geometry.rows.size(4).unwrap(), 31);
@@ -482,27 +486,100 @@ fn injected_worksheet_fragments_are_rejected() {
 }
 
 #[test]
-fn threaded_comments_are_reported_and_not_silently_dropped() {
-    let original = open(&corpus_dir().join("l1_values.xlsx")).unwrap();
-    let mut changed = original.clone();
-    changed
-        .workbook
-        .set_comment(
-            changed.workbook.active_sheet(),
-            0,
-            0,
-            Some(Comment {
-                author: "Ada".into(),
-                text: "review".into(),
+fn wp17_l2_records_roundtrip_together() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let protected =
+        RangeRef::from_corners(CellRef::new(1, 1).unwrap(), CellRef::new(2, 2).unwrap());
+    wb.set_comment(
+        sheet,
+        0,
+        0,
+        Some(Comment {
+            author: "Ada".into(),
+            text: "review".into(),
+            replies: vec![Comment {
+                author: "Lin".into(),
+                text: "done".into(),
                 replies: Vec::new(),
                 resolved: false,
-            }),
-        )
-        .unwrap();
-    assert!(!diff(&original, &changed).empty);
-    assert!(!diff(&changed, &original).empty);
-    let error = save_bytes(&changed).expect_err("threaded comment downgrade must be rejected");
-    assert!(error.message.contains("cannot be downgraded"));
+            }],
+            resolved: true,
+        }),
+    )
+    .unwrap();
+    wb.set_hyperlink(
+        sheet,
+        0,
+        1,
+        Some(Hyperlink {
+            target: "https://example.com".into(),
+            tooltip: Some("Example".into()),
+            display: None,
+        }),
+    )
+    .unwrap();
+    wb.set_sheet_protection(
+        sheet,
+        ProtectionState {
+            enabled: true,
+            password: Some(b"83AF".to_vec()),
+            allow: ProtectionAllow {
+                format_cells: true,
+                sort: true,
+                ..ProtectionAllow::default()
+            },
+            protected_ranges: vec![ProtectedRange {
+                name: "Editable".into(),
+                ranges: vec![protected],
+                password: Some(b"ABCD".to_vec()),
+            }],
+        },
+    )
+    .unwrap();
+    wb.set_workbook_protection(WorkbookProtectionState {
+        enabled: true,
+        lock_structure: true,
+        lock_windows: false,
+        password: Some(b"83AF".to_vec()),
+    })
+    .unwrap();
+    wb.set_row_outline_level(sheet, 4, 2).unwrap();
+    wb.set_row_collapsed(sheet, 4, true).unwrap();
+    wb.set_col_outline_level(sheet, 3, 1).unwrap();
+    wb.set_col_collapsed(sheet, 3, true).unwrap();
+    wb.set_sheet_merges(
+        sheet,
+        vec![RangeRef::from_corners(
+            CellRef::new(6, 0).unwrap(),
+            CellRef::new(6, 2).unwrap(),
+        )],
+    )
+    .unwrap();
+
+    let bytes = save_workbook_bytes(&wb).unwrap();
+    let doc = open_bytes(&bytes).unwrap();
+    let loaded = &doc.workbook;
+    let loaded_sheet = loaded.sheet(loaded.active_sheet()).unwrap();
+    assert_eq!(
+        loaded_sheet.comments.get(&(0, 0)),
+        wb.sheet(sheet).unwrap().comments.get(&(0, 0))
+    );
+    assert_eq!(loaded_sheet.hyperlinks, wb.sheet(sheet).unwrap().hyperlinks);
+    assert_eq!(loaded_sheet.protection, wb.sheet(sheet).unwrap().protection);
+    assert_eq!(loaded.protection(), wb.protection());
+    assert_eq!(loaded_sheet.geometry.rows.outline_level(4), 2);
+    assert!(loaded_sheet.geometry.rows.is_collapsed(4));
+    assert_eq!(loaded_sheet.geometry.cols.outline_level(3), 1);
+    assert!(loaded_sheet.geometry.cols.is_collapsed(3));
+    assert_eq!(loaded_sheet.merges, wb.sheet(sheet).unwrap().merges);
+    assert!(doc.package.part("xl/persons/person.xml").is_some());
+    assert!(
+        doc.package
+            .part("xl/threadedComments/threadedComment1.xml")
+            .is_some()
+    );
+    assert!(diff(&doc, &open_bytes(&save_bytes(&doc).unwrap()).unwrap()).empty);
 }
 
 #[test]

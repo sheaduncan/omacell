@@ -71,6 +71,18 @@ pub fn resolve_cell(wb: &Workbook, spec: &str) -> Result<ResolvedCell, CoreError
 
 /// Parse a cell or range. 3-D references are rejected in this package.
 pub fn resolve_range(wb: &Workbook, spec: &str) -> Result<ResolvedRange, CoreError> {
+    let resolved = resolve_range_unbounded(wb, spec)?;
+    if resolved.area() > MAX_RANGE_CELLS {
+        return Err(error::range_size(resolved.area()));
+    }
+    Ok(resolved)
+}
+
+/// Parse a range for axis-only operations that do not materialize every cell.
+pub(crate) fn resolve_range_unbounded(
+    wb: &Workbook,
+    spec: &str,
+) -> Result<ResolvedRange, CoreError> {
     let parsed = parse_a1(spec)?;
     let (sheet, kind) = attach(wb, parsed)?;
     let range = match kind {
@@ -93,9 +105,6 @@ pub fn resolve_range(wb: &Workbook, spec: &str) -> Result<ResolvedRange, CoreErr
         max_row,
         max_col,
     };
-    if resolved.area() > MAX_RANGE_CELLS {
-        return Err(error::range_size(resolved.area()));
-    }
     Ok(resolved)
 }
 

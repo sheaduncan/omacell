@@ -18,7 +18,9 @@ use omacell_core::storage::CellSlot;
 use omacell_core::style::{Font, Style};
 use omacell_core::tables::{Table, TableColumn, TableId};
 use omacell_core::value::Value;
-use omacell_core::workbook::{CalcMode, DateSystem, Workbook, WorkbookMeta, WorkbookSettings};
+use omacell_core::workbook::{
+    CalcMode, DateSystem, Workbook, WorkbookMeta, WorkbookProtectionState, WorkbookSettings,
+};
 
 use super::{MAX_OMC_LINE, MAX_OMC_RECORDS, OmcDocument};
 use crate::error;
@@ -241,6 +243,12 @@ fn apply_book(
     }
     if let Some(meta) = kv.get("meta") {
         *wb.meta_mut() = parse_json::<WorkbookMeta>(meta, "book metadata")?;
+    }
+    if let Some(protection) = kv.get("protection") {
+        wb.set_workbook_protection(parse_json::<WorkbookProtectionState>(
+            protection,
+            "workbook protection",
+        )?)?;
     }
     if let Some(ds) = kv.get("date_system") {
         wb.settings_mut().date_system = match ds.as_str() {
@@ -489,6 +497,7 @@ fn load_sheet(
                 enabled: parse_bool_kv(&kv, "protect", false)?,
                 password: None,
                 allow: Default::default(),
+                protected_ranges: Vec::new(),
             },
         )?;
     }

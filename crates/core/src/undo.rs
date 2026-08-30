@@ -11,11 +11,11 @@ use crate::command::UndoUnitId;
 use crate::error::CoreError;
 use crate::names::{DefinedName, NameScope};
 use crate::print::PageSetup;
-use crate::sheet::{Sheet, SheetVisibility};
+use crate::sheet::{Sheet, SheetEditState, SheetVisibility};
 use crate::storage::CellSlot;
 use crate::style::Color;
 use crate::tables::Table;
-use crate::workbook::CalcMode;
+use crate::workbook::{CalcMode, WorkbookProtectionState};
 
 /// Default undo memory budget (64 MiB of estimated delta size).
 pub const DEFAULT_BUDGET: usize = 64 * 1024 * 1024;
@@ -108,6 +108,10 @@ pub enum Delta {
         hidden_before: bool,
         /// Hidden after.
         hidden_after: bool,
+        /// Whether the previous size was explicitly stored.
+        custom_before: bool,
+        /// Whether the new size is explicitly stored.
+        custom_after: bool,
     },
     /// Column width / hidden flag.
     ColGeom {
@@ -123,6 +127,10 @@ pub enum Delta {
         hidden_before: bool,
         /// Hidden after.
         hidden_after: bool,
+        /// Whether the previous size was explicitly stored.
+        custom_before: bool,
+        /// Whether the new size is explicitly stored.
+        custom_after: bool,
     },
     /// Sheet inserted.
     SheetAdd {
@@ -141,6 +149,28 @@ pub enum Delta {
         index: usize,
         /// Full snapshot for restore.
         sheet: Box<Sheet>,
+        /// Active sheet before removal.
+        active_before: SheetId,
+        /// Active sheet after removal.
+        active_after: SheetId,
+    },
+    /// Sheet tab reordered.
+    SheetReorder {
+        /// Sheet.
+        id: SheetId,
+        /// Original tab index.
+        before: usize,
+        /// New tab index.
+        after: usize,
+    },
+    /// WP-17 metadata outside the sparse cell store.
+    SheetEdit {
+        /// Sheet.
+        sheet: SheetId,
+        /// Metadata before the edit.
+        before: Box<SheetEditState>,
+        /// Metadata after the edit.
+        after: Box<SheetEditState>,
     },
     /// Sheet renamed.
     SheetRename {
@@ -261,6 +291,13 @@ pub enum Delta {
         /// Mode after the command.
         after: CalcMode,
     },
+    /// Workbook protection flags.
+    WorkbookProtection {
+        /// State before the command.
+        before: WorkbookProtectionState,
+        /// State after the command.
+        after: WorkbookProtectionState,
+    },
 }
 
 impl Delta {
@@ -270,6 +307,10 @@ impl Delta {
             Self::RowGeom { .. } | Self::ColGeom { .. } => 32,
             Self::SheetAdd { sheet, .. } | Self::SheetRemove { sheet, .. } => {
                 64 + sheet.store.heap_bytes()
+            }
+            Self::SheetReorder { .. } => 32,
+            Self::SheetEdit { before, after, .. } => {
+                64 + before.estimated_bytes() + after.estimated_bytes()
             }
             Self::SheetRename { before, after, .. } => 32 + before.len() + after.len(),
             Self::SheetVisibility { .. } | Self::TabColor { .. } => 16,
@@ -307,6 +348,10 @@ impl Delta {
                 24 + removed.len() * std::mem::size_of::<(u32, u16, CellSlot)>()
             }
             Self::CalcMode { .. } => 2,
+            Self::WorkbookProtection { before, after } => {
+                32 + before.password.as_ref().map(Vec::len).unwrap_or(0)
+                    + after.password.as_ref().map(Vec::len).unwrap_or(0)
+            }
         }
     }
 
@@ -333,10 +378,12 @@ impl Delta {
             },
             Self::SheetAdd { id, .. }
             | Self::SheetRemove { id, .. }
+            | Self::SheetReorder { id, .. }
             | Self::SheetRename { id, .. }
             | Self::SheetVisibility { id, .. }
             | Self::TabColor { id, .. } => AffectedRange::sheet(*id),
             Self::PageSetup { sheet, .. } => AffectedRange::sheet(*sheet),
+            Self::SheetEdit { sheet, .. } => AffectedRange::sheet(*sheet),
             Self::Name { .. } | Self::Table { .. } => AffectedRange::sheet(SheetId::new(0)),
             Self::ChartAdd { sheet, .. }
             | Self::ChartRemove { sheet, .. }
@@ -345,7 +392,9 @@ impl Delta {
             Self::ShiftRows { sheet, .. } | Self::ShiftCols { sheet, .. } => {
                 AffectedRange::sheet(*sheet)
             }
-            Self::CalcMode { .. } => AffectedRange::sheet(SheetId::new(0)),
+            Self::CalcMode { .. } | Self::WorkbookProtection { .. } => {
+                AffectedRange::sheet(SheetId::new(0))
+            }
         }
     }
 }

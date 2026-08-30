@@ -24,6 +24,7 @@ mod logical;
 mod policy;
 mod registry;
 mod resolve;
+mod restore;
 mod runner;
 mod session;
 mod task;

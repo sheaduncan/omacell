@@ -17,7 +17,7 @@ pub const DEFAULT_ROW_PX: u32 = 20;
 pub const DEFAULT_COL_PX: u32 = 64;
 
 /// Sparse Fenwick tree of i64 deltas. Index 1 is the first row/col (0-based 0).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Fenwick {
     n: u32,
     tree: BTreeMap<u32, i64>,
@@ -71,7 +71,7 @@ impl Fenwick {
 /// assert_eq!(a.index_to_pixel(1), 40);
 /// assert_eq!(a.size(1).unwrap(), DEFAULT_ROW_PX);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AxisGeometry {
     max: u32,
     default_px: u32,
@@ -209,6 +209,29 @@ impl AxisGeometry {
         let mut v: Vec<(u32, u8)> = self.outline.iter().map(|(&i, &l)| (i, l)).collect();
         v.sort_unstable_by_key(|(i, _)| *i);
         v.into_iter()
+    }
+
+    /// Collapsed outline markers in ascending index order.
+    pub fn iter_collapsed(&self) -> impl Iterator<Item = u32> {
+        let mut v: Vec<u32> = self.collapsed.iter().copied().collect();
+        v.sort_unstable();
+        v.into_iter()
+    }
+
+    /// Remove a custom size so the axis default applies again.
+    pub(crate) fn clear_size(&mut self, index: u32) -> Result<(), CoreError> {
+        self.check(index)?;
+        let old = self.size_unchecked(index);
+        self.custom.remove(&index);
+        if !self.hidden.contains(&index) {
+            self.fenwick
+                .add(index + 1, i64::from(self.default_px) - i64::from(old));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn has_custom_size(&self, index: u32) -> bool {
+        self.custom.contains_key(&index)
     }
 
     /// Shift hidden/custom/outline maps when inserting or deleting `count` items at `at`.
@@ -392,7 +415,7 @@ fn shift_set_delete(set: &mut FxHashSet<u32>, at: u32, mag: u32) {
 /// assert_eq!(g.rows.index_to_pixel(1), 20);
 /// assert_eq!(g.cols.index_to_pixel(1), 64);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SheetGeometry {
     /// Row heights.
     pub rows: AxisGeometry,

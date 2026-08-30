@@ -3,14 +3,16 @@
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::addr::{CellRef, RangeRef, SheetId, SheetSpec, col_to_letters};
+use crate::addr::{CellRef, RangeRef, SheetId, SheetSpec, col_to_letters, quote_sheet_name};
 use crate::dates::{CivilDate, DateSystem, date_to_serial, serial_to_date};
 use crate::error::{CoreError, ErrorKind};
 use crate::formula::{
     Expr, ExprKind, Formula, RewriteOp, adjust_cols, adjust_rows, move_range, parse, print,
     rewrite_print,
 };
+use crate::intern::RichTextRun;
 use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::sheet::{Comment, Hyperlink, Note};
 use crate::storage::{CellFlags, CellSlot};
 use crate::style::Style;
 use crate::value::Value;
@@ -214,6 +216,7 @@ pub fn insert_cells(
         Shift::Down => {
             let n = r1.saturating_sub(r0).saturating_add(1);
             shift_band_rows(wb, sheet, r0, n, c0, c1, false)?;
+            shift_band_side_tables_rows(wb, sheet, r0, n, c0, c1, false)?;
             rewrite_formulas(
                 wb,
                 sheet,
@@ -229,6 +232,7 @@ pub fn insert_cells(
         Shift::Right => {
             let n = c1.saturating_sub(c0).saturating_add(1);
             shift_band_cols(wb, sheet, c0, n, r0, r1, false)?;
+            shift_band_side_tables_cols(wb, sheet, c0, n, r0, r1, false)?;
             rewrite_formulas(
                 wb,
                 sheet,
@@ -256,6 +260,7 @@ pub fn delete_cells(
         Shift::Down => {
             let n = r1.saturating_sub(r0).saturating_add(1);
             shift_band_rows(wb, sheet, r0, n, c0, c1, true)?;
+            shift_band_side_tables_rows(wb, sheet, r0, n, c0, c1, true)?;
             rewrite_formulas(
                 wb,
                 sheet,
@@ -271,6 +276,7 @@ pub fn delete_cells(
         Shift::Right => {
             let n = c1.saturating_sub(c0).saturating_add(1);
             shift_band_cols(wb, sheet, c0, n, r0, r1, true)?;
+            shift_band_side_tables_cols(wb, sheet, c0, n, r0, r1, true)?;
             rewrite_formulas(
                 wb,
                 sheet,
@@ -362,6 +368,135 @@ fn shift_band_cols(
         let _ = replace_cell_slot(wb, sheet, r, nc, Some(slot))?;
     }
     Ok(())
+}
+
+fn shift_band_side_tables_rows(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    at: u32,
+    count: u32,
+    c0: u16,
+    c1: u16,
+    delete: bool,
+) -> Result<(), CoreError> {
+    let signed = if delete {
+        -(count as i32)
+    } else {
+        count as i32
+    };
+    wb.mutate_sheet_edit(sheet, |target| {
+        target.notes = shift_map_band_rows(&target.notes, at, signed, c0, c1);
+        target.comments = shift_map_band_rows(&target.comments, at, signed, c0, c1);
+        target.hyperlinks = shift_map_band_rows(&target.hyperlinks, at, signed, c0, c1);
+        target.merges = target
+            .merges
+            .iter()
+            .filter_map(|merge| {
+                let (_, mc0, _, mc1) = norm(*merge);
+                if mc0 >= c0 && mc1 <= c1 {
+                    shift_range_rows(*merge, at, signed)
+                } else {
+                    Some(*merge)
+                }
+            })
+            .collect();
+        Ok(())
+    })
+}
+
+fn shift_band_side_tables_cols(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    at: u16,
+    count: u16,
+    r0: u32,
+    r1: u32,
+    delete: bool,
+) -> Result<(), CoreError> {
+    let signed = if delete {
+        -(count as i32)
+    } else {
+        count as i32
+    };
+    wb.mutate_sheet_edit(sheet, |target| {
+        target.notes = shift_map_band_cols(&target.notes, at, signed, r0, r1);
+        target.comments = shift_map_band_cols(&target.comments, at, signed, r0, r1);
+        target.hyperlinks = shift_map_band_cols(&target.hyperlinks, at, signed, r0, r1);
+        target.merges = target
+            .merges
+            .iter()
+            .filter_map(|merge| {
+                let (mr0, _, mr1, _) = norm(*merge);
+                if mr0 >= r0 && mr1 <= r1 {
+                    shift_range_cols(*merge, at, signed)
+                } else {
+                    Some(*merge)
+                }
+            })
+            .collect();
+        Ok(())
+    })
+}
+
+fn shift_map_band_rows<T: Clone>(
+    map: &FxHashMap<(u32, u16), T>,
+    at: u32,
+    count: i32,
+    c0: u16,
+    c1: u16,
+) -> FxHashMap<(u32, u16), T> {
+    let mut next = FxHashMap::default();
+    for (&(row, col), value) in map {
+        if col < c0 || col > c1 {
+            next.insert((row, col), value.clone());
+            continue;
+        }
+        let shifted = shift_index(row, at, count);
+        if let Some(row) = shifted.filter(|row| *row < MAX_ROWS) {
+            next.insert((row, col), value.clone());
+        }
+    }
+    next
+}
+
+fn shift_map_band_cols<T: Clone>(
+    map: &FxHashMap<(u32, u16), T>,
+    at: u16,
+    count: i32,
+    r0: u32,
+    r1: u32,
+) -> FxHashMap<(u32, u16), T> {
+    let mut next = FxHashMap::default();
+    for (&(row, col), value) in map {
+        if row < r0 || row > r1 {
+            next.insert((row, col), value.clone());
+            continue;
+        }
+        let shifted = shift_index(u32::from(col), u32::from(at), count)
+            .filter(|col| *col < u32::from(MAX_COLS))
+            .and_then(|col| u16::try_from(col).ok());
+        if let Some(col) = shifted {
+            next.insert((row, col), value.clone());
+        }
+    }
+    next
+}
+
+fn shift_index(index: u32, at: u32, count: i32) -> Option<u32> {
+    let magnitude = count.unsigned_abs();
+    if count >= 0 {
+        Some(if index >= at {
+            index.saturating_add(magnitude)
+        } else {
+            index
+        })
+    } else if index < at {
+        Some(index)
+    } else if index < at.saturating_add(magnitude) {
+        None
+    } else {
+        Some(index - magnitude)
+    }
 }
 
 enum RewriteKind {
@@ -723,17 +858,18 @@ fn shift_side_tables(
     rows: bool,
 ) -> Result<(), CoreError> {
     let _ = rows;
-    let s = wb.sheet_mut(sheet)?;
-    s.geometry.rows.shift_meta(at, count)?;
-    s.notes = shift_map_rows(&s.notes, at, count);
-    s.comments = shift_map_rows(&s.comments, at, count);
-    s.hyperlinks = shift_map_rows(&s.hyperlinks, at, count);
-    s.merges = s
-        .merges
-        .iter()
-        .filter_map(|m| shift_range_rows(*m, at, count))
-        .collect();
-    Ok(())
+    wb.mutate_sheet_edit(sheet, |s| {
+        s.geometry.rows.shift_meta(at, count)?;
+        s.notes = shift_map_rows(&s.notes, at, count);
+        s.comments = shift_map_rows(&s.comments, at, count);
+        s.hyperlinks = shift_map_rows(&s.hyperlinks, at, count);
+        s.merges = s
+            .merges
+            .iter()
+            .filter_map(|m| shift_range_rows(*m, at, count))
+            .collect();
+        Ok(())
+    })
 }
 
 fn shift_side_tables_cols(
@@ -742,17 +878,18 @@ fn shift_side_tables_cols(
     at: u16,
     count: i32,
 ) -> Result<(), CoreError> {
-    let s = wb.sheet_mut(sheet)?;
-    s.geometry.cols.shift_meta(u32::from(at), count)?;
-    s.notes = shift_map_cols(&s.notes, at, count);
-    s.comments = shift_map_cols(&s.comments, at, count);
-    s.hyperlinks = shift_map_cols(&s.hyperlinks, at, count);
-    s.merges = s
-        .merges
-        .iter()
-        .filter_map(|m| shift_range_cols(*m, at, count))
-        .collect();
-    Ok(())
+    wb.mutate_sheet_edit(sheet, |s| {
+        s.geometry.cols.shift_meta(u32::from(at), count)?;
+        s.notes = shift_map_cols(&s.notes, at, count);
+        s.comments = shift_map_cols(&s.comments, at, count);
+        s.hyperlinks = shift_map_cols(&s.hyperlinks, at, count);
+        s.merges = s
+            .merges
+            .iter()
+            .filter_map(|m| shift_range_cols(*m, at, count))
+            .collect();
+        Ok(())
+    })
 }
 
 fn shift_map_rows<T: Clone>(
@@ -857,26 +994,28 @@ fn shift_range_cols(range: RangeRef, at: u16, count: i32) -> Option<RangeRef> {
 
 /// Merge `range` into one merged area.
 pub fn merge(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Result<(), CoreError> {
-    wb.sheet_mut(sheet)?.add_merge(range)
+    wb.mutate_sheet_edit(sheet, |target| target.add_merge(range))
 }
 
 /// Merge each row of `range` independently (Excel merge-across).
 pub fn merge_across(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Result<(), CoreError> {
     let (r0, c0, r1, c1) = norm(range);
-    for r in r0..=r1 {
-        let row_range =
-            RangeRef::from_corners(CellRef::new(r, c0).unwrap(), CellRef::new(r, c1).unwrap());
-        wb.sheet_mut(sheet)?.add_merge(row_range)?;
-    }
-    Ok(())
+    wb.mutate_sheet_edit(sheet, |target| {
+        for r in r0..=r1 {
+            let row_range = RangeRef::from_corners(CellRef::new(r, c0)?, CellRef::new(r, c1)?);
+            target.add_merge(row_range)?;
+        }
+        Ok(())
+    })
 }
 
 /// Unmerge any merge overlapping `range`.
 pub fn unmerge(wb: &mut Workbook, sheet: SheetId, range: RangeRef) -> Result<usize, CoreError> {
-    let s = wb.sheet_mut(sheet)?;
-    let before = s.merges.len();
-    s.merges.retain(|m| !overlaps(*m, range));
-    Ok(before - s.merges.len())
+    wb.mutate_sheet_edit(sheet, |target| {
+        let before = target.merges.len();
+        target.merges.retain(|m| !overlaps(*m, range));
+        Ok(before - target.merges.len())
+    })
 }
 
 fn overlaps(a: RangeRef, b: RangeRef) -> bool {
@@ -975,6 +1114,54 @@ pub fn extend_fill(values: &[f64], mode: FillMode, n: usize, dates: DateSystem) 
         FillMode::Month => (1..=n).map(|i| add_months(last, i as i32, dates)).collect(),
         FillMode::Year => (1..=n)
             .map(|i| add_months(last, 12 * i as i32, dates))
+            .collect(),
+    }
+}
+
+fn extend_fill_before(values: &[f64], mode: FillMode, n: usize, dates: DateSystem) -> Vec<f64> {
+    let Some(&first) = values.first() else {
+        return vec![0.0; n];
+    };
+    match mode {
+        FillMode::Copy | FillMode::Formats => vec![first; n],
+        FillMode::Linear => {
+            let step = if values.len() >= 2 {
+                values[1] - values[0]
+            } else {
+                1.0
+            };
+            (1..=n).map(|i| first - step * i as f64).collect()
+        }
+        FillMode::Growth => {
+            let ratio = if values.len() >= 2 && values[0].abs() > 1e-12 {
+                values[1] / values[0]
+            } else {
+                1.0
+            };
+            (1..=n).map(|i| first / ratio.powi(i as i32)).collect()
+        }
+        FillMode::Date => (1..=n).map(|i| first - i as f64).collect(),
+        FillMode::Weekday => {
+            let mut out = Vec::with_capacity(n);
+            let mut serial = first;
+            while out.len() < n {
+                serial -= 1.0;
+                if let Some(date) = serial_to_date(serial as i64, dates) {
+                    let day = weekday(date.year, u32::from(date.month), u32::from(date.day));
+                    if day != 0 && day != 6 {
+                        out.push(serial);
+                    }
+                } else {
+                    out.push(serial);
+                }
+            }
+            out
+        }
+        FillMode::Month => (1..=n)
+            .map(|i| add_months(first, -(i as i32), dates))
+            .collect(),
+        FillMode::Year => (1..=n)
+            .map(|i| add_months(first, -12 * i as i32, dates))
             .collect(),
     }
 }
@@ -1086,6 +1273,46 @@ pub fn fill_range(
                 }
             }
         }
+    } else if dr0 < sr0 && dc0 == sc0 && dc1 == sc1 && dr1 >= sr1 {
+        let mut nums = Vec::new();
+        for r in sr0..=sr1 {
+            if let Ok(Some(slot)) = wb.get(sheet, r, sc0)
+                && let Value::Number(n) = slot.value
+            {
+                nums.push(n);
+            }
+        }
+        let ext = extend_fill_before(
+            &nums,
+            mode,
+            sr0.saturating_sub(dr0) as usize,
+            DateSystem::Excel1900,
+        );
+        for (i, r) in (dr0..sr0).rev().enumerate() {
+            for c in sc0..=sc1 {
+                match mode {
+                    FillMode::Copy => {
+                        let source_row = sr1 - (sr0 - r - 1) % (sr1 - sr0 + 1);
+                        if let Ok(Some(slot)) = wb.get(sheet, source_row, c) {
+                            copy_slot(wb, sheet, *slot, r, c, r as i32 - source_row as i32, 0)?;
+                            changed += 1;
+                        }
+                    }
+                    FillMode::Formats => {
+                        let source_row = sr1 - (sr0 - r - 1) % (sr1 - sr0 + 1);
+                        if let Ok(Some(slot)) = wb.get(sheet, source_row, c) {
+                            copy_slot_format(wb, sheet, *slot, r, c)?;
+                            changed += 1;
+                        }
+                    }
+                    _ if i < ext.len() => {
+                        wb.set_number(sheet, r, c, ext[i])?;
+                        changed += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
     } else if dc0 >= sc0 && dr0 == sr0 && dr1 == sr1 {
         let mut nums = Vec::new();
         for c in sc0..=sc1 {
@@ -1134,6 +1361,115 @@ pub fn fill_range(
                     }
                 }
             }
+        }
+    } else if dc0 < sc0 && dr0 == sr0 && dr1 == sr1 && dc1 >= sc1 {
+        let mut nums = Vec::new();
+        for c in sc0..=sc1 {
+            if let Ok(Some(slot)) = wb.get(sheet, sr0, c)
+                && let Value::Number(n) = slot.value
+            {
+                nums.push(n);
+            }
+        }
+        let ext = extend_fill_before(
+            &nums,
+            mode,
+            usize::from(sc0.saturating_sub(dc0)),
+            DateSystem::Excel1900,
+        );
+        for r in sr0..=sr1 {
+            for (i, c) in (dc0..sc0).rev().enumerate() {
+                match mode {
+                    FillMode::Copy => {
+                        let source_col = sc1 - (sc0 - c - 1) % (sc1 - sc0 + 1);
+                        if let Ok(Some(slot)) = wb.get(sheet, r, source_col) {
+                            copy_slot(
+                                wb,
+                                sheet,
+                                *slot,
+                                r,
+                                c,
+                                0,
+                                i32::from(c) - i32::from(source_col),
+                            )?;
+                            changed += 1;
+                        }
+                    }
+                    FillMode::Formats => {
+                        let source_col = sc1 - (sc0 - c - 1) % (sc1 - sc0 + 1);
+                        if let Ok(Some(slot)) = wb.get(sheet, r, source_col) {
+                            copy_slot_format(wb, sheet, *slot, r, c)?;
+                            changed += 1;
+                        }
+                    }
+                    _ if i < ext.len() => {
+                        wb.set_number(sheet, r, c, ext[i])?;
+                        changed += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(changed)
+}
+
+/// Fill a one-dimensional destination by cycling a user-provided custom list.
+pub fn fill_custom_list(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    src: RangeRef,
+    dest: RangeRef,
+    list: &[String],
+) -> Result<u32, CoreError> {
+    if list.is_empty() {
+        return Err(CoreError::new(
+            "edit.fill.list",
+            "custom fill list must not be empty",
+        ));
+    }
+    let (sr0, sc0, sr1, sc1) = norm(src);
+    let (dr0, dc0, dr1, dc1) = norm(dest);
+    let seed = clip_one(wb, sheet, sr0, sc0).input;
+    let start = list
+        .iter()
+        .position(|item| item.eq_ignore_ascii_case(&seed))
+        .ok_or_else(|| {
+            CoreError::new(
+                "edit.fill.list",
+                format!("source value {seed:?} is not in the custom list"),
+            )
+        })? as i64;
+    let list_len = i64::try_from(list.len())
+        .map_err(|_| CoreError::new("edit.fill.list", "custom list is too long"))?;
+    let vertical = sc0 == sc1 && dc0 == sc0 && dc1 == sc1;
+    let horizontal = sr0 == sr1 && dr0 == sr0 && dr1 == sr1;
+    if !vertical && !horizontal {
+        return Err(CoreError::new(
+            "edit.fill.list",
+            "custom-list fill must be one-dimensional",
+        ));
+    }
+    let mut changed = 0u32;
+    if vertical {
+        for row in dr0..=dr1 {
+            if row >= sr0 && row <= sr1 {
+                continue;
+            }
+            let offset = i64::from(row) - i64::from(sr0);
+            let index = (start + offset).rem_euclid(list_len) as usize;
+            wb.set_text(sheet, row, sc0, &list[index])?;
+            changed += 1;
+        }
+    } else {
+        for col in dc0..=dc1 {
+            if col >= sc0 && col <= sc1 {
+                continue;
+            }
+            let offset = i64::from(col) - i64::from(sc0);
+            let index = (start + offset).rem_euclid(list_len) as usize;
+            wb.set_text(sheet, sr0, col, &list[index])?;
+            changed += 1;
         }
     }
     Ok(changed)
@@ -1219,6 +1555,9 @@ pub struct ClipCell {
     pub input: String,
     /// Stored value, including the cached result of a formula.
     pub value: ClipValue,
+    /// Portable rich-text runs for text values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_text: Vec<RichTextRun>,
     /// Complete cell style for ordinary and formats-only paste.
     pub style: Style,
     /// Packed protection/recalc flags.
@@ -1227,6 +1566,24 @@ pub struct ClipCell {
     pub number_format: Option<String>,
     /// Source column width in pixels.
     pub column_width_px: u32,
+}
+
+/// Non-cell records carried by the internal clipboard MIME payload.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipExtras {
+    /// Source height.
+    pub rows: u32,
+    /// Source width.
+    pub cols: u16,
+    /// Legacy notes at relative coordinates.
+    pub notes: Vec<(u32, u16, Note)>,
+    /// Threaded comments at relative coordinates.
+    pub comments: Vec<(u32, u16, Comment)>,
+    /// Hyperlinks at relative coordinates.
+    pub hyperlinks: Vec<(u32, u16, Hyperlink)>,
+    /// Merged rectangles `(r0, c0, r1, c1)` relative to the copied range.
+    pub merges: Vec<(u32, u16, u32, u16)>,
 }
 
 /// Copy `range` into a grid of clip cells.
@@ -1243,6 +1600,136 @@ pub fn copy_range(wb: &Workbook, sheet: SheetId, range: RangeRef) -> Vec<Vec<Cli
     rows
 }
 
+/// Copy notes, threaded comments, hyperlinks, and contained merges for a range.
+pub fn copy_extras(wb: &Workbook, sheet: SheetId, range: RangeRef) -> ClipExtras {
+    let (r0, c0, r1, c1) = norm(range);
+    let Some(sheet) = wb.sheet(sheet) else {
+        return ClipExtras::default();
+    };
+    let mut notes: Vec<_> = sheet
+        .notes
+        .iter()
+        .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+        .map(|(&(row, col), value)| (row - r0, col - c0, value.clone()))
+        .collect();
+    let mut comments: Vec<_> = sheet
+        .comments
+        .iter()
+        .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+        .map(|(&(row, col), value)| (row - r0, col - c0, value.clone()))
+        .collect();
+    let mut hyperlinks: Vec<_> = sheet
+        .hyperlinks
+        .iter()
+        .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+        .map(|(&(row, col), value)| (row - r0, col - c0, value.clone()))
+        .collect();
+    notes.sort_by_key(|(row, col, _)| (*row, *col));
+    comments.sort_by_key(|(row, col, _)| (*row, *col));
+    hyperlinks.sort_by_key(|(row, col, _)| (*row, *col));
+    let mut merges: Vec<_> = sheet
+        .merges
+        .iter()
+        .filter_map(|merge| {
+            let (mr0, mc0, mr1, mc1) = norm(*merge);
+            (mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1).then_some((
+                mr0 - r0,
+                mc0 - c0,
+                mr1 - r0,
+                mc1 - c0,
+            ))
+        })
+        .collect();
+    merges.sort_unstable();
+    ClipExtras {
+        rows: r1 - r0 + 1,
+        cols: c1 - c0 + 1,
+        notes,
+        comments,
+        hyperlinks,
+        merges,
+    }
+}
+
+/// Paste non-cell clipboard records at `dest`.
+pub fn paste_extras(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    dest: CellRef,
+    extras: &ClipExtras,
+    transpose: bool,
+) -> Result<(), CoreError> {
+    if extras.rows == 0 || extras.cols == 0 {
+        return Ok(());
+    }
+    let (height, width) = if transpose {
+        (u32::from(extras.cols), extras.rows)
+    } else {
+        (extras.rows, u32::from(extras.cols))
+    };
+    if height > MAX_ROWS - dest.row || width > u32::from(MAX_COLS - dest.col) {
+        return Err(CoreError::addr_ref(
+            "clipboard metadata exceeds the worksheet grid",
+        ));
+    }
+    let target_r1 = dest.row + height - 1;
+    let target_c1 = dest.col
+        + u16::try_from(width - 1)
+            .map_err(|_| CoreError::addr_ref("clipboard metadata is too wide"))?;
+    wb.mutate_sheet_edit(sheet, |target| {
+        target.notes.retain(|&(row, col), _| {
+            row < dest.row || row > target_r1 || col < dest.col || col > target_c1
+        });
+        target.comments.retain(|&(row, col), _| {
+            row < dest.row || row > target_r1 || col < dest.col || col > target_c1
+        });
+        target.hyperlinks.retain(|&(row, col), _| {
+            row < dest.row || row > target_r1 || col < dest.col || col > target_c1
+        });
+        let map_coord = |row: u32, col: u16| {
+            if transpose {
+                (dest.row + u32::from(col), dest.col + row as u16)
+            } else {
+                (dest.row + row, dest.col + col)
+            }
+        };
+        for (row, col, note) in &extras.notes {
+            target.notes.insert(map_coord(*row, *col), note.clone());
+        }
+        for (row, col, comment) in &extras.comments {
+            target
+                .comments
+                .insert(map_coord(*row, *col), comment.clone());
+        }
+        for (row, col, link) in &extras.hyperlinks {
+            target
+                .hyperlinks
+                .insert(map_coord(*row, *col), link.clone());
+        }
+        let target_range = RangeRef::from_corners(dest, CellRef::new(target_r1, target_c1)?);
+        target
+            .merges
+            .retain(|merge| !overlaps(*merge, target_range));
+        for &(mr0, mc0, mr1, mc1) in &extras.merges {
+            let (start_row, start_col) = map_coord(mr0, mc0);
+            let (end_row, end_col) = map_coord(mr1, mc1);
+            let merge = if transpose {
+                RangeRef::from_corners(
+                    CellRef::new(start_row.min(end_row), start_col.min(end_col))?,
+                    CellRef::new(start_row.max(end_row), start_col.max(end_col))?,
+                )
+            } else {
+                RangeRef::from_corners(
+                    CellRef::new(start_row, start_col)?,
+                    CellRef::new(end_row, end_col)?,
+                )
+            };
+            target.add_merge(merge)?;
+        }
+        Ok(())
+    })
+}
+
 fn clip_one(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> ClipCell {
     let column_width_px = wb
         .sheet(sheet)
@@ -1252,6 +1739,7 @@ fn clip_one(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> ClipCell {
         return ClipCell {
             input: String::new(),
             value: ClipValue::Empty,
+            rich_text: Vec::new(),
             style: Style::default(),
             flags: CellFlags::DEFAULT,
             number_format: None,
@@ -1279,6 +1767,15 @@ fn clip_one(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> ClipCell {
         }
         Value::Error(value) => ClipValue::Error(value),
     };
+    let rich_text = match slot.value {
+        Value::Text(id) => wb
+            .intern()
+            .strings
+            .get_rich(id)
+            .map(|runs| runs.to_vec())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let style = wb
         .intern()
         .styles
@@ -1289,6 +1786,7 @@ fn clip_one(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> ClipCell {
     ClipCell {
         input,
         value,
+        rich_text,
         style,
         flags: slot.flags,
         number_format,
@@ -1304,6 +1802,19 @@ pub fn paste_special(
     grid: &[Vec<ClipCell>],
     spec: PasteSpecial,
     src_origin: Option<(u32, u16)>,
+) -> Result<u32, CoreError> {
+    paste_special_from(wb, sheet, dest, grid, spec, src_origin, Some(sheet))
+}
+
+/// Paste with an explicit source sheet for cross-sheet paste-link formulas.
+pub fn paste_special_from(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    dest: CellRef,
+    grid: &[Vec<ClipCell>],
+    spec: PasteSpecial,
+    src_origin: Option<(u32, u16)>,
+    src_sheet: Option<SheetId>,
 ) -> Result<u32, CoreError> {
     validate_paste_bounds(dest, grid, spec.transpose)?;
     let ordinary = !spec.values
@@ -1331,7 +1842,12 @@ pub fn paste_special(
                     let source_row = sr + source_row as u32;
                     let source_col = sc + source_col as u16;
                     let letters = col_to_letters(source_col)?;
-                    let input = format!("=${letters}${}", source_row + 1);
+                    let qualifier = src_sheet
+                        .filter(|source| *source != sheet)
+                        .and_then(|source| wb.sheet(source))
+                        .map(|source| format!("{}!", quote_sheet_name(&source.name)))
+                        .unwrap_or_default();
+                    let input = format!("={qualifier}${letters}${}", source_row + 1);
                     wb.set_cell_contents(sheet, row, col, &input)?;
                     changed += 1;
                 }
@@ -1361,7 +1877,7 @@ pub fn paste_special(
 
             if ordinary || spec.formulas || spec.values {
                 if spec.values && !spec.formulas && cell.input.starts_with('=') {
-                    set_clip_value(wb, sheet, row, col, &cell.value)?;
+                    set_clip_cell_value(wb, sheet, row, col, cell)?;
                 } else if (ordinary || spec.formulas) && cell.input.starts_with('=') {
                     let (source_row, source_col) = src_origin
                         .map(|(sr, sc)| (sr + source_row as u32, sc + source_col as u16))
@@ -1372,7 +1888,7 @@ pub fn paste_special(
                         .unwrap_or_else(|_| cell.input.clone());
                     wb.set_cell_contents(sheet, row, col, &input)?;
                 } else {
-                    set_clip_value(wb, sheet, row, col, &cell.value)?;
+                    set_clip_cell_value(wb, sheet, row, col, cell)?;
                 }
                 changed += 1;
             }
@@ -1450,6 +1966,22 @@ fn set_clip_value(
     Ok(())
 }
 
+fn set_clip_cell_value(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+    cell: &ClipCell,
+) -> Result<(), CoreError> {
+    if let ClipValue::Text(text) = &cell.value
+        && !cell.rich_text.is_empty()
+    {
+        wb.set_rich_text(sheet, row, col, text, cell.rich_text.clone())?;
+        return Ok(());
+    }
+    set_clip_value(wb, sheet, row, col, &cell.value)
+}
+
 fn apply_clip_style(
     wb: &mut Workbook,
     sheet: SheetId,
@@ -1524,6 +2056,183 @@ pub fn move_range_cells(
     Ok(changed)
 }
 
+/// Move a range between sheets with cut semantics and workbook-wide retargeting.
+pub fn move_range_cells_between(
+    wb: &mut Workbook,
+    source_sheet: SheetId,
+    src: RangeRef,
+    dest_sheet: SheetId,
+    dest: CellRef,
+) -> Result<u32, CoreError> {
+    if source_sheet == dest_sheet {
+        return move_range_cells(wb, source_sheet, src, dest);
+    }
+    let (r0, c0, r1, c1) = norm(src);
+    let height = r1 - r0 + 1;
+    let width = c1 - c0 + 1;
+    if height > MAX_ROWS - dest.row || u32::from(width) > u32::from(MAX_COLS - dest.col) {
+        return Err(CoreError::addr_ref("move exceeds the worksheet grid"));
+    }
+    validate_cross_sheet_merges(wb, source_sheet, src, dest_sheet, dest, height, width)?;
+    let grid: Vec<Vec<Option<CellSlot>>> = (r0..=r1)
+        .map(|row| {
+            (c0..=c1)
+                .map(|col| wb.get(source_sheet, row, col).map(|slot| slot.copied()))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for (dr, cells) in grid.iter().enumerate() {
+        for (dc, slot) in cells.iter().enumerate() {
+            replace_cell_slot(
+                wb,
+                dest_sheet,
+                dest.row + dr as u32,
+                dest.col + dc as u16,
+                *slot,
+            )?;
+        }
+    }
+    for row in r0..=r1 {
+        for col in c0..=c1 {
+            wb.clear_cell(source_sheet, row, col)?;
+        }
+    }
+    move_side_tables_between(wb, source_sheet, src, dest_sheet, dest, height, width)?;
+    rewrite_formulas_move_between(wb, source_sheet, src, dest_sheet, dest, height, width)?;
+    Ok(u32::from(width).saturating_mul(height))
+}
+
+fn validate_cross_sheet_merges(
+    wb: &Workbook,
+    source_sheet: SheetId,
+    src: RangeRef,
+    dest_sheet: SheetId,
+    dest: CellRef,
+    height: u32,
+    width: u16,
+) -> Result<(), CoreError> {
+    let source = wb
+        .sheet(source_sheet)
+        .ok_or_else(|| CoreError::sheet_id("unknown source sheet"))?;
+    let (r0, c0, r1, c1) = norm(src);
+    for merge in &source.merges {
+        let (mr0, mc0, mr1, mc1) = norm(*merge);
+        let fully_inside = mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1;
+        if overlaps(*merge, src) && !fully_inside {
+            return Err(CoreError::new(
+                "edit.move.merge",
+                "move range partially overlaps a merged area",
+            ));
+        }
+    }
+    let target = RangeRef::from_corners(
+        dest,
+        CellRef::new(dest.row + height - 1, dest.col + width - 1)?,
+    );
+    let destination = wb
+        .sheet(dest_sheet)
+        .ok_or_else(|| CoreError::sheet_id("unknown destination sheet"))?;
+    if destination
+        .merges
+        .iter()
+        .any(|merge| overlaps(*merge, target))
+    {
+        return Err(CoreError::new(
+            "edit.move.merge",
+            "move destination overlaps a merged area",
+        ));
+    }
+    Ok(())
+}
+
+fn move_side_tables_between(
+    wb: &mut Workbook,
+    source_sheet: SheetId,
+    src: RangeRef,
+    dest_sheet: SheetId,
+    dest: CellRef,
+    height: u32,
+    width: u16,
+) -> Result<(), CoreError> {
+    let (r0, c0, r1, c1) = norm(src);
+    let drow = i64::from(dest.row) - i64::from(r0);
+    let dcol = i64::from(dest.col) - i64::from(c0);
+    let target = |row: u32, col: u16| {
+        (
+            (i64::from(row) + drow) as u32,
+            (i64::from(col) + dcol) as u16,
+        )
+    };
+    let source = wb
+        .sheet(source_sheet)
+        .ok_or_else(|| CoreError::sheet_id("unknown source sheet"))?;
+    let notes: Vec<_> = source
+        .notes
+        .iter()
+        .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+        .map(|(&(row, col), value)| (target(row, col), value.clone()))
+        .collect();
+    let comments: Vec<_> = source
+        .comments
+        .iter()
+        .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+        .map(|(&(row, col), value)| (target(row, col), value.clone()))
+        .collect();
+    let hyperlinks: Vec<_> = source
+        .hyperlinks
+        .iter()
+        .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+        .map(|(&(row, col), value)| (target(row, col), value.clone()))
+        .collect();
+    let merges: Vec<_> = source
+        .merges
+        .iter()
+        .filter(|merge| {
+            let (mr0, mc0, mr1, mc1) = norm(**merge);
+            mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1
+        })
+        .map(|merge| {
+            let (start_row, start_col) = target(merge.start.row, merge.start.col);
+            let (end_row, end_col) = target(merge.end.row, merge.end.col);
+            RangeRef::from_corners(
+                CellRef::new(start_row, start_col).unwrap_or(dest),
+                CellRef::new(end_row, end_col).unwrap_or(dest),
+            )
+        })
+        .collect();
+    wb.mutate_sheet_edit(source_sheet, |sheet| {
+        sheet
+            .notes
+            .retain(|&(row, col), _| row < r0 || row > r1 || col < c0 || col > c1);
+        sheet
+            .comments
+            .retain(|&(row, col), _| row < r0 || row > r1 || col < c0 || col > c1);
+        sheet
+            .hyperlinks
+            .retain(|&(row, col), _| row < r0 || row > r1 || col < c0 || col > c1);
+        sheet.merges.retain(|merge| !overlaps(*merge, src));
+        Ok(())
+    })?;
+    let target_r1 = dest.row + height - 1;
+    let target_c1 = dest.col + width - 1;
+    wb.mutate_sheet_edit(dest_sheet, |sheet| {
+        sheet.notes.retain(|&(row, col), _| {
+            row < dest.row || row > target_r1 || col < dest.col || col > target_c1
+        });
+        sheet.comments.retain(|&(row, col), _| {
+            row < dest.row || row > target_r1 || col < dest.col || col > target_c1
+        });
+        sheet.hyperlinks.retain(|&(row, col), _| {
+            row < dest.row || row > target_r1 || col < dest.col || col > target_c1
+        });
+        sheet.notes.extend(notes);
+        sheet.comments.extend(comments);
+        sheet.hyperlinks.extend(hyperlinks);
+        sheet.merges.extend(merges);
+        Ok(())
+    })
+}
+
 fn move_side_tables(
     wb: &mut Workbook,
     sheet: SheetId,
@@ -1539,33 +2248,34 @@ fn move_side_tables(
             (i64::from(col) + dcol) as u16,
         )
     };
-    let sheet_ref = wb.sheet_mut(sheet)?;
-    for merge in &sheet_ref.merges {
-        let (mr0, mc0, mr1, mc1) = norm(*merge);
-        let fully_inside = mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1;
-        let overlaps_source = mr0 <= r1 && r0 <= mr1 && mc0 <= c1 && c0 <= mc1;
-        if overlaps_source && !fully_inside {
-            return Err(CoreError::new(
-                "edit.move.merge",
-                "move range partially overlaps a merged area",
-            ));
+    wb.mutate_sheet_edit(sheet, |sheet_ref| {
+        for merge in &sheet_ref.merges {
+            let (mr0, mc0, mr1, mc1) = norm(*merge);
+            let fully_inside = mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1;
+            let overlaps_source = mr0 <= r1 && r0 <= mr1 && mc0 <= c1 && c0 <= mc1;
+            if overlaps_source && !fully_inside {
+                return Err(CoreError::new(
+                    "edit.move.merge",
+                    "move range partially overlaps a merged area",
+                ));
+            }
         }
-    }
-    move_map_entries(&mut sheet_ref.notes, r0, c0, r1, c1, target);
-    move_map_entries(&mut sheet_ref.comments, r0, c0, r1, c1, target);
-    move_map_entries(&mut sheet_ref.hyperlinks, r0, c0, r1, c1, target);
-    for merge in &mut sheet_ref.merges {
-        let (mr0, mc0, mr1, mc1) = norm(*merge);
-        if mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1 {
-            let (start_row, start_col) = target(merge.start.row, merge.start.col);
-            let (end_row, end_col) = target(merge.end.row, merge.end.col);
-            *merge = RangeRef::from_corners(
-                CellRef::new(start_row, start_col)?,
-                CellRef::new(end_row, end_col)?,
-            );
+        move_map_entries(&mut sheet_ref.notes, r0, c0, r1, c1, target);
+        move_map_entries(&mut sheet_ref.comments, r0, c0, r1, c1, target);
+        move_map_entries(&mut sheet_ref.hyperlinks, r0, c0, r1, c1, target);
+        for merge in &mut sheet_ref.merges {
+            let (mr0, mc0, mr1, mc1) = norm(*merge);
+            if mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1 {
+                let (start_row, start_col) = target(merge.start.row, merge.start.col);
+                let (end_row, end_col) = target(merge.end.row, merge.end.col);
+                *merge = RangeRef::from_corners(
+                    CellRef::new(start_row, start_col)?,
+                    CellRef::new(end_row, end_col)?,
+                );
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 fn move_map_entries<T: Clone>(
@@ -1636,6 +2346,178 @@ fn rewrite_formulas_move(
     Ok(())
 }
 
+fn rewrite_formulas_move_between(
+    wb: &mut Workbook,
+    source_sheet: SheetId,
+    src: RangeRef,
+    dest_sheet: SheetId,
+    dest: CellRef,
+    height: u32,
+    width: u16,
+) -> Result<(), CoreError> {
+    let source_name = wb
+        .sheet(source_sheet)
+        .map(|sheet| sheet.name.clone())
+        .ok_or_else(|| CoreError::sheet_id("unknown source sheet"))?;
+    let dest_name = wb
+        .sheet(dest_sheet)
+        .map(|sheet| sheet.name.clone())
+        .ok_or_else(|| CoreError::sheet_id("unknown destination sheet"))?;
+    let sheet_ids: Vec<_> = wb.sheets().map(|sheet| sheet.id).collect();
+    let mut updates = Vec::new();
+    for id in sheet_ids {
+        let current_home = wb
+            .sheet(id)
+            .map(|sheet| sheet.name.clone())
+            .unwrap_or_default();
+        let cells: Vec<_> = wb
+            .sheet(id)
+            .map(|sheet| sheet.store.iter().collect())
+            .unwrap_or_default();
+        for (row, col, slot) in cells {
+            let Some(formula_id) = slot.formula else {
+                continue;
+            };
+            let Some(source) = wb.intern().formulas.get(formula_id).map(str::to_string) else {
+                continue;
+            };
+            let Ok(parsed) = parse(&source) else {
+                continue;
+            };
+            let moved_formula = id == dest_sheet
+                && row >= dest.row
+                && row < dest.row + height
+                && col >= dest.col
+                && col < dest.col + width;
+            let logical_home = if moved_formula {
+                source_name.as_str()
+            } else {
+                current_home.as_str()
+            };
+            let ast = map_sheet_move_between(
+                &parsed.ast,
+                &current_home,
+                logical_home,
+                &source_name,
+                &dest_name,
+                src,
+                dest,
+            );
+            let printed = print(&Formula {
+                ast,
+                style: parsed.style,
+                base_row: parsed.base_row,
+                base_col: parsed.base_col,
+            });
+            if printed != source {
+                updates.push((id, row, col, printed));
+            }
+        }
+    }
+    for (id, row, col, source) in updates {
+        wb.set_cell_contents(id, row, col, &source)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_sheet_move_between(
+    expr: &Expr,
+    current_home: &str,
+    logical_home: &str,
+    source_name: &str,
+    dest_name: &str,
+    src: RangeRef,
+    dest: CellRef,
+) -> Expr {
+    expr.clone().map(&mut |item| {
+        let kind = match item.kind {
+            ExprKind::Cell { sheet, cell } => {
+                let resolved = sheet
+                    .as_ref()
+                    .map(|spec| spec.start.as_str())
+                    .unwrap_or(logical_home);
+                if resolved.eq_ignore_ascii_case(source_name) {
+                    let moved = move_range(
+                        &Expr {
+                            kind: ExprKind::Cell { sheet: None, cell },
+                            span: item.span,
+                        },
+                        src,
+                        dest,
+                    );
+                    match moved.kind {
+                        ExprKind::Cell {
+                            cell: moved_cell, ..
+                        } if moved_cell != cell => ExprKind::Cell {
+                            sheet: qualifier_for(current_home, dest_name),
+                            cell: moved_cell,
+                        },
+                        _ if sheet.is_none()
+                            && !logical_home.eq_ignore_ascii_case(current_home) =>
+                        {
+                            ExprKind::Cell {
+                                sheet: qualifier_for(current_home, source_name),
+                                cell,
+                            }
+                        }
+                        _ => ExprKind::Cell { sheet, cell },
+                    }
+                } else {
+                    ExprKind::Cell { sheet, cell }
+                }
+            }
+            ExprKind::Range { sheet, range } => {
+                let resolved = sheet
+                    .as_ref()
+                    .map(|spec| spec.start.as_str())
+                    .unwrap_or(logical_home);
+                if resolved.eq_ignore_ascii_case(source_name) {
+                    let moved = move_range(
+                        &Expr {
+                            kind: ExprKind::Range { sheet: None, range },
+                            span: item.span,
+                        },
+                        src,
+                        dest,
+                    );
+                    match moved.kind {
+                        ExprKind::Range {
+                            range: moved_range, ..
+                        } if moved_range != range => ExprKind::Range {
+                            sheet: qualifier_for(current_home, dest_name),
+                            range: moved_range,
+                        },
+                        _ if sheet.is_none()
+                            && !logical_home.eq_ignore_ascii_case(current_home) =>
+                        {
+                            ExprKind::Range {
+                                sheet: qualifier_for(current_home, source_name),
+                                range,
+                            }
+                        }
+                        _ => ExprKind::Range { sheet, range },
+                    }
+                } else {
+                    ExprKind::Range { sheet, range }
+                }
+            }
+            other => other,
+        };
+        Expr {
+            kind,
+            span: item.span,
+        }
+    })
+}
+
+fn qualifier_for(home: &str, target: &str) -> Option<SheetSpec> {
+    (!home.eq_ignore_ascii_case(target)).then(|| SheetSpec {
+        start: target.to_string(),
+        end: None,
+    })
+}
+
 fn map_sheet_move(expr: &Expr, home: &str, target: &str, src: RangeRef, dest: CellRef) -> Expr {
     let applies = |sheet: &Option<SheetSpec>| match sheet {
         None => home.eq_ignore_ascii_case(target),
@@ -1682,39 +2564,175 @@ fn map_sheet_move(expr: &Expr, home: &str, target: &str, src: RangeRef, dest: Ce
     })
 }
 
-/// Split the first row of `range` by `delim` into adjacent columns.
+/// Text-to-columns split mode.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TextToColumnsMode {
+    /// Split on any listed delimiter.
+    Delimited {
+        /// Delimiter characters.
+        delimiters: Vec<char>,
+    },
+    /// Split at Unicode character offsets.
+    Fixed {
+        /// Strictly increasing offsets from the start of the source text.
+        breaks: Vec<usize>,
+    },
+}
+
+/// Conversion rule for one output field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextColumnType {
+    /// Conservatively recognize numbers and booleans, else keep exact text.
+    #[default]
+    General,
+    /// Preserve exact text, including leading zeroes and whitespace.
+    Text,
+    /// Do not write this field.
+    Skip,
+}
+
+/// Complete text-to-columns plan.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextToColumnsPlan {
+    /// Split mode.
+    pub mode: TextToColumnsMode,
+    /// Per-field conversion rules; missing entries use [`TextColumnType::General`].
+    #[serde(default)]
+    pub columns: Vec<TextColumnType>,
+}
+
+/// Split `range` into adjacent columns using a typed plan.
+pub fn text_to_columns_with_plan(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    range: RangeRef,
+    plan: &TextToColumnsPlan,
+) -> Result<u32, CoreError> {
+    validate_text_plan(plan)?;
+    let (r0, c0, r1, _) = norm(range);
+    let mut changed = 0u32;
+    for row in r0..=r1 {
+        let text = cell_plain_text(wb, sheet, row, c0);
+        let parts = split_text(&text, &plan.mode);
+        if parts.len() > usize::from(MAX_COLS - c0) {
+            return Err(CoreError::addr_ref(
+                "text-to-columns output exceeds the worksheet grid",
+            ));
+        }
+        for (index, part) in parts.into_iter().enumerate() {
+            let offset = u16::try_from(index)
+                .map_err(|_| CoreError::addr_ref("text-to-columns output is too wide"))?;
+            let col = c0 + offset;
+            let kind = plan.columns.get(index).copied().unwrap_or_default();
+            match kind {
+                TextColumnType::Skip => continue,
+                TextColumnType::Text => {
+                    wb.set_text(sheet, row, col, &part)?;
+                }
+                TextColumnType::General => set_general_text(wb, sheet, row, col, &part)?,
+            }
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
+fn validate_text_plan(plan: &TextToColumnsPlan) -> Result<(), CoreError> {
+    match &plan.mode {
+        TextToColumnsMode::Delimited { delimiters } if delimiters.is_empty() => Err(
+            CoreError::new("edit.texttocolumns", "at least one delimiter is required"),
+        ),
+        TextToColumnsMode::Fixed { breaks }
+            if breaks.first() == Some(&0) || breaks.windows(2).any(|pair| pair[0] >= pair[1]) =>
+        {
+            Err(CoreError::new(
+                "edit.texttocolumns",
+                "fixed-width breaks must be positive and strictly increasing",
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn cell_plain_text(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> String {
+    match wb
+        .get(sheet, row, col)
+        .ok()
+        .flatten()
+        .map(|slot| slot.value)
+    {
+        Some(Value::Text(id)) => wb.intern().strings.get(id).unwrap_or_default().to_string(),
+        Some(Value::Number(number)) => number.to_string(),
+        Some(Value::Bool(value)) => if value { "TRUE" } else { "FALSE" }.into(),
+        Some(Value::Error(error)) => error.as_str().to_string(),
+        _ => String::new(),
+    }
+}
+
+fn split_text(text: &str, mode: &TextToColumnsMode) -> Vec<String> {
+    match mode {
+        TextToColumnsMode::Delimited { delimiters } => text
+            .split(|character| delimiters.contains(&character))
+            .map(str::to_string)
+            .collect(),
+        TextToColumnsMode::Fixed { breaks } => {
+            let chars: Vec<char> = text.chars().collect();
+            let mut start = 0usize;
+            let mut parts = Vec::new();
+            for &end in breaks {
+                let end = end.min(chars.len());
+                parts.push(chars[start.min(end)..end].iter().collect());
+                start = end;
+            }
+            parts.push(chars[start..].iter().collect());
+            parts
+        }
+    }
+}
+
+fn set_general_text(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+    text: &str,
+) -> Result<(), CoreError> {
+    let trimmed = text.trim();
+    if let Ok(number) = trimmed.parse::<f64>()
+        && number.is_finite()
+    {
+        wb.set_number(sheet, row, col, number)?;
+    } else if trimmed.eq_ignore_ascii_case("true") {
+        wb.set_cell_contents(sheet, row, col, "TRUE")?;
+    } else if trimmed.eq_ignore_ascii_case("false") {
+        wb.set_cell_contents(sheet, row, col, "FALSE")?;
+    } else {
+        wb.set_text(sheet, row, col, text)?;
+    }
+    Ok(())
+}
+
+/// Split `range` by one delimiter using general conversion.
 pub fn text_to_columns(
     wb: &mut Workbook,
     sheet: SheetId,
     range: RangeRef,
     delim: char,
 ) -> Result<u32, CoreError> {
-    let (r0, c0, r1, _) = norm(range);
-    let mut changed = 0u32;
-    for r in r0..=r1 {
-        let text = match wb.get(sheet, r, c0).ok().flatten() {
-            Some(slot) => match slot.value {
-                Value::Text(id) => wb.intern().strings.get(id).unwrap_or("").to_string(),
-                Value::Number(n) => n.to_string(),
-                _ => String::new(),
+    text_to_columns_with_plan(
+        wb,
+        sheet,
+        range,
+        &TextToColumnsPlan {
+            mode: TextToColumnsMode::Delimited {
+                delimiters: vec![delim],
             },
-            None => String::new(),
-        };
-        let parts: Vec<&str> = text.split(delim).collect();
-        if parts.len() > usize::from(MAX_COLS - c0) {
-            return Err(CoreError::addr_ref(
-                "text-to-columns output exceeds the worksheet grid",
-            ));
-        }
-        for (i, part) in parts.into_iter().enumerate() {
-            let offset = u16::try_from(i)
-                .map_err(|_| CoreError::addr_ref("text-to-columns output is too wide"))?;
-            let col = c0 + offset;
-            wb.set_text(sheet, r, col, part)?;
-            changed += 1;
-        }
-    }
-    Ok(changed)
+            columns: Vec::new(),
+        },
+    )
 }
 
 /// Remove duplicate rows in `range` comparing the listed relative columns.
@@ -1724,7 +2742,30 @@ pub fn remove_duplicates(
     range: RangeRef,
     columns: &[u16],
 ) -> Result<u32, CoreError> {
+    remove_duplicates_with_header(wb, sheet, range, columns, false)
+}
+
+/// Remove duplicate rows, optionally preserving the first row as a header.
+pub fn remove_duplicates_with_header(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    range: RangeRef,
+    columns: &[u16],
+    has_headers: bool,
+) -> Result<u32, CoreError> {
     let (r0, c0, r1, c1) = norm(range);
+    if wb
+        .sheet(sheet)
+        .ok_or_else(|| CoreError::sheet_id("unknown sheet"))?
+        .merges
+        .iter()
+        .any(|merge| overlaps(*merge, range))
+    {
+        return Err(CoreError::new(
+            "edit.removeduplicates.merge",
+            "remove duplicates does not accept merged cells in the selected range",
+        ));
+    }
     let cols: Vec<u16> = if columns.is_empty() {
         (c0..=c1).collect()
     } else {
@@ -1746,6 +2787,13 @@ pub fn remove_duplicates(
     let mut seen = std::collections::BTreeSet::new();
     let mut kept = Vec::new();
     for r in r0..=r1 {
+        if has_headers && r == r0 {
+            let row = (c0..=c1)
+                .map(|col| wb.get(sheet, r, col).map(|slot| slot.copied()))
+                .collect::<Result<Vec<_>, _>>()?;
+            kept.push((r, row));
+            continue;
+        }
         let key: Vec<String> = cols
             .iter()
             .map(|&c| clip_one(wb, sheet, r, c).input)
@@ -1754,12 +2802,17 @@ pub fn remove_duplicates(
             let row = (c0..=c1)
                 .map(|col| wb.get(sheet, r, col).map(|slot| slot.copied()))
                 .collect::<Result<Vec<_>, _>>()?;
-            kept.push(row);
+            kept.push((r, row));
         }
     }
     let total = usize::try_from(r1 - r0 + 1).unwrap_or(usize::MAX);
     let removed = u32::try_from(total.saturating_sub(kept.len())).unwrap_or(u32::MAX);
-    for (offset, row) in kept.iter().enumerate() {
+    let row_map: std::collections::BTreeMap<u32, u32> = kept
+        .iter()
+        .enumerate()
+        .map(|(offset, (source_row, _))| (*source_row, r0 + offset as u32))
+        .collect();
+    for (offset, (_, row)) in kept.iter().enumerate() {
         let target_row = r0 + offset as u32;
         for (column, slot) in (c0..=c1).zip(row) {
             replace_cell_slot(wb, sheet, target_row, column, *slot)?;
@@ -1771,6 +2824,51 @@ pub fn remove_duplicates(
             wb.clear_cell(sheet, row, col)?;
         }
     }
+    wb.mutate_sheet_edit(sheet, |sheet| {
+        let notes: Vec<_> = sheet
+            .notes
+            .iter()
+            .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+            .map(|(coord, value)| (*coord, value.clone()))
+            .collect();
+        let comments: Vec<_> = sheet
+            .comments
+            .iter()
+            .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+            .map(|(coord, value)| (*coord, value.clone()))
+            .collect();
+        let hyperlinks: Vec<_> = sheet
+            .hyperlinks
+            .iter()
+            .filter(|((row, col), _)| *row >= r0 && *row <= r1 && *col >= c0 && *col <= c1)
+            .map(|(coord, value)| (*coord, value.clone()))
+            .collect();
+        sheet
+            .notes
+            .retain(|(row, col), _| !(*row >= r0 && *row <= r1 && *col >= c0 && *col <= c1));
+        sheet
+            .comments
+            .retain(|(row, col), _| !(*row >= r0 && *row <= r1 && *col >= c0 && *col <= c1));
+        sheet
+            .hyperlinks
+            .retain(|(row, col), _| !(*row >= r0 && *row <= r1 && *col >= c0 && *col <= c1));
+        for ((row, col), value) in notes {
+            if let Some(target_row) = row_map.get(&row) {
+                sheet.notes.insert((*target_row, col), value);
+            }
+        }
+        for ((row, col), value) in comments {
+            if let Some(target_row) = row_map.get(&row) {
+                sheet.comments.insert((*target_row, col), value);
+            }
+        }
+        for ((row, col), value) in hyperlinks {
+            if let Some(target_row) = row_map.get(&row) {
+                sheet.hyperlinks.insert((*target_row, col), value);
+            }
+        }
+        Ok(())
+    })?;
     Ok(removed)
 }
 
@@ -1798,6 +2896,11 @@ pub fn consolidate_by_position(
             }
         }
     }
+    if h > MAX_ROWS - dest.row || u32::from(w) > u32::from(MAX_COLS - dest.col) {
+        return Err(CoreError::addr_ref(
+            "consolidated output exceeds the worksheet grid",
+        ));
+    }
     let mut changed = 0u32;
     for r in 0..h {
         for c in 0..w {
@@ -1819,6 +2922,97 @@ pub fn formula_src(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> String 
     slot.formula
         .and_then(|fid| wb.intern().formulas.get(fid).map(str::to_string))
         .unwrap_or_default()
+}
+
+/// Auto-fit selected columns using a frontend-supplied text measurement callback.
+pub fn autofit_columns(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    range: RangeRef,
+    mut measure: impl FnMut(&str, &Style) -> u32,
+) -> Result<u32, CoreError> {
+    let (r0, c0, r1, c1) = norm(range);
+    let cells: Vec<_> = wb
+        .sheet(sheet)
+        .ok_or_else(|| CoreError::sheet_id("unknown sheet"))?
+        .store
+        .iter_region(r0, c0, r1, c1)
+        .collect();
+    let mut widths = std::collections::BTreeMap::new();
+    for (_, col, slot) in cells {
+        let text = display_text(wb, slot);
+        let style = wb
+            .intern()
+            .styles
+            .get(slot.style)
+            .cloned()
+            .unwrap_or_default();
+        let width = measure(&text, &style);
+        widths
+            .entry(col)
+            .and_modify(|current: &mut u32| *current = (*current).max(width))
+            .or_insert(width);
+    }
+    let mut changed = 0u32;
+    for col in c0..=c1 {
+        let width = widths.get(&col).copied().unwrap_or(24).max(24);
+        wb.set_col_width(sheet, col, width)?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+/// Auto-fit selected rows using a frontend-supplied text measurement callback.
+pub fn autofit_rows(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    range: RangeRef,
+    mut measure: impl FnMut(&str, &Style) -> u32,
+) -> Result<u32, CoreError> {
+    let (r0, c0, r1, c1) = norm(range);
+    let cells: Vec<_> = wb
+        .sheet(sheet)
+        .ok_or_else(|| CoreError::sheet_id("unknown sheet"))?
+        .store
+        .iter_region(r0, c0, r1, c1)
+        .collect();
+    let mut heights = std::collections::BTreeMap::new();
+    for (row, _, slot) in cells {
+        let text = display_text(wb, slot);
+        let style = wb
+            .intern()
+            .styles
+            .get(slot.style)
+            .cloned()
+            .unwrap_or_default();
+        let height = measure(&text, &style);
+        heights
+            .entry(row)
+            .and_modify(|current: &mut u32| *current = (*current).max(height))
+            .or_insert(height);
+    }
+    let mut changed = 0u32;
+    for row in r0..=r1 {
+        let height = heights
+            .get(&row)
+            .copied()
+            .unwrap_or(crate::geometry::DEFAULT_ROW_PX)
+            .max(crate::geometry::DEFAULT_ROW_PX);
+        wb.set_row_height(sheet, row, height)?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+fn display_text(wb: &Workbook, slot: CellSlot) -> String {
+    match slot.value {
+        Value::Empty => String::new(),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(value) => if value { "TRUE" } else { "FALSE" }.into(),
+        Value::Text(id) => wb.intern().strings.get(id).unwrap_or_default().to_string(),
+        Value::Error(error) => error.as_str().to_string(),
+        Value::Array(_) => String::new(),
+    }
 }
 
 /// Default column auto-fit width in pixels from display text.

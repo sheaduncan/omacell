@@ -96,6 +96,9 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
     push_kv(out, "calc", calc);
     push_kv(out, "active", active);
     push_json_kv(out, "settings", wb.settings())?;
+    if wb.protection() != &omacell_core::workbook::WorkbookProtectionState::default() {
+        push_json_kv(out, "protection", wb.protection())?;
+    }
     push_json_kv(out, "meta", wb.meta())?;
     out.push('\n');
 

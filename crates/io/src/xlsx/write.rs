@@ -1,6 +1,6 @@
 //! Regenerate modeled OPC parts and re-emit preserved L3 bytes.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Cursor, Write};
 
 use indexmap::IndexMap;
@@ -45,6 +45,9 @@ const REL_STYLES: &str =
 const REL_TABLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
 const REL_COMMENTS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+const REL_THREADED_COMMENTS: &str =
+    "http://schemas.microsoft.com/office/2017/10/relationships/threadedComment";
+const REL_PERSON: &str = "http://schemas.microsoft.com/office/2017/10/relationships/person";
 const REL_HYPER: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
 const REL_DRAWING: &str =
@@ -58,6 +61,8 @@ const CT_SST: &str =
 const CT_STY: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml";
 const CT_TBL: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 const CT_CMT: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+const CT_THREADED_CMT: &str = "application/vnd.ms-excel.threadedcomments+xml";
+const CT_PERSON: &str = "application/vnd.ms-excel.person+xml";
 const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 
 /// Encode `doc` as `.xlsx` bytes (modeled parts regenerated, L3 copied).
@@ -77,6 +82,7 @@ pub(crate) fn encode(
 ) -> Result<Vec<u8>, CoreError> {
     let intern = wb.intern();
     let sheets: Vec<&Sheet> = wb.sheets().collect();
+    let persons = threaded_persons(&sheets);
     if sheets.is_empty() {
         return Err(error::xlsx_write("workbook has no sheets"));
     }
@@ -161,6 +167,7 @@ pub(crate) fn encode(
             intern,
             i,
             package,
+            &persons,
         )?;
         parts.insert(format!("xl/{target}"), sheet_xml);
         overrides.push((format!("/xl/{target}"), CT_WS.into()));
@@ -183,12 +190,28 @@ pub(crate) fn encode(
     let sty_rid = format!("rId{rid}");
     rid += 1;
     wb_rels.push((sty_rid, REL_STYLES.into(), "styles.xml".into(), false));
+    if !persons.is_empty() {
+        let person_rid = format!("rId{rid}");
+        rid += 1;
+        wb_rels.push((
+            person_rid,
+            REL_PERSON.into(),
+            "persons/person.xml".into(),
+            false,
+        ));
+        parts.insert("xl/persons/person.xml".into(), persons_xml(&persons));
+        overrides.push(("/xl/persons/person.xml".into(), CT_PERSON.into()));
+    }
 
     if let Some(pkg) = package
         && let Ok(orig) = pkg.rels_for("xl/workbook.xml")
     {
         for rel in orig {
-            if rel.rel_type == REL_WS || rel.rel_type == REL_SST || rel.rel_type == REL_STYLES {
+            if rel.rel_type == REL_WS
+                || rel.rel_type == REL_SST
+                || rel.rel_type == REL_STYLES
+                || rel.rel_type == REL_PERSON
+            {
                 continue;
             }
             if is_rewritten(&rel.target) {
@@ -214,7 +237,7 @@ pub(crate) fn encode(
 
     parts.insert(
         "xl/workbook.xml".into(),
-        workbook_xml(wb, intern, &sheets, &sheet_rids),
+        workbook_xml(wb, intern, &sheets, &sheet_rids)?,
     );
     let workbook_content_type = package
         .and_then(|pkg| pkg.workbook_part().ok())
@@ -294,6 +317,8 @@ fn is_rewritten(name: &str) -> bool {
     ) || n.starts_with("xl/worksheets/")
         || n.starts_with("xl/tables/")
         || n.starts_with("xl/comments")
+        || n.starts_with("xl/threadedcomments/")
+        || n.starts_with("xl/persons/")
         || n.starts_with("xl/omacell/")
 }
 
@@ -393,12 +418,36 @@ fn workbook_xml(
     intern: &omacell_core::intern::Interners,
     sheets: &[&Sheet],
     rids: &[String],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, CoreError> {
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="{NS}" xmlns:r="{NS_R}">"#
     );
     if wb.settings().date_system == DateSystem::Excel1904 {
         s.push_str(r#"<workbookPr date1904="1"/>"#);
+    }
+    if wb.protection().enabled {
+        let password = wb
+            .protection()
+            .password
+            .as_deref()
+            .map(std::str::from_utf8)
+            .transpose()
+            .map_err(|_| error::xlsx_write("workbook protection verifier is not UTF-8"))?
+            .map(|value| format!(r#" workbookPassword="{}""#, xml::escape(value)))
+            .unwrap_or_default();
+        let structure = if wb.protection().lock_structure {
+            r#" lockStructure="1""#
+        } else {
+            ""
+        };
+        let windows = if wb.protection().lock_windows {
+            r#" lockWindows="1""#
+        } else {
+            ""
+        };
+        s.push_str(&format!(
+            r#"<workbookProtection{password}{structure}{windows}/>"#
+        ));
     }
     let active = sheets
         .iter()
@@ -500,7 +549,7 @@ fn workbook_xml(
         CalcMode::Automatic => {}
     }
     s.push_str("</workbook>");
-    s.into_bytes()
+    Ok(s.into_bytes())
 }
 
 fn constant_name_text(intern: &omacell_core::intern::Interners, v: Value) -> String {
@@ -989,6 +1038,7 @@ fn worksheet_xml(
     intern: &omacell_core::intern::Interners,
     sheet_ord: usize,
     package: Option<&OpcPackage>,
+    persons: &BTreeMap<String, String>,
 ) -> Result<
     (
         Vec<u8>,
@@ -997,11 +1047,6 @@ fn worksheet_xml(
     ),
     CoreError,
 > {
-    if !sheet.comments.is_empty() {
-        return Err(error::xlsx_write(
-            "threaded comments cannot be downgraded to legacy notes without losing replies and resolution state",
-        ));
-    }
     if !sheet.view.zoom.is_finite() || sheet.view.zoom <= 0.0 {
         return Err(error::xlsx_write("sheet zoom is not finite and positive"));
     }
@@ -1041,9 +1086,13 @@ fn worksheet_xml(
     }
     let hidden_rows: Vec<u32> = sheet.geometry.rows.iter_hidden().collect();
     let custom_rows: Vec<(u32, u32)> = sheet.geometry.rows.iter_custom().collect();
+    let outline_rows: Vec<(u32, u8)> = sheet.geometry.rows.iter_outline().collect();
+    let collapsed_rows: Vec<u32> = sheet.geometry.rows.iter_collapsed().collect();
     let mut row_idxs: Vec<u32> = cells_by_row.keys().copied().collect();
     row_idxs.extend_from_slice(&hidden_rows);
     row_idxs.extend(custom_rows.iter().map(|(i, _)| *i));
+    row_idxs.extend(outline_rows.iter().map(|(i, _)| *i));
+    row_idxs.extend_from_slice(&collapsed_rows);
     row_idxs.sort_unstable();
     row_idxs.dedup();
     for row in row_idxs {
@@ -1086,7 +1135,42 @@ fn worksheet_xml(
             .map_err(|_| error::xlsx_write("sheet protection verifier is not UTF-8"))?
             .map(|value| format!(r#" password="{}""#, xml::escape(value)))
             .unwrap_or_default();
-        s.push_str(&format!(r#"<sheetProtection sheet="1"{password}/>"#));
+        let allow = &sheet.protection.allow;
+        s.push_str(&format!(
+            r#"<sheetProtection sheet="1"{password} selectLockedCells="{}" selectUnlockedCells="{}" formatCells="{}" insertRows="{}" insertColumns="{}" sort="{}" autoFilter="{}"/>"#,
+            u8::from(!allow.select_locked),
+            u8::from(!allow.select_unlocked),
+            u8::from(!allow.format_cells),
+            u8::from(!allow.insert_rows),
+            u8::from(!allow.insert_cols),
+            u8::from(!allow.sort),
+            u8::from(!allow.auto_filter),
+        ));
+    }
+    if !sheet.protection.protected_ranges.is_empty() {
+        s.push_str("<protectedRanges>");
+        for range in &sheet.protection.protected_ranges {
+            let sqref = range
+                .ranges
+                .iter()
+                .map(|range| range.to_a1())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let password = range
+                .password
+                .as_deref()
+                .map(std::str::from_utf8)
+                .transpose()
+                .map_err(|_| error::xlsx_write("protected-range verifier is not UTF-8"))?
+                .map(|value| format!(r#" password="{}""#, xml::escape(value)))
+                .unwrap_or_default();
+            s.push_str(&format!(
+                r#"<protectedRange name="{}" sqref="{}"{password}/>"#,
+                xml::escape(&range.name),
+                xml::escape(&sqref),
+            ));
+        }
+        s.push_str("</protectedRanges>");
     }
     if let Some(ex) = extras
         && let Some(af) = &ex.autofilter
@@ -1181,6 +1265,7 @@ fn worksheet_xml(
             if rel.rel_type == REL_HYPER
                 || rel.rel_type == REL_TABLE
                 || rel.rel_type == REL_COMMENTS
+                || rel.rel_type == REL_THREADED_COMMENTS
             {
                 continue;
             }
@@ -1260,6 +1345,22 @@ fn worksheet_xml(
             false,
         ));
         extra_parts.push((cname, comments_xml(sheet), CT_CMT.into()));
+    }
+    if !sheet.comments.is_empty() {
+        let id = format!("rId{rid}");
+        let number = sheet_ord + 1;
+        let name = format!("xl/threadedComments/threadedComment{number}.xml");
+        rels.push((
+            id,
+            REL_THREADED_COMMENTS.into(),
+            format!("../threadedComments/threadedComment{number}.xml"),
+            false,
+        ));
+        extra_parts.push((
+            name,
+            threaded_comments_xml(sheet, sheet_ord, persons)?,
+            CT_THREADED_CMT.into(),
+        ));
     }
     let _ = rid;
     s.push_str("</worksheet>");
@@ -1436,7 +1537,8 @@ fn cols_xml(sheet: &Sheet) -> String {
     let hidden: Vec<u32> = sheet.geometry.cols.iter_hidden().collect();
     let custom: Vec<(u32, u32)> = sheet.geometry.cols.iter_custom().collect();
     let outline: Vec<(u32, u8)> = sheet.geometry.cols.iter_outline().collect();
-    if hidden.is_empty() && custom.is_empty() && outline.is_empty() {
+    let collapsed: Vec<u32> = sheet.geometry.cols.iter_collapsed().collect();
+    if hidden.is_empty() && custom.is_empty() && outline.is_empty() && collapsed.is_empty() {
         return String::new();
     }
     let mut idxs: Vec<u32> = hidden
@@ -1444,6 +1546,7 @@ fn cols_xml(sheet: &Sheet) -> String {
         .copied()
         .chain(custom.iter().map(|(i, _)| *i))
         .chain(outline.iter().map(|(i, _)| *i))
+        .chain(collapsed.iter().copied())
         .collect();
     idxs.sort_unstable();
     idxs.dedup();
@@ -1464,8 +1567,13 @@ fn cols_xml(sheet: &Sheet) -> String {
             0 => String::new(),
             level => format!(r#" outlineLevel="{level}""#),
         };
+        let collapsed_attr = if collapsed.contains(&i) {
+            r#" collapsed="1""#
+        } else {
+            ""
+        };
         s.push_str(&format!(
-            r#"<col min="{min}" max="{min}" width="{width}" customWidth="1"{hidden_attr}{outline_attr}/>"#
+            r#"<col min="{min}" max="{min}" width="{width}" customWidth="1"{hidden_attr}{outline_attr}{collapsed_attr}/>"#
         ));
     }
     s.push_str("</cols>");
@@ -1590,6 +1698,129 @@ fn validate_table(table: &Table) -> Result<(), CoreError> {
             "table {:?} has an invalid range or column count",
             table.name
         )));
+    }
+    Ok(())
+}
+
+fn threaded_persons(sheets: &[&Sheet]) -> BTreeMap<String, String> {
+    fn collect(
+        comment: &omacell_core::sheet::Comment,
+        authors: &mut std::collections::BTreeSet<String>,
+    ) {
+        authors.insert(comment.author.clone());
+        for reply in &comment.replies {
+            collect(reply, authors);
+        }
+    }
+
+    let mut authors = std::collections::BTreeSet::new();
+    for sheet in sheets {
+        for comment in sheet.comments.values() {
+            collect(comment, &mut authors);
+        }
+    }
+    authors
+        .into_iter()
+        .enumerate()
+        .map(|(index, author)| (author, deterministic_guid(1, index as u64 + 1)))
+        .collect()
+}
+
+fn deterministic_guid(namespace: u32, ordinal: u64) -> String {
+    format!("{{{namespace:08X}-0000-4000-8000-{ordinal:012X}}}")
+}
+
+fn persons_xml(persons: &BTreeMap<String, String>) -> Vec<u8> {
+    let mut xml_out = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><personList xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">"#,
+    );
+    for (author, id) in persons {
+        xml_out.push_str(&format!(
+            r#"<person displayName="{}" id="{}" userId="{}" providerId="None"/>"#,
+            xml::escape(author),
+            xml::escape(id),
+            xml::escape(author),
+        ));
+    }
+    xml_out.push_str("</personList>");
+    xml_out.into_bytes()
+}
+
+fn threaded_comments_xml(
+    sheet: &Sheet,
+    sheet_ord: usize,
+    persons: &BTreeMap<String, String>,
+) -> Result<Vec<u8>, CoreError> {
+    let mut comments: Vec<_> = sheet.comments.iter().collect();
+    comments.sort_by_key(|((row, col), _)| (*row, *col));
+    let mut xml_out = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">"#,
+    );
+    let mut ordinal = 1u64;
+    for ((row, col), comment) in comments {
+        let cell_ref = format!(
+            "{}{}",
+            col_to_letters(*col).map_err(|error| error::xlsx_write(error.to_string()))?,
+            row + 1
+        );
+        append_thread_comment_xml(
+            &mut xml_out,
+            comment,
+            &cell_ref,
+            None,
+            sheet_ord,
+            persons,
+            &mut ordinal,
+            0,
+        )?;
+    }
+    xml_out.push_str("</ThreadedComments>");
+    Ok(xml_out.into_bytes())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_thread_comment_xml(
+    out: &mut String,
+    comment: &omacell_core::sheet::Comment,
+    cell_ref: &str,
+    parent_id: Option<&str>,
+    sheet_ord: usize,
+    persons: &BTreeMap<String, String>,
+    ordinal: &mut u64,
+    depth: usize,
+) -> Result<(), CoreError> {
+    if depth >= 64 {
+        return Err(error::xlsx_write(
+            "threaded comment nesting exceeds 64 levels",
+        ));
+    }
+    let person_id = persons
+        .get(&comment.author)
+        .ok_or_else(|| error::xlsx_write("threaded comment author has no person record"))?;
+    let id = deterministic_guid(u32::try_from(sheet_ord + 2).unwrap_or(u32::MAX), *ordinal);
+    *ordinal = ordinal.saturating_add(1);
+    let parent = parent_id
+        .map(|value| format!(r#" parentId="{}""#, xml::escape(value)))
+        .unwrap_or_default();
+    let done = if comment.resolved { r#" done="1""# } else { "" };
+    out.push_str(&format!(
+        r#"<threadedComment ref="{}" dT="1970-01-01T00:00:00Z" personId="{}" id="{}"{parent}{done}><text>{}</text></threadedComment>"#,
+        xml::escape(cell_ref),
+        xml::escape(person_id),
+        xml::escape(&id),
+        xml::escape(&comment.text),
+    ));
+    for reply in &comment.replies {
+        append_thread_comment_xml(
+            out,
+            reply,
+            cell_ref,
+            Some(&id),
+            sheet_ord,
+            persons,
+            ordinal,
+            depth + 1,
+        )?;
     }
     Ok(())
 }
