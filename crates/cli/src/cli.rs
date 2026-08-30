@@ -44,7 +44,7 @@ pub struct Cli {
     pub from_workbook: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<Commands>,
-    /// Workbook paths. With no subcommand, opens the GUI (WP-16).
+    /// Workbook paths. With no subcommand, opens the graphical UI.
     #[arg(value_name = "FILE")]
     pub files: Vec<PathBuf>,
 }

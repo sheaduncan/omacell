@@ -36,6 +36,10 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
     "CC0-1.0",
+    # Bundled egui/epaint default fonts (WP-16). SIL OFL and Ubuntu Font
+    # License 1.0 are font licenses, not GPL-family.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
 ]
 confidence-threshold = 0.8
 

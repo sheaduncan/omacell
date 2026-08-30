@@ -27,6 +27,7 @@ use omacell_fn::{all_specs, functions_json};
 use omacell_io::csv::ImportPlan;
 use omacell_io::xlsx;
 
+use omacell_gui::Launch as GuiLaunch;
 use omacell_tui::Launch;
 
 use crate::app::App;
@@ -95,12 +96,7 @@ fn dispatch(cli: &Cli, output: Output) -> Result<(), CliError> {
         return cmd_tui(cli);
     }
     match &cli.command {
-        None => {
-            if cli.files.is_empty() {
-                return Err(CliError::nyi("omacell GUI", "WP-16"));
-            }
-            Err(CliError::nyi("omacell GUI", "WP-16"))
-        }
+        None => cmd_gui(cli),
         Some(Commands::Run { .. }) => Err(CliError::nyi("omacell run", "WP-20")),
         Some(Commands::Audit { .. }) => Err(CliError::nyi("omacell audit", "WP-19")),
         Some(Commands::Ai { .. }) => Err(CliError::nyi("omacell ai", "WP-22")),
@@ -177,6 +173,53 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
         | Commands::Agent { .. }
         | Commands::Mcp { .. } => unreachable!("stubs handled earlier"),
     }
+}
+
+fn display_available() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
+}
+
+fn cmd_gui(cli: &Cli) -> Result<(), CliError> {
+    if cli.files.len() > 1 {
+        return Err(
+            CliError::new("cli.usage", "omacell GUI accepts at most one workbook")
+                .hint("run a separate Omacell instance for each workbook")
+                .exit(EXIT_USAGE),
+        );
+    }
+    if cli.dry_run {
+        return Err(
+            CliError::new("cli.usage", "--dry-run is not valid for the GUI")
+                .hint("use --dry-run with a CLI or IPC command")
+                .exit(EXIT_USAGE),
+        );
+    }
+    if !display_available() {
+        return Err(CliError::new(
+            "gui.display",
+            "omacell GUI requires a Wayland or X11 display",
+        )
+        .hint("set WAYLAND_DISPLAY or DISPLAY, or use omacell --tui"));
+    }
+    let book = cli.files.first().map(PathBuf::as_path);
+    // File loading belongs to the GUI task runner so first paint, progress, and
+    // cancellation remain available for large workbooks.
+    let mut app = App::bootstrap_live(cli, None)?;
+    log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
+    let _sig = crate::reload::spawn_sigusr1_reloader(app.reload_handle())?;
+    let (ui, roots) = app.attach_session(cli.config.as_deref())?;
+    let launch = GuiLaunch {
+        paths: app.paths,
+        store: app.store,
+        bus: app.bus,
+        ui,
+        roots,
+        long_ops: omacell_bus::LongOps::production(),
+        file: book.map(Path::to_path_buf),
+        use_shell_font: true,
+    };
+    omacell_gui::run(launch)?;
+    Ok(())
 }
 
 fn cmd_tui(cli: &Cli) -> Result<(), CliError> {

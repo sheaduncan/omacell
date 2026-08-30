@@ -20,6 +20,7 @@ omacell-conf = { path = "../conf", version = "0.0.0" }
 omacell-core = { path = "../core", version = "0.0.0" }
 omacell-fn = { path = "../fn", version = "0.0.0" }
 omacell-io = { path = "../io", version = "0.0.0" }
+omacell-gui = { path = "../gui", version = "0.0.0" }
 omacell-tui = { path = "../tui", version = "0.0.0" }
 omacell-ui = { path = "../ui", version = "0.0.0" }
 schemars = { workspace = true }

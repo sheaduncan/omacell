@@ -1,7 +1,7 @@
 //! Barrier-based task runner tests (no sleeps as synchronization).
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::Instant;
 
 use omacell_bus::{Bus, LongOps, TaskEvent, TaskRunner, register_hold_command};
@@ -202,4 +202,29 @@ fn shutdown_with_in_flight_task_joins() {
     start.wait();
     drop(runner);
     let _ = AtomicUsize::new(0);
+}
+
+#[test]
+fn task_events_wake_a_registered_frontend() {
+    let start = Arc::new(Barrier::new(1));
+    let release = Arc::new(AtomicBool::new(true));
+    let bus = bus_with_hold(start, release);
+    let runner = TaskRunner::spawn(bus, LongOps::production()).unwrap();
+    let handle = runner.handle();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let wake_count = Arc::clone(&wakes);
+    let frontend = Arc::new(Mutex::new(Some(handle.clone())));
+    let callback_frontend = Arc::clone(&frontend);
+    handle.set_event_waker(move || {
+        if let Some(handle) = callback_frontend.lock().unwrap().as_ref() {
+            let _ = handle.tracked_tasks();
+        }
+        wake_count.fetch_add(1, Ordering::SeqCst);
+    });
+
+    let outcome = handle.submit_wait(Origin::User, "cell.set", json!({"ref": "A1", "input": "1"}));
+
+    assert!(outcome.ok, "{:?}", outcome.error);
+    assert!(wakes.load(Ordering::SeqCst) >= 3);
+    *frontend.lock().unwrap() = None;
 }
