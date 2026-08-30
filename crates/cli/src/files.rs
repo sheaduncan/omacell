@@ -1,4 +1,4 @@
-//! `file.open` / `file.save` / `file.export` adapters over `omacell-io`.
+//! `file.open` / `file.save` / `file.export` / `file.print` adapters over `omacell-io`.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -25,6 +25,7 @@ enum FileKind {
     Xlsx,
     Csv,
     Omc,
+    Pdf,
 }
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -100,6 +101,18 @@ pub struct FileExportArgs {
     pub range: Option<String>,
 }
 
+/// `file.print`
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FilePrintArgs {
+    /// Optional PDF destination. Omitted with no printer → preview data only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// CUPS printer name (`lp -d`). Omitted → do not print.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub printer: Option<String>,
+}
+
 /// Register file adapters on an existing bus.
 pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(), CoreError> {
     let open_session = session.clone();
@@ -137,6 +150,18 @@ pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(),
             default_keys: &[],
         },
         move |ctx, args| file_export(ctx, &export_session, args),
+    )?;
+    let print_session = session.clone();
+    bus.registry_mut().register::<FilePrintArgs, _>(
+        CommandSpec {
+            id: "file.print",
+            doc: "Print-preview page boxes, export PDF, or send a PDF to CUPS",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+P"],
+        },
+        move |ctx, args| file_print(ctx, &print_session, args),
     )?;
     Ok(())
 }
@@ -266,7 +291,7 @@ fn file_export(
             "file.format",
             format!("cannot infer export format from {}", path.display()),
         )
-        .with_hint("use a .xlsx, .csv, .tsv, or .omc destination")
+        .with_hint("use a .xlsx, .csv, .tsv, .omc, or .pdf destination")
     })?;
     let (package, extras, keep_backups) = {
         let state = session.lock();
@@ -313,6 +338,20 @@ fn file_export(
                     keep_backups,
                     ctx.cancel_flag().map(Arc::as_ref),
                 )?;
+            }
+        }
+        FileKind::Pdf => {
+            let options = pdf_options_for(session, &path);
+            if ctx.is_preflight() {
+                let _ = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
+            } else {
+                if ctx.is_cancelled() {
+                    return Err(cancelled());
+                }
+                ctx.report_progress(0, Some(1), "pdf");
+                let bytes = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
+                atomic_write_bytes(&path, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
+                ctx.report_progress(1, Some(1), "pdf");
             }
         }
     }
@@ -409,6 +448,11 @@ fn open_kind(
                 package: None,
             })
         }
+        FileKind::Pdf => Err(
+            CoreError::new("file.format", "cannot open a PDF as a workbook").with_hint(
+                "export TO pdf with convert or file.print; open an .xlsx, .csv, or .omc",
+            ),
+        ),
         FileKind::Csv => {
             let sniffed;
             let plan = if let Some(plan) = import_plan {
@@ -494,6 +538,12 @@ fn write_kind(
             }
             let bytes = csv::export(wb, &plan)?;
             atomic_write_bytes(path, &bytes, cancel)?;
+        }
+        FileKind::Pdf => {
+            return Err(CoreError::new(
+                "file.format",
+                "PDF export is handled by file.export / file.print",
+            ));
         }
     }
     Ok(())
@@ -584,6 +634,9 @@ fn validate_kind(
             }
             let _ = csv::export(wb, &plan)?;
         }
+        FileKind::Pdf => {
+            let _ = omacell_io::pdf::write_pdf(wb, &omacell_io::pdf::PdfOptions::default())?;
+        }
     }
     Ok(())
 }
@@ -598,6 +651,103 @@ fn kind_from_path(path: &Path) -> Option<FileKind> {
         Some("xlsx" | "xlsm") => Some(FileKind::Xlsx),
         Some("csv" | "tsv" | "txt") => Some(FileKind::Csv),
         Some("omc") => Some(FileKind::Omc),
+        Some("pdf") => Some(FileKind::Pdf),
         _ => None,
     }
+}
+
+fn file_print(
+    ctx: &mut CommandContext<'_>,
+    session: &FileSession,
+    args: FilePrintArgs,
+) -> Result<Effect, CoreError> {
+    let mut pages = Vec::new();
+    for sheet in ctx.workbook_ref().sheets() {
+        for page in omacell_core::print::paginate(sheet, &sheet.page_setup) {
+            pages.push(serde_json::json!({
+                "sheet": sheet.name,
+                "page": page.page,
+                "pages": page.pages,
+                "row0": page.row0,
+                "row1": page.row1,
+                "col0": page.col0,
+                "col1": page.col1,
+                "scale": page.scale,
+            }));
+        }
+    }
+    let printers = list_printers();
+    if ctx.is_preflight() {
+        return Ok(Effect::query(serde_json::json!({
+            "pages": pages,
+            "printers": printers,
+            "dry_run": ctx.is_dry_run(),
+        })));
+    }
+    let mut written: Option<String> = None;
+    if args.path.is_some() || args.printer.is_some() {
+        let dest = match args.path.as_ref() {
+            Some(path) => PathBuf::from(path),
+            None => std::env::temp_dir().join(format!(
+                "omacell-print-{}-{}.pdf",
+                std::process::id(),
+                TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            )),
+        };
+        let options = pdf_options_for(session, &dest);
+        let bytes = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
+        atomic_write_bytes(&dest, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
+        if let Some(printer) = args.printer.as_deref().filter(|p| !p.is_empty()) {
+            let status = std::process::Command::new("lp")
+                .args(["-d", printer, &dest.display().to_string()])
+                .status()
+                .map_err(|err| CoreError::new("file.print", format!("lp: {err}")))?;
+            if !status.success() {
+                return Err(CoreError::new(
+                    "file.print",
+                    format!("lp exited {}", status.code().unwrap_or(-1)),
+                ));
+            }
+        }
+        written = Some(dest.display().to_string());
+    }
+    Ok(Effect {
+        result: serde_json::json!({
+            "pages": pages,
+            "printers": printers,
+            "path": written,
+        }),
+        auto_recalc: false,
+        ..Effect::default()
+    })
+}
+
+fn pdf_options_for(session: &FileSession, dest: &Path) -> omacell_io::pdf::PdfOptions {
+    let font_path = session
+        .lock()
+        .config
+        .as_ref()
+        .and_then(|cfg| cfg.snapshot().shell.ui_font_path.clone());
+    omacell_io::pdf::PdfOptions {
+        font_path,
+        file_name: dest
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workbook.pdf")
+            .to_string(),
+        ..omacell_io::pdf::PdfOptions::default()
+    }
+}
+
+fn list_printers() -> Vec<String> {
+    let Ok(out) = std::process::Command::new("lpstat").arg("-a").output() else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .collect()
 }

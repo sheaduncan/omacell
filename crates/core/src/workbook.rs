@@ -19,6 +19,7 @@ use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
 use crate::locale::LocaleId;
 use crate::names::{DefinedName, NameRegistry, NameScope};
 use crate::numfmt;
+use crate::print::PageSetup;
 use crate::sheet::{
     Comment, Hyperlink, Note, ProtectionState, Sheet, SheetVisibility, ViewState,
     validate_sheet_name,
@@ -243,6 +244,7 @@ impl Workbook {
                 geometry: crate::geometry::SheetGeometry::new(),
                 charts: Vec::new(),
                 sparklines: Vec::new(),
+                page_setup: PageSetup::default(),
             },
         };
         let mut sheets = IndexMap::new();
@@ -431,6 +433,12 @@ impl Workbook {
     /// Append a sparkline.
     pub fn add_sparkline(&mut self, spark: Sparkline) -> Result<(), CoreError> {
         self.sheet_mut(spark.sheet)?.sparklines.push(spark);
+        Ok(())
+    }
+
+    /// Replace a sheet's page setup (print / PDF).
+    pub fn set_page_setup(&mut self, id: SheetId, setup: PageSetup) -> Result<(), CoreError> {
+        self.sheet_mut(id)?.page_setup = setup;
         Ok(())
     }
 

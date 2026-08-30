@@ -52,7 +52,7 @@ pub struct Cli {
 /// Top-level subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Convert a workbook between `.xlsx`, CSV, and `.omc`.
+    /// Convert a workbook between `.xlsx`, CSV, `.omc`, and PDF.
     Convert {
         /// Input path.
         input: PathBuf,

@@ -26,6 +26,7 @@ use super::opc::{
     MAX_ENTRY_BYTES, MAX_PACKAGE_BYTES, MAX_UNCOMPRESSED_TOTAL, MAX_ZIP_ENTRIES, OpcPackage,
     sanitize_path,
 };
+use super::print as xlsx_print;
 use super::{XlsxDocument, xml};
 use crate::error;
 
@@ -423,33 +424,45 @@ fn workbook_xml(
     }
     s.push_str("</sheets>");
     let names: Vec<_> = wb.names().iter().collect();
-    if !names.is_empty() {
-        s.push_str("<definedNames>");
-        for n in names {
-            let local = match n.scope {
-                omacell_core::names::NameScope::Workbook => String::new(),
-                omacell_core::names::NameScope::Sheet(id) => sheets
-                    .iter()
-                    .position(|sh| sh.id == id)
-                    .map(|i| format!(r#" localSheetId="{i}""#))
-                    .unwrap_or_default(),
-            };
-            let text = match &n.referent {
-                omacell_core::names::NameReferent::Range(r) => r.to_a1(),
-                omacell_core::names::NameReferent::Formula(f) => f.clone(),
-                omacell_core::names::NameReferent::Constant(v) => constant_name_text(intern, *v),
-            };
-            let comment = n
-                .comment
-                .as_ref()
-                .map(|value| format!(r#" comment="{}""#, xml::escape(value)))
-                .unwrap_or_default();
-            s.push_str(&format!(
-                r#"<definedName name="{}"{local}{comment}>{}</definedName>"#,
-                xml::escape(&n.name),
-                xml::escape(&text)
-            ));
+    let mut names_xml = String::new();
+    for n in &names {
+        let local = match n.scope {
+            omacell_core::names::NameScope::Workbook => String::new(),
+            omacell_core::names::NameScope::Sheet(id) => sheets
+                .iter()
+                .position(|sh| sh.id == id)
+                .map(|i| format!(r#" localSheetId="{i}""#))
+                .unwrap_or_default(),
+        };
+        let text = match &n.referent {
+            omacell_core::names::NameReferent::Range(r) => r.to_a1(),
+            omacell_core::names::NameReferent::Formula(f) => f.clone(),
+            omacell_core::names::NameReferent::Constant(v) => constant_name_text(intern, *v),
+        };
+        let comment = n
+            .comment
+            .as_ref()
+            .map(|value| format!(r#" comment="{}""#, xml::escape(value)))
+            .unwrap_or_default();
+        names_xml.push_str(&format!(
+            r#"<definedName name="{}"{local}{comment}>{}</definedName>"#,
+            xml::escape(&n.name),
+            xml::escape(&text)
+        ));
+    }
+    for (i, sheet) in sheets.iter().enumerate() {
+        let has_print_name = names.iter().any(|n| {
+            let lower = n.name.to_ascii_lowercase();
+            (lower.ends_with("print_area") || lower.ends_with("print_titles"))
+                && matches!(n.scope, omacell_core::names::NameScope::Sheet(id) if id == sheet.id)
+        });
+        if !has_print_name {
+            names_xml.push_str(&xlsx_print::print_names_xml(sheet, i));
         }
+    }
+    if !names_xml.is_empty() {
+        s.push_str("<definedNames>");
+        s.push_str(&names_xml);
         s.push_str("</definedNames>");
     }
     match wb.settings().calc_mode {
@@ -1102,21 +1115,21 @@ fn worksheet_xml(
         }
         s.push_str("</hyperlinks>");
     }
-    if let Some(ex) = extras {
+    let print_roots = [
+        "pageSetup",
+        "pageMargins",
+        "printOptions",
+        "headerFooter",
+        "rowBreaks",
+        "colBreaks",
+    ];
+    if let Some(ex) = extras.filter(|ex| xlsx_print::extras_win(&ex.print_xml)) {
         for blob in &ex.print_xml {
-            push_fragment(
-                &mut s,
-                blob,
-                "print settings",
-                &[
-                    "pageSetup",
-                    "pageMargins",
-                    "printOptions",
-                    "headerFooter",
-                    "rowBreaks",
-                    "colBreaks",
-                ],
-            )?;
+            push_fragment(&mut s, blob, "print settings", &print_roots)?;
+        }
+    } else if !sheet.page_setup.is_default() {
+        for xml in xlsx_print::modeled_print_xml(&sheet.page_setup) {
+            push_fragment(&mut s, xml.as_bytes(), "print settings", &print_roots)?;
         }
     }
     let mut drawing_xml = String::new();

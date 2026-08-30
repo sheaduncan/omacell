@@ -1,0 +1,516 @@
+//! Page setup and pagination (spec F-11.1).
+
+use serde::{Deserialize, Serialize};
+
+use crate::addr::RangeRef;
+use crate::geometry::{DEFAULT_COL_PX, DEFAULT_ROW_PX};
+use crate::sheet::Sheet;
+
+/// 96 CSS px → 72 PDF points.
+pub const PX_TO_PT: f64 = 72.0 / 96.0;
+
+/// Paper size in PDF points (1/72 in).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaperSize {
+    /// US Letter 8.5×11 in.
+    #[default]
+    Letter,
+    /// US Legal 8.5×14 in.
+    Legal,
+    /// ISO A4.
+    A4,
+    /// ISO A3.
+    A3,
+    /// Tabloid 11×17 in.
+    Tabloid,
+}
+
+impl PaperSize {
+    /// Excel `paperSize` attribute.
+    #[must_use]
+    pub const fn excel_id(self) -> u32 {
+        match self {
+            Self::Letter => 1,
+            Self::Legal => 5,
+            Self::A4 => 9,
+            Self::A3 => 8,
+            Self::Tabloid => 3,
+        }
+    }
+
+    /// Parse an Excel paperSize id.
+    #[must_use]
+    pub const fn from_excel_id(id: u32) -> Self {
+        match id {
+            5 => Self::Legal,
+            8 => Self::A3,
+            9 => Self::A4,
+            3 => Self::Tabloid,
+            _ => Self::Letter,
+        }
+    }
+
+    /// Width × height in points, portrait.
+    #[must_use]
+    pub const fn portrait_pt(self) -> (f64, f64) {
+        match self {
+            Self::Letter => (612.0, 792.0),
+            Self::Legal => (612.0, 1008.0),
+            Self::A4 => (595.0, 842.0),
+            Self::A3 => (842.0, 1191.0),
+            Self::Tabloid => (792.0, 1224.0),
+        }
+    }
+}
+
+/// Page orientation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Orientation {
+    /// Portrait.
+    #[default]
+    Portrait,
+    /// Landscape.
+    Landscape,
+}
+
+/// Inches.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Margins {
+    /// Left.
+    pub left: f64,
+    /// Right.
+    pub right: f64,
+    /// Top.
+    pub top: f64,
+    /// Bottom.
+    pub bottom: f64,
+    /// Header inset.
+    pub header: f64,
+    /// Footer inset.
+    pub footer: f64,
+}
+
+impl Default for Margins {
+    fn default() -> Self {
+        Self {
+            left: 0.75,
+            right: 0.75,
+            top: 0.75,
+            bottom: 0.75,
+            header: 0.3,
+            footer: 0.3,
+        }
+    }
+}
+
+impl Margins {
+    fn pt(self, inches: f64) -> f64 {
+        inches * 72.0
+    }
+
+    /// Left margin in points.
+    #[must_use]
+    pub fn left_pt(self) -> f64 {
+        self.pt(self.left)
+    }
+
+    /// Right margin in points.
+    #[must_use]
+    pub fn right_pt(self) -> f64 {
+        self.pt(self.right)
+    }
+
+    /// Top margin in points.
+    #[must_use]
+    pub fn top_pt(self) -> f64 {
+        self.pt(self.top)
+    }
+
+    /// Bottom margin in points.
+    #[must_use]
+    pub fn bottom_pt(self) -> f64 {
+        self.pt(self.bottom)
+    }
+
+    /// Header inset in points.
+    #[must_use]
+    pub fn header_pt(self) -> f64 {
+        self.pt(self.header)
+    }
+
+    /// Footer inset in points.
+    #[must_use]
+    pub fn footer_pt(self) -> f64 {
+        self.pt(self.footer)
+    }
+}
+
+/// Per-sheet page setup.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PageSetup {
+    /// Paper.
+    #[serde(default)]
+    pub paper: PaperSize,
+    /// Orientation.
+    #[serde(default)]
+    pub orientation: Orientation,
+    /// Margins in inches.
+    #[serde(default)]
+    pub margins: Margins,
+    /// Percent scale (10–400). Ignored when fit-to is set.
+    #[serde(default = "hundred")]
+    pub scale_percent: u32,
+    /// Fit-to-width pages (`None` = use scale).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_to_width: Option<u32>,
+    /// Fit-to-height pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_to_height: Option<u32>,
+    /// Print area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_area: Option<RangeRef>,
+    /// Rows to repeat at top (`0..n` count).
+    #[serde(default)]
+    pub title_rows: u32,
+    /// Columns to repeat at left.
+    #[serde(default)]
+    pub title_cols: u16,
+    /// Header text (Excel `&` codes allowed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// Footer text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<String>,
+    /// Manual row breaks (0-based row *after* which a page starts).
+    #[serde(default)]
+    pub row_breaks: Vec<u32>,
+    /// Manual column breaks.
+    #[serde(default)]
+    pub col_breaks: Vec<u16>,
+    /// Print gridlines.
+    #[serde(default)]
+    pub gridlines: bool,
+    /// Print row/column headings.
+    #[serde(default)]
+    pub headings: bool,
+    /// Black and white.
+    #[serde(default)]
+    pub black_and_white: bool,
+}
+
+fn hundred() -> u32 {
+    100
+}
+
+impl Default for PageSetup {
+    fn default() -> Self {
+        Self {
+            paper: PaperSize::Letter,
+            orientation: Orientation::Portrait,
+            margins: Margins::default(),
+            scale_percent: 100,
+            fit_to_width: None,
+            fit_to_height: None,
+            print_area: None,
+            title_rows: 0,
+            title_cols: 0,
+            header: None,
+            footer: None,
+            row_breaks: Vec::new(),
+            col_breaks: Vec::new(),
+            gridlines: false,
+            headings: false,
+            black_and_white: false,
+        }
+    }
+}
+
+impl PageSetup {
+    /// Media box width × height in points.
+    #[must_use]
+    pub fn media_pt(&self) -> (f64, f64) {
+        let (w, h) = self.paper.portrait_pt();
+        match self.orientation {
+            Orientation::Portrait => (w, h),
+            Orientation::Landscape => (h, w),
+        }
+    }
+
+    /// Printable inner size in points (minus margins).
+    #[must_use]
+    pub fn usable_pt(&self) -> (f64, f64) {
+        let (w, h) = self.media_pt();
+        (
+            (w - self.margins.left_pt() - self.margins.right_pt()).max(1.0),
+            (h - self.margins.top_pt() - self.margins.bottom_pt()).max(1.0),
+        )
+    }
+
+    /// True when every field matches Excel's Letter / 100% defaults.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// One printed page's cell window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PageBox {
+    /// First data row (after title rows).
+    pub row0: u32,
+    /// Last data row inclusive.
+    pub row1: u32,
+    /// First data column (after title cols).
+    pub col0: u16,
+    /// Last data column inclusive.
+    pub col1: u16,
+    /// Applied scale (1.0 = 100%).
+    pub scale: f64,
+    /// 1-based page number.
+    pub page: u32,
+    /// Total pages.
+    pub pages: u32,
+}
+
+/// Paginate `sheet` using `setup`.
+#[must_use]
+pub fn paginate(sheet: &Sheet, setup: &PageSetup) -> Vec<PageBox> {
+    let (area_r0, area_c0, area_r1, area_c1) = print_bounds(sheet, setup);
+    let (usable_w, usable_h) = setup.usable_pt();
+    let heading_w = if setup.headings { 28.0 } else { 0.0 };
+    let heading_h = if setup.headings { 14.0 } else { 0.0 };
+    let title_h = if setup.title_rows == 0 {
+        0.0
+    } else {
+        row_span_pt(
+            sheet,
+            area_r0,
+            area_r0.saturating_add(setup.title_rows).saturating_sub(1),
+        )
+    };
+    let title_w = if setup.title_cols == 0 {
+        0.0
+    } else {
+        col_span_pt(
+            sheet,
+            area_c0,
+            area_c0.saturating_add(setup.title_cols).saturating_sub(1),
+        )
+    };
+    let content_w = col_span_pt(sheet, area_c0, area_c1);
+    let content_h = row_span_pt(sheet, area_r0, area_r1);
+    let scale = compute_scale(
+        setup,
+        content_w,
+        content_h,
+        (usable_w - heading_w).max(1.0),
+        (usable_h - heading_h).max(1.0),
+    );
+    let data_w = ((usable_w - heading_w) / scale - title_w).max(1.0);
+    let data_h = ((usable_h - heading_h) / scale - title_h).max(1.0);
+
+    let data_r0 = area_r0.saturating_add(setup.title_rows);
+    let data_c0 = area_c0.saturating_add(setup.title_cols);
+    let row_pages = pack_axis_rows(sheet, data_r0, area_r1, data_h, &setup.row_breaks);
+    let col_pages = pack_axis_cols(sheet, data_c0, area_c1, data_w, &setup.col_breaks);
+    let pages = (row_pages.len() * col_pages.len()).max(1) as u32;
+    let mut out = Vec::new();
+    let mut n = 1u32;
+    for (r0, r1) in &row_pages {
+        for (c0, c1) in &col_pages {
+            out.push(PageBox {
+                row0: *r0,
+                row1: *r1,
+                col0: *c0,
+                col1: *c1,
+                scale,
+                page: n,
+                pages,
+            });
+            n += 1;
+        }
+    }
+    if out.is_empty() {
+        out.push(PageBox {
+            row0: data_r0,
+            row1: data_r0,
+            col0: data_c0,
+            col1: data_c0,
+            scale,
+            page: 1,
+            pages: 1,
+        });
+    }
+    out
+}
+
+/// Inclusive print-area or used-range bounds `(row0, col0, row1, col1)`.
+#[must_use]
+pub fn print_bounds(sheet: &Sheet, setup: &PageSetup) -> (u32, u16, u32, u16) {
+    if let Some(area) = setup.print_area {
+        return (
+            area.start.row.min(area.end.row),
+            area.start.col.min(area.end.col),
+            area.start.row.max(area.end.row),
+            area.start.col.max(area.end.col),
+        );
+    }
+    match sheet.used_range() {
+        Some(used) => (used.min_row, used.min_col, used.max_row, used.max_col),
+        None => (0, 0, 0, 0),
+    }
+}
+
+fn compute_scale(
+    setup: &PageSetup,
+    content_w: f64,
+    content_h: f64,
+    usable_w: f64,
+    usable_h: f64,
+) -> f64 {
+    if setup.fit_to_width.is_some() || setup.fit_to_height.is_some() {
+        let fw = f64::from(setup.fit_to_width.unwrap_or(1).max(1));
+        let fh = f64::from(setup.fit_to_height.unwrap_or(1).max(1));
+        let sx = (fw * usable_w) / content_w.max(1.0);
+        let sy = (fh * usable_h) / content_h.max(1.0);
+        let pct = ((sx.min(sy) * 100.0).floor() as u32).clamp(10, 400);
+        f64::from(pct) / 100.0
+    } else {
+        f64::from(setup.scale_percent.clamp(10, 400)) / 100.0
+    }
+}
+
+fn row_span_pt(sheet: &Sheet, r0: u32, r1: u32) -> f64 {
+    if r1 < r0 {
+        return 0.0;
+    }
+    let mut px = 0u64;
+    for r in r0..=r1 {
+        px += u64::from(sheet.geometry.rows.size(r).unwrap_or(DEFAULT_ROW_PX));
+    }
+    px as f64 * PX_TO_PT
+}
+
+fn col_span_pt(sheet: &Sheet, c0: u16, c1: u16) -> f64 {
+    if c1 < c0 {
+        return 0.0;
+    }
+    let mut px = 0u64;
+    for c in c0..=c1 {
+        px += u64::from(
+            sheet
+                .geometry
+                .cols
+                .size(u32::from(c))
+                .unwrap_or(DEFAULT_COL_PX),
+        );
+    }
+    px as f64 * PX_TO_PT
+}
+
+fn pack_axis_rows(
+    sheet: &Sheet,
+    start: u32,
+    end: u32,
+    budget: f64,
+    breaks: &[u32],
+) -> Vec<(u32, u32)> {
+    let mut pages = Vec::new();
+    let mut r = start;
+    while r <= end {
+        let mut used = 0.0;
+        let r0 = r;
+        let mut r1 = r;
+        while r <= end {
+            if r > r0 && breaks.iter().any(|b| *b + 1 == r) {
+                break;
+            }
+            let h = row_span_pt(sheet, r, r);
+            if used > 0.0 && used + h > budget {
+                break;
+            }
+            used += h;
+            r1 = r;
+            r = r.saturating_add(1);
+            if r == 0 {
+                break;
+            }
+        }
+        pages.push((r0, r1));
+        if r <= r0 {
+            r = r0.saturating_add(1);
+        }
+        if r0 == end && r1 == end {
+            break;
+        }
+    }
+    pages
+}
+
+fn pack_axis_cols(
+    sheet: &Sheet,
+    start: u16,
+    end: u16,
+    budget: f64,
+    breaks: &[u16],
+) -> Vec<(u16, u16)> {
+    let mut pages = Vec::new();
+    let mut c = start;
+    while c <= end {
+        let mut used = 0.0;
+        let c0 = c;
+        let mut c1 = c;
+        while c <= end {
+            if c > c0 && breaks.iter().any(|b| *b + 1 == c) {
+                break;
+            }
+            let w = col_span_pt(sheet, c, c);
+            if used > 0.0 && used + w > budget {
+                break;
+            }
+            used += w;
+            c1 = c;
+            if c == u16::MAX {
+                break;
+            }
+            c = c.saturating_add(1);
+        }
+        pages.push((c0, c1));
+        if c <= c0 {
+            c = c0.saturating_add(1);
+        }
+        if c0 == end && c1 == end {
+            break;
+        }
+    }
+    pages
+}
+
+/// Expand Excel header/footer codes (`&P`, `&N`, `&A`, `&F`, `&D`).
+#[must_use]
+pub fn expand_header(template: &str, page: &PageBox, sheet_name: &str, file_name: &str) -> String {
+    let mut out = String::new();
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '&' {
+            match chars.next() {
+                Some('P') | Some('p') => out.push_str(&page.page.to_string()),
+                Some('N') | Some('n') => out.push_str(&page.pages.to_string()),
+                Some('A') | Some('a') => out.push_str(sheet_name),
+                Some('F') | Some('f') => out.push_str(file_name),
+                Some('D') | Some('d') => out.push_str("1970-01-01"),
+                Some('&') => out.push('&'),
+                Some(other) => {
+                    out.push('&');
+                    out.push(other);
+                }
+                None => out.push('&'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}

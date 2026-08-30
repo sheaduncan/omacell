@@ -2,7 +2,7 @@
 source: crates/cli/tests/help.rs
 expression: "help(&[\"convert\", \"--help\"])"
 ---
-Convert a workbook between `.xlsx`, CSV, and `.omc`
+Convert a workbook between `.xlsx`, CSV, `.omc`, and PDF
 
 Usage: omacell convert [OPTIONS] <INPUT> <OUTPUT>
 

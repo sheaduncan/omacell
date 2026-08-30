@@ -36,6 +36,8 @@ pub mod codes {
     pub const OMC_LIMIT: &str = "omc.limit";
     /// The `.omc` document is not a readable workbook or changeset.
     pub const OMC_FORMAT: &str = "omc.format";
+    /// PDF export failed.
+    pub const PDF_WRITE: &str = "pdf.write";
 }
 
 /// Encoding error.
@@ -146,4 +148,11 @@ pub fn omc_limit(message: impl Into<String>) -> CoreError {
 pub fn omc_format(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::OMC_FORMAT, message)
         .with_hint("the first record must be 'omc 1'; see docs/formats/omc.md")
+}
+
+/// PDF write error.
+#[must_use]
+pub fn pdf_write(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::PDF_WRITE, message)
+        .with_hint("check the font file and that the destination is writable")
 }

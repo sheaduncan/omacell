@@ -133,10 +133,16 @@ impl LongOps {
     #[must_use]
     pub fn production() -> Self {
         Self {
-            ids: ["calc.recalc", "file.open", "file.save", "file.export"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            ids: [
+                "calc.recalc",
+                "file.open",
+                "file.save",
+                "file.export",
+                "file.print",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         }
     }
 

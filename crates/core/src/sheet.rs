@@ -7,6 +7,7 @@ use crate::addr::{CellRef, RangeRef, SheetId};
 use crate::chart::{Chart, Sparkline};
 use crate::error::CoreError;
 use crate::geometry::SheetGeometry;
+use crate::print::PageSetup;
 use crate::storage::{SheetStore, UsedRange};
 use crate::style::Color;
 
@@ -257,6 +258,8 @@ pub struct Sheet {
     pub charts: Vec<Chart>,
     /// In-cell sparklines.
     pub sparklines: Vec<Sparkline>,
+    /// Page setup used by print preview and PDF export.
+    pub page_setup: PageSetup,
 }
 
 impl Sheet {
@@ -279,6 +282,7 @@ impl Sheet {
             geometry: SheetGeometry::new(),
             charts: Vec::new(),
             sparklines: Vec::new(),
+            page_setup: PageSetup::default(),
         })
     }
 

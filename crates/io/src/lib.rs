@@ -9,4 +9,5 @@ pub mod chart_export;
 pub mod csv;
 pub mod error;
 pub mod omc;
+pub mod pdf;
 pub mod xlsx;
