@@ -10,10 +10,13 @@ use omacell_core::changeset::{Changeset, ChangesetId, CommandCall};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
 
+#[cfg(feature = "test-util")]
 use crate::args::EmptyArgs;
 use crate::error;
 use crate::handler::TaskCtl;
-use crate::registry::{CommandKind, CommandSpec, Exposure};
+#[cfg(feature = "test-util")]
+use crate::registry::CommandSpec;
+use crate::registry::{CommandKind, Exposure};
 use crate::session::{Bus, DryRun};
 use crate::task::{
     CancelHandle, LongOps, MAX_SUBMIT_QUEUE, MAX_TASK_EVENTS, ReaderSnapshot, TaskEvent, TaskId,
@@ -789,6 +792,7 @@ fn coalesce_progress(shared: &Shared, id: TaskId, done: u64, total: Option<u64>,
 
 /// Test helper: register `test.hold` which waits on `start` then spins until
 /// `release` or cancel. Synchronization uses a barrier and atomics, not sleeps.
+#[cfg(feature = "test-util")]
 pub fn register_hold_command(
     registry: &mut crate::registry::CommandRegistry,
     start: Arc<std::sync::Barrier>,

@@ -1,6 +1,8 @@
 //! Criterion bench for formula parse throughput (WP-03 gate ≥ 100k formulas/s).
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use omacell_core::formula::parse;
 
 fn sample_formulas() -> Vec<&'static str> {

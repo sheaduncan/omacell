@@ -364,6 +364,7 @@ impl Tui {
             workbook: self.file.clone(),
             selection: Some(selection),
             diagnose,
+            state_dir: self.paths.state_dir.clone(),
         }) {
             Ok(result) if result.hidden => {
                 self.message = Some(format!(

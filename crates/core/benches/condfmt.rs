@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat, resolve_overlay};
 use omacell_core::style::Color;

@@ -10,6 +10,7 @@ use omacell_core::limits::MAX_ROWS;
 use omacell_gui::Gui;
 
 #[test]
+#[ignore = "nightly wall-clock performance gate"]
 fn scrolling_the_million_row_space_stays_within_the_regression_budget() {
     let parts = launch_theme(None);
     let mut harness = Harness::builder()

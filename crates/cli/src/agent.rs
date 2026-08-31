@@ -20,11 +20,13 @@ pub fn run_prompt(
     selection: Option<&str>,
     output: Output,
 ) -> Result<(), CliError> {
+    let paths = Paths::from_env()?;
     let result = hand_off(HandOffRequest {
         prompt: prompt.to_string(),
         workbook: book.map(|p| p.to_path_buf()),
         selection: selection.map(str::to_string),
         diagnose: None,
+        state_dir: paths.state_dir,
     })?;
     let json = serde_json::to_value(&result)
         .map_err(|err| CliError::new("agent.json", err.to_string()))?;
@@ -70,6 +72,7 @@ pub fn run_diagnose(
         workbook: book.map(|p| p.to_path_buf()),
         selection: selection.map(str::to_string),
         diagnose: Some(diagnose_path.clone()),
+        state_dir: paths.state_dir.clone(),
     })?;
     let json = json!({
         "handoff": result,

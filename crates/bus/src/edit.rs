@@ -1067,11 +1067,11 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
     Ok(())
 }
 
-fn to_range(r: crate::resolve::ResolvedRange) -> RangeRef {
-    RangeRef::from_corners(
-        CellRef::new(r.min_row, r.min_col).unwrap(),
-        CellRef::new(r.max_row, r.max_col).unwrap(),
-    )
+fn to_range(r: crate::resolve::ResolvedRange) -> Result<RangeRef, CoreError> {
+    Ok(RangeRef::from_corners(
+        CellRef::new(r.min_row, r.min_col)?,
+        CellRef::new(r.max_row, r.max_col)?,
+    ))
 }
 
 fn parse_shift(value: &str) -> Result<Shift, CoreError> {
@@ -1115,7 +1115,7 @@ fn edit_insert(ctx: &mut CommandContext<'_>, args: EditInsertArgs) -> Result<Eff
         if r.area() > crate::resolve::MAX_RANGE_CELLS {
             return Err(crate::error::range_size(r.area()));
         }
-        insert_cells(ctx.workbook(), r.sheet, to_range(r), shift)?;
+        insert_cells(ctx.workbook(), r.sheet, to_range(r)?, shift)?;
     }
     Ok(changed("insert"))
 }
@@ -1141,25 +1141,30 @@ fn edit_delcells(ctx: &mut CommandContext<'_>, args: EditInsertArgs) -> Result<E
         if r.area() > crate::resolve::MAX_RANGE_CELLS {
             return Err(crate::error::range_size(r.area()));
         }
-        delete_cells(ctx.workbook(), r.sheet, to_range(r), shift)?;
+        delete_cells(ctx.workbook(), r.sheet, to_range(r)?, shift)?;
     }
     Ok(changed("delete"))
 }
 
 fn edit_copy(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
-    Ok(copy_effect(ctx, r, false))
+    copy_effect(ctx, r, false)
 }
 
 fn edit_yank(ctx: &mut CommandContext<'_>, args: SelectionArgs) -> Result<Effect, CoreError> {
     let range = action_range(ctx, args.range.as_deref())?;
-    Ok(copy_effect(ctx, range, false))
+    copy_effect(ctx, range, false)
 }
 
-fn copy_effect(ctx: &CommandContext<'_>, r: crate::resolve::ResolvedRange, cut: bool) -> Effect {
-    let grid = copy_range(ctx.workbook_ref(), r.sheet, to_range(r));
-    let extras = copy_extras(ctx.workbook_ref(), r.sheet, to_range(r));
-    Effect::query(serde_json::json!({
+fn copy_effect(
+    ctx: &CommandContext<'_>,
+    r: crate::resolve::ResolvedRange,
+    cut: bool,
+) -> Result<Effect, CoreError> {
+    let range = to_range(r)?;
+    let grid = copy_range(ctx.workbook_ref(), r.sheet, range);
+    let extras = copy_extras(ctx.workbook_ref(), r.sheet, range);
+    Ok(Effect::query(serde_json::json!({
         "payload": {
             "cut": cut,
             "sheet": r.sheet.index(),
@@ -1168,12 +1173,12 @@ fn copy_effect(ctx: &CommandContext<'_>, r: crate::resolve::ResolvedRange, cut: 
             "cells": grid,
             "extras": extras,
         }
-    }))
+    })))
 }
 
 fn edit_cut(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Effect, CoreError> {
     let range = resolve_range(ctx.workbook_ref(), &args.range)?;
-    Ok(copy_effect(ctx, range, true))
+    copy_effect(ctx, range, true)
 }
 
 fn edit_paste(ctx: &mut CommandContext<'_>, args: EditPasteArgs) -> Result<Effect, CoreError> {
@@ -1396,8 +1401,9 @@ fn edit_move(ctx: &mut CommandContext<'_>, args: EditMoveArgs) -> Result<Effect,
     let dest = resolve_cell(ctx.workbook_ref(), &args.dest)?;
     let destination = CellRef::new(dest.row, dest.col)?;
     let n = if args.copy {
-        let grid = copy_range(ctx.workbook_ref(), src.sheet, to_range(src));
-        let extras = copy_extras(ctx.workbook_ref(), src.sheet, to_range(src));
+        let range = to_range(src)?;
+        let grid = copy_range(ctx.workbook_ref(), src.sheet, range);
+        let extras = copy_extras(ctx.workbook_ref(), src.sheet, range);
         let count = paste_special_from(
             ctx.workbook(),
             dest.sheet,
@@ -1418,7 +1424,7 @@ fn edit_move(ctx: &mut CommandContext<'_>, args: EditMoveArgs) -> Result<Effect,
         move_range_cells_between(
             ctx.workbook(),
             src.sheet,
-            to_range(src),
+            to_range(src)?,
             dest.sheet,
             destination,
         )?
@@ -1473,8 +1479,8 @@ fn edit_fill(ctx: &mut CommandContext<'_>, args: EditFillArgs) -> Result<Effect,
         fill_custom_list(
             ctx.workbook(),
             src.sheet,
-            to_range(src),
-            to_range(dest),
+            to_range(src)?,
+            to_range(dest)?,
             list,
         )?
     } else {
@@ -1482,8 +1488,8 @@ fn edit_fill(ctx: &mut CommandContext<'_>, args: EditFillArgs) -> Result<Effect,
         fill_range(
             ctx.workbook(),
             src.sheet,
-            to_range(src),
-            to_range(dest),
+            to_range(src)?,
+            to_range(dest)?,
             mode,
         )?
     };
@@ -1500,10 +1506,10 @@ fn edit_filldown(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Ef
         return Ok(changed("fill"));
     }
     let src = RangeRef::from_corners(
-        CellRef::new(r.min_row, r.min_col).unwrap(),
-        CellRef::new(r.min_row, r.max_col).unwrap(),
+        CellRef::new(r.min_row, r.min_col)?,
+        CellRef::new(r.min_row, r.max_col)?,
     );
-    let n = fill_range(ctx.workbook(), r.sheet, src, to_range(r), FillMode::Copy)?;
+    let n = fill_range(ctx.workbook(), r.sheet, src, to_range(r)?, FillMode::Copy)?;
     Ok(Effect {
         result: serde_json::json!({"changed": n}),
         auto_recalc: true,
@@ -1514,10 +1520,10 @@ fn edit_filldown(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Ef
 fn edit_fillright(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
     let src = RangeRef::from_corners(
-        CellRef::new(r.min_row, r.min_col).unwrap(),
-        CellRef::new(r.max_row, r.min_col).unwrap(),
+        CellRef::new(r.min_row, r.min_col)?,
+        CellRef::new(r.max_row, r.min_col)?,
     );
-    let n = fill_range(ctx.workbook(), r.sheet, src, to_range(r), FillMode::Copy)?;
+    let n = fill_range(ctx.workbook(), r.sheet, src, to_range(r)?, FillMode::Copy)?;
     Ok(Effect {
         result: serde_json::json!({"changed": n}),
         auto_recalc: true,
@@ -1538,7 +1544,7 @@ fn edit_fillup(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Effe
         ctx.workbook(),
         range.sheet,
         src,
-        to_range(range),
+        to_range(range)?,
         FillMode::Copy,
     )?;
     Ok(Effect {
@@ -1560,7 +1566,7 @@ fn edit_fillleft(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Ef
         ctx.workbook(),
         range.sheet,
         src,
-        to_range(range),
+        to_range(range)?,
         FillMode::Copy,
     )?;
     Ok(Effect {
@@ -1571,7 +1577,7 @@ fn edit_fillleft(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Ef
 
 fn range_merge(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
-    merge(ctx.workbook(), r.sheet, to_range(r))?;
+    merge(ctx.workbook(), r.sheet, to_range(r)?)?;
     Ok(changed("merge"))
 }
 
@@ -1580,13 +1586,13 @@ fn range_mergeacross(
     args: RangeOnlyArgs,
 ) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
-    merge_across(ctx.workbook(), r.sheet, to_range(r))?;
+    merge_across(ctx.workbook(), r.sheet, to_range(r)?)?;
     Ok(changed("merge"))
 }
 
 fn range_unmerge(ctx: &mut CommandContext<'_>, args: RangeOnlyArgs) -> Result<Effect, CoreError> {
     let r = resolve_range(ctx.workbook_ref(), &args.range)?;
-    let n = unmerge(ctx.workbook(), r.sheet, to_range(r))?;
+    let n = unmerge(ctx.workbook(), r.sheet, to_range(r)?)?;
     Ok(Effect {
         result: serde_json::json!({"changed": n}),
         ..Effect::default()
@@ -1646,7 +1652,7 @@ fn auto_fit_rows(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Ef
     let count = autofit_rows(
         ctx.workbook(),
         range.sheet,
-        to_range(range),
+        to_range(range)?,
         |text, style| {
             let lines = text.lines().count().max(1) as u32;
             let scale = (style.font.size_pt / 11.0).max(0.5);
@@ -1664,7 +1670,7 @@ fn auto_fit_cols(ctx: &mut CommandContext<'_>, args: AxisRangeArgs) -> Result<Ef
     let count = autofit_columns(
         ctx.workbook(),
         range.sheet,
-        to_range(range),
+        to_range(range)?,
         |text, style| {
             let scale = (style.font.size_pt / 11.0).max(0.5);
             (f64::from(autofit_width(text)) * scale).ceil() as u32
@@ -1962,7 +1968,7 @@ fn sheet_protected_range(
                         "protected ranges must be on the target sheet",
                     ));
                 }
-                Ok(to_range(range))
+                to_range(range)
             })
             .collect::<Result<Vec<_>, CoreError>>()?;
         protection.protected_ranges.push(ProtectedRange {
@@ -2074,7 +2080,7 @@ fn edit_texttocolumns(
     let n = text_to_columns_with_plan(
         ctx.workbook(),
         r.sheet,
-        to_range(r),
+        to_range(r)?,
         &TextToColumnsPlan { mode, columns },
     )?;
     Ok(Effect {
@@ -2092,7 +2098,7 @@ fn range_removeduplicates(
     let n = remove_duplicates_with_header(
         ctx.workbook(),
         r.sheet,
-        to_range(r),
+        to_range(r)?,
         &args.columns,
         args.has_headers,
     )?;
@@ -2117,7 +2123,7 @@ fn range_consolidate(
         .iter()
         .map(|source| {
             let range = resolve_range(ctx.workbook_ref(), source)?;
-            Ok((range.sheet, to_range(range)))
+            Ok((range.sheet, to_range(range)?))
         })
         .collect::<Result<Vec<_>, CoreError>>()?;
     let dest = resolve_cell(ctx.workbook_ref(), &args.dest)?;
@@ -2219,7 +2225,7 @@ fn edit_delete_common(
     begin_edit: bool,
 ) -> Result<Effect, CoreError> {
     let range = action_range(ctx, args.range.as_deref())?;
-    let payload = copy_effect(ctx, range, false).result["payload"].clone();
+    let payload = copy_effect(ctx, range, false)?.result["payload"].clone();
     let mut changed = 0u64;
     for row in range.min_row..=range.max_row {
         for col in range.min_col..=range.max_col {
@@ -2336,21 +2342,19 @@ fn copy_above(
     if range.min_row == 0 {
         return Err(crate::error::args("the first row has no row above it"));
     }
-    let sources: Vec<_> = (range.min_col..=range.max_col)
+    let sources = (range.min_col..=range.max_col)
         .map(|col| {
-            (
+            let source = CellRef::new(range.min_row - 1, col)?;
+            Ok((
                 col,
                 copy_range(
                     ctx.workbook_ref(),
                     range.sheet,
-                    RangeRef::from_corners(
-                        CellRef::new(range.min_row - 1, col).expect("validated coordinate"),
-                        CellRef::new(range.min_row - 1, col).expect("validated coordinate"),
-                    ),
+                    RangeRef::from_corners(source, source),
                 ),
-            )
+            ))
         })
-        .collect();
+        .collect::<Result<Vec<_>, CoreError>>()?;
     let spec = PasteSpecial {
         values: !formulas,
         formulas,

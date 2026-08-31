@@ -145,6 +145,10 @@ pub const API: &[ApiEntry] = &[
 pub fn render_markdown() -> String {
     let mut out = String::from("# Lua API\n\n");
     out.push_str("Generated from `omacell_lua::catalog::API`. Do not edit by hand.\n\n");
+    out.push_str(
+        "## Runtime profiles\n\n\
+User-profile scripts have the documented API and Lua standard library. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt or change keymaps, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.\n\n",
+    );
     for entry in API {
         out.push_str(&format!(
             "## `{}`\n\n`{}`\n\n{}\n\n",

@@ -7,10 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use omacell_bus::ipc::{
-    ControlOp, IpcClient, MAX_FRAME_BYTES, Mode, Reply, Request, decode_request_bytes,
-    default_runtime_dir, discovered_socket, encode_line, list_live_instances,
+    ControlOp, Dispatch, IpcClient, MAX_FRAME_BYTES, Mode, Reply, Request, decode_request_bytes,
+    default_runtime_dir, discovered_socket, dispatch_bus_request, encode_line, list_live_instances,
 };
-use omacell_bus::{CommandKind, Exposure};
 use omacell_conf::schema::package_defaults;
 use omacell_conf::{
     HYPRLAND_SNIPPET, Layer, LoadOptions, LoadedConfig, Paths, SetupOptions, keys,
@@ -18,9 +17,8 @@ use omacell_conf::{
     validate_user_rel,
 };
 use omacell_core::addr::{RefKind, parse_a1};
-use omacell_core::changeset::{ChangesetId, CommandCall};
+use omacell_core::command::Origin;
 use omacell_core::command::Outcome;
-use omacell_core::command::{CommandId, Origin};
 use omacell_core::eval::{eval_formula_in, format_runtime};
 use omacell_core::formula::parse;
 use omacell_core::graph::CellCoord;
@@ -1072,11 +1070,9 @@ fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), 
         reload,
     );
     let runtime = omacell_bus::ipc::default_runtime_dir();
-    let ipc = omacell_bus::ipc::serve(runtime, bus)?;
-    let handler = crate::mcp::OmacellMcp::new(
-        ipc.bus().clone(),
-        std::sync::Arc::new(std::sync::Mutex::new(ctx)),
-    );
+    let bus = std::sync::Arc::new(std::sync::Mutex::new(bus));
+    let ipc = omacell_bus::ipc::serve_shared(runtime, std::sync::Arc::clone(&bus))?;
+    let handler = crate::mcp::OmacellMcp::new(bus, std::sync::Arc::new(std::sync::Mutex::new(ctx)));
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -1434,6 +1430,10 @@ impl omacell_lua::ScriptHost for CliScriptHost {
         omacell_lua::ScriptHost::execute(&mut self.inner, id, args)
     }
 
+    fn embedded_command_allowed(&self, id: &str) -> bool {
+        omacell_lua::ScriptHost::embedded_command_allowed(&self.inner, id)
+    }
+
     fn workbook(&self) -> &omacell_core::workbook::Workbook {
         omacell_lua::ScriptHost::workbook(&self.inner)
     }
@@ -1562,137 +1562,10 @@ fn cmd_run_python(
 }
 
 fn dispatch_python_request(app: &mut App, request: Request) -> Reply {
-    match request {
-        Request::Command {
-            id,
-            cmd,
-            args,
-            mode,
-        } => {
-            let command = match app.bus.registry().get_str(&cmd) {
-                Ok(command) if command.exposure == Exposure::Public => command,
-                Ok(_) => {
-                    return Reply::err(
-                        id,
-                        CoreError::new("command.internal", "internal command is not addressable"),
-                    );
-                }
-                Err(error) => return Reply::err(id, error),
-            };
-            let kind = command.kind;
-            let eligible = command.changeset_eligible;
-            let mode = mode.unwrap_or(match kind {
-                CommandKind::Query => Mode::Execute,
-                CommandKind::Mutating if eligible => Mode::Propose,
-                CommandKind::Mutating => Mode::Execute,
-            });
-            if kind == CommandKind::Mutating && eligible && mode == Mode::Execute {
-                return Reply::err(
-                    id,
-                    CoreError::new(
-                        "ipc.mode",
-                        "changeset-eligible mutating commands cannot use mode execute",
-                    ),
-                );
-            }
-            match mode {
-                Mode::Execute => outcome_to_reply(id, app.bus.execute(Origin::Script, &cmd, args)),
-                Mode::DryRun => match app.bus.dry_run(Origin::Script, &cmd, args) {
-                    Ok(dry) if dry.outcome.ok => Reply::ok(
-                        id,
-                        serde_json::json!({
-                            "dry_run": true,
-                            "summary": dry.summary,
-                            "result": dry.outcome.result,
-                        }),
-                    ),
-                    Ok(dry) => Reply::err(
-                        id,
-                        dry.outcome.error.unwrap_or_else(|| {
-                            CoreError::new("ipc.protocol", "dry-run failed without an error")
-                        }),
-                    ),
-                    Err(error) => Reply::err(id, error),
-                },
-                Mode::Propose => {
-                    let command_id = match CommandId::new(&cmd) {
-                        Ok(command_id) => command_id,
-                        Err(error) => return Reply::err(id, error),
-                    };
-                    match app.bus.propose(
-                        Origin::Script,
-                        vec![CommandCall {
-                            id: command_id,
-                            args,
-                        }],
-                    ) {
-                        Ok(changeset) => match serde_json::to_value(changeset) {
-                            Ok(value) => Reply::ok(id, value),
-                            Err(error) => {
-                                Reply::err(id, CoreError::new("ipc.frame", error.to_string()))
-                            }
-                        },
-                        Err(error) => Reply::err(id, error),
-                    }
-                }
-            }
-        }
-        Request::Control {
-            id, op, changeset, ..
-        } => match op {
-            ControlOp::Ping => Reply::ok(id, serde_json::json!({"pong": true})),
-            ControlOp::ChangesetList => match serde_json::to_value(app.bus.list_changesets()) {
-                Ok(value) => Reply::ok(id, value),
-                Err(error) => Reply::err(id, CoreError::new("ipc.frame", error.to_string())),
-            },
-            operation @ (ControlOp::ChangesetGet
-            | ControlOp::ChangesetApply
-            | ControlOp::ChangesetRevert) => {
-                let Some(changeset) = changeset else {
-                    return Reply::err(
-                        id,
-                        CoreError::new("ipc.protocol", "changeset id is required"),
-                    );
-                };
-                let changeset = match ChangesetId::new(changeset) {
-                    Ok(changeset) => changeset,
-                    Err(error) => return Reply::err(id, error),
-                };
-                let result = match operation {
-                    ControlOp::ChangesetGet => app.bus.get_changeset(&changeset).cloned(),
-                    ControlOp::ChangesetApply => app.bus.apply(Origin::Script, &changeset),
-                    ControlOp::ChangesetRevert => app.bus.revert(Origin::Script, &changeset),
-                    _ => unreachable!(),
-                };
-                match result.and_then(|value| {
-                    serde_json::to_value(value)
-                        .map_err(|error| CoreError::new("ipc.frame", error.to_string()))
-                }) {
-                    Ok(value) => Reply::ok(id, value),
-                    Err(error) => Reply::err(id, error),
-                }
-            }
-            ControlOp::Subscribe | ControlOp::Unsubscribe => Reply::err(
-                id,
-                CoreError::new(
-                    "ipc.protocol",
-                    "event subscriptions are unavailable on the Python stdio bridge",
-                ),
-            ),
-        },
-    }
-}
-
-fn outcome_to_reply(id: u64, outcome: Outcome) -> Reply {
-    if outcome.ok {
-        Reply::ok(id, outcome.result.unwrap_or(serde_json::Value::Null))
-    } else {
-        Reply::err(
-            id,
-            outcome
-                .error
-                .unwrap_or_else(|| CoreError::new("ipc.protocol", "command failed without error")),
-        )
+    match dispatch_bus_request(&mut app.bus, Origin::Script, request) {
+        Dispatch::Reply(reply) => reply,
+        dispatch => dispatch
+            .reject_subscriptions("event subscriptions are unavailable on the Python stdio bridge"),
     }
 }
 

@@ -3,7 +3,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use omacell_bus::Bus;
 use omacell_bus::ipc::{IpcClient, Mode, serve};
 use omacell_core::eval::FnRegistry;

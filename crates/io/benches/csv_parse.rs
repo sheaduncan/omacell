@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use omacell_io::csv::{ImportPlan, load};
 
 fn numeric_csv(rows: usize, cols: usize) -> Vec<u8> {

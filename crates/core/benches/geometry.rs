@@ -17,7 +17,7 @@ fn pixel_to_index_scales(c: &mut Criterion) {
         }
         let px = axis.index_to_pixel(n / 2);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| axis.pixel_to_index(criterion::black_box(px)));
+            b.iter(|| axis.pixel_to_index(std::hint::black_box(px)));
         });
     }
     group.finish();
@@ -33,7 +33,7 @@ fn index_to_pixel_scales(c: &mut Criterion) {
             }
         }
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| axis.index_to_pixel(criterion::black_box(n / 2)));
+            b.iter(|| axis.index_to_pixel(std::hint::black_box(n / 2)));
         });
     }
     group.finish();

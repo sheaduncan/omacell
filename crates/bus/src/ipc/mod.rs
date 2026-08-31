@@ -9,6 +9,8 @@ mod client;
 #[cfg(unix)]
 mod discover;
 #[cfg(unix)]
+mod dispatch;
+#[cfg(unix)]
 mod protocol;
 #[cfg(unix)]
 mod server;
@@ -21,6 +23,8 @@ pub use discover::{
     prepare_runtime_dir, remove_stale_socket,
 };
 #[cfg(unix)]
+pub use dispatch::{Dispatch, dispatch_bus_request};
+#[cfg(unix)]
 pub use protocol::{
     ControlOp, Discovery, EVENT_TYPES, FrameBuf, MAX_CONNECTIONS, MAX_EVENT_FILTERS,
     MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, MAX_FRAME_BYTES, MAX_JSON_DEPTH, Mode, Reply, Request,
@@ -28,4 +32,4 @@ pub use protocol::{
     encode_control, encode_line, event_type_name,
 };
 #[cfg(unix)]
-pub use server::{IpcHandle, serve, serve_runner};
+pub use server::{IpcHandle, serve, serve_runner, serve_shared};

@@ -10,6 +10,14 @@ use serde_json::Value;
 pub trait ScriptHost: Send {
     /// Execute a command-bus command (`Origin::Script`).
     fn execute(&mut self, id: &str, args: Value) -> Result<Value, CoreError>;
+    /// Whether the command is part of the embedded-script capability set.
+    ///
+    /// Hosts default closed. Production hosts should require an exact command
+    /// allowlist as well as safe command metadata.
+    fn embedded_command_allowed(&self, id: &str) -> bool {
+        let _ = id;
+        false
+    }
     /// Borrow the live workbook.
     fn workbook(&self) -> &Workbook;
     /// Register a custom function on the live calc registry.

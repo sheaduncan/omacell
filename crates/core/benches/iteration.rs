@@ -21,7 +21,7 @@ fn iter_occupied(c: &mut Criterion) {
             for (_r, _c, slot) in store.iter() {
                 n = n.wrapping_add(slot.value.is_error() as u64);
             }
-            criterion::black_box(n)
+            std::hint::black_box(n)
         });
     });
 }

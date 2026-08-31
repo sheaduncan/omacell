@@ -17,7 +17,7 @@ jobs:
     name: fuzz-and-ignored
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly 2026-08-28
@@ -33,6 +33,9 @@ jobs:
 
       - name: Ignored / large-file tests
         run: cargo +nightly test --workspace -- --ignored
+
+      - name: GUI software-render performance gate
+        run: cargo +nightly test --release -p omacell-gui --test performance -- --ignored --nocapture
 
       - name: Fuzz targets (10 minutes each)
         run: |

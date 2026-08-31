@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use mlua::{HookTriggers, Lua, Table, Value as LuaValue, VmState};
+use mlua::{HookTriggers, Lua, Table, Value as LuaValue, Variadic, VmState};
 use omacell_core::addr::{RefKind, parse_a1, quote_sheet_name};
 use omacell_core::coerce::Scalar;
 use omacell_core::error::CoreError;
@@ -252,6 +252,7 @@ fn install_api(
     profile: Profile,
     function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
+    install_print(lua, host, function_depth)?;
     let omacell = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
@@ -260,7 +261,8 @@ fn install_api(
     let cmd = lua
         .create_function(move |lua, (id, args): (String, LuaValue)| {
             host_api_available(&cmd_depth)?;
-            if profile == Profile::Embedded && !embedded_command_allowed(&id) {
+            if profile == Profile::Embedded && !lock_mutex(&host_cmd).embedded_command_allowed(&id)
+            {
                 return Err(mlua::Error::external(CoreError::new(
                     "lua.sandbox",
                     format!("command {id} is not available to embedded scripts"),
@@ -297,9 +299,9 @@ fn install_api(
         .set("fn", register)
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
 
-    install_ui(lua, &omacell, host, function_depth)?;
+    install_ui(lua, &omacell, host, profile, function_depth)?;
     install_events(lua, &omacell)?;
-    install_keymap(lua, &omacell, host, function_depth)?;
+    install_keymap(lua, &omacell, host, profile, function_depth)?;
     install_ai(lua, &omacell)?;
     install_book(lua, &omacell, host, function_depth)?;
 
@@ -309,10 +311,35 @@ fn install_api(
     Ok(())
 }
 
+fn install_print(
+    lua: &Lua,
+    host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    function_depth: &Arc<AtomicU32>,
+) -> Result<(), CoreError> {
+    let h = Arc::clone(host);
+    let depth = Arc::clone(function_depth);
+    let print = lua
+        .create_function(move |lua, values: Variadic<LuaValue>| {
+            host_api_available(&depth)?;
+            let tostring: mlua::Function = lua.globals().get("tostring")?;
+            let mut rendered = Vec::with_capacity(values.len());
+            for value in values {
+                rendered.push(tostring.call::<String>(value)?);
+            }
+            lock_mutex(&h).status(&rendered.join("\t"));
+            Ok(())
+        })
+        .map_err(|error| CoreError::new("lua.api", error.to_string()))?;
+    lua.globals()
+        .set("print", print)
+        .map_err(|error| CoreError::new("lua.api", error.to_string()))
+}
+
 fn install_ui(
     lua: &Lua,
     omacell: &Table,
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    profile: Profile,
     function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
     let ui = lua
@@ -342,17 +369,19 @@ fn install_ui(
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?,
     )
     .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    let h = Arc::clone(host);
-    let depth = Arc::clone(function_depth);
-    ui.set(
-        "prompt",
-        lua.create_function(move |_, msg: String| {
-            host_api_available(&depth)?;
-            lock_mutex(&h).prompt(&msg).map_err(mlua::Error::external)
-        })
-        .map_err(|e| CoreError::new("lua.api", e.to_string()))?,
-    )
-    .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
+    if profile == Profile::User {
+        let h = Arc::clone(host);
+        let depth = Arc::clone(function_depth);
+        ui.set(
+            "prompt",
+            lua.create_function(move |_, msg: String| {
+                host_api_available(&depth)?;
+                lock_mutex(&h).prompt(&msg).map_err(mlua::Error::external)
+            })
+            .map_err(|e| CoreError::new("lua.api", e.to_string()))?,
+        )
+        .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
+    }
     omacell
         .set("ui", ui)
         .map_err(|e| CoreError::new("lua.api", e.to_string()))
@@ -440,20 +469,16 @@ fn dispatch_hook(lua: &Lua, name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-fn embedded_command_allowed(id: &str) -> bool {
-    id != "edit.repeat"
-        && !matches!(
-            id.split_once('.').map(|(namespace, _)| namespace),
-            Some("file" | "macro" | "script" | "theme")
-        )
-}
-
 fn install_keymap(
     lua: &Lua,
     omacell: &Table,
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    profile: Profile,
     function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
+    if profile == Profile::Embedded {
+        return Ok(());
+    }
     let keymap = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
