@@ -13,6 +13,7 @@ Commands:
   eval       Evaluate a formula in a workbook
   recalc     Recalculate a workbook
   run        Run a Lua script (WP-20)
+  trust      Embedded-script trust store (WP-20)
   fn         Function catalog
   config     Configuration
   theme      Theme inspection and reload

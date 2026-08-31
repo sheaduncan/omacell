@@ -108,10 +108,21 @@ pub enum Commands {
     },
     /// Run a Lua script (WP-20).
     Run {
-        /// Script path.
+        /// Script path (workbook path when `--embedded`).
         script: PathBuf,
-        /// Workbook path.
-        book: PathBuf,
+        /// Workbook path (optional with `--embedded`).
+        book: Option<PathBuf>,
+        /// Run the workbook's embedded script (`xl/omacell/scripts/main.lua`).
+        #[arg(long, conflicts_with = "python")]
+        embedded: bool,
+        /// Experimental Python subprocess speaking JSON-lines over stdio.
+        #[arg(long, conflicts_with = "embedded")]
+        python: bool,
+    },
+    /// Embedded-script trust store (WP-20).
+    Trust {
+        #[command(subcommand)]
+        cmd: TrustCmd,
     },
     /// Function catalog.
     Fn {
@@ -260,6 +271,23 @@ pub enum KeysCmd {
         #[arg(long)]
         hyprland: Option<PathBuf>,
     },
+}
+
+/// `omacell trust`.
+#[derive(Debug, Subcommand)]
+pub enum TrustCmd {
+    /// Grant a file hash.
+    Add {
+        /// Workbook or script path.
+        file: PathBuf,
+    },
+    /// Revoke a file hash (path or hex).
+    Remove {
+        /// Path or SHA-256 hex.
+        file: String,
+    },
+    /// List trusted hashes.
+    List,
 }
 
 /// `omacell setup`.

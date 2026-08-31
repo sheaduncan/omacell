@@ -133,6 +133,8 @@ pub fn launch_opts(theme: Option<&str>, workbook: Workbook, watch: bool) -> Harn
     omacell_bus::register_data_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_audit_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_analysis_commands(bus.registry_mut()).unwrap();
+    omacell_lua::register_script_commands(bus.registry_mut(), omacell_lua::ScriptGate::default())
+        .unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
     register_theme_reload(&mut bus, store.handle()).unwrap();
     let open_count = Arc::new(AtomicUsize::new(0));

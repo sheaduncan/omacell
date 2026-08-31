@@ -96,6 +96,8 @@ fn harness_opts_with_workbook(
     omacell_bus::register_data_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_audit_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_analysis_commands(bus.registry_mut()).unwrap();
+    omacell_lua::register_script_commands(bus.registry_mut(), omacell_lua::ScriptGate::default())
+        .unwrap();
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
 
     let tui = Tui::new(

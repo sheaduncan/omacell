@@ -485,7 +485,11 @@ impl RecalcEngine {
                 callee: crate::formula::Callee::Name(name),
                 ..
             } = &expr.kind
-                && self.registry.lookup(name).is_some_and(|def| def.volatile)
+                && (self.registry.lookup(name).is_some_and(|def| def.volatile)
+                    || self
+                        .registry
+                        .lookup_dynamic(name)
+                        .is_some_and(|def| def.volatile))
             {
                 registry_volatile = true;
             }

@@ -48,6 +48,8 @@ encode.
 | Unsupported pivot extensions | Preserves calculated fields, slicers, and vendor extensions | Supported fields are modeled; saving regenerates their cache/table parts and does not preserve unsupported pivot XML extensions | WP-24 / WP-24a |
 | Goal Seek non-convergence | Status dialog; last trial remains | `converged: false` with a finite last trial; no error | WP-24 |
 | Data Tables / Scenario Manager | Excel what-if tools | Deferred (v1.x); only Goal Seek in this package | WP-24 |
+| Lua user stdlib | Full Lua 5.4 including `debug` | User scripts receive `mlua`'s full safe subset, including `io`, `os`, `package`, and Lua-module `require`; the unsafe `debug` library and native C-module loading remain unavailable under the workspace-wide `unsafe_code = "forbid"`. Embedded scripts additionally remove all file/process/module-loading entry points | WP-20 |
+| `embedded_scripts = ask` | Prompt (never on open) | Non-interactive CLI treats `ask` as `deny` | WP-20 |
 
 LibreOffice disagreements discovered by `scripts/lo-crosscheck.py` should be
 appended here rather than papered over in the corpus. Corpus rows for an

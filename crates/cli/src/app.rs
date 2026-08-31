@@ -64,6 +64,25 @@ impl App {
         Self::from_parts(paths, options, opened.workbook, file_session, false)
     }
 
+    /// Bootstrap from workbook bytes that were read once for an embedded-script
+    /// trust decision.
+    pub fn with_scriptable_workbook_bytes(
+        cli: &Cli,
+        book: &Path,
+        bytes: &[u8],
+    ) -> Result<Self, CoreError> {
+        let paths = Paths::from_env()?;
+        let opened = files::open_scriptable_bytes(book, bytes)?;
+        let mut options = LoadOptions::from_process();
+        options.config_file = cli.config.clone();
+        options.theme_override = cli.theme.clone();
+        options.cli_sets = cli.sets.clone();
+        options.workbook = Some(workbook_settings_overlay(opened.workbook.settings()));
+        let file_session = FileSession::new();
+        file_session.attach(book, &opened);
+        Self::from_parts(paths, options, opened.workbook, file_session, false)
+    }
+
     /// Live TUI/GUI composition: watcher-enabled [`ConfigStore`].
     pub fn bootstrap_live(cli: &Cli, book: Option<&Path>) -> Result<Self, CoreError> {
         match book {
@@ -141,6 +160,9 @@ impl App {
         omacell_bus::register_data_commands(bus.registry_mut())?;
         omacell_bus::register_audit_commands(bus.registry_mut())?;
         omacell_bus::register_analysis_commands(bus.registry_mut())?;
+        let script_gate = omacell_lua::ScriptGate::default();
+        omacell_lua::register_script_commands(bus.registry_mut(), script_gate.clone())?;
+        omacell_lua::attach_recorder(&mut bus, &script_gate);
         Ok(Self {
             paths,
             store,

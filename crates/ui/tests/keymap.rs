@@ -25,6 +25,8 @@ fn load_session(model_file: &str) -> (tempfile::TempDir, UiSession, CommandRegis
     register_core(&mut registry).unwrap();
     register_chart_commands(&mut registry).unwrap();
     register_analysis_commands(&mut registry).unwrap();
+    omacell_lua::register_script_commands(&mut registry, omacell_lua::ScriptGate::default())
+        .unwrap();
     register_ui_commands(&mut registry, &session).unwrap();
     let keymap = session.keymap();
     (dir, session, registry, keymap)

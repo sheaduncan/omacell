@@ -37,6 +37,8 @@ fn harness_with_keymap(keymap: &str) -> (tempfile::TempDir, UiSession, Bus) {
     omacell_bus::register_data_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_audit_commands(bus.registry_mut()).unwrap();
     omacell_bus::register_analysis_commands(bus.registry_mut()).unwrap();
+    omacell_lua::register_script_commands(bus.registry_mut(), omacell_lua::ScriptGate::default())
+        .unwrap();
     register_ui_commands(bus.registry_mut(), &session).unwrap();
     (dir, session, bus)
 }

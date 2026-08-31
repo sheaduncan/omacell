@@ -48,12 +48,7 @@ fn ipc_all_and_socket_are_mutually_exclusive() {
 
 #[test]
 fn stubs_exit_three_with_hint() {
-    for args in [
-        vec!["run", "x.lua", "x.xlsx"],
-        vec!["ai", "setup"],
-        vec!["agent", "hello"],
-        vec!["mcp"],
-    ] {
+    for args in [vec!["ai", "setup"], vec!["agent", "hello"], vec!["mcp"]] {
         let (_home, mut cmd) = home();
         cmd.args(&args)
             .assert()
@@ -111,7 +106,7 @@ fn tui_rejects_ambiguous_or_ignored_arguments_before_tty_setup() {
 #[test]
 fn json_error_shape() {
     let (_home, mut cmd) = home();
-    cmd.args(["--json", "run", "x.lua", "x.xlsx"])
+    cmd.args(["--json", "ai", "setup"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("\"code\""))

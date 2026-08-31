@@ -24,6 +24,7 @@ serde_json = { workspace = true }
 toml = "0.8"
 
 [dev-dependencies]
+omacell-lua = { path = "../lua", version = "0.0.0" }
 insta = "1"
 proptest = { workspace = true }
 tempfile = "3"

@@ -155,6 +155,20 @@ WP-24 proposes the following additions to the frozen public core contract. The P
 
 The WP-07a command catalog adds public ids `pivot.create`, `pivot.refresh`, `pivot.remove`, `whatif.goalseek`, and `stats.describe` with the typed schemas in [`analysis.rs`](../crates/bus/src/analysis.rs). `pivot.restore` is an internal inverse and is excluded from `commands_json`. The catalog envelope remains schema version 1; existing ids and schemas are unchanged.
 
+## Lua scripting extensions — WP-20 (approval pending)
+
+WP-20 proposes additive extensions to frozen calculation and command contracts. The PR must not merge until a human approves the RFC in [`reports/WP-20.md`](../reports/WP-20.md).
+
+| Type / fn | Source |
+|---|---|
+| `DynamicFnBody`, `DynamicFn` | [`eval/registry.rs`](../crates/core/src/eval/registry.rs) |
+| `FnRegistry::{register_dynamic,lookup_dynamic,iter_dynamic}` | same |
+| `CommandObserver`, `Bus::observe_commands` | [`session.rs`](../crates/bus/src/session.rs) |
+
+Dynamic function names are case-insensitive and additive beside built-ins; built-ins retain lookup precedence. Dynamic arguments are materialized before dispatch, volatility participates in graph invalidation, and `ArrayLift::All` uses the same lift machinery as built-ins. `FnRegistry::len` and `is_empty` include dynamic entries.
+
+The WP-07a public command catalog adds `macro.record`, `macro.stop`, `macro.save`, and `script.source`. The first, second, and fourth use the closed empty-object schema; `macro.save` requires one string `path`. All four are non-changeset-eligible mutating commands; `script.source` is a deferred host action, and its mutating classification prevents model origins from causing full-profile user code execution. The catalog envelope remains schema version 1 and existing command schemas are unchanged.
+
 ## Corpora
 
 - [`tests/corpus/addr/a1.tsv`](../tests/corpus/addr/a1.tsv)
