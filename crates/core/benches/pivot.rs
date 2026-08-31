@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use omacell_core::addr::{CellRef, RangeRef, SheetId};
 use omacell_core::pivot::{
     CacheValue, PivotAgg, PivotDataField, PivotTable, materialize_from_cache,

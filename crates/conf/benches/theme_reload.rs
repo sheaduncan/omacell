@@ -2,7 +2,9 @@
 
 use std::path::PathBuf;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use omacell_conf::{LoadOptions, Paths, load_with_options};
 
 fn fixture_paths() -> Paths {

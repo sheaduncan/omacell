@@ -1,6 +1,8 @@
 //! Frame budget: redraw a 200×60 window over a 1M-row sheet.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use omacell_bus::Bus;
 use omacell_bus::LongOps;
 use omacell_conf::{ConfigStore, LoadOptions, Paths};

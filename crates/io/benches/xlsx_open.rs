@@ -62,7 +62,7 @@ fn bench_open(c: &mut Criterion) {
     group.bench_function("synthetic_sheet", |b| {
         b.iter(|| {
             let doc = open_bytes(&bytes).expect("open");
-            criterion::black_box(doc.workbook.used_range(doc.workbook.active_sheet()).ok());
+            std::hint::black_box(doc.workbook.used_range(doc.workbook.active_sheet()).ok());
         });
     });
     group.finish();

@@ -1,6 +1,8 @@
 //! Software-raster scroll budget on a 1M-row sheet.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use egui_kittest::Harness;
 use omacell_bus::{Bus, LongOps};
 use omacell_conf::{ConfigStore, LoadOptions, Paths};

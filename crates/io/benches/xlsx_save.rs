@@ -28,7 +28,7 @@ fn bench_save(c: &mut Criterion) {
     group.bench_function("numeric_86k_x_20", |b| {
         b.iter(|| {
             let bytes = save_workbook_bytes(&wb).expect("save");
-            criterion::black_box(bytes.len());
+            std::hint::black_box(bytes.len());
         });
     });
     group.finish();
