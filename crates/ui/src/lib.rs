@@ -41,7 +41,7 @@ pub use panel::PanelState;
 pub use persist::SessionState;
 pub use selection::{Area, ExtendMode, Selection, SelectionStats, SelectionStatsProvider};
 pub use session::{AgentHandoff, UiSession};
-pub use status::{StatusLine, StatusSegment, diagnose_offer};
+pub use status::{StatusLine, StatusSegment, ai_status_text, diagnose_offer};
 pub use undo::{UndoEntry, UndoHistory};
 pub use view::register_ui_commands;
 pub use viewport::Viewport;

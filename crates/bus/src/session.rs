@@ -64,6 +64,11 @@ impl Bus {
         &self.workbook
     }
 
+    /// Mutable workbook (AI cache persist, composition-root settle).
+    pub fn workbook_mut(&mut self) -> &mut Workbook {
+        &mut self.workbook
+    }
+
     /// Borrow the recalc engine.
     #[must_use]
     pub fn engine(&self) -> &RecalcEngine {

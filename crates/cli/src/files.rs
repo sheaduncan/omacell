@@ -38,6 +38,7 @@ struct FileState {
     package: Option<OpcPackage>,
     extras: HashMap<String, WorksheetExtras>,
     config: Option<ReloadHandle>,
+    ai: Option<std::sync::Arc<omacell_ai::AiRuntime>>,
 }
 
 /// Sidecar retained by file command closures (package bytes live outside `Workbook`).
@@ -68,6 +69,10 @@ impl FileSession {
 
     pub(crate) fn attach_config(&self, config: ReloadHandle) {
         self.lock().config = Some(config);
+    }
+
+    pub(crate) fn attach_ai(&self, runtime: std::sync::Arc<omacell_ai::AiRuntime>) {
+        self.lock().ai = Some(runtime);
     }
 
     /// Path of the workbook attached to this session, if any.
@@ -257,15 +262,38 @@ fn file_save(
         return Err(cancelled());
     }
     ctx.report_progress(0, Some(1), "save");
-    write_kind(
-        ctx.workbook_ref(),
-        &path,
-        kind,
-        package.as_ref(),
-        &extras,
-        keep_backups,
-        ctx.cancel_flag().map(Arc::as_ref),
-    )?;
+    if let Some(ai) = session.lock().ai.clone() {
+        let _ = ai.write_workbook_cache(ctx.workbook());
+    }
+    let xlsx_export = session
+        .lock()
+        .config
+        .as_ref()
+        .map(|config| config.snapshot().config.ai.functions.xlsx_export)
+        .unwrap_or_else(|| "formulas".into());
+    if kind == FileKind::Xlsx && xlsx_export == "values" {
+        let mut copy = ctx.workbook_ref().clone();
+        omacell_ai::strip_ai_formulas(&mut copy);
+        write_kind(
+            &copy,
+            &path,
+            kind,
+            package.as_ref(),
+            &extras,
+            keep_backups,
+            ctx.cancel_flag().map(Arc::as_ref),
+        )?;
+    } else {
+        write_kind(
+            ctx.workbook_ref(),
+            &path,
+            kind,
+            package.as_ref(),
+            &extras,
+            keep_backups,
+            ctx.cancel_flag().map(Arc::as_ref),
+        )?;
+    }
     ctx.report_progress(1, Some(1), "save");
     {
         let mut state = session.lock();

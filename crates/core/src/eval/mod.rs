@@ -1792,9 +1792,14 @@ pub fn eval_async_fn(
     };
     let key = ContentHash::of_args(def.name, args);
     match provider.evaluate(key, &req) {
-        AsyncState::Ready(v) => RuntimeValue::from_stored(v, ctx.wb.intern()),
+        AsyncState::Ready(v) => provider
+            .runtime_result(key)
+            .unwrap_or_else(|| RuntimeValue::from_stored(v, ctx.wb.intern())),
         AsyncState::Pending { cached } => {
             ctx.mark_pending();
+            if let Some(runtime) = provider.runtime_result(key) {
+                return runtime;
+            }
             match cached {
                 Some(v) => RuntimeValue::from_stored(v, ctx.wb.intern()),
                 None => RuntimeValue::error(ErrorKind::GettingData),

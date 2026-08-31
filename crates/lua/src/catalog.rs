@@ -130,13 +130,23 @@ pub const API: &[ApiEntry] = &[
     },
     ApiEntry {
         name: "omacell.ai.task",
-        signature: "omacell.ai.task(...)",
-        doc: "Reserved for WP-23.",
+        signature: "omacell.ai.task(name, spec)",
+        doc: "Register a named AI task (prompt/schema).",
     },
     ApiEntry {
         name: "omacell.ai.fn",
-        signature: "omacell.ai.fn(...)",
-        doc: "Reserved for WP-23.",
+        signature: "omacell.ai.fn(name, spec)",
+        doc: "Register an AI-backed worksheet function (sync; not an async graph node).",
+    },
+    ApiEntry {
+        name: "omacell.on_ai_request",
+        signature: "omacell.on_ai_request(fn)",
+        doc: "Register a pre-request hook. The payload is already fenced.",
+    },
+    ApiEntry {
+        name: "omacell.on_ai_response",
+        signature: "omacell.on_ai_response(fn)",
+        doc: "Register a post-response hook.",
     },
 ];
 

@@ -1048,6 +1048,21 @@ fn draw_status(
     };
     let mut line = StatusLine::default();
     line.refresh(ids, ui.mode().label(), &cell, &stats, calc, theme_name);
+    let cfg = ui.config();
+    let local = cfg
+        .ai
+        .models
+        .default
+        .split(':')
+        .next()
+        .and_then(|name| cfg.ai.providers.get(name).map(|p| p.local))
+        .unwrap_or(false);
+    line.set_ai(Some(omacell_ui::ai_status_text(
+        cfg.ai.enabled,
+        &cfg.ai.models.default,
+        local,
+        &cfg.ai.privacy.send,
+    )));
     line.set_offer(omacell_ui::diagnose_offer(
         wb,
         ui.config().ai.agent.diagnose_offers,

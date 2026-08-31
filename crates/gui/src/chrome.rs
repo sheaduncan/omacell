@@ -104,6 +104,21 @@ pub fn status(
         calc,
         &theme.name,
     );
+    let cfg = session.config();
+    let local = cfg
+        .ai
+        .models
+        .default
+        .split(':')
+        .next()
+        .and_then(|name| cfg.ai.providers.get(name).map(|p| p.local))
+        .unwrap_or(false);
+    line.set_ai(Some(omacell_ui::ai_status_text(
+        cfg.ai.enabled,
+        &cfg.ai.models.default,
+        local,
+        &cfg.ai.privacy.send,
+    )));
     line.set_offer(omacell_ui::diagnose_offer(
         wb,
         session.config().ai.agent.diagnose_offers,

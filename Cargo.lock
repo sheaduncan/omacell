@@ -3584,10 +3584,14 @@ name = "omacell-ai"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "calamine",
  "criterion",
  "insta",
  "omacell-conf",
  "omacell-core",
+ "omacell-fn",
+ "omacell-io",
+ "proptest",
  "regex",
  "reqwest",
  "schemars",

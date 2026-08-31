@@ -991,11 +991,24 @@ fn cmd_recalc(
     let mut app = init_app_book(cli, book)?;
     let args = serde_json::json!({"mode": "rebuild"});
     let outcome = if cli.dry_run {
-        app.dry_run("calc.recalc", args)?.outcome
+        app.dry_run("calc.recalc", args.clone())?.outcome
     } else {
-        app.execute("calc.recalc", args)
+        app.execute("calc.recalc", args.clone())
     };
-    let _ = wait;
+    if wait
+        && outcome.ok
+        && let Some(ai) = app.ai.clone()
+    {
+        let config = app.loaded().config;
+        let local = {
+            let (name, _) = omacell_ai::route_slot(&config, omacell_ai::Slot::Default);
+            omacell_ai::policy::provider_is_local(&config, &name)
+        };
+        let policy = omacell_ai::PolicySnapshot::capture(&config, Some(app.bus.workbook()), local);
+        let _ = ai.settle(&policy);
+        let _ = ai.write_workbook_cache(app.bus.workbook_mut());
+        let _ = app.execute("calc.recalc", args);
+    }
     if write && outcome.ok {
         let save_args = serde_json::json!({"path": book.display().to_string()});
         let save = if cli.dry_run {
@@ -1061,6 +1074,8 @@ fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), 
         store,
         bus,
         files,
+        ai,
+        ai_tokio,
     } = app;
     let ctx = crate::mcp::ctx_for_cli(
         files
@@ -1077,7 +1092,7 @@ fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), 
         .enable_all()
         .build()
         .map_err(|err| CliError::new("mcp.runtime", err.to_string()))?;
-    let _keep = (store, files, ipc);
+    let _keep = (store, files, ipc, ai, ai_tokio);
     rt.block_on(crate::mcp::serve(handler, socket.map(Path::to_path_buf)))
 }
 

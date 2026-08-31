@@ -15,6 +15,7 @@ workspace = true
 async-trait = "0.1"
 omacell-conf = { path = "../conf", version = "0.0.0" }
 omacell-core = { path = "../core", version = "0.0.0" }
+omacell-io = { path = "../io", version = "0.0.0" }
 regex = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 schemars = { workspace = true }
@@ -23,12 +24,15 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 thiserror = "2"
 toml = "0.8"
-tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 tracing = "0.1"
 
 [dev-dependencies]
+calamine = "0.36"
 criterion = { workspace = true }
 insta = { version = "1", features = ["json"] }
+omacell-fn = { path = "../fn", version = "0.0.0" }
+proptest = { workspace = true }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 

@@ -146,12 +146,24 @@ Register a theme-changed handler.
 
 ## `omacell.ai.task`
 
-`omacell.ai.task(...)`
+`omacell.ai.task(name, spec)`
 
-Reserved for WP-23.
+Register a named AI task (prompt/schema).
 
 ## `omacell.ai.fn`
 
-`omacell.ai.fn(...)`
+`omacell.ai.fn(name, spec)`
 
-Reserved for WP-23.
+Register an AI-backed worksheet function (sync; not an async graph node).
+
+## `omacell.on_ai_request`
+
+`omacell.on_ai_request(fn)`
+
+Register a pre-request hook. The payload is already fenced.
+
+## `omacell.on_ai_response`
+
+`omacell.on_ai_response(fn)`
+
+Register a post-response hook.

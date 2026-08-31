@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use mlua::{HookTriggers, Lua, Table, Value as LuaValue, Variadic, VmState};
 use omacell_core::addr::{RefKind, parse_a1, quote_sheet_name};
 use omacell_core::coerce::Scalar;
-use omacell_core::error::CoreError;
+use omacell_core::error::{CoreError, ErrorKind};
 use omacell_core::eval::{ArgVal, ArrayLift, DynamicFn, DynamicFnBody, RuntimeValue};
 use omacell_core::value::Value;
 use serde_json::Value as Json;
@@ -302,7 +302,7 @@ fn install_api(
     install_ui(lua, &omacell, host, profile, function_depth)?;
     install_events(lua, &omacell)?;
     install_keymap(lua, &omacell, host, profile, function_depth)?;
-    install_ai(lua, &omacell)?;
+    install_ai(lua, &omacell, host, function_depth)?;
     install_book(lua, &omacell, host, function_depth)?;
 
     lua.globals()
@@ -397,6 +397,8 @@ fn install_events(lua: &Lua, omacell: &Table) -> Result<(), CoreError> {
         "on_before_save",
         "on_recalc",
         "on_theme_change",
+        "on_ai_request",
+        "on_ai_response",
     ] {
         hooks
             .set(
@@ -500,24 +502,69 @@ fn install_keymap(
         .map_err(|e| CoreError::new("lua.api", e.to_string()))
 }
 
-fn install_ai(lua: &Lua, omacell: &Table) -> Result<(), CoreError> {
+fn install_ai(
+    lua: &Lua,
+    omacell: &Table,
+    host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    function_depth: &Arc<AtomicU32>,
+) -> Result<(), CoreError> {
     let ai = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    let stub = lua
-        .create_function(|_, (): ()| -> mlua::Result<()> {
-            Err(mlua::Error::RuntimeError(
-                "omacell.ai is reserved for WP-23".into(),
-            ))
-        })
+    let task = lua
+        .create_function(
+            |lua, (name, spec): (String, LuaValue)| -> mlua::Result<()> {
+                let g = lua.globals();
+                let omacell: Table = g.get("omacell")?;
+                let tasks: Table = match omacell.get("_ai_tasks") {
+                    Ok(t) => t,
+                    Err(_) => {
+                        let t = lua.create_table()?;
+                        omacell.set("_ai_tasks", t.clone())?;
+                        t
+                    }
+                };
+                tasks.set(name, spec)?;
+                Ok(())
+            },
+        )
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    ai.set("task", stub.clone())
+    let host_fn = Arc::clone(host);
+    let depth = Arc::clone(function_depth);
+    let func = lua
+        .create_function(
+            move |_, (name, _spec): (String, LuaValue)| -> mlua::Result<()> {
+                host_api_available(&depth)?;
+                let def = DynamicFn {
+                    name,
+                    min_args: 1,
+                    max_args: 8,
+                    volatile: false,
+                    array_lift: ArrayLift::None,
+                    body: Arc::new(AiFnStub),
+                };
+                lock_mutex(&host_fn)
+                    .register_function(def)
+                    .map_err(mlua::Error::external)?;
+                Ok(())
+            },
+        )
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    ai.set("fn", stub)
+    ai.set("task", task)
+        .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
+    ai.set("fn", func)
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     omacell
         .set("ai", ai)
         .map_err(|e| CoreError::new("lua.api", e.to_string()))
+}
+
+struct AiFnStub;
+
+impl DynamicFnBody for AiFnStub {
+    fn eval(&self, _args: &[ArgVal]) -> RuntimeValue {
+        RuntimeValue::error(ErrorKind::Na)
+    }
 }
 
 fn install_book(

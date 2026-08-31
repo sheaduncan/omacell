@@ -76,10 +76,10 @@ impl Palette {
             self.hits.clear();
             let request = rest.trim();
             self.prompt = Some(if request.is_empty() {
-                "AI plans arrive in WP-23".into()
+                "Type a sentence after ? for an AI plan".into()
             } else {
                 ai.and_then(|provider| provider.plan(request))
-                    .unwrap_or_else(|| format!("AI plan for {request:?} arrives in WP-23"))
+                    .unwrap_or_else(|| format!("plan {request:?} (omacell ai plan / ai.plan)"))
             });
             return;
         }
