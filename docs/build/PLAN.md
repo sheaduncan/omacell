@@ -270,7 +270,7 @@ Those paths have landed. The remaining critical path is AI + formats + release: 
 | [WP-24](wp/WP-24-pivot-goalseek-stats.md) | Pivot tables, Goal Seek, statistics panel | 6 | A | XL | WP-18, WP-10 | WP-28 |
 | [WP-25](wp/WP-25-charts-sparklines.md) | Charts and sparklines: model, vector renderer, `.xlsx` DrawingML core types | 6 | C | XL | WP-16, WP-10, WP-15 | WP-26, WP-28 |
 | [WP-26](wp/WP-26-print-pdf.md) | Printing and PDF export | 6 | C | L | WP-16, WP-25 | WP-28 |
-| [WP-27](wp/WP-27-other-formats.md) | Additional formats: ODS, JSON, Parquet/Arrow, `.xls` bridge, HTML/Markdown tables | 6 | B | L | WP-08, WP-10 | WP-28 |
+| [WP-27](wp/WP-27-other-formats.md) | Additional formats: ODS, JSON, Parquet/Arrow, native `.xls`, HTML/Markdown tables | 6 | B | L | WP-08, WP-10 | WP-28 |
 | [WP-28](wp/WP-28-packaging-release-hardening.md) | Packaging, documentation, Omarchy CI, hardening, accessibility, i18n scaffolding, release | 7 | D | L | WP-13, WP-15, WP-16, WP-21, WP-23, WP-24, WP-25, WP-26, WP-27 | — |
 | [WP-29](wp/WP-29-security-hardening.md) | Public-repository security hardening | Security | D | M | WP-05c, WP-07a, WP-08, G1 | Public development |
 | [WP-30](wp/WP-30-repository-security-controls.md) | GitHub repository security controls | Security | Ops | S | WP-29 | Stronger public contribution policy |

@@ -821,7 +821,7 @@
       "type": "object",
       "properties": {
         "libreoffice_fallback": {
-          "description": "soffice `.xls` bridge.",
+          "description": "Deprecated compatibility key; `.xls` import is native.",
           "type": "boolean"
         },
         "menu_entries": {

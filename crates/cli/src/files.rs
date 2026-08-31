@@ -201,12 +201,7 @@ fn file_open(
     if ctx.is_cancelled() {
         return Err(cancelled());
     }
-    let libreoffice_fallback = session
-        .lock()
-        .config
-        .as_ref()
-        .is_some_and(|config| config.snapshot().config.integrations.libreoffice_fallback);
-    let mut opened = open_any_with_cancel(&path, ctx, libreoffice_fallback)?;
+    let mut opened = open_any_with_cancel(&path, ctx)?;
     if ctx.is_cancelled() {
         return Err(cancelled());
     }
@@ -491,23 +486,11 @@ fn cancelled() -> CoreError {
         .with_hint("the live workbook and destination file were left unchanged")
 }
 
-fn open_any_with_cancel(
-    path: &Path,
-    ctx: &CommandContext<'_>,
-    libreoffice_fallback: bool,
-) -> Result<Opened, CoreError> {
+fn open_any_with_cancel(path: &Path, ctx: &CommandContext<'_>) -> Result<Opened, CoreError> {
     let cancel = ctx.cancel_flag().cloned();
     let progress = ctx.progress_sink();
     if let Some(kind) = kind_from_path(path) {
-        return open_kind(
-            path,
-            kind,
-            None,
-            cancel,
-            progress,
-            None,
-            libreoffice_fallback,
-        );
+        return open_kind(path, kind, None, cancel, progress, None);
     }
     if let Ok(opened) = open_kind(
         path,
@@ -516,7 +499,6 @@ fn open_any_with_cancel(
         cancel.clone(),
         progress.clone(),
         None,
-        libreoffice_fallback,
     ) {
         return Ok(opened);
     }
@@ -527,24 +509,15 @@ fn open_any_with_cancel(
         cancel.clone(),
         progress.clone(),
         None,
-        libreoffice_fallback,
     ) {
         return Ok(opened);
     }
-    open_kind(
-        path,
-        FileKind::Csv,
-        None,
-        cancel,
-        progress,
-        None,
-        libreoffice_fallback,
-    )
+    open_kind(path, FileKind::Csv, None, cancel, progress, None)
 }
 
 /// Open a workbook by extension, then content sniff.
-pub fn open_any(path: &Path, libreoffice_fallback: bool) -> Result<Opened, CoreError> {
-    open_any_with_plan(path, None, libreoffice_fallback)
+pub fn open_any(path: &Path) -> Result<Opened, CoreError> {
+    open_any_with_plan(path, None)
 }
 
 /// Open an `.xlsx`/`.xlsm` or `.omc` from bytes already covered by a trust
@@ -579,59 +552,25 @@ pub(crate) fn open_scriptable_bytes(path: &Path, bytes: &[u8]) -> Result<Opened,
 pub(crate) fn open_any_with_plan(
     path: &Path,
     plan: Option<&csv::ImportPlan>,
-    libreoffice_fallback: bool,
 ) -> Result<Opened, CoreError> {
     if plan.is_some() {
-        return open_kind(
-            path,
-            FileKind::Csv,
-            plan,
-            None,
-            None,
-            None,
-            libreoffice_fallback,
-        );
+        return open_kind(path, FileKind::Csv, plan, None, None, None);
     }
     if let Some(kind) = kind_from_path(path) {
-        return open_kind(path, kind, None, None, None, None, libreoffice_fallback);
+        return open_kind(path, kind, None, None, None, None);
     }
-    if let Ok(opened) = open_kind(
-        path,
-        FileKind::Xlsx,
-        None,
-        None,
-        None,
-        None,
-        libreoffice_fallback,
-    ) {
+    if let Ok(opened) = open_kind(path, FileKind::Xlsx, None, None, None, None) {
         return Ok(opened);
     }
-    if let Ok(opened) = open_kind(
-        path,
-        FileKind::Omc,
-        None,
-        None,
-        None,
-        None,
-        libreoffice_fallback,
-    ) {
+    if let Ok(opened) = open_kind(path, FileKind::Omc, None, None, None, None) {
         return Ok(opened);
     }
-    open_kind(
-        path,
-        FileKind::Csv,
-        None,
-        None,
-        None,
-        None,
-        libreoffice_fallback,
-    )
+    open_kind(path, FileKind::Csv, None, None, None, None)
 }
 
 pub(crate) fn open_any_with_pointer(
     path: &Path,
     json_pointer: Option<&str>,
-    libreoffice_fallback: bool,
 ) -> Result<Opened, CoreError> {
     let kind = kind_from_path(path).unwrap_or(FileKind::Json);
     if kind != FileKind::Json {
@@ -640,15 +579,7 @@ pub(crate) fn open_any_with_pointer(
             "--jq is only valid for JSON input",
         ));
     }
-    open_kind(
-        path,
-        kind,
-        None,
-        None,
-        None,
-        json_pointer,
-        libreoffice_fallback,
-    )
+    open_kind(path, kind, None, None, None, json_pointer)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -659,7 +590,6 @@ fn open_kind(
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     progress: Option<Arc<omacell_core::recalc::RecalcProgress>>,
     json_pointer: Option<&str>,
-    lo_fallback: bool,
 ) -> Result<Opened, CoreError> {
     match kind {
         FileKind::Xlsx => {
@@ -730,15 +660,12 @@ fn open_kind(
                 extras: HashMap::new(),
             })
         }
-        FileKind::Xls => {
-            let doc = omacell_io::bridge::open_xls(path, lo_fallback)?;
-            Ok(Opened {
-                workbook: doc.workbook,
-                kind: FileKind::Xlsx,
-                package: Some(doc.package),
-                extras: doc.extras,
-            })
-        }
+        FileKind::Xls => Ok(Opened {
+            workbook: omacell_io::bridge::open_xls(path)?,
+            kind,
+            package: None,
+            extras: HashMap::new(),
+        }),
         FileKind::Csv => {
             let sniffed;
             let plan = if let Some(plan) = import_plan {
@@ -1222,7 +1149,7 @@ mod tests {
 
     #[test]
     fn jq_selector_is_rejected_for_non_json_input() {
-        let err = match open_any_with_pointer(Path::new("book.xlsx"), Some(".items"), false) {
+        let err = match open_any_with_pointer(Path::new("book.xlsx"), Some(".items")) {
             Ok(_) => panic!("non-JSON --jq unexpectedly succeeded"),
             Err(err) => err,
         };

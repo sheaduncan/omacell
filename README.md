@@ -11,6 +11,10 @@ nothing that phones home.
 One engine, three clients: a Wayland GUI, a TUI, and a JSON-speaking CLI that
 doubles as an IPC surface for scripts and AI agents.
 
+Omacell reads legacy Excel 97–2003 `.xls` files natively; LibreOffice is not a
+runtime dependency. Legacy `.xls` remains read-only, so edits must be saved to
+`.xlsx`, `.ods`, or another writable format.
+
 **Status:** pre-alpha. Merged: WP-00–WP-22, WP-15a, WP-05F, WP-24–WP-26, WP-29,
 WP-S1, WP-S2 (reports in [`reports/`](reports/)). Remaining: WP-23 (in-app AI),
 WP-24a (pivot fidelity), WP-27 (other formats), WP-28 (release), WP-30 (GitHub

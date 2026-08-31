@@ -1,4 +1,4 @@
-//! WP-27 corpora: ODS, JSON, HTML/Markdown, .xls bridge, locks.
+//! WP-27 corpora: ODS, JSON, HTML/Markdown, native `.xls`, locks.
 
 use omacell_core::addr::CellRef;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
@@ -294,63 +294,66 @@ fn calc_lock_blocks_ods_open() {
 }
 
 #[test]
-fn xls_bridge_skips_or_round_trips_when_soffice_present() {
-    let disabled = bridge::open_xls(Path::new("missing.xls"), false).unwrap_err();
-    assert_eq!(disabled.code, codes::XLS_BRIDGE);
-    assert!(disabled.message.contains("disabled"));
+fn native_xls_import_preserves_core_content() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/xls");
 
-    let has_lo = ["soffice", "libreoffice"].into_iter().any(|bin| {
-        std::process::Command::new(bin)
-            .arg("--version")
-            .output()
-            .is_ok()
-    });
-    if !has_lo {
-        let err = bridge::open_xls(Path::new("/tmp/missing.xls"), true).unwrap_err();
-        assert_eq!(err.code, codes::XLS_BRIDGE);
-        return;
-    }
-    let dir = tempfile_dir("xls");
-    let xlsx = dir.join("book.xlsx");
-    let mut wb = Workbook::new();
-    wb.set_number(wb.active_sheet(), 0, 0, 3.0).unwrap();
-    omacell_io::xlsx::save_workbook(
-        &wb,
-        &xlsx,
-        omacell_io::xlsx::SaveOptions {
-            keep_backups: 0,
-            lock: false,
-        },
-    )
-    .unwrap();
-    let status = std::process::Command::new("soffice")
-        .arg(format!(
-            "-env:UserInstallation=file://{}",
-            dir.join("profile").display()
-        ))
-        .args(["--headless", "--convert-to", "xls", "--outdir"])
-        .arg(&dir)
-        .arg(&xlsx)
-        .status();
-    let Ok(status) = status else {
-        return;
-    };
-    if !status.success() {
-        return;
-    }
-    let xls = dir.join("book.xls");
-    if !xls.exists() {
-        return;
-    }
-    let opened = bridge::open_xls(&xls, true).unwrap();
+    let values = bridge::open_xls(&root.join("l1_values.xls")).unwrap();
+    assert_eq!(cell_text(&values, 0, 0), "1.5");
+    assert_eq!(cell_text(&values, 0, 1), "hello");
+    assert_eq!(cell_text(&values, 0, 2), "TRUE");
+    let date = values
+        .get(values.active_sheet(), 1, 0)
+        .unwrap()
+        .expect("A2 date");
+    assert!(matches!(date.value, omacell_core::value::Value::Number(_)));
+    assert_ne!(date.style, omacell_core::style::StyleId::DEFAULT);
+
+    let formulas = bridge::open_xls(&root.join("l1_formulas.xls")).unwrap();
+    let formula = formulas
+        .get(formulas.active_sheet(), 0, 2)
+        .unwrap()
+        .unwrap()
+        .formula
+        .expect("C1 formula");
+    assert_eq!(formulas.intern().formulas.get(formula), Some("=A1+B1"));
+
+    let merged = bridge::open_xls(&root.join("l2_merges_freeze.xls")).unwrap();
+    let sheet = merged.sheet(merged.active_sheet()).unwrap();
+    assert_eq!(sheet.merges.len(), 1);
+    assert_eq!(sheet.merges[0].to_a1(), "A1:B1");
+
+    let named = bridge::open_xls(&root.join("l2_names.xls")).unwrap();
+    assert!(named.names().iter().any(|name| name.name == "Rate"));
+
+    let hidden = bridge::open_xls(&root.join("l2_hidden_sheet.xls")).unwrap();
     assert_eq!(
-        opened
-            .workbook
-            .get(opened.workbook.active_sheet(), 0, 0)
-            .unwrap()
-            .unwrap()
-            .value,
-        omacell_core::value::Value::Number(3.0)
+        hidden.sheet_by_name("Visible").unwrap().visibility,
+        omacell_core::sheet::SheetVisibility::Visible
+    );
+    assert_eq!(
+        hidden.sheet_by_name("Hidden").unwrap().visibility,
+        omacell_core::sheet::SheetVisibility::Hidden
+    );
+}
+
+#[test]
+fn native_xls_import_is_bounded_and_reports_parse_errors() {
+    let dir = tempfile_dir("xls-limits");
+    let invalid = dir.join("invalid.xls");
+    std::fs::write(&invalid, b"not a BIFF workbook").unwrap();
+    assert_eq!(
+        bridge::open_xls(&invalid).unwrap_err().code,
+        codes::XLS_BRIDGE
+    );
+
+    let oversized = dir.join("oversized.xls");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(bridge::MAX_XLS_BYTES + 1)
+        .unwrap();
+    assert_eq!(
+        bridge::open_xls(&oversized).unwrap_err().code,
+        codes::XLSX_LIMIT
     );
 }
 

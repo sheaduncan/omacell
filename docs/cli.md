@@ -37,6 +37,8 @@ Stubs that exit 3:
 
 `omacell convert input.csv output.xlsx --plan plan.json` consumes the shared WP-08 `ImportPlan` JSON (bounded to 1 MiB). For JSON input, `--jq .items` selects an array with a dotted object path; it is a selector, not the full jq language. `omacell config diff` emits sorted effective user/package differences and honors `--config`.
 
+Legacy Excel 97–2003 `.xls` input is read natively, without LibreOffice or an external converter. It is read-only: use `omacell convert old.xls new.xlsx` before editing in place, or save an opened workbook to a writable format.
+
 ## Completions and man page
 
 `cargo test -p omacell-cli --test dist` writes bash/zsh/fish completions and `omacell.1` to `target/dist/` (or `$CARGO_TARGET_DIR/dist`).

@@ -48,7 +48,7 @@ pub mod codes {
     pub const PARQUET_FORMAT: &str = "parquet.format";
     /// HTML/Markdown table import failed.
     pub const HTML_FORMAT: &str = "html.format";
-    /// Legacy `.xls` bridge failed or LibreOffice is missing.
+    /// Legacy `.xls` import failed (stable historical code name).
     pub const XLS_BRIDGE: &str = "xls.bridge";
 }
 
@@ -204,10 +204,9 @@ pub fn html_format(message: impl Into<String>) -> CoreError {
         .with_hint("the file must contain an HTML <table> or a GitHub-style Markdown table")
 }
 
-/// `.xls` bridge error.
+/// Legacy `.xls` reader error.
 #[must_use]
 pub fn xls_bridge(message: impl Into<String>) -> CoreError {
-    CoreError::new(codes::XLS_BRIDGE, message).with_hint(
-        "install LibreOffice and set [integrations] libreoffice_fallback = true, or save as .xlsx",
-    )
+    CoreError::new(codes::XLS_BRIDGE, message)
+        .with_hint("the file must be an unencrypted Excel 97–2003 BIFF workbook")
 }
