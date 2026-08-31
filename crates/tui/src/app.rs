@@ -335,12 +335,13 @@ impl Tui {
                 self.message = outcome.error.map(|error| error.message);
                 return;
             }
-            let bundle = serde_json::json!({
+            let mut bundle = serde_json::json!({
                 "schema": 1,
                 "workbook": self.file.as_ref().map(|path| path.display().to_string()),
                 "selection": &selection,
                 "diagnostic": outcome.result,
             });
+            let _ = omacell_ai::redact_json(&mut bundle);
             match omacell_conf::write_diagnostic_bundle(&self.paths.state_dir, &bundle) {
                 Ok(path) => Some(path),
                 Err(error) => {

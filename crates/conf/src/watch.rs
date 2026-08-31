@@ -1,9 +1,9 @@
 //! Debounced live reload with last-good-config semantics (spec §7.5).
 
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -313,18 +313,15 @@ fn spawn_watcher(
         }
     }
     std::thread::spawn(move || {
-        let mut last = Instant::now()
-            .checked_sub(debounce)
-            .unwrap_or_else(Instant::now);
         while let Ok(event) = raw_rx.recv() {
             let mut changed_paths = event.paths;
-            // coalesce
-            while let Ok(event) = raw_rx.try_recv() {
-                changed_paths.extend(event.paths);
-            }
-            let wait = debounce.saturating_sub(last.elapsed());
-            std::thread::sleep(wait);
-            last = Instant::now();
+            let disconnected = loop {
+                match raw_rx.recv_timeout(debounce) {
+                    Ok(event) => changed_paths.extend(event.paths),
+                    Err(RecvTimeoutError::Timeout) => break false,
+                    Err(RecvTimeoutError::Disconnected) => break true,
+                }
+            };
             let user_file_changed = changed_paths.iter().any(|path| {
                 path.starts_with(&paths.user_config)
                     || options.config_file.as_ref() == Some(path)
@@ -362,6 +359,9 @@ fn spawn_watcher(
                         message: e.message.clone(),
                     });
                 }
+            }
+            if disconnected {
+                break;
             }
         }
     });

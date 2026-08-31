@@ -1,0 +1,36 @@
+{
+  "protocol": "anthropic",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "body": {
+      "model": "claude",
+      "max_tokens": 1024,
+      "messages": [
+        { "role": "user", "content": "call tool" }
+      ],
+      "stream": false,
+      "tools": [
+        {
+          "name": "sum",
+          "description": "add",
+          "input_schema": { "type": "object" }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_1",
+          "name": "sum",
+          "input": { "a": 1 }
+        }
+      ],
+      "usage": { "input_tokens": 2, "output_tokens": 1 }
+    }
+  }
+}

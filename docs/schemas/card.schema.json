@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omacell.dev/schemas/card.schema.json",
+  "title": "WorkbookCard",
+  "description": "WP-22 workbook card. Built only by omacell_ai::policy::build_card.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "sheets",
+    "names",
+    "tables",
+    "formula_count",
+    "functions",
+    "external_references",
+    "validations",
+    "conditional_formats",
+    "tokens",
+    "truncated"
+  ],
+  "properties": {
+    "schema": { "type": "integer", "const": 1 },
+    "kind": {
+      "type": "string",
+      "enum": ["summary", "columns", "sample", "full"]
+    },
+    "file": { "type": ["string", "null"] },
+    "sheets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "rows", "cols", "formulas"],
+        "properties": {
+          "name": { "type": "string" },
+          "rows": { "type": "integer", "minimum": 0 },
+          "cols": { "type": "integer", "minimum": 0 },
+          "formulas": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "names": { "type": "array", "items": { "type": "string" } },
+    "tables": { "type": "array", "items": { "type": "string" } },
+    "formula_count": { "type": "integer", "minimum": 0 },
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "count"],
+        "properties": {
+          "name": { "type": "string" },
+          "count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "external_references": { "type": "integer", "minimum": 0 },
+    "validations": { "type": "integer", "minimum": 0 },
+    "conditional_formats": { "type": "integer", "minimum": 0 },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sheet", "column", "name", "type", "header_row"],
+        "properties": {
+          "sheet": { "type": "string" },
+          "column": { "type": "string" },
+          "name": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["empty", "number", "text", "boolean", "mixed"]
+          },
+          "null_share": { "type": "number" },
+          "distinct": { "type": "integer", "minimum": 0 },
+          "min": { "type": "number" },
+          "max": { "type": "number" },
+          "samples": { "type": "array", "items": { "type": "string" } },
+          "header_row": { "type": "boolean" }
+        }
+      }
+    },
+    "sample_rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sheet", "origin", "rows"],
+        "properties": {
+          "sheet": { "type": "string" },
+          "origin": { "type": "string" },
+          "rows": {
+            "type": "array",
+            "items": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "values": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref"],
+          "properties": {
+            "ref": { "type": "string" },
+            "value": { "type": "string" },
+            "formula": { "type": "string" }
+          }
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "returned_rows", "total_rows", "truncated"],
+      "properties": {
+        "offset": { "type": "integer", "minimum": 0 },
+        "returned_rows": { "type": "integer", "minimum": 0 },
+        "total_rows": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "focus": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "selection": { "type": "string" },
+        "precedents": { "type": "array", "items": { "type": "string" } },
+        "dependents": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "tokens": { "type": "integer", "minimum": 0 },
+    "token_budget": { "type": "integer", "minimum": 0 },
+    "truncated": { "type": "boolean" }
+  }
+}

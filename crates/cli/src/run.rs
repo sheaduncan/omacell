@@ -36,7 +36,7 @@ use omacell_tui::Launch;
 
 use crate::app::App;
 use crate::cli::{
-    AgentCmd, ChangesetCmd, Cli, Commands, ConfigCmd, FnCmd, KeysCmd, QueryFormat, SetupCmd,
+    AgentCmd, AiCmd, ChangesetCmd, Cli, Commands, ConfigCmd, FnCmd, KeysCmd, QueryFormat, SetupCmd,
     ThemeCmd, TrustCmd,
 };
 use crate::error::{CliError, EXIT_OK, EXIT_USAGE};
@@ -102,7 +102,7 @@ fn dispatch(cli: &Cli, output: Output) -> Result<(), CliError> {
     }
     match &cli.command {
         None => cmd_gui(cli),
-        Some(Commands::Ai { .. }) => Err(CliError::nyi("omacell ai", "WP-22")),
+
         Some(cmd) => {
             let app_needed = !matches!(
                 cmd,
@@ -190,7 +190,7 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
             output,
         ),
         Commands::Mcp { socket, book } => cmd_mcp(cli, socket.as_deref(), book.as_deref()),
-        Commands::Ai { .. } => unreachable!("ai stub handled earlier"),
+        Commands::Ai { cmd } => cmd_ai(cli, cmd, output),
     }
 }
 
@@ -1043,6 +1043,10 @@ fn cmd_agent(
     }
 }
 
+fn cmd_ai(cli: &Cli, cmd: &AiCmd, output: Output) -> Result<(), CliError> {
+    crate::ai::run(cli, cmd, output)
+}
+
 fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), CliError> {
     if cli.dry_run {
         return Err(
@@ -1053,21 +1057,20 @@ fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), 
     }
     let app = App::bootstrap_live(cli, book)?;
     crate::log::init(&app.paths, cli.verbose, cli.quiet, true);
-    let config = app.loaded().config.clone();
+    let reload = app.reload_handle();
     let crate::app::App {
         paths: _,
         store,
         bus,
         files,
     } = app;
-    let ctx = omacell_bus::mcp::McpCtx {
-        open_path: files
+    let ctx = crate::mcp::ctx_for_cli(
+        files
             .current_path()
             .map(|p| p.display().to_string())
             .or_else(|| book.map(|p| p.display().to_string())),
-        gui_running: false,
-        on_external_propose: Some(crate::mcp::proposal_notifier(config)),
-    };
+        reload,
+    );
     let runtime = omacell_bus::ipc::default_runtime_dir();
     let ipc = omacell_bus::ipc::serve(runtime, bus)?;
     let handler = crate::mcp::OmacellMcp::new(

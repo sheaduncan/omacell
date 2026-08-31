@@ -46,17 +46,17 @@ Mapping to the spec's milestones: Phases 0–3 deliver M1 (engine + CLI + TUI, `
 
 ### Immediate dispatch point (31 August 2026)
 
-Merged: WP-00–WP-21, WP-15a, WP-05F, WP-24, WP-25, WP-26, WP-29, WP-S1, WP-S2. Gate G1 is in [`reports/G1.md`](../../reports/G1.md). Reports for every merged package live in `reports/`.
+Merged: WP-00–WP-22, WP-15a, WP-05F, WP-24, WP-25, WP-26, WP-29, WP-S1, WP-S2. Gate G1 is in [`reports/G1.md`](../../reports/G1.md). Reports for every merged package live in `reports/`.
 
 Ready now (may run concurrently; one agent per lane):
 
-- **Lane D:** [WP-22](wp/WP-22-ai-providers-privacy-card.md) (open as PR #41). After it merges, [WP-23](wp/WP-23-ai-features.md).
+- **Lane D:** [WP-23](wp/WP-23-ai-features.md) — depends on WP-22, now merged.
 - **Lane B:** [WP-27](wp/WP-27-other-formats.md) — depends on WP-08 and WP-10, both merged.
 - **Lane A follow-up:** [WP-24a](wp/WP-24a-pivot-fidelity.md) — depends on WP-24, merged.
 
 [WP-28](wp/WP-28-packaging-release-hardening.md) waits on WP-23 and WP-27. [WP-30](wp/WP-30-repository-security-controls.md) is maintainer GitHub settings, not an agent PR.
 
-Do not start WP-23 until WP-22 is merged. Do not start WP-28 until every package in its *Depends on* list is merged.
+Do not start WP-28 until every package in its *Depends on* list is merged.
 
 ## 4. Gates (human checkpoints)
 
@@ -230,7 +230,7 @@ graph LR
   WP_27 --> WP_28
 ```
 
-Those paths have landed. The remaining critical path is AI + formats + release: `WP-22 → WP-23` in parallel with `WP-27` (and optional `WP-24a`), then `WP-28`. Treat package sizes as ordering signals, not commitments. The live queue is the *Immediate dispatch point* above.
+Those paths have landed. The remaining critical path is AI + formats + release: `WP-23` in parallel with `WP-27` (and optional `WP-24a`), then `WP-28`. Treat package sizes as ordering signals, not commitments. The live queue is the *Immediate dispatch point* above.
 
 ## 7. Work-package index
 

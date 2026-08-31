@@ -1,0 +1,19 @@
+{
+  "protocol": "anthropic",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "body": {
+      "model": "claude",
+      "max_tokens": 1024,
+      "messages": [
+        { "role": "user", "content": "fail" }
+      ],
+      "stream": false
+    }
+  },
+  "response": {
+    "status": 401,
+    "body": { "error": { "message": "no key" } }
+  }
+}

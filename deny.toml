@@ -12,8 +12,8 @@ targets = [
 [advisories]
 yanked = "deny"
 ignore = [
-    # Unmaintained `ttf-parser` (info). Direct dep for WP-26 PDF embedding;
-    # also still used by `fontdb`. No skrifa migration yet.
+    # Unmaintained `ttf-parser` (info). Direct dep for WP-26 PDF embedding and
+    # transitive via egui's `owned_ttf_parser`; neither path has a replacement yet.
     "RUSTSEC-2026-0192",
 ]
 
@@ -28,6 +28,9 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
     "CC0-1.0",
+    # Mozilla root certificates bundled by `webpki-roots` via pre-approved
+    # `reqwest` rustls-tls (WP-22). Permissive data license, not GPL-family.
+    "CDLA-Permissive-2.0",
     # Bundled egui/epaint default fonts (WP-16). SIL OFL and Ubuntu Font
     # License 1.0 are font licenses, not GPL-family.
     "OFL-1.1",

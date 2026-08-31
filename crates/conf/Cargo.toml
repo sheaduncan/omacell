@@ -19,6 +19,7 @@ schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
+toml_edit = "0.22"
 tracing = "0.1"
 zbus = "5"
 

@@ -184,6 +184,26 @@ The MCP tool names, argument schemas, and resource URI templates freeze with thi
 
 `Workbook::ref_error_count()` exposes the incrementally maintained `#REF!` count used to gate the WP-21 diagnose offer without scanning stored cells during paint.
 
+## AI provider and card extensions — WP-22 (approval pending)
+
+WP-22 proposes additive extensions to the frozen WP-12 configuration and WP-21
+MCP composition surfaces. The PR must not merge until a human approves the RFC
+in [`reports/WP-22.md`](../reports/WP-22.md).
+
+| Item | Source |
+|---|---|
+| `Provider`, `ChatRequest`/`ChatResponse`, `ChatMessage` | [`provider.rs`](../crates/ai/src/provider.rs) |
+| `AiProvider.timeout`, `AiProvider.headers` | [`schema.rs`](../crates/conf/src/schema.rs) |
+| `patch_ai_setup`, `merge_overlays` | [`edit.rs`](../crates/conf/src/edit.rs), [`layer.rs`](../crates/conf/src/layer.rs) |
+| `CardHook`, `McpCtx.card` | [`session.rs`](../crates/bus/src/mcp/session.rs) |
+
+Serialized configuration remains backward-compatible through serde defaults.
+MCP tool names, `CardArgs`, resource templates, and wire schemas are unchanged.
+The provider request contract first freezes here with correlated assistant tool
+calls/tool results and an explicit output-token ceiling.
+The workbook-card schema in [`card.schema.json`](schemas/card.schema.json) is
+first frozen by WP-22 with bounded pagination and token-budget metadata.
+
 ## Corpora
 
 - [`tests/corpus/addr/a1.tsv`](../tests/corpus/addr/a1.tsv)

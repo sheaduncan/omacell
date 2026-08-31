@@ -1,0 +1,27 @@
+---
+source: crates/ai/tests/card.rs
+expression: card
+---
+{
+  "conditional_formats": 0,
+  "external_references": 0,
+  "file": "book.xlsx",
+  "formula_count": 1,
+  "functions": [],
+  "kind": "summary",
+  "names": [],
+  "schema": 1,
+  "sheets": [
+    {
+      "cols": 2,
+      "formulas": 1,
+      "name": "Sheet1",
+      "rows": 3
+    }
+  ],
+  "tables": [],
+  "token_budget": 2048,
+  "tokens": 70,
+  "truncated": false,
+  "validations": 0
+}
