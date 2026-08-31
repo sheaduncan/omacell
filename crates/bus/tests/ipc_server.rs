@@ -7,12 +7,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use omacell_bus::ipc::{
     IpcClient, MAX_EVENT_QUEUE, Mode, default_runtime_dir, discover_newest, discovered_socket,
-    serve, serve_runner,
+    serve, serve_runner, serve_shared,
 };
 use omacell_bus::{Bus, LongOps, TaskRunner};
 use omacell_core::changeset::CommandCall;
@@ -41,6 +42,13 @@ fn start() -> (omacell_bus::ipc::IpcHandle, PathBuf) {
     (handle, dir)
 }
 
+fn start_shared() -> (omacell_bus::ipc::IpcHandle, Arc<Mutex<Bus>>, PathBuf) {
+    let dir = runtime_dir();
+    let bus = Arc::new(Mutex::new(bus()));
+    let handle = serve_shared(dir.clone(), Arc::clone(&bus)).expect("serve");
+    (handle, bus, dir)
+}
+
 fn start_runner() -> (TaskRunner, omacell_bus::ipc::IpcHandle) {
     let runner = TaskRunner::spawn(bus(), LongOps::production()).unwrap();
     let handle = serve_runner(runtime_dir(), runner.handle()).unwrap();
@@ -49,7 +57,7 @@ fn start_runner() -> (TaskRunner, omacell_bus::ipc::IpcHandle) {
 
 #[test]
 fn ping_and_propose_apply_revert_round_trip() {
-    let (handle, dir) = start();
+    let (handle, bus, dir) = start_shared();
     let mut client = IpcClient::connect(handle.socket_path()).unwrap();
     let pong = client.ping().unwrap();
     assert!(pong.ok, "{:?}", pong.error);
@@ -73,7 +81,7 @@ fn ping_and_propose_apply_revert_round_trip() {
     let applied = client.apply(&cs).unwrap();
     assert!(applied.ok, "{:?}", applied.error);
     {
-        let bus = handle.bus().lock().unwrap();
+        let bus = bus.lock().unwrap();
         let sheet = bus.workbook().active_sheet();
         let slot = bus.workbook().get(sheet, 0, 0).unwrap().unwrap();
         assert_eq!(slot.value, omacell_core::value::Value::Number(7.0));
@@ -82,7 +90,7 @@ fn ping_and_propose_apply_revert_round_trip() {
     let reverted = client.revert(&cs).unwrap();
     assert!(reverted.ok, "{:?}", reverted.error);
     {
-        let bus = handle.bus().lock().unwrap();
+        let bus = bus.lock().unwrap();
         let sheet = bus.workbook().active_sheet();
         assert!(bus.workbook().get(sheet, 0, 0).unwrap().is_none());
     }
@@ -299,11 +307,11 @@ fn client_preserves_unsolicited_event_order() {
 
 #[test]
 fn filtered_events_do_not_consume_the_subscriber_queue() {
-    let (handle, dir) = start();
+    let (handle, bus, dir) = start_shared();
     let mut client = IpcClient::connect(handle.socket_path()).unwrap();
     client.subscribe(&["recalc_done".to_string()]).unwrap();
     {
-        let mut bus = handle.bus().lock().unwrap();
+        let mut bus = bus.lock().unwrap();
         for i in 0..=MAX_EVENT_QUEUE {
             bus.propose(
                 Origin::Ipc,

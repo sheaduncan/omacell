@@ -25,8 +25,20 @@ path = "../crates/io"
 [dependencies.omacell-cli]
 path = "../crates/cli"
 
+[dependencies.omacell-conf]
+path = "../crates/conf"
+
+[dependencies.omacell-lua]
+path = "../crates/lua"
+
+[dependencies.omacell-ui]
+path = "../crates/ui"
+
 [dependencies.serde_json]
 version = "1"
+
+[dependencies.toml]
+version = "0.8"
 
 [dependencies.zip]
 version = "2"
@@ -99,6 +111,13 @@ bench = false
 [[bin]]
 name = "mcp_json"
 path = "fuzz_targets/mcp_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_parsers"
+path = "fuzz_targets/config_parsers.rs"
 test = false
 doc = false
 bench = false

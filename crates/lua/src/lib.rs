@@ -2,6 +2,7 @@
 //!
 //! WP-20: config-dir scripts run with the full standard library; workbook
 //! embedded scripts are sandboxed and require an explicit trust grant.
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 pub mod catalog;
@@ -28,6 +29,120 @@ pub use runtime::{
     load_user_scripts,
 };
 pub use trust::{TrustEntry, TrustStore, hash_path, sha256_hex, trust_path};
+
+// Frozen capability set for workbook-provided code. New commands remain
+// unavailable until they receive an explicit sandbox review here.
+const EMBEDDED_COMMAND_ALLOWLIST: &[&str] = &[
+    "audit.diagnose",
+    "audit.run",
+    "calc.mode",
+    "cell.clear",
+    "cell.set",
+    "chart.fromselection",
+    "condfmt.add",
+    "edit.autosum",
+    "edit.change",
+    "edit.clear",
+    "edit.clearcell",
+    "edit.clearrow",
+    "edit.collapse",
+    "edit.comment",
+    "edit.commentreply",
+    "edit.commentresolve",
+    "edit.copy",
+    "edit.copyformulaabove",
+    "edit.copyvalueabove",
+    "edit.cut",
+    "edit.delcells",
+    "edit.delete",
+    "edit.expand",
+    "edit.filldown",
+    "edit.fillleft",
+    "edit.fillright",
+    "edit.fillselection",
+    "edit.fillup",
+    "edit.findall",
+    "edit.flashfill",
+    "edit.group",
+    "edit.hyperlink",
+    "edit.insert",
+    "edit.insertdate",
+    "edit.inserttime",
+    "edit.move",
+    "edit.note",
+    "edit.paste",
+    "edit.pastespecial",
+    "edit.replaceall",
+    "edit.replacepreview",
+    "edit.texttocolumns",
+    "edit.ungroup",
+    "edit.yank",
+    "filter.clear",
+    "filter.set",
+    "filter.toggle",
+    "filter.values",
+    "format.autofitcols",
+    "format.autofitrows",
+    "format.bold",
+    "format.bordernone",
+    "format.borderoutline",
+    "format.colwidth",
+    "format.currency",
+    "format.date",
+    "format.general",
+    "format.indent",
+    "format.italic",
+    "format.number",
+    "format.numberstyle",
+    "format.outdent",
+    "format.panel",
+    "format.percent",
+    "format.protection",
+    "format.rowheight",
+    "format.scientific",
+    "format.time",
+    "format.underline",
+    "formula.dependents",
+    "formula.explain",
+    "formula.precedents",
+    "formula.trace",
+    "name.define",
+    "name.remove",
+    "nav.address",
+    "nav.gotospecial",
+    "pivot.create",
+    "pivot.remove",
+    "range.clear",
+    "range.consolidate",
+    "range.merge",
+    "range.mergeacross",
+    "range.removeduplicates",
+    "range.set",
+    "range.sort",
+    "range.unmerge",
+    "sheet.add",
+    "sheet.protect",
+    "sheet.protectedrange",
+    "sheet.remove",
+    "sheet.rename",
+    "sheet.reorder",
+    "sheet.visibility",
+    "sparkline.set",
+    "stats.describe",
+    "style.set",
+    "table.convert",
+    "table.create",
+    "table.rename",
+    "table.resize",
+    "table.totals",
+    "validation.set",
+    "view.hidecols",
+    "view.hiderows",
+    "view.unhidecols",
+    "view.unhiderows",
+    "whatif.goalseek",
+    "workbook.protect",
+];
 
 /// Command-bus host used by the CLI and tests.
 pub struct BusHost {
@@ -64,6 +179,16 @@ impl ScriptHost for BusHost {
             return Err(err);
         }
         Ok(out.result.unwrap_or(Value::Null))
+    }
+
+    fn embedded_command_allowed(&self, id: &str) -> bool {
+        if !EMBEDDED_COMMAND_ALLOWLIST.contains(&id) {
+            return false;
+        }
+        self.bus.registry().get_str(id).is_ok_and(|command| {
+            command.exposure == omacell_bus::Exposure::Public
+                && (command.kind == omacell_bus::CommandKind::Query || command.changeset_eligible)
+        })
     }
 
     fn workbook(&self) -> &Workbook {

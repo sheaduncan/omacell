@@ -20,6 +20,7 @@ omacell-core = { path = "../core", version = "0.0.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"
+toml = "0.8"
 
 [dev-dependencies]
 omacell-fn = { path = "../fn", version = "0.0.0" }

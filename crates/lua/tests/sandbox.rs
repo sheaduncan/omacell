@@ -3,7 +3,8 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use omacell_bus::Bus;
+use omacell_bus::args::EmptyArgs;
+use omacell_bus::{Bus, CommandKind, CommandSpec, Effect, Exposure};
 use omacell_core::error::CoreError;
 use omacell_core::eval::DynamicFn;
 use omacell_core::eval::FnRegistry;
@@ -56,12 +57,17 @@ fn embedded_blocks_io_os_require() {
 struct EscapeHost {
     workbook: Workbook,
     calls: Arc<Mutex<Vec<String>>>,
+    statuses: Arc<Mutex<Vec<String>>>,
 }
 
 impl ScriptHost for EscapeHost {
     fn execute(&mut self, id: &str, _args: Json) -> Result<Json, CoreError> {
         self.calls.lock().unwrap().push(id.to_string());
         Ok(Json::Null)
+    }
+
+    fn embedded_command_allowed(&self, id: &str) -> bool {
+        id == "cell.set"
     }
 
     fn workbook(&self) -> &Workbook {
@@ -76,7 +82,9 @@ impl ScriptHost for EscapeHost {
         Ok(String::new())
     }
 
-    fn status(&mut self, _message: &str) {}
+    fn status(&mut self, message: &str) {
+        self.statuses.lock().unwrap().push(message.to_string());
+    }
 
     fn notify(&mut self, _message: &str) {}
 }
@@ -84,9 +92,11 @@ impl ScriptHost for EscapeHost {
 #[test]
 fn embedded_cannot_escape_through_external_effect_commands() {
     let calls = Arc::new(Mutex::new(Vec::new()));
+    let statuses = Arc::new(Mutex::new(Vec::new()));
     let host = EscapeHost {
         workbook: Workbook::new(),
         calls: Arc::clone(&calls),
+        statuses,
     };
     let rt = Runtime::new(Profile::Embedded, Box::new(host)).unwrap();
     for id in [
@@ -100,6 +110,9 @@ fn embedded_cannot_escape_through_external_effect_commands() {
         // `edit.repeat` can indirectly replay the last file/macro/theme
         // mutation and therefore must not bypass the namespace filter.
         "edit.repeat",
+        // A future command namespace is denied unless its host explicitly
+        // grants it through command metadata.
+        "future.network",
     ] {
         let source = format!("omacell.cmd({id:?}, {{path = 'escape'}})");
         let err = rt.exec(&source, "escape.lua").unwrap_err();
@@ -110,6 +123,52 @@ fn embedded_cannot_escape_through_external_effect_commands() {
         );
     }
     assert!(calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn embedded_uses_capabilities_and_cannot_prompt_or_rebind_keys() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let statuses = Arc::new(Mutex::new(Vec::new()));
+    let host = EscapeHost {
+        workbook: Workbook::new(),
+        calls: Arc::clone(&calls),
+        statuses: Arc::clone(&statuses),
+    };
+    let rt = Runtime::new(Profile::Embedded, Box::new(host)).unwrap();
+    rt.exec(
+        "assert(omacell.ui.prompt == nil); assert(omacell.keymap == nil)",
+        "capabilities.lua",
+    )
+    .unwrap();
+    rt.exec(
+        "omacell.cmd('cell.set', {ref = 'A1', input = '1'})",
+        "allowed.lua",
+    )
+    .unwrap();
+    rt.exec("print('safe', 42, true)", "print.lua").unwrap();
+    assert_eq!(calls.lock().unwrap().as_slice(), ["cell.set"]);
+    assert_eq!(statuses.lock().unwrap().as_slice(), ["safe\t42\ttrue"]);
+}
+
+#[test]
+fn production_host_keeps_new_commands_closed_until_reviewed() {
+    let mut host = host();
+    host.bus
+        .registry_mut()
+        .register::<EmptyArgs, _>(
+            CommandSpec {
+                id: "future.network",
+                doc: "Unreviewed future query",
+                kind: CommandKind::Query,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, _args| Ok(Effect::query(Json::Null)),
+        )
+        .unwrap();
+    assert!(host.embedded_command_allowed("cell.set"));
+    assert!(!host.embedded_command_allowed("future.network"));
 }
 
 #[test]
@@ -293,4 +352,13 @@ fn trust_store_round_trips() {
         .open(&path)
         .unwrap();
     writeln!(f, "# comment").unwrap();
+}
+
+#[test]
+fn trust_store_parser_rejects_unknown_fields_and_invalid_hashes() {
+    let unknown = TrustStore::parse("unknown = true\n").unwrap_err();
+    assert_eq!(unknown.code, "trust.parse");
+
+    let invalid = TrustStore::parse("[[files]]\nsha256 = \"short\"\n").unwrap_err();
+    assert_eq!(invalid.code, "trust.hash");
 }

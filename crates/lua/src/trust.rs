@@ -18,6 +18,7 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// One trusted file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrustEntry {
     /// Lowercase hex SHA-256 of the file bytes.
     pub sha256: String,
@@ -28,6 +29,7 @@ pub struct TrustEntry {
 
 /// On-disk trust file.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrustStore {
     /// Granted files.
     #[serde(default)]
@@ -68,6 +70,20 @@ pub fn hash_path(path: &Path) -> Result<String, CoreError> {
 }
 
 impl TrustStore {
+    /// Parse and validate bounded trust-store TOML text.
+    pub fn parse(text: &str) -> Result<Self, CoreError> {
+        if text.len() as u64 > MAX_TRUST_BYTES {
+            return Err(CoreError::new("trust.limit", "trust store exceeds 1 MiB"));
+        }
+        let decoded: Self = toml::from_str(text)
+            .map_err(|error| CoreError::new("trust.parse", error.to_string()))?;
+        let mut validated = Self::default();
+        for entry in decoded.files {
+            validated.add(entry.sha256, entry.path)?;
+        }
+        Ok(validated)
+    }
+
     /// Load from `path`, or empty if missing.
     pub fn load(path: &Path) -> Result<Self, CoreError> {
         let file = match fs::File::open(path) {
@@ -96,7 +112,7 @@ impl TrustStore {
         if text.len() as u64 > MAX_TRUST_BYTES {
             return Err(CoreError::new("trust.limit", "trust store exceeds 1 MiB"));
         }
-        toml_from_str(&text)
+        Self::parse(&text)
     }
 
     /// Write atomically (exclusive sibling temp, fsync, rename).
@@ -182,12 +198,7 @@ pub fn trust_path(state_dir: &Path) -> PathBuf {
     state_dir.join("trust.toml")
 }
 
-fn toml_from_str(text: &str) -> Result<TrustStore, CoreError> {
-    parse_simple_toml(text)
-}
-
 fn toml_to_string(store: &TrustStore) -> Result<String, CoreError> {
-    let mut out = String::from("# Omacell embedded-script trust store (WP-20)\n");
     for e in &store.files {
         if !valid_sha256(&e.sha256) {
             return Err(CoreError::new(
@@ -195,141 +206,14 @@ fn toml_to_string(store: &TrustStore) -> Result<String, CoreError> {
                 "refusing to save an invalid SHA-256 trust entry",
             ));
         }
-        out.push_str("\n[[files]]\n");
-        out.push_str(&format!("sha256 = \"{}\"\n", e.sha256));
-        if let Some(p) = &e.path {
-            out.push_str(&format!("path = \"{}\"\n", escape_toml(p)));
-        }
     }
-    Ok(out)
-}
-
-fn escape_toml(s: &str) -> String {
-    let mut escaped = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '\u{08}' => escaped.push_str("\\b"),
-            '\t' => escaped.push_str("\\t"),
-            '\n' => escaped.push_str("\\n"),
-            '\u{0c}' => escaped.push_str("\\f"),
-            '\r' => escaped.push_str("\\r"),
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            control if control.is_control() => {
-                let code = u32::from(control);
-                if code <= u32::from(u16::MAX) {
-                    escaped.push_str(&format!("\\u{code:04X}"));
-                } else {
-                    escaped.push_str(&format!("\\U{code:08X}"));
-                }
-            }
-            value => escaped.push(value),
-        }
-    }
-    escaped
-}
-
-fn parse_simple_toml(text: &str) -> Result<TrustStore, CoreError> {
-    let mut store = TrustStore::default();
-    let mut current: Option<TrustEntry> = None;
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if line == "[[files]]" {
-            if let Some(e) = current.take() {
-                store.add(e.sha256, e.path)?;
-            }
-            current = Some(TrustEntry {
-                sha256: String::new(),
-                path: None,
-            });
-            continue;
-        }
-        let Some(entry) = current.as_mut() else {
-            return Err(CoreError::new(
-                "trust.parse",
-                format!("unexpected trust-store line: {line}"),
-            ));
-        };
-        if let Some(v) = line.strip_prefix("sha256") {
-            if !entry.sha256.is_empty() {
-                return Err(CoreError::new("trust.parse", "duplicate sha256 field"));
-            }
-            entry.sha256 = parse_toml_string(v)?;
-        } else if let Some(v) = line.strip_prefix("path") {
-            if entry.path.is_some() {
-                return Err(CoreError::new("trust.parse", "duplicate path field"));
-            }
-            entry.path = Some(parse_toml_string(v)?);
-        } else {
-            return Err(CoreError::new(
-                "trust.parse",
-                format!("unknown trust-store field: {line}"),
-            ));
-        }
-    }
-    if let Some(e) = current.take() {
-        store.add(e.sha256, e.path)?;
-    }
-    Ok(store)
+    let encoded =
+        toml::to_string(store).map_err(|error| CoreError::new("trust.parse", error.to_string()))?;
+    Ok(format!(
+        "# Omacell embedded-script trust store (WP-20)\n{encoded}"
+    ))
 }
 
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn parse_toml_string(rest: &str) -> Result<String, CoreError> {
-    let rest = rest
-        .trim()
-        .strip_prefix('=')
-        .ok_or_else(|| CoreError::new("trust.parse", "expected '='"))?
-        .trim();
-    let inner = rest
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .ok_or_else(|| CoreError::new("trust.parse", "expected a quoted string"))?;
-    let mut chars = inner.chars();
-    let mut value = String::with_capacity(inner.len());
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => {
-                return Err(CoreError::new("trust.parse", "unescaped quote in string"));
-            }
-            '\\' => match chars.next() {
-                Some('b') => value.push('\u{08}'),
-                Some('t') => value.push('\t'),
-                Some('n') => value.push('\n'),
-                Some('f') => value.push('\u{0c}'),
-                Some('r') => value.push('\r'),
-                Some('"') => value.push('"'),
-                Some('\\') => value.push('\\'),
-                Some(prefix @ ('u' | 'U')) => {
-                    let width = if prefix == 'u' { 4 } else { 8 };
-                    let digits = chars.by_ref().take(width).collect::<String>();
-                    if digits.len() != width || !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    {
-                        return Err(CoreError::new("trust.parse", "invalid Unicode escape"));
-                    }
-                    let code = u32::from_str_radix(&digits, 16)
-                        .map_err(|error| CoreError::new("trust.parse", error.to_string()))?;
-                    value.push(
-                        char::from_u32(code).ok_or_else(|| {
-                            CoreError::new("trust.parse", "invalid Unicode scalar")
-                        })?,
-                    );
-                }
-                _ => return Err(CoreError::new("trust.parse", "invalid string escape")),
-            },
-            control if control.is_control() => {
-                return Err(CoreError::new(
-                    "trust.parse",
-                    "unescaped control character in string",
-                ));
-            }
-            value_char => value.push(value_char),
-        }
-    }
-    Ok(value)
 }

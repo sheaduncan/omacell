@@ -2,6 +2,10 @@
 
 Generated from `omacell_lua::catalog::API`. Do not edit by hand.
 
+## Runtime profiles
+
+User-profile scripts have the documented API and Lua standard library. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt or change keymaps, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.
+
 ## `omacell.cmd`
 
 `omacell.cmd(id, args) -> result`

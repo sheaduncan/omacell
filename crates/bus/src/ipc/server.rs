@@ -9,21 +9,19 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use omacell_core::changeset::{ChangesetId, CommandCall};
-use omacell_core::command::{CommandId, Origin};
+use omacell_core::command::Origin;
 use omacell_core::error::CoreError;
-use serde_json::Value;
 
 use super::discover::{
     instance_path, prepare_runtime_dir, remove_stale_socket, socket_path, write_discovery,
 };
+use super::dispatch::{Dispatch, dispatch_bus_request, dispatch_runner_request};
 use super::protocol::{
-    ControlOp, FrameBuf, MAX_CONNECTIONS, MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, Mode, Reply,
-    Request, ServerRecord, encode_line, event_type_name,
+    FrameBuf, MAX_CONNECTIONS, MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, Reply, Request,
+    ServerRecord, encode_line, event_type_name,
 };
 use crate::error;
 use crate::event::SubscriberId;
-use crate::registry::{CommandKind, Exposure};
 use crate::runner::TaskRunnerHandle;
 use crate::session::Bus;
 
@@ -38,7 +36,6 @@ pub struct IpcHandle {
     shutdown: Arc<AtomicBool>,
     accept: Option<JoinHandle<()>>,
     clients: Arc<Mutex<Vec<JoinHandle<()>>>>,
-    bus: Option<Arc<Mutex<Bus>>>,
 }
 
 impl IpcHandle {
@@ -52,14 +49,6 @@ impl IpcHandle {
     #[must_use]
     pub fn runtime_dir(&self) -> &Path {
         &self.dir
-    }
-
-    /// Shared bus (tests). Panics if this server is runner-backed.
-    #[must_use]
-    pub fn bus(&self) -> &Arc<Mutex<Bus>> {
-        self.bus
-            .as_ref()
-            .expect("runner-backed IPC has no Mutex<Bus>")
     }
 
     /// Signal shutdown and join the accept thread.
@@ -94,6 +83,14 @@ impl Drop for IpcHandle {
 
 /// Bind `{dir}/{pid}.sock` and serve `bus` on std threads.
 pub fn serve(dir: PathBuf, bus: Bus) -> Result<IpcHandle, CoreError> {
+    serve_shared(dir, Arc::new(Mutex::new(bus)))
+}
+
+/// Bind `{dir}/{pid}.sock` and serve an existing shared bus on std threads.
+///
+/// Callers that also host MCP or need direct inspection retain their own
+/// [`Arc`] instead of reaching back through the server handle.
+pub fn serve_shared(dir: PathBuf, bus: Arc<Mutex<Bus>>) -> Result<IpcHandle, CoreError> {
     prepare_runtime_dir(&dir)?;
     let pid = std::process::id();
     remove_stale_socket(&dir, pid)?;
@@ -122,7 +119,6 @@ pub fn serve(dir: PathBuf, bus: Bus) -> Result<IpcHandle, CoreError> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let connections = Arc::new(AtomicUsize::new(0));
     let clients = Arc::new(Mutex::new(Vec::new()));
-    let bus = Arc::new(Mutex::new(bus));
     let accept_shutdown = shutdown.clone();
     let accept_bus = bus.clone();
     let accept_clients = clients.clone();
@@ -146,7 +142,6 @@ pub fn serve(dir: PathBuf, bus: Bus) -> Result<IpcHandle, CoreError> {
         shutdown,
         accept: Some(accept),
         clients,
-        bus: Some(bus),
     })
 }
 
@@ -203,7 +198,6 @@ pub fn serve_runner(dir: PathBuf, runner: TaskRunnerHandle) -> Result<IpcHandle,
         shutdown,
         accept: Some(accept),
         clients,
-        bus: None,
     })
 }
 
@@ -344,107 +338,8 @@ fn client_loop_runner(stream: UnixStream, runner: TaskRunnerHandle, shutdown: Ar
 }
 
 fn dispatch_runner(runner: &TaskRunnerHandle, request: Request) -> Reply {
-    match request {
-        Request::Command {
-            id,
-            cmd,
-            args,
-            mode,
-        } => {
-            let (kind, eligible) = match runner.ipc_command_policy(&cmd) {
-                Ok(policy) => policy,
-                Err(err) => return Reply::err(id, err),
-            };
-            let mode = mode.unwrap_or(match kind {
-                CommandKind::Query => Mode::Execute,
-                CommandKind::Mutating if eligible => Mode::Propose,
-                CommandKind::Mutating => Mode::Execute,
-            });
-            if kind == CommandKind::Mutating && eligible && mode == Mode::Execute {
-                return Reply::err(
-                    id,
-                    error::ipc_mode("changeset-eligible mutating commands cannot use mode execute"),
-                );
-            }
-            match mode {
-                Mode::Execute => outcome_reply(id, runner.submit_wait(Origin::Ipc, &cmd, args)),
-                Mode::DryRun => match runner.dry_run(Origin::Ipc, &cmd, args) {
-                    Ok(dry) if dry.outcome.ok => Reply::ok(
-                        id,
-                        serde_json::json!({
-                            "dry_run": true,
-                            "summary": dry.summary,
-                            "result": dry.outcome.result,
-                        }),
-                    ),
-                    Ok(dry) => Reply::err(
-                        id,
-                        dry.outcome.error.unwrap_or_else(|| {
-                            error::ipc_protocol("dry-run failed without an error payload")
-                        }),
-                    ),
-                    Err(err) => Reply::err(id, err),
-                },
-                Mode::Propose => match command_call(&cmd, args) {
-                    Ok(call) => match runner.propose(Origin::Ipc, vec![call]) {
-                        Ok(cs) => match serde_json::to_value(&cs) {
-                            Ok(v) => Reply::ok(id, v),
-                            Err(err) => Reply::err(
-                                id,
-                                error::ipc_frame(format!("serialize changeset: {err}")),
-                            ),
-                        },
-                        Err(err) => Reply::err(id, err),
-                    },
-                    Err(err) => Reply::err(id, err),
-                },
-            }
-        }
-        Request::Control {
-            id, op, changeset, ..
-        } => match op {
-            ControlOp::Ping => Reply::ok(id, serde_json::json!({"pong": true})),
-            ControlOp::ChangesetList => match runner.list_changesets() {
-                Ok(changesets) => match serde_json::to_value(changesets) {
-                    Ok(value) => Reply::ok(id, value),
-                    Err(err) => {
-                        Reply::err(id, error::ipc_frame(format!("serialize changesets: {err}")))
-                    }
-                },
-                Err(err) => Reply::err(id, err),
-            },
-            operation @ (ControlOp::ChangesetGet
-            | ControlOp::ChangesetApply
-            | ControlOp::ChangesetRevert) => {
-                let Some(changeset) = changeset else {
-                    return Reply::err(id, error::ipc_protocol("changeset id is required"));
-                };
-                let changeset = match ChangesetId::new(changeset) {
-                    Ok(changeset) => changeset,
-                    Err(err) => return Reply::err(id, err),
-                };
-                let result = match operation {
-                    ControlOp::ChangesetGet => runner.get_changeset(&changeset),
-                    ControlOp::ChangesetApply => runner.apply(Origin::Ipc, &changeset),
-                    ControlOp::ChangesetRevert => runner.revert(Origin::Ipc, &changeset),
-                    _ => unreachable!(),
-                };
-                match result {
-                    Ok(changeset) => match serde_json::to_value(changeset) {
-                        Ok(value) => Reply::ok(id, value),
-                        Err(err) => {
-                            Reply::err(id, error::ipc_frame(format!("serialize changeset: {err}")))
-                        }
-                    },
-                    Err(err) => Reply::err(id, err),
-                }
-            }
-            ControlOp::Subscribe | ControlOp::Unsubscribe => Reply::err(
-                id,
-                error::ipc_protocol("event subscriptions are not available on the UI task runner"),
-            ),
-        },
-    }
+    dispatch_runner_request(runner, Origin::Ipc, request)
+        .reject_subscriptions("event subscriptions are not available on the UI task runner")
 }
 
 fn write_error_and_close(mut stream: UnixStream, err: CoreError) -> Result<(), CoreError> {
@@ -525,95 +420,10 @@ fn dispatch(
     filter: &mut Vec<String>,
     request: Request,
 ) -> Reply {
-    match request {
-        Request::Command {
-            id,
-            cmd,
-            args,
-            mode,
-        } => dispatch_command(&mut lock_bus(bus), id, &cmd, args, mode),
-        Request::Control {
-            id,
-            op,
-            events,
-            changeset,
-        } => dispatch_control(&mut lock_bus(bus), sub, filter, id, op, events, changeset),
-    }
-}
-
-fn dispatch_command(bus: &mut Bus, id: u64, cmd: &str, args: Value, mode: Option<Mode>) -> Reply {
-    let registered = match bus.registry().get_str(cmd) {
-        Ok(r) => r,
-        Err(err) => return Reply::err(id, err),
-    };
-    if registered.exposure == Exposure::Internal {
-        return Reply::err(id, error::internal(cmd));
-    }
-    let kind = registered.kind;
-    let eligible = registered.changeset_eligible;
-    let mode = mode.unwrap_or(match kind {
-        CommandKind::Query => Mode::Execute,
-        CommandKind::Mutating if eligible => Mode::Propose,
-        CommandKind::Mutating => Mode::Execute,
-    });
-    if matches!(kind, CommandKind::Mutating) && eligible && matches!(mode, Mode::Execute) {
-        return Reply::err(
-            id,
-            error::ipc_mode("changeset-eligible mutating commands cannot use mode execute"),
-        );
-    }
-    match mode {
-        Mode::Propose => {
-            let call = match command_call(cmd, args) {
-                Ok(c) => c,
-                Err(err) => return Reply::err(id, err),
-            };
-            match bus.propose(Origin::Ipc, vec![call]) {
-                Ok(cs) => match serde_json::to_value(&cs) {
-                    Ok(v) => Reply::ok(id, v),
-                    Err(err) => {
-                        Reply::err(id, error::ipc_frame(format!("serialize changeset: {err}")))
-                    }
-                },
-                Err(err) => Reply::err(id, err),
-            }
-        }
-        Mode::Execute => outcome_reply(id, bus.execute(Origin::Ipc, cmd, args)),
-        Mode::DryRun => match bus.dry_run(Origin::Ipc, cmd, args) {
-            Ok(dry) => {
-                if dry.outcome.ok {
-                    let result = serde_json::json!({
-                        "dry_run": true,
-                        "summary": dry.summary,
-                        "result": dry.outcome.result,
-                    });
-                    Reply::ok(id, result)
-                } else {
-                    Reply::err(
-                        id,
-                        dry.outcome.error.unwrap_or_else(|| {
-                            error::ipc_protocol("dry-run failed without an error payload")
-                        }),
-                    )
-                }
-            }
-            Err(err) => Reply::err(id, err),
-        },
-    }
-}
-
-fn dispatch_control(
-    bus: &mut Bus,
-    sub: &mut Option<SubscriberId>,
-    filter: &mut Vec<String>,
-    id: u64,
-    op: ControlOp,
-    events: Vec<String>,
-    changeset: Option<String>,
-) -> Reply {
-    match op {
-        ControlOp::Ping => Reply::ok(id, serde_json::json!({"pong": true})),
-        ControlOp::Subscribe => {
+    let mut bus = lock_bus(bus);
+    match dispatch_bus_request(&mut bus, Origin::Ipc, request) {
+        Dispatch::Reply(reply) => reply,
+        Dispatch::Subscribe { id, events } => {
             if let Some(old) = sub.take() {
                 bus.unsubscribe(old);
             }
@@ -621,77 +431,13 @@ fn dispatch_control(
             *sub = Some(bus.subscribe_ipc(MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, filter));
             Reply::ok(id, serde_json::json!({ "subscribed": filter.clone() }))
         }
-        ControlOp::Unsubscribe => {
+        Dispatch::Unsubscribe { id } => {
             if let Some(old) = sub.take() {
                 bus.unsubscribe(old);
             }
             filter.clear();
             Reply::ok(id, serde_json::json!({ "unsubscribed": true }))
         }
-        ControlOp::ChangesetList => match serde_json::to_value(bus.list_changesets()) {
-            Ok(v) => Reply::ok(id, v),
-            Err(err) => Reply::err(id, error::ipc_frame(format!("serialize changesets: {err}"))),
-        },
-        ControlOp::ChangesetGet => {
-            let Some(cs_id) = changeset else {
-                return Reply::err(id, error::ipc_protocol("changeset id is required"));
-            };
-            match ChangesetId::new(cs_id) {
-                Err(err) => Reply::err(id, err),
-                Ok(cs_id) => match bus.get_changeset(&cs_id) {
-                    Ok(cs) => match serde_json::to_value(cs) {
-                        Ok(v) => Reply::ok(id, v),
-                        Err(err) => {
-                            Reply::err(id, error::ipc_frame(format!("serialize changeset: {err}")))
-                        }
-                    },
-                    Err(err) => Reply::err(id, err),
-                },
-            }
-        }
-        ControlOp::ChangesetApply | ControlOp::ChangesetRevert => {
-            let Some(cs_id) = changeset else {
-                return Reply::err(id, error::ipc_protocol("changeset id is required"));
-            };
-            let cs_id = match ChangesetId::new(cs_id) {
-                Ok(id) => id,
-                Err(err) => return Reply::err(id, err),
-            };
-            let result = if matches!(op, ControlOp::ChangesetApply) {
-                bus.apply(Origin::Ipc, &cs_id)
-            } else {
-                bus.revert(Origin::Ipc, &cs_id)
-            };
-            match result {
-                Ok(cs) => match serde_json::to_value(&cs) {
-                    Ok(v) => Reply::ok(id, v),
-                    Err(err) => {
-                        Reply::err(id, error::ipc_frame(format!("serialize changeset: {err}")))
-                    }
-                },
-                Err(err) => Reply::err(id, err),
-            }
-        }
-    }
-}
-
-fn command_call(cmd: &str, args: Value) -> Result<CommandCall, CoreError> {
-    Ok(CommandCall {
-        id: CommandId::new(cmd)?,
-        args,
-    })
-}
-
-fn outcome_reply(id: u64, outcome: omacell_core::command::Outcome) -> Reply {
-    if outcome.ok {
-        Reply::ok(id, outcome.result.unwrap_or(Value::Null))
-    } else {
-        Reply::err(
-            id,
-            outcome
-                .error
-                .unwrap_or_else(|| error::ipc_protocol("command failed without an error payload")),
-        )
     }
 }
 

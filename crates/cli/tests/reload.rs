@@ -101,8 +101,10 @@ fn ipc_dry_run_reaches_the_server_without_mutating_it() {
     let xdg = TempDir::new().unwrap();
     let runtime = xdg.path().join("omacell");
     let home = TempDir::new().unwrap();
-    let bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).unwrap();
-    let server = omacell_bus::ipc::serve(runtime, bus).unwrap();
+    let bus = std::sync::Arc::new(std::sync::Mutex::new(
+        Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).unwrap(),
+    ));
+    let server = omacell_bus::ipc::serve_shared(runtime, std::sync::Arc::clone(&bus)).unwrap();
 
     Command::cargo_bin("omacell")
         .unwrap()
@@ -121,7 +123,7 @@ fn ipc_dry_run_reaches_the_server_without_mutating_it() {
         .success()
         .stdout(predicate::str::contains("\"dry_run\": true"));
 
-    let bus = server.bus().lock().unwrap_or_else(|p| p.into_inner());
+    let bus = bus.lock().unwrap_or_else(|p| p.into_inner());
     let sheet = bus.workbook().active_sheet();
     assert!(bus.workbook().get(sheet, 0, 0).unwrap().is_none());
 }
