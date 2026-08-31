@@ -42,7 +42,9 @@ pub fn send(config: &Config, kind: NotifyKind, title: &str, body: &str) {
 }
 
 fn send_inner(title: &str, body: &str) -> Result<(), CoreError> {
-    if on_path("omarchy-notification-send") {
+    // This Omarchy helper accepts options before its positional title/body but
+    // has no portable `--` sentinel. Fall back to D-Bus for option-like text.
+    if omarchy_args_safe(title, body) && on_path("omarchy-notification-send") {
         let status = Command::new("omarchy-notification-send")
             .arg(title)
             .arg(body)
@@ -58,6 +60,10 @@ fn send_inner(title: &str, body: &str) -> Result<(), CoreError> {
         ));
     }
     freedesktop(title, body)
+}
+
+fn omarchy_args_safe(title: &str, body: &str) -> bool {
+    !title.starts_with('-') && !body.starts_with('-')
 }
 
 fn freedesktop(title: &str, body: &str) -> Result<(), CoreError> {
@@ -82,4 +88,16 @@ fn freedesktop(title: &str, body: &str) -> Result<(), CoreError> {
     )
     .map_err(|err| CoreError::new("notify.dbus", err.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::omarchy_args_safe;
+
+    #[test]
+    fn option_like_notification_text_bypasses_the_omarchy_helper() {
+        assert!(omarchy_args_safe("Omacell", "saved"));
+        assert!(!omarchy_args_safe("--app-name=other", "saved"));
+        assert!(!omarchy_args_safe("Omacell", "--icon=other"));
+    }
 }

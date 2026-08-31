@@ -52,7 +52,17 @@ fn handoff_records_args_and_cwd_when_default_agent_set() {
     assert_eq!(json["launched"], true);
     assert_eq!(json["cwd"], book_dir.display().to_string());
     assert_eq!(json["argv"].as_array().unwrap().len(), 4);
-    let prompt = json["argv"][3].as_str().unwrap();
+    let prompt_file = std::path::PathBuf::from(json["prompt_file"].as_str().unwrap());
+    assert!(prompt_file.is_file());
+    assert_eq!(
+        std::fs::metadata(&prompt_file)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let prompt = std::fs::read_to_string(prompt_file).unwrap();
     assert!(prompt.contains("Use the installed omacell skill"));
     assert!(prompt.contains(&book.display().to_string()));
     assert!(prompt.contains("Current selection: Sheet1!A1"));
@@ -62,8 +72,8 @@ fn handoff_records_args_and_cwd_when_default_agent_set() {
     assert!(log_text.contains("prompt"));
     assert!(!log_text.contains("--workbook"));
     assert!(!log_text.contains("--selection"));
-    assert!(log_text.contains("Sheet1!A1"));
-    assert!(log_text.contains("Reconcile Inputs"));
+    assert!(!log_text.contains("Sheet1!A1"));
+    assert!(!log_text.contains("Reconcile Inputs"));
     assert!(
         log_text.contains(&book_dir.display().to_string())
             || log_text.lines().next() == Some(book_dir.to_str().unwrap())
@@ -100,7 +110,8 @@ fn diagnose_without_book_writes_a_private_bundle_and_passes_it_in_the_prompt() {
         std::fs::metadata(&bundle).unwrap().permissions().mode() & 0o777,
         0o600
     );
-    let prompt = json["handoff"]["argv"][3].as_str().unwrap();
+    let prompt_file = json["handoff"]["prompt_file"].as_str().unwrap();
+    let prompt = std::fs::read_to_string(prompt_file).unwrap();
     assert!(prompt.contains(&bundle.display().to_string()));
 }
 
