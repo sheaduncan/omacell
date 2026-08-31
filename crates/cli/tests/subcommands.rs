@@ -48,13 +48,11 @@ fn ipc_all_and_socket_are_mutually_exclusive() {
 
 #[test]
 fn stubs_exit_three_with_hint() {
-    for args in [vec!["ai", "setup"], vec!["agent", "hello"], vec!["mcp"]] {
-        let (_home, mut cmd) = home();
-        cmd.args(&args)
-            .assert()
-            .code(3)
-            .stderr(predicate::str::contains("arrives in WP-"));
-    }
+    let (_home, mut cmd) = home();
+    cmd.args(["ai", "setup"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("arrives in WP-"));
     let (_home, mut cmd) = home();
     cmd.env_remove("WAYLAND_DISPLAY")
         .env_remove("DISPLAY")

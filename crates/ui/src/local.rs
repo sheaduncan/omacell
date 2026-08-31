@@ -70,6 +70,7 @@ pub fn is_local_command(id: &str) -> bool {
             | "view.formulabar"
             | "view.formulas"
             | "palette.open"
+            | "ai.agent"
             | "help.keys"
             | "command.line"
             | "nav.goto"
@@ -233,6 +234,19 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
         "view.formulas" => inner.show_formulas = !inner.show_formulas,
         "view.select" => apply_select(wb, &mut inner.selection, args)?,
         "palette.open" => inner.palette.open(),
+        "ai.agent" => {
+            inner.pending_agent = Some(crate::session::AgentHandoff {
+                prompt: args
+                    .get("prompt")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                diagnose: args
+                    .get("diagnose")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            });
+        }
         "help.keys" | "nav.goto" | "edit.find" | "command.line" | "changeset.review" => {
             let id = match cmd {
                 "help.keys" => "keys",

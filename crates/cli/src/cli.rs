@@ -105,6 +105,9 @@ pub enum Commands {
         /// Write the recalculated workbook back.
         #[arg(long)]
         write: bool,
+        /// Wait for async AI cells to settle (no-op extra until WP-22).
+        #[arg(long)]
+        wait: bool,
     },
     /// Run a Lua script (WP-20).
     Run {
@@ -190,15 +193,45 @@ pub enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Hand off to the Omarchy default agent (WP-21).
+    /// Hand off to the Omarchy default agent.
     Agent {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Diagnose subcommand.
+        #[command(subcommand)]
+        cmd: Option<AgentCmd>,
+        /// Prompt for the default agent.
+        prompt: Option<String>,
+        /// Workbook path passed to the agent.
+        #[arg(long)]
+        book: Option<PathBuf>,
+        /// Current selection (`Sheet!A1`).
+        #[arg(long)]
+        selection: Option<String>,
     },
-    /// MCP server (WP-21).
+    /// MCP server (stdio, or `--socket`).
     Mcp {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        /// Unix socket path. Default is stdio.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// Workbook to open before serving.
+        #[arg(long)]
+        book: Option<PathBuf>,
+    },
+}
+
+/// `omacell agent diagnose`.
+#[derive(Debug, Subcommand)]
+pub enum AgentCmd {
+    /// Build a WP-19 diagnostic bundle and hand it to the agent.
+    Diagnose {
+        /// Optional process id to include in the bundle.
+        #[arg(long)]
+        pid: Option<u32>,
+        /// Workbook path.
+        #[arg(long)]
+        book: Option<PathBuf>,
+        /// Current selection (`Sheet!A1`).
+        #[arg(long)]
+        selection: Option<String>,
     },
 }
 

@@ -1048,6 +1048,11 @@ fn draw_status(
     };
     let mut line = StatusLine::default();
     line.refresh(ids, ui.mode().label(), &cell, &stats, calc, theme_name);
+    line.set_offer(omacell_ui::diagnose_offer(
+        wb,
+        ui.config().ai.agent.diagnose_offers,
+        ui.agent_visible(),
+    ));
     let zoom = format!("{}%", (ui.viewport().zoom * 100.0).round());
     let dirty = if dirty { "*" } else { "" };
     for seg in &mut line.segments {

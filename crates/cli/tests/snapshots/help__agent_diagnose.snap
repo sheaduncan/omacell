@@ -1,20 +1,15 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"agent\", \"--help\"])"
+expression: "help(&[\"agent\", \"diagnose\", \"--help\"])"
 ---
-Hand off to the Omarchy default agent
+Build a WP-19 diagnostic bundle and hand it to the agent
 
-Usage: omacell agent [OPTIONS] [PROMPT] [COMMAND]
-
-Commands:
-  diagnose  Build a WP-19 diagnostic bundle and hand it to the agent
-
-Arguments:
-  [PROMPT]  Prompt for the default agent
+Usage: omacell agent diagnose [OPTIONS]
 
 Options:
       --json                   Machine-readable stdout (and stderr errors)
-      --book <BOOK>            Workbook path passed to the agent
+      --pid <PID>              Optional process id to include in the bundle
+      --book <BOOK>            Workbook path
       --dry-run                Validate writes without changing files
       --selection <SELECTION>  Current selection (`Sheet!A1`)
       --set <KEY=VALUE>        Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable

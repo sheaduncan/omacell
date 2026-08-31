@@ -45,6 +45,17 @@ pub(crate) struct UiInner {
     pub formula_bar_expanded: bool,
     pub show_formulas: bool,
     pub config: Config,
+    pub agent_visible: bool,
+    pub pending_agent: Option<AgentHandoff>,
+}
+
+/// Pending *Hand to agent* request from the palette or status line.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentHandoff {
+    /// Prompt text.
+    pub prompt: String,
+    /// `omacell agent diagnose` when true.
+    pub diagnose: bool,
 }
 
 /// Toolkit-free UI session.
@@ -275,9 +286,31 @@ impl UiSession {
         query: &str,
         ai: Option<&dyn AiPlanProvider>,
     ) {
+        let visible = self.lock().agent_visible;
+        let filtered: Vec<CommandJson> = commands
+            .iter()
+            .filter(|c| visible || c.id != "ai.agent")
+            .cloned()
+            .collect();
         let mut palette = self.palette();
-        palette.rank_with_ai(commands, query, ai);
+        palette.rank_with_ai(&filtered, query, ai);
         self.lock().palette = palette;
+    }
+
+    /// Whether a default Omarchy agent is available (palette/status).
+    #[must_use]
+    pub fn agent_visible(&self) -> bool {
+        self.lock().agent_visible
+    }
+
+    /// Set from the composition root after [`omacell_conf::detect_default_agent`].
+    pub fn set_agent_visible(&self, visible: bool) {
+        self.lock().agent_visible = visible;
+    }
+
+    /// Take a pending hand-off request, if any.
+    pub fn take_agent_handoff(&self) -> Option<AgentHandoff> {
+        self.lock().pending_agent.take()
     }
 
     /// Populate the retained palette's inline argument prompt.
@@ -468,5 +501,7 @@ fn load_inner(config: &LoadedConfig, roots: &KeymapRoots) -> Result<UiInner, Cor
         formula_bar_expanded: false,
         show_formulas: false,
         config: config.config.clone(),
+        agent_visible: false,
+        pending_agent: None,
     })
 }

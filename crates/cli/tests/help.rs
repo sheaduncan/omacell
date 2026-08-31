@@ -58,5 +58,6 @@ fn help_snapshots() {
     assert_snapshot!("audit", help(&["audit", "--help"]));
     assert_snapshot!("ai", help(&["ai", "--help"]));
     assert_snapshot!("agent", help(&["agent", "--help"]));
+    assert_snapshot!("agent_diagnose", help(&["agent", "diagnose", "--help"]));
     assert_snapshot!("mcp", help(&["mcp", "--help"]));
 }

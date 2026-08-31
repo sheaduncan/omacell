@@ -169,6 +169,19 @@ Dynamic function names are case-insensitive and additive beside built-ins; built
 
 The WP-07a public command catalog adds `macro.record`, `macro.stop`, `macro.save`, and `script.source`. The first, second, and fourth use the closed empty-object schema; `macro.save` requires one string `path`. All four are non-changeset-eligible mutating commands; `script.source` is a deferred host action, and its mutating classification prevents model origins from causing full-profile user code execution. The catalog envelope remains schema version 1 and existing command schemas are unchanged.
 
+## MCP tools and resources — WP-21
+
+The MCP tool names, argument schemas, and resource URI templates freeze with this package. Changing them after merge requires an RFC.
+
+| Item | Source |
+|---|---|
+| Catalog envelope `schema = 1` | [`docs/schemas/mcp.schema.json`](schemas/mcp.schema.json) |
+| Tool table | [`crates/bus/src/mcp/catalog.rs`](../crates/bus/src/mcp/catalog.rs) |
+| Resource URIs `omacell://{file}/card`, `omacell://{file}/{sheet}` | [`crates/bus/src/mcp/uri.rs`](../crates/bus/src/mcp/uri.rs) |
+| Markdown reference | [`docs/mcp.md`](mcp.md) |
+
+`<file>` is a percent-encoded path (one URI segment). Write tools default to `Origin::ExternalAgent` changeset proposals. `apply=true` is denied by mutation policy.
+
 ## Corpora
 
 - [`tests/corpus/addr/a1.tsv`](../tests/corpus/addr/a1.tsv)

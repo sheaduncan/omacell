@@ -1,0 +1,473 @@
+{
+  "resources": [
+    {
+      "uriTemplate": "omacell://{file}/card"
+    },
+    {
+      "uriTemplate": "omacell://{file}/{sheet}"
+    }
+  ],
+  "schema": 1,
+  "tools": [
+    {
+      "description": "Run the deterministic workbook audit (`omacell audit --json`).",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`workbook_list` takes no arguments.",
+        "title": "EmptyArgs",
+        "type": "object"
+      },
+      "name": "audit"
+    },
+    {
+      "description": "Workbook card. WP-21 returns summary level; WP-22 replaces the payload.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`card`",
+        "title": "CardArgs",
+        "type": "object"
+      },
+      "name": "card"
+    },
+    {
+      "description": "Apply a proposed changeset. External agents are denied; use the CLI.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`changeset_apply` / `changeset_revert` / `changeset_show`-style id.",
+        "properties": {
+          "id": {
+            "description": "Changeset id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ChangesetIdArgs",
+        "type": "object"
+      },
+      "name": "changeset_apply"
+    },
+    {
+      "description": "List stored changesets for this session.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`workbook_list` takes no arguments.",
+        "title": "EmptyArgs",
+        "type": "object"
+      },
+      "name": "changeset_list"
+    },
+    {
+      "description": "Propose an ordered list of command-bus calls without mutating live state.",
+      "inputSchema": {
+        "$defs": {
+          "CommandCallArgs": {
+            "additionalProperties": false,
+            "description": "One command in a proposed batch.",
+            "properties": {
+              "args": {
+                "default": null,
+                "description": "JSON arguments."
+              },
+              "id": {
+                "description": "Registry id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`changeset_propose`",
+        "properties": {
+          "commands": {
+            "description": "Ordered command-bus calls.",
+            "items": {
+              "$ref": "#/$defs/CommandCallArgs"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "commands"
+        ],
+        "title": "ChangesetProposeArgs",
+        "type": "object"
+      },
+      "name": "changeset_propose"
+    },
+    {
+      "description": "Revert an applied changeset. External agents are denied; use the CLI.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`changeset_apply` / `changeset_revert` / `changeset_show`-style id.",
+        "properties": {
+          "id": {
+            "description": "Changeset id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ChangesetIdArgs",
+        "type": "object"
+      },
+      "name": "changeset_revert"
+    },
+    {
+      "description": "Invoke any public registry command. Mutating calls default to a changeset proposal.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`command_run`",
+        "properties": {
+          "apply": {
+            "default": false,
+            "description": "Apply immediately when the command is mutating (denied for external agents).",
+            "type": "boolean"
+          },
+          "args": {
+            "default": null,
+            "description": "JSON arguments."
+          },
+          "id": {
+            "description": "Registry command id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CommandRunArgs",
+        "type": "object"
+      },
+      "name": "command_run"
+    },
+    {
+      "description": "The command-bus catalog (`omacell commands --json`).",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`workbook_list` takes no arguments.",
+        "title": "EmptyArgs",
+        "type": "object"
+      },
+      "name": "commands_list"
+    },
+    {
+      "description": "Export the open workbook (`file.export`).",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`export`",
+        "properties": {
+          "path": {
+            "description": "Destination path (extension selects format).",
+            "type": "string"
+          },
+          "range": {
+            "description": "A1 range.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sheet": {
+            "description": "Sheet name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "ExportArgs",
+        "type": "object"
+      },
+      "name": "export"
+    },
+    {
+      "description": "Set one cell's formula. Defaults to proposing a changeset.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`formula_set`",
+        "properties": {
+          "apply": {
+            "default": false,
+            "description": "Apply immediately (denied for external agents).",
+            "type": "boolean"
+          },
+          "formula": {
+            "description": "Formula source (`=SUM(A1:A10)` or formula-bar text).",
+            "type": "string"
+          },
+          "ref": {
+            "description": "A1 cell.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "formula"
+        ],
+        "title": "FormulaSetArgs",
+        "type": "object"
+      },
+      "name": "formula_set"
+    },
+    {
+      "description": "Read values, formulas, and/or formats from an A1 range (paginated by row).",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`range_read`",
+        "properties": {
+          "fields": {
+            "description": "`values`, `formulas`, `formats`. Default is all three.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "limit": {
+            "description": "Max rows to return (default 256, max 1024).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "default": 0,
+            "description": "Row offset into the range.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "range": {
+            "description": "A1 range (`Sheet!A1:D20`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "range"
+        ],
+        "title": "RangeReadArgs",
+        "type": "object"
+      },
+      "name": "range_read"
+    },
+    {
+      "description": "Write formula-bar values into an A1 range. Defaults to proposing a changeset.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`range_write`",
+        "properties": {
+          "apply": {
+            "default": false,
+            "description": "Apply immediately (denied for external agents).",
+            "type": "boolean"
+          },
+          "range": {
+            "description": "A1 range.",
+            "type": "string"
+          },
+          "values": {
+            "description": "Row-major formula-bar values. `null` clears a cell.",
+            "items": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "range",
+          "values"
+        ],
+        "title": "RangeWriteArgs",
+        "type": "object"
+      },
+      "name": "range_write"
+    },
+    {
+      "description": "Recalculate the workbook. `wait` is reserved for async AI cells (WP-22).",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`recalc`",
+        "properties": {
+          "wait": {
+            "default": false,
+            "description": "Wait for async AI cells to settle (no-op until WP-22).",
+            "type": "boolean"
+          }
+        },
+        "title": "RecalcArgs",
+        "type": "object"
+      },
+      "name": "recalc"
+    },
+    {
+      "description": "Rasterize a range. Headless servers return 'GUI not running'.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`render`",
+        "properties": {
+          "range": {
+            "description": "A1 range to rasterize.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "range"
+        ],
+        "title": "RenderArgs",
+        "type": "object"
+      },
+      "name": "render"
+    },
+    {
+      "description": "Add a worksheet. Defaults to proposing a changeset.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`sheet_add`",
+        "properties": {
+          "apply": {
+            "default": false,
+            "description": "Apply immediately (denied for external agents).",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Sheet name. Generated when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "SheetAddToolArgs",
+        "type": "object"
+      },
+      "name": "sheet_add"
+    },
+    {
+      "description": "List worksheet names in the open workbook.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`workbook_list` takes no arguments.",
+        "title": "EmptyArgs",
+        "type": "object"
+      },
+      "name": "sheet_list"
+    },
+    {
+      "description": "Rename a worksheet. Defaults to proposing a changeset.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`sheet_rename`",
+        "properties": {
+          "apply": {
+            "default": false,
+            "description": "Apply immediately (denied for external agents).",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "New name.",
+            "type": "string"
+          },
+          "sheet": {
+            "description": "Current name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sheet",
+          "name"
+        ],
+        "title": "SheetRenameToolArgs",
+        "type": "object"
+      },
+      "name": "sheet_rename"
+    },
+    {
+      "description": "List workbooks open in this MCP session.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`workbook_list` takes no arguments.",
+        "title": "EmptyArgs",
+        "type": "object"
+      },
+      "name": "workbook_list"
+    },
+    {
+      "description": "Open a workbook from disk, replacing the current session workbook.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`workbook_open`",
+        "properties": {
+          "path": {
+            "description": "Path to open.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "WorkbookOpenArgs",
+        "type": "object"
+      },
+      "name": "workbook_open"
+    },
+    {
+      "description": "Save the open workbook.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`workbook_save`",
+        "properties": {
+          "path": {
+            "description": "Destination; default is the path from `workbook_open`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "WorkbookSaveArgs",
+        "type": "object"
+      },
+      "name": "workbook_save"
+    }
+  ]
+}

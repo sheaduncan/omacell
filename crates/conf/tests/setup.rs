@@ -66,6 +66,41 @@ fn setup_without_menu_writes_only_expected_files() {
         );
     }
 
+    let src = paths
+        .default_dir
+        .join("agents/skills/omacell")
+        .canonicalize()
+        .unwrap();
+    for relative in [
+        ".agents/skills/omacell",
+        ".claude/skills/omacell",
+        ".codex/skills/omacell",
+        ".pi/agent/skills/omacell",
+        ".gemini/config/skills/omacell",
+    ] {
+        let dest = dir.path().join(relative);
+        let target = std::fs::read_link(&dest).unwrap();
+        let resolved = dest.parent().unwrap().join(&target).canonicalize().unwrap();
+        assert_eq!(resolved, src, "{relative}");
+        assert!(resolved.join("SKILL.md").is_file());
+    }
+
+    let again = setup_omarchy(
+        &paths,
+        SetupOptions {
+            confirm_menu: false,
+            link_skill: true,
+        },
+    )
+    .unwrap();
+    assert!(
+        again
+            .written
+            .iter()
+            .all(|p| !p.to_string_lossy().contains("skills/omacell")),
+        "skill links must be idempotent: {again:?}"
+    );
+
     assert_eq!(
         relative_entries(dir.path()),
         vec![

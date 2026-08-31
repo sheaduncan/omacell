@@ -46,6 +46,14 @@ pub mod codes {
     pub const TASK_SHUTDOWN: &str = "task.shutdown";
     /// Cooperative cancel completed without committing.
     pub const TASK_CANCELLED: &str = "task.cancelled";
+    /// Unknown MCP tool or resource.
+    pub const MCP_UNKNOWN: &str = "mcp.unknown";
+    /// MCP tool arguments failed validation or exceeded size/depth limits.
+    pub const MCP_ARGS: &str = "mcp.args";
+    /// MCP `render` requires a running GUI.
+    pub const MCP_RENDER: &str = "mcp.render";
+    /// MCP resource URI could not be parsed or does not match the open workbook.
+    pub const MCP_URI: &str = "mcp.uri";
 }
 
 pub(crate) fn unknown(id: &str) -> CoreError {

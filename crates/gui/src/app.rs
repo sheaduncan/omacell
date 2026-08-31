@@ -370,6 +370,9 @@ impl Gui {
                 self.refresh_palette("");
                 self.palette_command = None;
             }
+            if cmd == "ai.agent" {
+                self.dispatch_agent();
+            }
             return Ok(Outcome::success(json!({"ok": true})));
         }
         let args = inject_chart_range(&self.ui, cmd, args);
@@ -390,6 +393,31 @@ impl Gui {
                 self.message = Some(err.message.clone());
                 Ok(Outcome::failure(err))
             }
+        }
+    }
+
+    fn dispatch_agent(&mut self) {
+        let Some(handoff) = self.ui.take_agent_handoff() else {
+            return;
+        };
+        let prompt = if handoff.diagnose {
+            "Diagnose this Omacell workbook".into()
+        } else if handoff.prompt.is_empty() {
+            "Help with this workbook".into()
+        } else {
+            handoff.prompt
+        };
+        match omacell_conf::hand_off(omacell_conf::HandOffRequest {
+            prompt,
+            workbook: self.file.clone(),
+            selection: None,
+            diagnose: None,
+        }) {
+            Ok(result) if result.hidden => {
+                self.message = Some(format!("no default agent; run: {}", result.argv.join(" ")));
+            }
+            Ok(_) => self.message = Some("handed to omarchy agent".into()),
+            Err(err) => self.message = Some(err.message),
         }
     }
 

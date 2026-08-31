@@ -131,6 +131,7 @@ impl App {
             config_file,
         );
         let ui = UiSession::new(&loaded, &roots)?;
+        ui.set_agent_visible(omacell_conf::detect_default_agent().is_some());
         register_ui_commands(self.bus.registry_mut(), &ui)?;
         Ok((ui, roots))
     }

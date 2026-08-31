@@ -286,6 +286,9 @@ impl Tui {
             if cmd == "palette.open" {
                 self.refresh_palette("")?;
             }
+            if cmd == "ai.agent" {
+                self.dispatch_agent();
+            }
             return Ok(Outcome::success(serde_json::json!({"ok": true})));
         }
         let args = inject_chart_range(&self.ui, cmd, args);
@@ -307,6 +310,31 @@ impl Tui {
             "queued": true,
             "task": id.get(),
         })))
+    }
+
+    fn dispatch_agent(&mut self) {
+        let Some(handoff) = self.ui.take_agent_handoff() else {
+            return;
+        };
+        let prompt = if handoff.diagnose {
+            "Diagnose this Omacell workbook".into()
+        } else if handoff.prompt.is_empty() {
+            "Help with this workbook".into()
+        } else {
+            handoff.prompt
+        };
+        match omacell_conf::hand_off(omacell_conf::HandOffRequest {
+            prompt,
+            workbook: None,
+            selection: None,
+            diagnose: None,
+        }) {
+            Ok(result) if result.hidden => {
+                self.message = Some(format!("no default agent; run: {}", result.argv.join(" ")));
+            }
+            Ok(_) => self.message = Some("handed to omarchy agent".into()),
+            Err(err) => self.message = Some(err.message),
+        }
     }
 
     fn adopt_snapshot(&mut self) {
