@@ -211,11 +211,11 @@ pub fn insert_cells(
     range: RangeRef,
     shift: Shift,
 ) -> Result<(), CoreError> {
-    wb.ensure_sheet_not_used_by_pivot(sheet)?;
     let (r0, c0, r1, c1) = norm(range);
     match shift {
         Shift::Down => {
             let n = r1.saturating_sub(r0).saturating_add(1);
+            wb.rewrite_pivots_after_row_band(sheet, r0, n as i32, c0, c1)?;
             shift_band_rows(wb, sheet, r0, n, c0, c1, false)?;
             shift_band_side_tables_rows(wb, sheet, r0, n, c0, c1, false)?;
             rewrite_formulas(
@@ -232,6 +232,7 @@ pub fn insert_cells(
         }
         Shift::Right => {
             let n = c1.saturating_sub(c0).saturating_add(1);
+            wb.rewrite_pivots_after_col_band(sheet, c0, i32::from(n), r0, r1)?;
             shift_band_cols(wb, sheet, c0, n, r0, r1, false)?;
             shift_band_side_tables_cols(wb, sheet, c0, n, r0, r1, false)?;
             rewrite_formulas(
@@ -256,11 +257,11 @@ pub fn delete_cells(
     range: RangeRef,
     shift: Shift,
 ) -> Result<(), CoreError> {
-    wb.ensure_sheet_not_used_by_pivot(sheet)?;
     let (r0, c0, r1, c1) = norm(range);
     match shift {
         Shift::Down => {
             let n = r1.saturating_sub(r0).saturating_add(1);
+            wb.rewrite_pivots_after_row_band(sheet, r0, -(n as i32), c0, c1)?;
             shift_band_rows(wb, sheet, r0, n, c0, c1, true)?;
             shift_band_side_tables_rows(wb, sheet, r0, n, c0, c1, true)?;
             rewrite_formulas(
@@ -277,6 +278,7 @@ pub fn delete_cells(
         }
         Shift::Right => {
             let n = c1.saturating_sub(c0).saturating_add(1);
+            wb.rewrite_pivots_after_col_band(sheet, c0, -i32::from(n), r0, r1)?;
             shift_band_cols(wb, sheet, c0, n, r0, r1, true)?;
             shift_band_side_tables_cols(wb, sheet, c0, n, r0, r1, true)?;
             rewrite_formulas(

@@ -239,8 +239,21 @@ pub(crate) fn encode(
     }
 
     let mut pivot_caches: Vec<(u32, String)> = Vec::new();
+    let mut emitted_cache_ids = std::collections::BTreeSet::new();
     for pivot in wb.pivots().iter() {
-        let cache = super::pivot::cache_parts(wb, pivot)?;
+        let cache_id = super::pivot::cache_id_of(pivot);
+        if !emitted_cache_ids.insert(cache_id) {
+            continue;
+        }
+        let cache = if let Some(pkg) = package {
+            super::pivot::preserved_cache_parts(pkg, pivot)
+        } else {
+            None
+        };
+        let cache = match cache {
+            Some(parts) => parts,
+            None => super::pivot::cache_parts(wb, pivot)?,
+        };
         let r = format!("rId{rid}");
         rid += 1;
         wb_rels.push((
@@ -1481,7 +1494,15 @@ fn worksheet_xml(
         .iter()
         .filter(|pivot| pivot.dest_sheet == sheet.id)
     {
-        let extra = super::pivot::table_parts(wb, pivot)?;
+        let extra = if let Some(pkg) = package {
+            super::pivot::preserved_table_parts(pkg, pivot)
+        } else {
+            None
+        };
+        let extra = match extra {
+            Some(parts) => parts,
+            None => super::pivot::table_parts(wb, pivot)?,
+        };
         let id = format!("rId{rid}");
         rid += 1;
         rels.push((id, REL_PIVOT_TABLE.into(), extra.rel_target, false));

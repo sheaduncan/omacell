@@ -39,10 +39,10 @@ encode.
 | `CONVERT` unknown/incompatible unit | `#N/A` | LibreOffice `Err:502` | WP-05c |
 | `CONVERT` `lbm`→`g` | Microsoft factor `453.59237` | LibreOffice uses a slightly different mass factor | WP-05c |
 | `BITLSHIFT` beyond 48 bits | `#NUM!` (`0..2^48-1`) | LibreOffice may return the untruncated shift | WP-05c |
-| Pivot compact layout | Nested row fields indent in one column | Multi-field row keys are joined with ` \| ` in the snapshot | WP-24 |
-| Pivot Distinct Count | Excel 2013+ distinct-count data field | Aggregates distinctly; OOXML export uses `subtotal="count"` with a Distinct-count caption | WP-24 |
-| Structural edits around pivots | Excel rewrites pivot source/output references as rows and columns move | Row/column and cell-shift structural edits are rejected on sheets used by a pivot until reference rewriting is implemented | WP-24 / WP-24a |
-| Unsupported pivot extensions | Preserves calculated fields, slicers, and vendor extensions | Supported fields are modeled; saving regenerates their cache/table parts and does not preserve unsupported pivot XML extensions | WP-24 / WP-24a |
+| Pivot compact layout | Nested row fields indent in one column; outer keys get a group header row | Same: two spaces per depth, group header when an outer key changes; outline blanks repeated outer labels; tabular repeats them | WP-24a |
+| Pivot Distinct Count | Excel 2013+ `x14:dataField pivotShowAs="distinctCount"` | Aggregates distinctly and writes the x14 extension; `subtotal="count"` remains the base attribute | WP-24a |
+| Structural edits around pivots | Excel rewrites pivot source/output references as rows and columns move | Whole-row/column inserts and deletes, and cell shifts that cover a pivot range, rewrite source and output; partial bands that would split a pivot still error `pivot.struct` | WP-24a |
+| Unsupported pivot extensions | Preserves calculated fields, slicers, and vendor extensions | Calculated fields are modeled; unchanged pivots re-emit original cache/table XML and relationships; a dirty pivot regenerates supported parts and drops unmodeled extensions | WP-24a |
 | Goal Seek non-convergence | Status dialog; last trial remains | `converged: false` with a finite last trial; no error | WP-24 |
 | Data Tables / Scenario Manager | Excel what-if tools | Deferred (v1.x); only Goal Seek in this package | WP-24 |
 | Lua user stdlib | Full Lua 5.4 including `debug` | User scripts receive `mlua`'s full safe subset, including `io`, `os`, `package`, and Lua-module `require`; the unsafe `debug` library and native C-module loading remain unavailable under the workspace-wide `unsafe_code = "forbid"`. Embedded scripts additionally remove all file/process/module-loading entry points | WP-20 |

@@ -287,6 +287,15 @@ impl PivotDataField {
     }
 }
 
+/// A calculated cache field (`cacheField@databaseField="0"`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PivotCalcField {
+    /// Field name shown in the pivot field list.
+    pub name: String,
+    /// Excel-style formula over other cache field names (`'Amount'*1.1`).
+    pub formula: String,
+}
+
 /// Cached source cell used when the live range is missing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CacheValue {
@@ -345,6 +354,21 @@ pub struct PivotTable {
     /// Refresh when the file opens.
     #[serde(default)]
     pub refresh_on_load: bool,
+    /// Calculated cache fields (not present on the source worksheet).
+    #[serde(default)]
+    pub calc_fields: Vec<PivotCalcField>,
+    /// When true, `.xlsx` cache/table parts must be regenerated on save.
+    #[serde(skip)]
+    pub ooxml_dirty: bool,
+    /// Original OOXML `cacheId` when loaded from `.xlsx`.
+    #[serde(skip)]
+    pub ooxml_cache_id: Option<u32>,
+    /// Original cache definition part name when loaded from `.xlsx`.
+    #[serde(skip)]
+    pub ooxml_cache_def: Option<String>,
+    /// Original pivot table part name when loaded from `.xlsx`.
+    #[serde(skip)]
+    pub ooxml_table: Option<String>,
 }
 
 fn yes() -> bool {
@@ -382,6 +406,11 @@ impl PivotTable {
             grand_cols: true,
             subtotals: true,
             refresh_on_load: false,
+            calc_fields: Vec::new(),
+            ooxml_dirty: true,
+            ooxml_cache_id: None,
+            ooxml_cache_def: None,
+            ooxml_table: None,
         }
     }
 
@@ -411,6 +440,13 @@ impl PivotTable {
                 .map(|(name, values)| name.len() + values.iter().map(String::len).sum::<usize>())
                 .sum::<usize>()
             + self.groups.keys().map(String::len).sum::<usize>()
+            + self
+                .calc_fields
+                .iter()
+                .map(|field| field.name.len() + field.formula.len())
+                .sum::<usize>()
+            + self.ooxml_cache_def.as_ref().map(String::len).unwrap_or(0)
+            + self.ooxml_table.as_ref().map(String::len).unwrap_or(0)
     }
 }
 
@@ -720,7 +756,12 @@ pub fn materialize_from_cache(
         .collect();
     let row_keys = unique_keys(&columns, &filtered, &pivot.rows, &pivot.groups, date_system);
     let col_keys = unique_keys(&columns, &filtered, &pivot.cols, &pivot.groups, date_system);
-    validate_materialized_shape(pivot, row_keys.len(), col_keys.len())?;
+    validate_materialized_shape(
+        pivot,
+        row_keys.len(),
+        col_keys.len(),
+        compact_group_header_count(&row_keys, pivot),
+    )?;
     let data_n = pivot.data.len().max(1);
     let mut raw: BTreeMap<(Vec<String>, Vec<String>, usize), Agg> = BTreeMap::new();
     for row in &filtered {
@@ -811,13 +852,37 @@ pub fn materialize_from_cache(
     }
     let body0 = col_header_rows;
     let mut r = body0;
+    let mut prev_key: Option<&Vec<String>> = None;
     for (ri, rk) in row_keys.iter().enumerate() {
         if tabular {
             for (i, part) in rk.iter().enumerate() {
-                cells.push(label(r, i as u16, part));
+                let text = if matches!(pivot.layout, PivotLayout::Outline)
+                    && i + 1 < rk.len()
+                    && prev_key.is_some_and(|prev| prev.get(i) == Some(part))
+                {
+                    ""
+                } else {
+                    part.as_str()
+                };
+                cells.push(label(r, i as u16, text));
+            }
+        } else if rk.len() > 1 {
+            for depth in 0..rk.len().saturating_sub(1) {
+                let changed = prev_key.is_none_or(|prev| prev.get(depth) != rk.get(depth));
+                if changed {
+                    cells.push(label(r, 0, &compact_label(depth, &rk[depth])));
+                    r += 1;
+                }
+            }
+            if let Some(leaf) = rk.last() {
+                cells.push(label(
+                    r,
+                    0,
+                    &compact_label(rk.len().saturating_sub(1), leaf),
+                ));
             }
         } else {
-            cells.push(label(r, 0, &rk.join(" | ")));
+            cells.push(label(r, 0, rk.first().map(String::as_str).unwrap_or("")));
         }
         push_data_row(
             &mut cells,
@@ -906,6 +971,7 @@ pub fn materialize_from_cache(
                 r += 1;
             }
         }
+        prev_key = Some(rk);
     }
     if pivot.grand_rows && !pivot.rows.is_empty() {
         cells.push(label(r, 0, "Grand Total"));
@@ -1096,7 +1162,185 @@ pub fn cache_table(
         }
         rows.push(row);
     }
+    apply_calc_fields(pivot, &mut headers, &mut rows)?;
     Ok((headers, rows))
+}
+
+fn apply_calc_fields(
+    pivot: &PivotTable,
+    headers: &mut Vec<String>,
+    rows: &mut [Vec<CacheValue>],
+) -> Result<(), CoreError> {
+    for field in &pivot.calc_fields {
+        if field.name.is_empty() {
+            return Err(CoreError::new(
+                "pivot.field",
+                "calculated field name is empty",
+            ));
+        }
+        if headers.iter().any(|header| header == &field.name) {
+            continue;
+        }
+        if headers.len() >= usize::from(MAX_COLS) {
+            return Err(CoreError::new(
+                "pivot.source",
+                "pivot source is too wide to add a calculated field",
+            ));
+        }
+        let by_name: BTreeMap<&str, usize> = headers
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.as_str(), index))
+            .collect();
+        for row in rows.iter_mut() {
+            row.resize(headers.len(), CacheValue::Empty);
+            let value = eval_calc_field(&field.formula, &by_name, row);
+            row.push(value);
+        }
+        headers.push(field.name.clone());
+    }
+    Ok(())
+}
+
+struct CalcCtx<'a> {
+    by_name: &'a BTreeMap<&'a str, usize>,
+    row: &'a [CacheValue],
+}
+
+fn eval_calc_field(
+    formula: &str,
+    by_name: &BTreeMap<&str, usize>,
+    row: &[CacheValue],
+) -> CacheValue {
+    let expr = formula.trim().strip_prefix('=').unwrap_or(formula).trim();
+    let ctx = CalcCtx { by_name, row };
+    match parse_calc_add(&ctx, expr, 0) {
+        Ok((value, rest)) if rest.trim().is_empty() => value
+            .and_then(|n| n.is_finite().then_some(CacheValue::Number(n)))
+            .unwrap_or(CacheValue::Empty),
+        _ => CacheValue::Empty,
+    }
+}
+
+fn parse_calc_add<'a>(
+    ctx: &CalcCtx<'_>,
+    input: &'a str,
+    depth: u32,
+) -> Result<(Option<f64>, &'a str), ()> {
+    if depth > 16 {
+        return Err(());
+    }
+    let (mut acc, mut rest) = parse_calc_mul(ctx, input, depth + 1)?;
+    loop {
+        let next = rest.trim_start();
+        if let Some(tail) = next.strip_prefix('+') {
+            let (rhs, after) = parse_calc_mul(ctx, tail, depth + 1)?;
+            acc = acc.zip(rhs).map(|(a, b)| a + b);
+            rest = after;
+        } else if let Some(tail) = next.strip_prefix('-') {
+            let (rhs, after) = parse_calc_mul(ctx, tail, depth + 1)?;
+            acc = acc.zip(rhs).map(|(a, b)| a - b);
+            rest = after;
+        } else {
+            return Ok((acc, rest));
+        }
+    }
+}
+
+fn parse_calc_mul<'a>(
+    ctx: &CalcCtx<'_>,
+    input: &'a str,
+    depth: u32,
+) -> Result<(Option<f64>, &'a str), ()> {
+    if depth > 16 {
+        return Err(());
+    }
+    let (mut acc, mut rest) = parse_calc_atom(ctx, input, depth + 1)?;
+    loop {
+        let next = rest.trim_start();
+        if let Some(tail) = next.strip_prefix('*') {
+            let (rhs, after) = parse_calc_atom(ctx, tail, depth + 1)?;
+            acc = acc.zip(rhs).map(|(a, b)| a * b);
+            rest = after;
+        } else if let Some(tail) = next.strip_prefix('/') {
+            let (rhs, after) = parse_calc_atom(ctx, tail, depth + 1)?;
+            acc = match (acc, rhs) {
+                (Some(a), Some(b)) if b != 0.0 => Some(a / b),
+                _ => None,
+            };
+            rest = after;
+        } else {
+            return Ok((acc, rest));
+        }
+    }
+}
+
+fn parse_calc_atom<'a>(
+    ctx: &CalcCtx<'_>,
+    input: &'a str,
+    depth: u32,
+) -> Result<(Option<f64>, &'a str), ()> {
+    if depth > 16 {
+        return Err(());
+    }
+    let input = input.trim_start();
+    if let Some(tail) = input.strip_prefix('(') {
+        let (value, rest) = parse_calc_add(ctx, tail, depth + 1)?;
+        let rest = rest.trim_start().strip_prefix(')').ok_or(())?;
+        return Ok((value, rest));
+    }
+    if let Some(tail) = input.strip_prefix('-')
+        && (tail.starts_with(|c: char| {
+            c.is_ascii_digit()
+                || c == '.'
+                || c == '('
+                || c == '\''
+                || c.is_ascii_alphabetic()
+                || c == '_'
+        }))
+    {
+        let (value, rest) = parse_calc_atom(ctx, tail, depth + 1)?;
+        return Ok((value.map(|n| -n), rest));
+    }
+    if let Some(tail) = input.strip_prefix('\'') {
+        let end = tail.find('\'').ok_or(())?;
+        let name = &tail[..end];
+        return Ok((lookup_calc_number(ctx, name), &tail[end + 1..]));
+    }
+    if input.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
+        let bytes = input.as_bytes();
+        let mut end = 0usize;
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        if end < bytes.len() && bytes[end] == b'.' {
+            end += 1;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+        }
+        let number: f64 = input.get(..end).ok_or(())?.parse().map_err(|_| ())?;
+        return Ok((number.is_finite().then_some(number), &input[end..]));
+    }
+    if input.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+        let end = input
+            .char_indices()
+            .take_while(|(_, c)| c.is_ascii_alphanumeric() || *c == '_')
+            .map(|(i, c)| i + c.len_utf8())
+            .last()
+            .unwrap_or(0);
+        let name = &input[..end];
+        return Ok((lookup_calc_number(ctx, name), &input[end..]));
+    }
+    Err(())
+}
+
+fn lookup_calc_number(ctx: &CalcCtx<'_>, name: &str) -> Option<f64> {
+    let index = ctx.by_name.get(name).copied()?;
+    match ctx.row.get(index) {
+        Some(CacheValue::Number(n)) if n.is_finite() => Some(*n),
+        _ => None,
+    }
 }
 
 /// Write materialized cells onto the destination sheet and update the output rectangle.
@@ -1394,10 +1638,35 @@ fn ensure_field(available: &BTreeSet<&str>, name: &str) -> Result<(), CoreError>
     }
 }
 
+fn compact_label(depth: usize, text: &str) -> String {
+    format!("{}{text}", "  ".repeat(depth))
+}
+
+fn compact_group_header_count(row_keys: &[Vec<String>], pivot: &PivotTable) -> usize {
+    if !matches!(pivot.layout, PivotLayout::Compact) || pivot.rows.len() <= 1 {
+        return 0;
+    }
+    let mut count = 0;
+    let mut prev: Option<&Vec<String>> = None;
+    for rk in row_keys {
+        if rk.len() <= 1 {
+            continue;
+        }
+        for depth in 0..rk.len().saturating_sub(1) {
+            if prev.is_none_or(|p| p.get(depth) != rk.get(depth)) {
+                count += 1;
+            }
+        }
+        prev = Some(rk);
+    }
+    count
+}
+
 fn validate_materialized_shape(
     pivot: &PivotTable,
     row_keys: usize,
     col_keys: usize,
+    extra_row_headers: usize,
 ) -> Result<(), CoreError> {
     let row_label_cols = if pivot.rows.is_empty() {
         1
@@ -1428,6 +1697,7 @@ fn validate_materialized_shape(
     };
     let rows = header_rows
         .checked_add(row_keys)
+        .and_then(|n| n.checked_add(extra_row_headers))
         .and_then(|n| n.checked_add(subtotal_rows))
         .and_then(|n| n.checked_add(usize::from(pivot.grand_rows && !pivot.rows.is_empty())))
         .ok_or_else(|| CoreError::new("pivot.output", "pivot output height overflows"))?;
@@ -1597,6 +1867,339 @@ fn rectangles_overlap(
     bc1: u16,
 ) -> bool {
     ar0 <= br1 && br0 <= ar1 && ac0 <= bc1 && bc0 <= ac1
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PivotShiftBound {
+    SourceHeader,
+    OutputOrigin,
+}
+
+pub(crate) fn shift_closed_interval(
+    start: u32,
+    end: u32,
+    at: u32,
+    count: i32,
+    bound: PivotShiftBound,
+    max: u32,
+) -> Result<(u32, u32), CoreError> {
+    let (start, end) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    if count == 0 {
+        return Ok((start, end));
+    }
+    if count > 0 {
+        let n = u32::try_from(count).map_err(|_| struct_err("insert count is too large"))?;
+        let (next_start, next_end) = if at <= start {
+            (
+                start
+                    .checked_add(n)
+                    .ok_or_else(|| struct_err("row insert overflows the grid"))?,
+                end.checked_add(n)
+                    .ok_or_else(|| struct_err("row insert overflows the grid"))?,
+            )
+        } else if at <= end {
+            (
+                start,
+                end.checked_add(n)
+                    .ok_or_else(|| struct_err("row insert overflows the grid"))?,
+            )
+        } else {
+            (start, end)
+        };
+        if next_end >= max {
+            return Err(struct_err(
+                "structural edit would push a pivot off the grid",
+            ));
+        }
+        return Ok((next_start, next_end));
+    }
+    let mag = count.unsigned_abs();
+    let deleted_end = at.saturating_add(mag);
+    if deleted_end <= start {
+        return Ok((start.saturating_sub(mag), end.saturating_sub(mag)));
+    }
+    if at > end {
+        return Ok((start, end));
+    }
+    let origin_deleted = start >= at && start < deleted_end;
+    if origin_deleted {
+        return Err(match bound {
+            PivotShiftBound::SourceHeader => {
+                struct_err("cannot delete the header row or column of a pivot source")
+            }
+            PivotShiftBound::OutputOrigin => {
+                struct_err("cannot delete the origin of a pivot output")
+            }
+        });
+    }
+    if at <= start && deleted_end > end {
+        return Err(struct_err("structural edit would delete a pivot range"));
+    }
+    let overlap = {
+        let lo = start.max(at);
+        let hi = (end + 1).min(deleted_end);
+        hi.saturating_sub(lo)
+    };
+    let next_start = if start >= deleted_end {
+        start - mag
+    } else {
+        start
+    };
+    let next_end = end.saturating_sub(overlap);
+    if next_end < next_start {
+        return Err(struct_err("structural edit would delete a pivot range"));
+    }
+    Ok((next_start, next_end))
+}
+
+pub(crate) fn shift_closed_interval_u16(
+    start: u16,
+    end: u16,
+    at: u16,
+    count: i32,
+    bound: PivotShiftBound,
+    max: u16,
+) -> Result<(u16, u16), CoreError> {
+    let (s, e) = shift_closed_interval(
+        u32::from(start),
+        u32::from(end),
+        u32::from(at),
+        count,
+        bound,
+        u32::from(max),
+    )?;
+    Ok((
+        u16::try_from(s).map_err(|_| struct_err("column shift overflows"))?,
+        u16::try_from(e).map_err(|_| struct_err("column shift overflows"))?,
+    ))
+}
+
+fn struct_err(message: &str) -> CoreError {
+    CoreError::new("pivot.struct", message)
+        .with_hint("insert or delete fully before, inside, or after the pivot source and output")
+}
+
+pub(crate) fn band_covers_cols(bc0: u16, bc1: u16, c0: u16, c1: u16) -> bool {
+    bc0 <= c0 && bc1 >= c1
+}
+
+pub(crate) fn band_covers_rows(br0: u32, br1: u32, r0: u32, r1: u32) -> bool {
+    br0 <= r0 && br1 >= r1
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BandAction {
+    None,
+    Shift,
+    Refuse,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn row_band_action(
+    r0: u32,
+    c0: u16,
+    r1: u32,
+    c1: u16,
+    at: u32,
+    count: i32,
+    bc0: u16,
+    bc1: u16,
+) -> BandAction {
+    let cols_overlap = c0 <= bc1 && bc0 <= c1;
+    if !cols_overlap {
+        return BandAction::None;
+    }
+    let mag = count.unsigned_abs();
+    let rows_overlap = if count >= 0 {
+        r1 >= at
+    } else {
+        let deleted_end = at.saturating_add(mag).saturating_sub(1);
+        r0 <= deleted_end && at <= r1
+    };
+    if !rows_overlap {
+        return BandAction::None;
+    }
+    if band_covers_cols(bc0, bc1, c0, c1) {
+        BandAction::Shift
+    } else {
+        BandAction::Refuse
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn col_band_action(
+    r0: u32,
+    c0: u16,
+    r1: u32,
+    c1: u16,
+    at: u16,
+    count: i32,
+    br0: u32,
+    br1: u32,
+) -> BandAction {
+    let rows_overlap = r0 <= br1 && br0 <= r1;
+    if !rows_overlap {
+        return BandAction::None;
+    }
+    let mag = count.unsigned_abs() as u16;
+    let cols_overlap = if count >= 0 {
+        c1 >= at
+    } else {
+        let deleted_end = at.saturating_add(mag).saturating_sub(1);
+        c0 <= deleted_end && at <= c1
+    };
+    if !cols_overlap {
+        return BandAction::None;
+    }
+    if band_covers_rows(br0, br1, r0, r1) {
+        BandAction::Shift
+    } else {
+        BandAction::Refuse
+    }
+}
+
+pub(crate) fn split_err(name: &str) -> CoreError {
+    CoreError::new(
+        "pivot.struct",
+        format!("structural edit would split pivot {name:?}"),
+    )
+    .with_hint("insert or delete the full rows or columns of the pivot source and output")
+}
+
+pub(crate) fn shift_pivot_rows(
+    pivot: &PivotTable,
+    sheet: SheetId,
+    at: u32,
+    count: i32,
+    c0: u16,
+    c1: u16,
+) -> Result<Option<PivotTable>, CoreError> {
+    let mut next = pivot.clone();
+    let mut changed = false;
+    if pivot.source_sheet == sheet {
+        let (sr0, sc0, sr1, sc1) = norm(pivot.source);
+        match row_band_action(sr0, sc0, sr1, sc1, at, count, c0, c1) {
+            BandAction::None => {}
+            BandAction::Refuse => return Err(split_err(&pivot.name)),
+            BandAction::Shift => {
+                let (nr0, nr1) = shift_closed_interval(
+                    sr0,
+                    sr1,
+                    at,
+                    count,
+                    PivotShiftBound::SourceHeader,
+                    MAX_ROWS,
+                )?;
+                next.source.start.row = nr0;
+                next.source.end.row = nr1;
+                changed = true;
+            }
+        }
+    }
+    if pivot.dest_sheet == sheet {
+        match row_band_action(
+            pivot.dest_row,
+            pivot.dest_col,
+            pivot.out_end_row,
+            pivot.out_end_col,
+            at,
+            count,
+            c0,
+            c1,
+        ) {
+            BandAction::None => {}
+            BandAction::Refuse => return Err(split_err(&pivot.name)),
+            BandAction::Shift => {
+                let (nr0, nr1) = shift_closed_interval(
+                    pivot.dest_row,
+                    pivot.out_end_row,
+                    at,
+                    count,
+                    PivotShiftBound::OutputOrigin,
+                    MAX_ROWS,
+                )?;
+                next.dest_row = nr0;
+                next.out_end_row = nr1;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        next.ooxml_dirty = true;
+        Ok(Some(next))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn shift_pivot_cols(
+    pivot: &PivotTable,
+    sheet: SheetId,
+    at: u16,
+    count: i32,
+    r0: u32,
+    r1: u32,
+) -> Result<Option<PivotTable>, CoreError> {
+    let mut next = pivot.clone();
+    let mut changed = false;
+    if pivot.source_sheet == sheet {
+        let (sr0, sc0, sr1, sc1) = norm(pivot.source);
+        match col_band_action(sr0, sc0, sr1, sc1, at, count, r0, r1) {
+            BandAction::None => {}
+            BandAction::Refuse => return Err(split_err(&pivot.name)),
+            BandAction::Shift => {
+                let (nc0, nc1) = shift_closed_interval_u16(
+                    sc0,
+                    sc1,
+                    at,
+                    count,
+                    PivotShiftBound::SourceHeader,
+                    MAX_COLS,
+                )?;
+                next.source.start.col = nc0;
+                next.source.end.col = nc1;
+                changed = true;
+            }
+        }
+    }
+    if pivot.dest_sheet == sheet {
+        match col_band_action(
+            pivot.dest_row,
+            pivot.dest_col,
+            pivot.out_end_row,
+            pivot.out_end_col,
+            at,
+            count,
+            r0,
+            r1,
+        ) {
+            BandAction::None => {}
+            BandAction::Refuse => return Err(split_err(&pivot.name)),
+            BandAction::Shift => {
+                let (nc0, nc1) = shift_closed_interval_u16(
+                    pivot.dest_col,
+                    pivot.out_end_col,
+                    at,
+                    count,
+                    PivotShiftBound::OutputOrigin,
+                    MAX_COLS,
+                )?;
+                next.dest_col = nc0;
+                next.out_end_col = nc1;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        next.ooxml_dirty = true;
+        Ok(Some(next))
+    } else {
+        Ok(None)
+    }
 }
 
 fn value_parts(value: Option<&CacheValue>) -> (Option<f64>, std::borrow::Cow<'_, str>) {
@@ -1777,7 +2380,7 @@ fn group_sort_key(
     }
 }
 
-fn norm(r: RangeRef) -> (u32, u16, u32, u16) {
+pub(crate) fn norm(r: RangeRef) -> (u32, u16, u32, u16) {
     (
         r.start.row.min(r.end.row),
         r.start.col.min(r.end.col),

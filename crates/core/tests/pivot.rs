@@ -6,8 +6,10 @@ use omacell_core::addr::{CellRef, RangeRef, SheetId};
 use omacell_core::dates::{CivilDate, date_to_serial};
 use omacell_core::eval::FnRegistry;
 use omacell_core::graph::CellCoord;
+use omacell_core::ops::{Shift, insert_cells, insert_rows};
 use omacell_core::pivot::{
-    DateGroup, PivotAgg, PivotDataField, PivotGroup, PivotLayout, PivotTable, ShowAs, materialize,
+    DateGroup, PivotAgg, PivotCalcField, PivotDataField, PivotGroup, PivotLayout, PivotTable,
+    ShowAs, materialize,
 };
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::stats::describe_range;
@@ -41,7 +43,17 @@ struct CaseFile {
     data: Vec<DataSpec>,
     #[serde(default)]
     groups: std::collections::BTreeMap<String, GroupSpec>,
+    #[serde(default)]
+    layout: Option<String>,
+    #[serde(default)]
+    calc_fields: Vec<CalcFieldSpec>,
     expect: Vec<ExpectCell>,
+}
+
+#[derive(Deserialize)]
+struct CalcFieldSpec {
+    name: String,
+    formula: String,
 }
 
 #[derive(Deserialize)]
@@ -166,6 +178,17 @@ fn definition(case: &CaseFile, dest_row: u32, dest_col: u16) -> PivotTable {
             (name.clone(), group)
         })
         .collect();
+    if let Some(layout) = &case.layout {
+        table.layout = PivotLayout::parse(layout).unwrap();
+    }
+    table.calc_fields = case
+        .calc_fields
+        .iter()
+        .map(|field| PivotCalcField {
+            name: field.name.clone(),
+            formula: field.formula.clone(),
+        })
+        .collect();
     table
 }
 
@@ -263,14 +286,6 @@ fn pivot_create_is_atomic_for_undo_and_blocks_sheet_removal() {
 
     assert_eq!(wb.remove_sheet(source).unwrap_err().code, "pivot.sheet");
     assert_eq!(wb.remove_sheet(output).unwrap_err().code, "pivot.sheet");
-    assert_eq!(
-        wb.insert_rows(source, 0, 1).unwrap_err().code,
-        "pivot.readonly"
-    );
-    assert_eq!(
-        wb.insert_cols(output, 0, 1).unwrap_err().code,
-        "pivot.readonly"
-    );
     wb.undo().unwrap();
     assert!(wb.pivots().is_empty());
     assert!(wb.get(output, 0, 0).unwrap().is_none());
@@ -556,4 +571,119 @@ fn stats_rejects_an_unknown_sheet() {
     let wb = Workbook::new();
     let err = describe_range(&wb, SheetId::new(999), range(0, 0, 0, 0)).unwrap_err();
     assert_eq!(err.code, omacell_core::error::codes::SHEET_ID);
+}
+
+fn sales_source() -> (Workbook, SheetId) {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_number(s, 1, 1, 10.0).unwrap();
+    wb.set_text(s, 2, 0, "West").unwrap();
+    wb.set_number(s, 2, 1, 20.0).unwrap();
+    (wb, s)
+}
+
+#[test]
+fn pivot_structural_edits_rewrite_source_and_output_as_one_undo() {
+    let (mut wb, s) = sales_source();
+    let mut table = PivotTable::new("Sales", s, range(0, 0, 2, 1), s, 0, 4);
+    table.rows = vec!["Region".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let id = wb.add_pivot(table).unwrap();
+    let dest_col = wb.pivots().get(id).unwrap().dest_col;
+
+    wb.transact_try(|workbook| insert_rows(workbook, s, 0, 1))
+        .unwrap();
+    let pivot = wb.pivots().get(id).unwrap();
+    assert_eq!(pivot.source.start.row, 1);
+    assert_eq!(pivot.source.end.row, 3);
+    assert_eq!(pivot.dest_row, 1);
+    assert_eq!(cell_text(&wb, s, 2, 0), "East");
+    assert_eq!(cell_num(&wb, s, 2, dest_col + 1), Some(10.0));
+    wb.undo().unwrap();
+    let pivot = wb.pivots().get(id).unwrap();
+    assert_eq!(pivot.source.start.row, 0);
+    assert_eq!(pivot.dest_row, 0);
+    assert_eq!(cell_text(&wb, s, 1, 0), "East");
+
+    wb.insert_rows(s, 2, 1).unwrap();
+    let pivot = wb.pivots().get(id).unwrap();
+    assert_eq!(pivot.source.start.row, 0);
+    assert_eq!(pivot.source.end.row, 3);
+
+    wb.insert_rows(s, 10, 1).unwrap();
+    let pivot = wb.pivots().get(id).unwrap();
+    assert_eq!(pivot.source.end.row, 3);
+
+    assert_eq!(wb.delete_rows(s, 0, 1).unwrap_err().code, "pivot.struct");
+}
+
+#[test]
+fn pivot_cell_shift_refuses_to_split_and_rewrites_full_bands() {
+    let (mut wb, s) = sales_source();
+    let mut table = PivotTable::new("Sales", s, range(0, 0, 2, 1), s, 0, 4);
+    table.rows = vec!["Region".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let id = wb.add_pivot(table).unwrap();
+    assert_eq!(
+        insert_cells(&mut wb, s, range(0, 0, 0, 0), Shift::Down)
+            .unwrap_err()
+            .code,
+        "pivot.struct"
+    );
+    insert_cells(&mut wb, s, range(0, 8, 0, 8), Shift::Down).unwrap();
+    let pivot = wb.pivots().get(id).unwrap();
+    assert_eq!(pivot.source.start.row, 0);
+    assert_eq!(pivot.dest_col, 4);
+}
+
+#[test]
+fn pivot_calculated_field_is_aggregated() {
+    let (mut wb, s) = sales_source();
+    let mut table = PivotTable::new("Sales", s, range(0, 0, 2, 1), s, 0, 4);
+    table.rows = vec!["Region".into()];
+    table.calc_fields = vec![PivotCalcField {
+        name: "Tax".into(),
+        formula: "'Amount'*0.1".into(),
+    }];
+    table.data = vec![PivotDataField::new("Tax", PivotAgg::Sum)];
+    wb.add_pivot(table).unwrap();
+    assert_eq!(cell_num(&wb, s, 1, 5), Some(1.0));
+    assert_eq!(cell_num(&wb, s, 2, 5), Some(2.0));
+    assert_eq!(cell_num(&wb, s, 3, 5), Some(3.0));
+}
+
+#[test]
+fn pivot_compact_layout_indents_nested_row_fields() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Region").unwrap();
+    wb.set_text(s, 0, 1, "Product").unwrap();
+    wb.set_text(s, 0, 2, "Amount").unwrap();
+    wb.set_text(s, 1, 0, "East").unwrap();
+    wb.set_text(s, 1, 1, "A").unwrap();
+    wb.set_number(s, 1, 2, 10.0).unwrap();
+    wb.set_text(s, 2, 0, "East").unwrap();
+    wb.set_text(s, 2, 1, "B").unwrap();
+    wb.set_number(s, 2, 2, 20.0).unwrap();
+    wb.set_text(s, 3, 0, "West").unwrap();
+    wb.set_text(s, 3, 1, "A").unwrap();
+    wb.set_number(s, 3, 2, 40.0).unwrap();
+    let mut table = PivotTable::new("Sales", s, range(0, 0, 3, 2), s, 0, 5);
+    table.rows = vec!["Region".into(), "Product".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    table.layout = PivotLayout::Compact;
+    table.subtotals = false;
+    let cells = materialize(&wb, &table).unwrap();
+    omacell_core::pivot::write_output(&mut wb, &mut table, &cells).unwrap();
+    assert_eq!(cell_text(&wb, s, 1, 5), "East");
+    assert_eq!(cell_text(&wb, s, 2, 5), "  A");
+    assert_eq!(cell_num(&wb, s, 2, 6), Some(10.0));
+    assert_eq!(cell_text(&wb, s, 3, 5), "  B");
+    assert_eq!(cell_num(&wb, s, 3, 6), Some(20.0));
+    assert_eq!(cell_text(&wb, s, 4, 5), "West");
+    assert_eq!(cell_text(&wb, s, 5, 5), "  A");
+    assert_eq!(cell_num(&wb, s, 5, 6), Some(40.0));
 }
