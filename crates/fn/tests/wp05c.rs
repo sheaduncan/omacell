@@ -141,7 +141,7 @@ fn eval_formula(formula: &str) -> String {
 
 #[test]
 fn sequence_randarray_makearray_reject_invalid_shapes() {
-    assert_eq!(eval_formula("=SEQUENCE(0)"), "#NUM!");
+    assert_eq!(eval_formula("=SEQUENCE(0)"), "#CALC!");
     assert_eq!(eval_formula("=SEQUENCE(1048577)"), "#NUM!");
     assert_eq!(eval_formula("=SEQUENCE(1,16385)"), "#NUM!");
     assert_eq!(eval_formula("=RANDARRAY(0)"), "#NUM!");

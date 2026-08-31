@@ -856,10 +856,7 @@ fn char_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     if !(1..=255).contains(&n) {
         return util::err(ErrorKind::Value);
     }
-    match char::from_u32(n as u32) {
-        Some(c) => text(c.to_string()),
-        None => util::err(ErrorKind::Value),
-    }
+    text(windows_1252_char(n as u8).to_string())
 }
 
 fn code_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -867,10 +864,36 @@ fn code_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Ok(s) => s,
         Err(e) => return util::err(e),
     };
-    match s.chars().next() {
-        Some(c) if (1..=255).contains(&(c as u32)) => number(c as u32 as f64),
+    match s.chars().next().and_then(windows_1252_byte) {
+        Some(byte) if byte != 0 => number(f64::from(byte)),
         Some(_) | None => util::err(ErrorKind::Value),
     }
+}
+
+const WINDOWS_1252_HIGH: [char; 32] = [
+    '€', '\u{0081}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{008D}', 'Ž',
+    '\u{008F}', '\u{0090}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{009D}',
+    'ž', 'Ÿ',
+];
+
+fn windows_1252_char(byte: u8) -> char {
+    if (0x80..=0x9F).contains(&byte) {
+        WINDOWS_1252_HIGH[usize::from(byte - 0x80)]
+    } else {
+        char::from(byte)
+    }
+}
+
+fn windows_1252_byte(character: char) -> Option<u8> {
+    let scalar = character as u32;
+    if scalar <= 0x7F || (0xA0..=0xFF).contains(&scalar) {
+        return u8::try_from(scalar).ok();
+    }
+    WINDOWS_1252_HIGH
+        .iter()
+        .position(|candidate| *candidate == character)
+        .and_then(|index| u8::try_from(index).ok())
+        .map(|index| index + 0x80)
 }
 
 fn unichar_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -920,5 +943,18 @@ fn t_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Ok(Scalar::Error(e)) => util::err(e),
         Ok(_) => text(""),
         Err(e) => util::err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{windows_1252_byte, windows_1252_char};
+
+    #[test]
+    fn windows_1252_bytes_round_trip() {
+        for byte in 1..=u8::MAX {
+            let character = windows_1252_char(byte);
+            assert_eq!(windows_1252_byte(character), Some(byte));
+        }
     }
 }

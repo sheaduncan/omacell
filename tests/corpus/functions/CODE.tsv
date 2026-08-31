@@ -1,5 +1,5 @@
 # formula	expected	note
-# Latin-1 code of first scalar if ≤ 255.
+# Windows-1252 byte of the first scalar when representable.
 =CODE("A")	65	ASCII
 =CODE("ABC")	65	first character only
 =CODE(" ")	32	space
@@ -12,3 +12,5 @@
 =CODE({"A","B"})	{65,66}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =CODE(TRUE)	84	T of TRUE; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =CODE(CHAR(65))	65	round-trip
+=CODE("€")	128	Windows-1252 euro byte
+=CODE("Œ")	140	Windows-1252 ligature byte
