@@ -12,10 +12,12 @@ description = "Workbook file formats (xlsx, csv, omc, ods, …) for Omacell."
 workspace = true
 
 [dependencies]
+arrow = { version = "59", default-features = false }
 csv = "1"
 encoding_rs = "0.8"
 indexmap = { workspace = true }
 omacell-core = { path = "../core", version = "0.0.0" }
+parquet = { version = "59", default-features = false, features = ["arrow", "snap", "flate2-rust_backend"] }
 pdf-writer = "0.12"
 quick-xml = "0.41"
 resvg = "0.48"

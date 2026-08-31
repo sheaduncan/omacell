@@ -17,17 +17,17 @@ mod atomic;
 pub(crate) mod data;
 mod diff;
 mod drawing;
-mod opc;
+pub(crate) mod opc;
 pub(crate) mod pivot;
 pub(crate) mod print;
 mod read;
 mod warnings;
 mod write;
-mod xml;
+pub(crate) mod xml;
 
 pub use atomic::{
-    SaveOptions, acquire_lock, lock_path, release_lock, save, save_with_cancel, save_workbook,
-    save_workbook_with_cancel,
+    SaveOptions, acquire_lock, lock_path, peer_lock_blocks, release_lock, save, save_with_cancel,
+    save_workbook, save_workbook_with_cancel,
 };
 pub use diff::{DiffReport, diff};
 pub use opc::{

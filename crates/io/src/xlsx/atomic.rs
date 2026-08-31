@@ -43,6 +43,25 @@ pub fn lock_path(xlsx: &Path) -> PathBuf {
     xlsx.with_file_name(name)
 }
 
+/// Refuse to open or save when a live foreign / LibreOffice lock is present.
+pub fn peer_lock_blocks(path: &Path) -> Result<(), CoreError> {
+    let lock = lock_path(path);
+    if !lock.exists() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&lock).map_err(|e| error::xlsx_lock(e.to_string()))?;
+    if let Some(owner) = LockOwner::parse(&text) {
+        let current = LockOwner::current();
+        if owner.host == current.host && owner.pid == current.pid {
+            return Ok(());
+        }
+    }
+    Err(error::xlsx_lock(format!(
+        "{} is locked by another editor",
+        path.display()
+    )))
+}
+
 /// Create a lock file. Fails if another live owner holds it.
 pub fn acquire_lock(xlsx: &Path) -> Result<PathBuf, CoreError> {
     let path = lock_path(xlsx);

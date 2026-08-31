@@ -59,6 +59,23 @@ impl App {
         Self::from_parts(paths, options, Workbook::new(), FileSession::new(), false)
     }
 
+    /// Bootstrap from an already-opened workbook (JSON `--jq`, etc.).
+    pub fn with_opened(
+        cli: &Cli,
+        book: &Path,
+        opened: crate::files::Opened,
+    ) -> Result<Self, CoreError> {
+        let paths = Paths::from_env()?;
+        let mut options = LoadOptions::from_process();
+        options.config_file = cli.config.clone();
+        options.theme_override = cli.theme.clone();
+        options.cli_sets = cli.sets.clone();
+        options.workbook = Some(workbook_overlay(&opened.workbook));
+        let file_session = FileSession::new();
+        file_session.attach(book, &opened);
+        Self::from_parts(paths, options, opened.workbook, file_session, false)
+    }
+
     /// Bootstrap with an optional shared CSV import plan.
     pub fn with_workbook_plan(
         cli: &Cli,

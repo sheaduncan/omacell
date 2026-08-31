@@ -40,6 +40,16 @@ pub mod codes {
     pub const OMC_FORMAT: &str = "omc.format";
     /// PDF export failed.
     pub const PDF_WRITE: &str = "pdf.write";
+    /// ODS zip/XML could not be parsed.
+    pub const ODS_FORMAT: &str = "ods.format";
+    /// JSON import/export failed.
+    pub const JSON_FORMAT: &str = "json.format";
+    /// Parquet/Arrow read failed.
+    pub const PARQUET_FORMAT: &str = "parquet.format";
+    /// HTML/Markdown table import failed.
+    pub const HTML_FORMAT: &str = "html.format";
+    /// Legacy `.xls` bridge failed or LibreOffice is missing.
+    pub const XLS_BRIDGE: &str = "xls.bridge";
 }
 
 /// Encoding error.
@@ -164,4 +174,40 @@ pub fn omc_format(message: impl Into<String>) -> CoreError {
 pub fn pdf_write(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::PDF_WRITE, message)
         .with_hint("check the font file and that the destination is writable")
+}
+
+/// ODS format error.
+#[must_use]
+pub fn ods_format(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::ODS_FORMAT, message)
+        .with_hint("the file must be a zip with content.xml (OpenDocument spreadsheet)")
+}
+
+/// JSON format error.
+#[must_use]
+pub fn json_format(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::JSON_FORMAT, message)
+        .with_hint("JSON import expects an array of objects (use --jq to select a path)")
+}
+
+/// Parquet format error.
+#[must_use]
+pub fn parquet_format(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::PARQUET_FORMAT, message)
+        .with_hint("only Parquet/Arrow files are accepted; write is not in this package")
+}
+
+/// HTML/Markdown table error.
+#[must_use]
+pub fn html_format(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::HTML_FORMAT, message)
+        .with_hint("the file must contain an HTML <table> or a GitHub-style Markdown table")
+}
+
+/// `.xls` bridge error.
+#[must_use]
+pub fn xls_bridge(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::XLS_BRIDGE, message).with_hint(
+        "install LibreOffice and set [integrations] libreoffice_fallback = true, or save as .xlsx",
+    )
 }
