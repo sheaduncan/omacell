@@ -82,52 +82,74 @@ pub fn split_fixed(n: f64, frac_places: usize) -> (Vec<u8>, Vec<u8>) {
     if a == 0.0 || !a.is_finite() {
         return (vec![0], vec![0; frac_places]);
     }
-    let rounded = round_half_away(a, frac_places.min(18) as i32);
-    if rounded == 0.0 {
-        return (vec![0], vec![0; frac_places]);
-    }
-    let (mant, exp) = sig15(rounded);
+    let (mant, exp) = sig15(a);
     if mant == 0 {
         return (vec![0], vec![0; frac_places]);
     }
-    let mut digits = mant.to_string().into_bytes();
-    while digits.len() < 15 {
-        digits.insert(0, b'0');
+    let mut significant = mant.to_string().into_bytes();
+    while significant.len() < 15 {
+        significant.insert(0, b'0');
     }
-    let mut int_digits: Vec<u8> = Vec::new();
-    let mut frac_digits: Vec<u8> = vec![0; frac_places];
-    if exp >= 0 {
-        let int_len = exp as usize + 1;
-        if int_len <= digits.len() {
-            int_digits.extend(digits[..int_len].iter().map(|d| d - b'0'));
-            for (i, d) in digits[int_len..].iter().take(frac_places).enumerate() {
-                frac_digits[i] = d - b'0';
-            }
+
+    // `mant` is Excel's 15-digit decimal coefficient. Round that decimal,
+    // rather than the original binary float, at the requested display place.
+    let keep = i64::from(exp)
+        .saturating_add(1)
+        .saturating_add(i64::try_from(frac_places).unwrap_or(i64::MAX));
+    let mut scaled = if keep < 0 {
+        vec![b'0']
+    } else if keep == 0 {
+        if significant[0] >= b'5' {
+            vec![b'1']
         } else {
-            int_digits.extend(digits.iter().map(|d| d - b'0'));
-            int_digits.resize(int_len, 0);
+            vec![b'0']
         }
     } else {
-        int_digits.push(0);
-        let lead_zeros = (-exp - 1) as usize;
-        for (i, slot) in frac_digits.iter_mut().enumerate() {
-            if i >= lead_zeros {
-                let di = i - lead_zeros;
-                *slot = if di < digits.len() {
-                    digits[di] - b'0'
-                } else {
-                    0
-                };
+        let keep = match usize::try_from(keep) {
+            Ok(keep) => keep,
+            Err(_) => return (vec![0], vec![0; frac_places]),
+        };
+        if keep >= significant.len() {
+            significant.resize(keep, b'0');
+            significant
+        } else {
+            let round_up = significant[keep] >= b'5';
+            significant.truncate(keep);
+            if round_up {
+                increment_decimal(&mut significant);
             }
+            significant
         }
+    };
+
+    if frac_places == 0 {
+        return (
+            scaled.into_iter().map(|digit| digit - b'0').collect(),
+            Vec::new(),
+        );
     }
-    while int_digits.len() > 1 && int_digits[0] == 0 {
-        int_digits.remove(0);
+
+    if scaled.len() <= frac_places {
+        let mut fractional = vec![0; frac_places - scaled.len()];
+        fractional.extend(scaled.into_iter().map(|digit| digit - b'0'));
+        return (vec![0], fractional);
     }
-    if int_digits.is_empty() {
-        int_digits.push(0);
+
+    let fractional = scaled.split_off(scaled.len() - frac_places);
+    let integer = scaled.into_iter().map(|digit| digit - b'0').collect();
+    let fractional = fractional.into_iter().map(|digit| digit - b'0').collect();
+    (integer, fractional)
+}
+
+fn increment_decimal(digits: &mut Vec<u8>) {
+    for digit in digits.iter_mut().rev() {
+        if *digit < b'9' {
+            *digit += 1;
+            return;
+        }
+        *digit = b'0';
     }
-    (int_digits, frac_digits)
+    digits.insert(0, b'1');
 }
 
 /// Group an integer digit string every 3 from the right.

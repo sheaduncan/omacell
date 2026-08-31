@@ -1,7 +1,7 @@
 # value	format	locale	date_system	text	note
 1234.56	#,##0.00	en-US	1900	1,234.56	en-US baseline
 1234.56	#,##0.00	de-DE	1900	1.234,56	de-DE
-1234.56	#,##0.00	fr-FR	1900	1 234,56	fr-FR space thousands
+1234.56	#,##0.00	fr-FR	1900	1 234,56	Windows fr-FR uses U+202F narrow no-break space for grouping
 1234.56	#,##0.00	es-ES	1900	1.234,56	es-ES
 1234.56	#,##0.00	it-IT	1900	1.234,56	it-IT
 1234.56	#,##0.00	nl-NL	1900	1.234,56	nl-NL

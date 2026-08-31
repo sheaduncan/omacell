@@ -7,9 +7,9 @@ name	#NAME?	5	Microsoft ERROR.TYPE: #NAME? → 5
 num	#NUM!	6	Microsoft ERROR.TYPE: #NUM! → 6
 na	#N/A	7	Microsoft ERROR.TYPE: #N/A → 7
 getting_data	#GETTING_DATA	8	Microsoft ERROR.TYPE: #GETTING_DATA → 8
-spill	#SPILL!		Microsoft ERROR.TYPE: anything else → #N/A
-calc	#CALC!		Microsoft ERROR.TYPE: anything else → #N/A
-field	#FIELD!		Microsoft ERROR.TYPE: anything else → #N/A
-connect	#CONNECT!		Microsoft ERROR.TYPE: anything else → #N/A
-blocked	#BLOCKED!		Microsoft ERROR.TYPE: anything else → #N/A
-unknown	#UNKNOWN!		Microsoft ERROR.TYPE: anything else → #N/A
+spill	#SPILL!	9	Microsoft ERROR.TYPE extended table
+calc	#CALC!	14	Microsoft ERROR.TYPE extended table
+field	#FIELD!	13	Microsoft ERROR.TYPE extended table
+connect	#CONNECT!	10	Microsoft ERROR.TYPE extended table
+blocked	#BLOCKED!	11	Microsoft ERROR.TYPE extended table
+unknown	#UNKNOWN!	12	Microsoft ERROR.TYPE extended table

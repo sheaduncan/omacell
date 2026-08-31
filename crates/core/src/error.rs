@@ -130,32 +130,32 @@ const ERROR_TABLE: &[ErrorMeta] = &[
     ErrorMeta {
         kind: ErrorKind::Spill,
         display: "#SPILL!",
-        error_type: None,
+        error_type: Some(9),
     },
     ErrorMeta {
         kind: ErrorKind::Calc,
         display: "#CALC!",
-        error_type: None,
+        error_type: Some(14),
     },
     ErrorMeta {
         kind: ErrorKind::Field,
         display: "#FIELD!",
-        error_type: None,
+        error_type: Some(13),
     },
     ErrorMeta {
         kind: ErrorKind::Connect,
         display: "#CONNECT!",
-        error_type: None,
+        error_type: Some(10),
     },
     ErrorMeta {
         kind: ErrorKind::Blocked,
         display: "#BLOCKED!",
-        error_type: None,
+        error_type: Some(11),
     },
     ErrorMeta {
         kind: ErrorKind::Unknown,
         display: "#UNKNOWN!",
-        error_type: None,
+        error_type: Some(12),
     },
 ];
 
