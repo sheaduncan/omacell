@@ -85,7 +85,7 @@ Frozen WP-01 types unchanged. `WorkbookSettings` unchanged.
 
 ## Deviations from the spec or the package (with reasons)
 
-- **`SEQUENCE(0)` → `#NUM!`** rather than Excel 365 `#CALC!`. Documented in `docs/compat/known-differences.md`.
+- **Resolved 2026-08-31:** zero-sized `SEQUENCE` results return `#CALC!`; negative and oversized dimensions return `#NUM!` before allocation.
 - **Transient array limit:** one evaluator array is capped at 16,777,216 cells to bound allocation and iteration even though the worksheet grid is larger. Range aggregates retain references and do not materialize ordinary full-column inputs.
 - **Probe names** (`ABS`, `SUM`, `IF`, `NOW`, `RAND`, `SEQUENCE`) are the real Excel names so WP-05a/b/c can replace the same registrations.
 - **WP-04 test `IF`/`NOW`/`SUM`** remain local eager stubs in `crates/core/tests/eval.rs` so existing eval corpora stay independent of `omacell-fn`.
@@ -106,7 +106,7 @@ Host: rustc 1.98.0, Linux.
 
 ## Open questions / decisions needed
 
-1. Excel 365 `SEQUENCE(0)` is `#CALC!`; we use `#NUM!` for all invalid shapes. Confirm in WP-05c.
+1. Resolved 2026-08-31: zero-sized `SEQUENCE` results use `#CALC!`.
 2. Workbook-level locale is not on frozen `WorkbookSettings`; engine default is `en-US` via `RecalcEngine::set_locale`.
 
 ## RFC (only if a frozen contract changed)

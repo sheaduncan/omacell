@@ -104,7 +104,7 @@ const FR_FR: LocaleInfo = LocaleInfo {
     bcp47: "fr-FR",
     separators: LocaleSeparators {
         decimal: ',',
-        thousands: ' ',
+        thousands: '\u{202F}',
         list: ';',
     },
     date_order: DateOrder::Dmy,

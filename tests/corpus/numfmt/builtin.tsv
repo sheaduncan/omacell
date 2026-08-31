@@ -13,7 +13,7 @@
 11	en-US	0.00E+00	ECMA id 11
 12	en-US	# ?/?	ECMA id 12
 13	en-US	# ??/??	ECMA id 13
-14	en-US	m/d/yy	Excel en-US short date (ECMA writes mm-dd-yy; UI localizes id 14)
+14	en-US	m/d/yyyy	Excel en-US short date (ECMA writes mm-dd-yy; UI localizes id 14)
 15	en-US	d-mmm-yy	ECMA id 15
 16	en-US	d-mmm	ECMA id 16
 17	en-US	mmm-yy	ECMA id 17

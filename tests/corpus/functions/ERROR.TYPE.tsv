@@ -7,5 +7,9 @@
 =ERROR.TYPE(#NUM!)	6	Microsoft ERROR.TYPE: #NUM! → 6; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =ERROR.TYPE(#N/A)	7	Microsoft ERROR.TYPE: #N/A → 7; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =ERROR.TYPE(1)	#N/A	non-error; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
-=ERROR.TYPE(#SPILL!)	#N/A	newer errors → #N/A; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
-=ERROR.TYPE(#CALC!)	#N/A	calc has no code; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=ERROR.TYPE(#SPILL!)	9	Microsoft ERROR.TYPE extended table: #SPILL! → 9
+=ERROR.TYPE(#CONNECT!)	10	Microsoft ERROR.TYPE extended table: #CONNECT! → 10
+=ERROR.TYPE(#BLOCKED!)	11	Microsoft ERROR.TYPE extended table: #BLOCKED! → 11
+=ERROR.TYPE(#UNKNOWN!)	12	Microsoft ERROR.TYPE extended table: #UNKNOWN! → 12
+=ERROR.TYPE(#FIELD!)	13	Microsoft ERROR.TYPE extended table: #FIELD! → 13
+=ERROR.TYPE(#CALC!)	14	Microsoft ERROR.TYPE extended table: #CALC! → 14

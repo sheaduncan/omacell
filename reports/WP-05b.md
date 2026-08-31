@@ -93,7 +93,7 @@ No commands, schemas, or CLI. Frozen WP-01 types and `WorkbookSettings` unchange
 ## Deviations from the spec or the package (with reasons)
 
 - **Astral `LEN`/`MID`/`LEFT`/`RIGHT`:** Unicode scalar values, not Excel UTF-16 code units. Documented; no settings flag.
-- **`CHAR`/`CODE`:** Latin-1 1–255, not Windows-1252.
+- **Resolved 2026-08-31:** `CHAR`/`CODE` use Windows-1252 for bytes 1–255, including C1 controls for the five undefined slots.
 - **`WORKDAY`/`WORKDAY.INTL` array lift:** `ArrayBehavior::None` so the holidays argument is a set; start/days are lifted locally (Excel lifts the first two args only).
 - **Corpus runner formats spills as `{…}`.** `format_cell` of a spill origin is the top-left scalar (WP-04); the runner reconstructs the spill so TEXTSPLIT/lift rows can assert shape.
 - **LibreOffice:** 269 documented mismatches (date CSV formatting, no array lift, no REGEX*, serial 0 epoch, signed YEARFRAC). Zero unexplained.
@@ -119,9 +119,9 @@ Host: rustc 1.98 / Linux.
 
 ## Open questions / decisions needed
 
-1. Live Excel check of `CHAR(128)` (Windows-1252 euro vs Latin-1 C1). We emit U+0080.
-2. Live Excel `DATEDIF` `"MD"`/`"YD"` around month-end leap days — corpus uses non-pathological cases.
-3. `YEARFRAC` basis 1 across year boundaries: we use remaining-days / days-in-year of each end plus whole years. Confirm against Excel 365 on a mixed-leap span.
+1. Resolved 2026-08-31: `CHAR(128)` is `€`; `CHAR`/`CODE` use Windows-1252.
+2. Resolved 2026-08-31: retain Excel's documented `DATEDIF` month-end/leap quirks; pathological corpus rows cover them.
+3. Resolved 2026-08-31: `YEARFRAC` basis 1 divides actual days by the applicable year length or the average length of all covered years.
 4. Whether WP-13/`format_cell` should show spilled arrays as `{…}` in the UI (today only the corpus runner does).
 
 ## RFC (only if a frozen contract changed)

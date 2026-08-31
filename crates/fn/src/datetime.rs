@@ -1189,30 +1189,47 @@ fn actual_actual(
     if ds.year == de.year {
         return Ok((end - start) as f64 / f64::from(days_in_year(ds.year, system)));
     }
-    let start_end = dates::date_to_serial(
-        CivilDate {
-            year: ds.year,
-            month: 12,
-            day: 31,
-            lotus_leap: false,
-        },
-        system,
-    )
-    .ok_or(ErrorKind::Num)?;
-    let end_start = dates::date_to_serial(
-        CivilDate {
-            year: de.year,
-            month: 1,
-            day: 1,
-            lotus_leap: false,
-        },
-        system,
-    )
-    .ok_or(ErrorKind::Num)?;
-    let frac1 = (start_end - start + 1) as f64 / f64::from(days_in_year(ds.year, system));
-    let frac2 = (end - end_start) as f64 / f64::from(days_in_year(de.year, system));
-    let middle = f64::from(de.year - ds.year - 1);
-    Ok(frac1 + middle + frac2)
+    let within_one_year =
+        de.year == ds.year.saturating_add(1) && (de.month, de.day) <= (ds.month, ds.day);
+    let denominator = if within_one_year {
+        if includes_feb_29(start, end, ds.year, de.year, system) {
+            366.0
+        } else {
+            365.0
+        }
+    } else {
+        let covered_years = f64::from(de.year - ds.year + 1);
+        let covered_days: u32 = (ds.year..=de.year)
+            .map(|year| u32::from(days_in_year(year, system)))
+            .sum();
+        f64::from(covered_days) / covered_years
+    };
+    Ok((end - start) as f64 / denominator)
+}
+
+fn includes_feb_29(
+    start: i64,
+    end: i64,
+    first_year: i32,
+    last_year: i32,
+    system: DateSystem,
+) -> bool {
+    (first_year..=last_year).any(|year| {
+        if days_in_year(year, system) != 366 {
+            return false;
+        }
+        let lotus_leap = system == DateSystem::Excel1900 && year == 1900;
+        dates::date_to_serial(
+            CivilDate {
+                year,
+                month: 2,
+                day: 29,
+                lotus_leap,
+            },
+            system,
+        )
+        .is_some_and(|serial| (start..=end).contains(&serial))
+    })
 }
 
 fn days_in_year(year: i32, system: DateSystem) -> u16 {

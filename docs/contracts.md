@@ -53,7 +53,9 @@ JSON of `Value::Number` is a JSON number. That is not bit-exact for every IEEE v
 | `CoreError` `{code, message, hint}` | same |
 | `codes::*` (`addr.ref`, `addr.parse`, `command.id`, `changeset.id`, `changeset.inverse`, `value.array_shape`) | same |
 
-`ERROR.TYPE` codes 1–8 follow Microsoft’s documentation; newer errors return `None` (`#N/A`).
+`ERROR.TYPE` follows the Excel 365 extended table: classic errors and
+`#GETTING_DATA` use 1–8, then `#SPILL!` 9, `#CONNECT!` 10, `#BLOCKED!` 11,
+`#UNKNOWN!` 12, `#FIELD!` 13, and `#CALC!` 14.
 
 ## Styles — `omacell_core::style`
 

@@ -71,9 +71,9 @@ pub struct DefinedName {
 
 /// Validate Excel-ish defined-name syntax.
 pub fn validate_defined_name(name: &str) -> Result<(), CoreError> {
-    if name.is_empty() || name.len() > 255 {
+    if name.is_empty() || name.chars().count() > 255 {
         return Err(CoreError::name_defined(
-            "defined names are 1–255 bytes and cannot be empty",
+            "defined names are 1–255 characters and cannot be empty",
         ));
     }
     let mut chars = name.chars();
@@ -85,15 +85,20 @@ pub fn validate_defined_name(name: &str) -> Result<(), CoreError> {
             "defined name {name:?} must start with a letter, '_', or '\\\\'"
         )));
     }
-    if !chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+    if !chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '?') {
         return Err(CoreError::name_defined(format!(
-            "defined name {name:?} contains a character that is not letter, digit, '_', or '.'"
+            "defined name {name:?} contains a character that is not letter, digit, '_', '.', or '?'"
         )));
     }
     let upper = name.to_ascii_uppercase();
     if upper == "R" || upper == "C" {
         return Err(CoreError::name_defined(
             "R and C are reserved row/column specifiers",
+        ));
+    }
+    if upper == "TRUE" || upper == "FALSE" {
+        return Err(CoreError::name_defined(
+            "TRUE and FALSE are reserved boolean literals",
         ));
     }
     if parse_a1_cell(name).is_ok() {
@@ -219,6 +224,12 @@ mod tests {
         assert!(validate_defined_name("R1C1").is_err());
         assert!(validate_defined_name("R").is_err());
         assert!(validate_defined_name("Revenue").is_ok());
+    }
+
+    #[test]
+    fn length_limit_counts_unicode_characters() {
+        assert!(validate_defined_name(&"é".repeat(255)).is_ok());
+        assert!(validate_defined_name(&"é".repeat(256)).is_err());
     }
 
     #[test]

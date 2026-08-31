@@ -1269,7 +1269,7 @@ fn ceiling_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
                 Err(ErrorKind::Div0)
             };
         }
-        if n * sig < 0.0 {
+        if n > 0.0 && sig < 0.0 {
             return Err(ErrorKind::Num);
         }
         Ok((n / sig).ceil() * sig)
@@ -1284,7 +1284,7 @@ fn floor_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
                 Err(ErrorKind::Div0)
             };
         }
-        if n * sig < 0.0 {
+        if n > 0.0 && sig < 0.0 {
             return Err(ErrorKind::Num);
         }
         Ok((n / sig).floor() * sig)

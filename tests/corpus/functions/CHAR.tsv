@@ -1,5 +1,5 @@
 # formula	expected	note
-# Latin-1 code points 1..255 (not Windows-1252).
+# Windows-1252 bytes 1..255, matching Windows Excel.
 =CHAR(65)	A	ASCII A
 =CHAR(32)	 	space; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =CHAR(49)	1	digit
@@ -12,3 +12,5 @@
 =CHAR(97)	a	lowercase
 =CHAR({"65","66"})	{A,B}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =LEN(CHAR(10))	1	LF is one character; known difference vs system code page
+=CHAR(128)	€	Windows-1252 byte 128 is the euro sign
+=UNICODE(CHAR(129))	129	undefined Windows-1252 byte 129 remains the C1 control

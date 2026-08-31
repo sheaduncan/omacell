@@ -56,7 +56,7 @@
 1.2	0.??	en-US	1900	1.2 	? pads remaining frac with a space
 1	0.??	en-US	1900	1.  	two space pads
 1234.5	#,##0.00	de-DE	1900	1.234,50	de-DE separators: . thousands, , decimal
-1234.5	#,##0.00	fr-FR	1900	1 234,50	fr-FR thousands space, decimal comma
+1234.5	#,##0.00	fr-FR	1900	1 234,50	Windows fr-FR narrow no-break thousands separator, decimal comma
 1234.5	#,##0.00	en-GB	1900	1,234.50	en-GB same separators as en-US
 1000.5	0.0	en-US	1900	1000.5	no grouping without comma in format
 0.006	0.00	en-US	1900	0.01	round 0.006 to 2 decimals
@@ -64,7 +64,7 @@
 0.005	0.00	en-US	1900	0.01	0.005 half away from zero
 -0.005	0.00	en-US	1900	-0.01	negative 0.005
 999.99	0	en-US	1900	1000	round up extra digit
-1.005	0.00	en-US	1900	1.00	IEEE 1.005 is 1.00499…; 15-digit then 2-decimal yields 1.00 (Excel may show 1.01)
+1.005	0.00	en-US	1900	1.01	Excel converts to a 15-significant-digit decimal before half-away rounding
 10.1	0	en-US	1900	10	drop frac
 10.9	0	en-US	1900	11	round up
 1234567.891	#,##0.00	en-US	1900	1,234,567.89	thousands + 2dp

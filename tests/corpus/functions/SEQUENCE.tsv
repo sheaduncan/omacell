@@ -1,7 +1,8 @@
 # formula	expected	note
 =SEQUENCE(1)	1	1×1 collapses to scalar
-=SEQUENCE(0)	#NUM!	known difference: zero rows rejected before allocation (Excel 365 #CALC!)
+=SEQUENCE(0)	#CALC!	Excel 365 empty array: zero rows are rejected before allocation
 =SEQUENCE(-1)	#NUM!	known difference: negative rows rejected before allocation
+=SEQUENCE(1,0)	#CALC!	Excel 365 empty array: zero columns are rejected before allocation
 =INDEX(SEQUENCE(3),3)	3	default start 1 step 1
 =SUM(SEQUENCE(2,3))	21	2×3 row-major 1..6
 =INDEX(SEQUENCE(2,2,5,2),2,2)	11	start 5 step 2 → 5,7;9,11

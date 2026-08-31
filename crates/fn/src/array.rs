@@ -765,18 +765,18 @@ fn unique_wide_records(array: &RuntimeArray, n: usize, by_col: bool) -> Vec<(usi
 fn sequence_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     let rows = match args.first() {
         Some(a) => match args::number(ctx, a) {
-            Ok(n) => match args::pos_u32(n) {
+            Ok(n) => match sequence_dimension(n) {
                 Ok(v) => v,
-                Err(_) => return err(ErrorKind::Num),
+                Err(e) => return err(e),
             },
             Err(e) => return err(e),
         },
         None => return err(ErrorKind::Value),
     };
     let cols = match args::opt_number(ctx, args, 1, 1.0) {
-        Ok(n) => match args::pos_u32(n) {
+        Ok(n) => match sequence_dimension(n) {
             Ok(v) => v,
-            Err(_) => return err(ErrorKind::Num),
+            Err(e) => return err(e),
         },
         Err(e) => return err(e),
     };
@@ -796,6 +796,17 @@ fn sequence_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         values.push(Scalar::Number(start + step * (i as f64)));
     }
     args::array_result(rows, cols, values)
+}
+
+fn sequence_dimension(number: f64) -> Result<u32, ErrorKind> {
+    if number < 0.0 {
+        return Err(ErrorKind::Num);
+    }
+    let value = args::trunc_i64(number)?;
+    if value == 0 {
+        return Err(ErrorKind::Calc);
+    }
+    u32::try_from(value).map_err(|_| ErrorKind::Num)
 }
 
 fn randarray_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {

@@ -113,7 +113,7 @@ Host: rustc 1.98.0, Linux.
 ## Open questions / decisions needed
 
 1. Excel desktop `CELL` without a reference tracks the last edited cell; we use the formula cell. Confirm when UI editing exists.
-2. Legacy `CEILING`/`FLOOR` opposite-sign behaviour: we return `#NUM!` (older Excel); Excel 365 / LibreOffice may return a signed ceiling. Corpus + known-differences.
+2. Resolved 2026-08-31: Excel 2010+ asymmetric sign handling (`CEILING(-2.5,2)=-2`, `FLOOR(-2.5,2)=-4`; a positive number with negative significance is `#NUM!`).
 3. Whether `*IF` should reject array constants (`#VALUE!`) to match Excel strictly, or keep array walking for dynamic-array compatibility.
 
 ## RFC (only if a frozen contract changed)

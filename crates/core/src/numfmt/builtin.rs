@@ -27,6 +27,7 @@ pub fn builtin_format(id: u32, locale: LocaleId) -> Option<Cow<'static, str>> {
         11 => Some(Cow::Borrowed("0.00E+00")),
         12 => Some(Cow::Borrowed("# ?/?")),
         13 => Some(Cow::Borrowed("# ??/??")),
+        14 if locale == LocaleId::EN_US => Some(Cow::Borrowed("m/d/yyyy")),
         14 => Some(Cow::Owned(short_date(info.date_order, locale))),
         15 => Some(Cow::Borrowed("d-mmm-yy")),
         16 => Some(Cow::Borrowed("d-mmm")),
@@ -103,7 +104,7 @@ mod tests {
         }
         assert_eq!(
             builtin_format(14, LocaleId::EN_US).as_deref(),
-            Some("m/d/yy")
+            Some("m/d/yyyy")
         );
         assert_eq!(
             builtin_format(14, LocaleId::EN_GB).as_deref(),
