@@ -35,7 +35,7 @@ Stubs that exit 3:
 
 `omacell ipc theme.reload --all --quiet` is the Omarchy theme-set hook. It enumerates live owned instances and executes the registered `theme.reload` command. It does not add an IPC `ControlOp`.
 
-`omacell convert input.csv output.xlsx --plan plan.json` consumes the shared WP-08 `ImportPlan` JSON (bounded to 1 MiB). `omacell config diff` emits sorted effective user/package differences and honors `--config`.
+`omacell convert input.csv output.xlsx --plan plan.json` consumes the shared WP-08 `ImportPlan` JSON (bounded to 1 MiB). For JSON input, `--jq .items` selects an array with a dotted object path; it is a selector, not the full jq language. `omacell config diff` emits sorted effective user/package differences and honors `--config`.
 
 ## Completions and man page
 

@@ -43,6 +43,27 @@ pub fn lock_path(xlsx: &Path) -> PathBuf {
     xlsx.with_file_name(name)
 }
 
+/// Refuse to open or save when a live foreign / LibreOffice lock is present.
+pub fn peer_lock_blocks(path: &Path) -> Result<(), CoreError> {
+    let lock = lock_path(path);
+    let mut file = match open_existing_lock(&lock, false) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(error::xlsx_lock(err.to_string())),
+    };
+    let text = read_lock_text(&mut file, &lock)?;
+    if let Some(owner) = LockOwner::parse(&text) {
+        let current = LockOwner::current();
+        if owner.host == current.host && owner.pid == current.pid {
+            return Ok(());
+        }
+    }
+    Err(error::xlsx_lock(format!(
+        "{} is locked by another editor",
+        path.display()
+    )))
+}
+
 /// Create a lock file. Fails if another live owner holds it.
 pub fn acquire_lock(xlsx: &Path) -> Result<PathBuf, CoreError> {
     let path = lock_path(xlsx);
@@ -61,22 +82,9 @@ pub fn acquire_lock(xlsx: &Path) -> Result<PathBuf, CoreError> {
                 return Ok(path);
             }
             Err(open_error) if open_error.kind() == io::ErrorKind::AlreadyExists => {
-                if fs::symlink_metadata(&path)
-                    .map(|metadata| metadata.file_type().is_symlink())
-                    .unwrap_or(false)
-                {
-                    return Err(error::xlsx_lock(format!(
-                        "refusing symbolic-link lock {}",
-                        path.display()
-                    )));
-                }
-                let mut existing_file = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&path)
-                    .map_err(|e| {
-                        error::xlsx_lock(format!("cannot inspect {}: {e}", path.display()))
-                    })?;
+                let mut existing_file = open_existing_lock(&path, true).map_err(|e| {
+                    error::xlsx_lock(format!("cannot inspect {}: {e}", path.display()))
+                })?;
                 rustix::fs::flock(&existing_file, rustix::fs::FlockOperation::LockExclusive)
                     .map_err(|e| {
                         error::xlsx_lock(format!("cannot guard {}: {e}", path.display()))
@@ -84,10 +92,7 @@ pub fn acquire_lock(xlsx: &Path) -> Result<PathBuf, CoreError> {
                 if !path_still_names_file(&path, &existing_file)? {
                     continue;
                 }
-                let mut text = String::new();
-                existing_file.read_to_string(&mut text).map_err(|e| {
-                    error::xlsx_lock(format!("cannot inspect {}: {e}", path.display()))
-                })?;
+                let text = read_lock_text(&mut existing_file, &path)?;
                 let Some(existing) = LockOwner::parse(&text) else {
                     return Err(error::xlsx_lock(format!(
                         "{} is locked by LibreOffice or another editor",
@@ -117,16 +122,7 @@ pub fn acquire_lock(xlsx: &Path) -> Result<PathBuf, CoreError> {
 /// Remove a lock owned by this Omacell process.
 pub fn release_lock(xlsx: &Path) -> Result<(), CoreError> {
     let path = lock_path(xlsx);
-    if fs::symlink_metadata(&path)
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        return Err(error::xlsx_lock(format!(
-            "refusing symbolic-link lock {}",
-            path.display()
-        )));
-    }
-    let mut file = match OpenOptions::new().read(true).write(true).open(&path) {
+    let mut file = match open_existing_lock(&path, true) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(error::xlsx_write(e.to_string())),
@@ -139,9 +135,7 @@ pub fn release_lock(xlsx: &Path) -> Result<(), CoreError> {
             path.display()
         )));
     }
-    let mut text = String::new();
-    file.read_to_string(&mut text)
-        .map_err(|e| error::xlsx_write(e.to_string()))?;
+    let text = read_lock_text(&mut file, &path)?;
     let current = LockOwner::current();
     let Some(existing) = LockOwner::parse(&text) else {
         return Err(error::xlsx_lock(format!(
@@ -212,6 +206,34 @@ pub fn save_workbook_with_cancel(
     atomic_write(
         path,
         &bytes,
+        opts.keep_backups,
+        opts.lock,
+        false,
+        Some(cancel),
+    )
+}
+
+/// Atomically replace an arbitrary workbook export, optionally honoring the
+/// LibreOffice-compatible peer lock and rotating backups.
+pub fn atomic_write_bytes(path: &Path, bytes: &[u8], opts: SaveOptions) -> Result<(), CoreError> {
+    atomic_write(path, bytes, opts.keep_backups, opts.lock, false, None)
+}
+
+/// Atomically replace arbitrary workbook-export bytes, aborting before the
+/// destination rename when `cancel` is set.
+pub fn atomic_write_bytes_with_cancel(
+    path: &Path,
+    bytes: &[u8],
+    opts: SaveOptions,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), CoreError> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err(CoreError::new("task.cancelled", "operation cancelled")
+            .with_hint("the destination file was left unchanged"));
+    }
+    atomic_write(
+        path,
+        bytes,
         opts.keep_backups,
         opts.lock,
         false,
@@ -339,6 +361,59 @@ fn create_unique_temp(path: &Path, dir: &Path) -> Result<(File, PathBuf), CoreEr
 
 fn process_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[cfg(unix)]
+fn open_existing_lock(path: &Path, write: bool) -> io::Result<File> {
+    let access = if write {
+        rustix::fs::OFlags::RDWR
+    } else {
+        rustix::fs::OFlags::RDONLY
+    };
+    let fd = rustix::fs::open(
+        path,
+        access | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
+    Ok(File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn open_existing_lock(path: &Path, write: bool) -> io::Result<File> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "refusing symbolic-link lock",
+        ));
+    }
+    OpenOptions::new().read(true).write(write).open(path)
+}
+
+fn read_lock_text(file: &mut File, path: &Path) -> Result<String, CoreError> {
+    const MAX_LOCK_BYTES: u64 = 4096;
+    if file
+        .metadata()
+        .map_err(|err| error::xlsx_lock(err.to_string()))?
+        .len()
+        > MAX_LOCK_BYTES
+    {
+        return Err(error::xlsx_lock(format!(
+            "lock file {} is unexpectedly large",
+            path.display()
+        )));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_LOCK_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| error::xlsx_lock(err.to_string()))?;
+    if bytes.len() as u64 > MAX_LOCK_BYTES {
+        return Err(error::xlsx_lock(format!(
+            "lock file {} is unexpectedly large",
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes).map_err(|err| error::xlsx_lock(err.to_string()))
 }
 
 #[cfg(unix)]
@@ -574,6 +649,30 @@ mod tests {
             crate::error::codes::XLSX_LOCK
         );
         assert_eq!(fs::read_to_string(&lock).unwrap(), libreoffice);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symbolic_link_lock_is_never_followed() {
+        use std::os::unix::fs::symlink;
+
+        let dir =
+            std::env::temp_dir().join(format!("omacell-xlsx-lock-symlink-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("book.xlsx");
+        let target = dir.join("target");
+        fs::write(&target, b"do not touch").unwrap();
+        symlink(&target, lock_path(&path)).unwrap();
+        assert_eq!(
+            peer_lock_blocks(&path).unwrap_err().code,
+            crate::error::codes::XLSX_LOCK
+        );
+        assert_eq!(
+            acquire_lock(&path).unwrap_err().code,
+            crate::error::codes::XLSX_LOCK
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"do not touch");
         let _ = fs::remove_dir_all(&dir);
     }
 

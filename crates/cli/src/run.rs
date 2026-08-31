@@ -143,6 +143,7 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
             sheet,
             range,
             plan,
+            jq,
         } => cmd_convert(
             cli,
             input,
@@ -150,6 +151,7 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
             sheet.as_deref(),
             range.as_deref(),
             plan.as_deref(),
+            jq.as_deref(),
             output,
         ),
         Commands::Query {
@@ -644,6 +646,7 @@ fn prompt_menu() -> bool {
     matches!(line.trim(), "y" | "Y" | "yes")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_convert(
     cli: &Cli,
     input: &Path,
@@ -651,6 +654,7 @@ fn cmd_convert(
     sheet: Option<&str>,
     range: Option<&str>,
     plan: Option<&Path>,
+    jq: Option<&str>,
     output: Output,
 ) -> Result<(), CliError> {
     if dest
@@ -661,7 +665,12 @@ fn cmd_convert(
         return cmd_export_chart(cli, input, dest, sheet, output);
     }
     let plan = plan.map(read_import_plan).transpose()?;
-    let mut app = init_app_book_plan(cli, input, plan.as_ref())?;
+    let mut app = if jq.is_some() {
+        crate::app::App::with_workbook_pointer(cli, input, jq)
+            .map_err(|e| CliError::new(e.code, e.message))?
+    } else {
+        init_app_book_plan(cli, input, plan.as_ref())?
+    };
     let args = serde_json::json!({
         "path": dest.display().to_string(),
         "sheet": sheet,

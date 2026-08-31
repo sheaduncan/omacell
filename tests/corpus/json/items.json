@@ -1,0 +1,6 @@
+{
+  "items": [
+    {"user": {"name": "Ada"}, "n": 1},
+    {"user": {"name": "Bob"}, "n": 2}
+  ]
+}

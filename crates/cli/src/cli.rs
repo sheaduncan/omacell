@@ -52,7 +52,7 @@ pub struct Cli {
 /// Top-level subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Convert a workbook between `.xlsx`, CSV, `.omc`, and PDF.
+    /// Convert a workbook between `.xlsx`, CSV, `.omc`, ODS, JSON, and PDF.
     Convert {
         /// Input path.
         input: PathBuf,
@@ -65,8 +65,11 @@ pub enum Commands {
         #[arg(long)]
         range: Option<String>,
         /// Shared WP-08 CSV import plan JSON.
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", conflicts_with = "jq")]
         plan: Option<PathBuf>,
+        /// Dotted selector into a JSON array (`.items`).
+        #[arg(long, value_name = "PATH", conflicts_with = "plan")]
+        jq: Option<String>,
     },
     /// Print a range as json, csv, or markdown.
     Query {
