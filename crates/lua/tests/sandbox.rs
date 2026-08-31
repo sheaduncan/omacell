@@ -151,6 +151,16 @@ fn embedded_uses_capabilities_and_cannot_prompt_or_rebind_keys() {
 }
 
 #[test]
+fn embedded_cannot_register_ai_extensions_or_hooks() {
+    let rt = Runtime::new(Profile::Embedded, Box::new(host())).unwrap();
+    rt.exec(
+        "assert(omacell.ai == nil); assert(omacell.on_ai_request == nil); assert(omacell.on_ai_response == nil)",
+        "embedded-ai.lua",
+    )
+    .unwrap();
+}
+
+#[test]
 fn production_host_keeps_new_commands_closed_until_reviewed() {
     let mut host = host();
     host.bus

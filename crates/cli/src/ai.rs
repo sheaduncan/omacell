@@ -1,4 +1,4 @@
-//! `omacell ai setup|card|log|usage`.
+//! `omacell ai setup|card|plan|log|usage`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -40,9 +40,39 @@ pub fn run(cli: &Cli, cmd: &AiCmd, output: Output) -> Result<(), CliError> {
             },
             output,
         ),
+        AiCmd::Plan { book, prompt } => plan(cli, book, prompt, output),
         AiCmd::Log => log(cli, output),
         AiCmd::Usage => usage(cli, output),
     }
+}
+
+fn plan(cli: &Cli, book: &Path, prompt: &str, output: Output) -> Result<(), CliError> {
+    if cli.dry_run {
+        output.success(
+            json!({
+                "dry_run": true,
+                "book": book.display().to_string(),
+                "prompt": prompt,
+                "applied": false,
+            }),
+            "dry-run",
+        )?;
+        return Ok(());
+    }
+    let mut app = App::with_workbook_plan(cli, book, None)?;
+    crate::log::init(&app.paths, cli.verbose, cli.quiet, false);
+    let outcome = app.execute("ai.plan", json!({"prompt": prompt, "apply": false}));
+    if !outcome.ok {
+        return Err(outcome
+            .error
+            .unwrap_or_else(|| omacell_core::error::CoreError::new("ai.plan", "AI plan failed"))
+            .into());
+    }
+    let value = outcome.result.unwrap_or_else(|| json!({"commands": []}));
+    let human = serde_json::to_string_pretty(&value)
+        .unwrap_or_else(|_| "AI returned a command plan".into());
+    output.success(value, &human)?;
+    Ok(())
 }
 
 fn setup(cli: &Cli, output: Output) -> Result<(), CliError> {

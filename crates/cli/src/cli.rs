@@ -188,7 +188,7 @@ pub enum Commands {
         /// Workbook path.
         book: PathBuf,
     },
-    /// AI provider, card, log, and usage.
+    /// AI provider, card, plans, log, and usage.
     Ai {
         #[command(subcommand)]
         cmd: AiCmd,
@@ -242,6 +242,13 @@ pub enum AiCmd {
         /// Maximum rows returned from `--range`.
         #[arg(long, default_value_t = 128, value_parser = clap::value_parser!(u32).range(1..=1024))]
         limit: u32,
+    },
+    /// Propose registry commands from a natural-language request.
+    Plan {
+        /// Workbook path.
+        book: PathBuf,
+        /// Natural-language request.
+        prompt: String,
     },
     /// Read `~/.local/state/omacell/ai/log.jsonl`.
     Log,

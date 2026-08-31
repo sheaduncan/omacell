@@ -61,6 +61,31 @@ impl StatusLine {
             });
         }
     }
+
+    /// Set or replace the AI status-line segment (A-1.1, A-7.3).
+    pub fn set_ai(&mut self, text: Option<String>) {
+        if let Some(existing) = self.segments.iter_mut().find(|seg| seg.id == "ai") {
+            existing.text = text.unwrap_or_default();
+            return;
+        }
+        if let Some(text) = text {
+            self.segments.push(StatusSegment {
+                id: "ai".into(),
+                text,
+            });
+        }
+    }
+}
+
+/// Status-line AI hint.
+#[must_use]
+pub fn ai_status_text(enabled: bool, provider: &str, local: bool, level: &str) -> String {
+    if !enabled {
+        "AI: off · omacell ai setup".into()
+    } else {
+        let loc = if local { "local" } else { "cloud" };
+        format!("AI: {provider} ({loc}, {level})")
+    }
 }
 
 /// Status-line *Diagnose with agent* offer (A-5.4).

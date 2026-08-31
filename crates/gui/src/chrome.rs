@@ -104,6 +104,21 @@ pub fn status(
         calc,
         &theme.name,
     );
+    let cfg = session.config();
+    let local = cfg
+        .ai
+        .models
+        .default
+        .split(':')
+        .next()
+        .and_then(|name| cfg.ai.providers.get(name).map(|p| p.local))
+        .unwrap_or(false);
+    line.set_ai(Some(omacell_ui::ai_status_text(
+        cfg.ai.enabled,
+        &cfg.ai.models.default,
+        local,
+        &cfg.ai.privacy.send,
+    )));
     line.set_offer(omacell_ui::diagnose_offer(
         wb,
         session.config().ai.agent.diagnose_offers,
@@ -150,6 +165,9 @@ pub fn palette(
         .show(ctx, |ui| {
             ui.label(palette.prompt.as_deref().unwrap_or("palette"));
             ui.label(&palette.query);
+            if let Some(preview) = &palette.preview {
+                ui.monospace(preview);
+            }
             for (i, hit) in palette.hits.iter().take(12).enumerate() {
                 let text = format!("{}  {}", hit.id, hit.doc);
                 let rich = if i == selected {

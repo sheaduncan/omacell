@@ -7,6 +7,7 @@
 
 mod agent;
 mod ai;
+mod ai_cmd;
 mod app;
 mod cli;
 mod error;

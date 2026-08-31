@@ -1,7 +1,12 @@
 //! Composition root: one `Paths`, one `LoadOptions`, one bus.
 
 use std::path::Path;
+use std::sync::Arc;
 
+use omacell_ai::cache::AiCache;
+use omacell_ai::http::{ReqwestTransport, SharedTransport};
+use omacell_ai::runtime::AiRuntime;
+use omacell_ai::{PromptSet, register_ai_functions};
 use omacell_bus::Bus;
 use omacell_conf::layer::LoadOptions;
 use omacell_conf::{
@@ -32,6 +37,11 @@ pub struct App {
     /// File sidecar (retained so save/export keep package bytes).
     #[allow(dead_code)]
     pub files: FileSession,
+    /// AI runtime (async cells + `ai.*` commands).
+    pub ai: Option<Arc<AiRuntime>>,
+    /// Tokio runtime backing [`Self::ai`].
+    #[allow(dead_code)]
+    pub ai_tokio: Option<tokio::runtime::Runtime>,
 }
 
 impl App {
@@ -156,7 +166,65 @@ impl App {
         file_session.attach_config(store.handle());
         let mut registry = FnRegistry::new();
         register_all(&mut registry);
+        register_ai_functions(&mut registry);
         let mut engine = RecalcEngine::new(registry);
+        let loaded = store.snapshot();
+        let (ai, ai_tokio) = match tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => {
+                let handle = rt.handle().clone();
+                let transport: SharedTransport = match ReqwestTransport::new() {
+                    Ok(t) => Arc::new(t),
+                    Err(_) => {
+                        engine.recalc_rebuild(&mut workbook);
+                        let mut bus = Bus::new(workbook, engine)?;
+                        files::register_file_commands(&mut bus, file_session.clone())?;
+                        reload::register_theme_reload(&mut bus, store.handle())?;
+                        omacell_bus::register_chart_commands(bus.registry_mut())?;
+                        omacell_bus::register_edit_commands(bus.registry_mut())?;
+                        omacell_bus::register_data_commands(bus.registry_mut())?;
+                        omacell_bus::register_audit_commands(bus.registry_mut())?;
+                        omacell_bus::register_analysis_commands(bus.registry_mut())?;
+                        let script_gate = omacell_lua::ScriptGate::default();
+                        omacell_lua::register_script_commands(
+                            bus.registry_mut(),
+                            script_gate.clone(),
+                        )?;
+                        omacell_lua::attach_recorder(&mut bus, &script_gate);
+                        return Ok(Self {
+                            paths,
+                            store,
+                            bus,
+                            files: file_session,
+                            ai: None,
+                            ai_tokio: None,
+                        });
+                    }
+                };
+                let prompts = PromptSet::load(&paths.default_dir, Some(&paths.user_config))
+                    .unwrap_or_else(|_| PromptSet::builtin());
+                let cache = workbook
+                    .custom_parts
+                    .get(omacell_ai::cache::AICACHE_PART)
+                    .map(|b| AiCache::from_bytes(b))
+                    .unwrap_or_default();
+                let runtime = AiRuntime::new(
+                    handle,
+                    loaded.config.clone(),
+                    transport,
+                    prompts,
+                    paths.home.join(".cache/omacell"),
+                    paths.state_dir.clone(),
+                    cache,
+                );
+                engine.set_async_provider(runtime.clone());
+                (Some(runtime), Some(rt))
+            }
+            Err(_) => (None, None),
+        };
         engine.recalc_rebuild(&mut workbook);
         let mut bus = Bus::new(workbook, engine)?;
         files::register_file_commands(&mut bus, file_session.clone())?;
@@ -166,6 +234,41 @@ impl App {
         omacell_bus::register_data_commands(bus.registry_mut())?;
         omacell_bus::register_audit_commands(bus.registry_mut())?;
         omacell_bus::register_analysis_commands(bus.registry_mut())?;
+        if let Some(runtime) = ai.clone() {
+            crate::ai_cmd::register_ai_commands(
+                &mut bus,
+                crate::ai_cmd::AiSession {
+                    runtime: Arc::clone(&runtime),
+                },
+            )?;
+            file_session.attach_ai(Arc::clone(&runtime));
+        }
+        if let Some(runtime) = &ai {
+            let catalog = bus
+                .registry()
+                .iter()
+                .filter(|(_, cmd)| {
+                    cmd.exposure == omacell_bus::Exposure::Public && cmd.changeset_eligible
+                })
+                .map(|(id, cmd)| {
+                    let args = serde_json::to_value(&cmd.descriptor.arg_schema).map_err(|err| {
+                        CoreError::new(
+                            "ai.catalog",
+                            format!("cannot serialize schema for {id}: {err}"),
+                        )
+                    })?;
+                    Ok((
+                        id.to_string(),
+                        serde_json::json!({
+                            "id": id,
+                            "doc": cmd.descriptor.doc,
+                            "args": args,
+                        }),
+                    ))
+                })
+                .collect::<Result<Vec<_>, CoreError>>()?;
+            runtime.set_catalog(catalog);
+        }
         let script_gate = omacell_lua::ScriptGate::default();
         omacell_lua::register_script_commands(bus.registry_mut(), script_gate.clone())?;
         omacell_lua::attach_recorder(&mut bus, &script_gate);
@@ -174,6 +277,8 @@ impl App {
             store,
             bus,
             files: file_session,
+            ai,
+            ai_tokio,
         })
     }
 

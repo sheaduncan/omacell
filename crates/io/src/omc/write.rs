@@ -469,6 +469,12 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
         let text = std::str::from_utf8(bytes).map_err(|_| {
             crate::error::omc_format(format!("custom part {name:?} is not valid UTF-8"))
         })?;
+        if name == "xl/omacell/aicache.json" {
+            out.push_str("aicache\t");
+            push_field(out, text);
+            out.push('\n');
+            continue;
+        }
         out.push_str("custom\t");
         push_field(out, name);
         out.push('\t');

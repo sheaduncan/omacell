@@ -207,11 +207,13 @@ fn sheet_objects_resolve_names_and_range_iteration_is_bounded() {
 }
 
 #[test]
-fn ai_hooks_are_reserved() {
+fn ai_hooks_register() {
     let host = BusHost::new(bus());
     let rt = Runtime::new(Profile::User, Box::new(host)).unwrap();
-    let err = rt.exec("omacell.ai.task()", "ai.lua").unwrap_err();
-    assert!(err.message.contains("WP-23"), "{err:?}");
+    rt.exec("omacell.ai.task('summarize', {prompt = 'x'})", "ai.lua")
+        .unwrap();
+    rt.exec("omacell.ai.fn('MY.AI', {prompt = 'y'})", "ai.lua")
+        .unwrap();
 }
 
 #[test]

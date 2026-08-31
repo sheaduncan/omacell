@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use omacell_bus::ipc::{IpcHandle, default_runtime_dir, serve_runner};
 use omacell_bus::{
-    Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskRunner,
+    Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskId, TaskRunner,
     TaskRunnerHandle,
 };
 use omacell_conf::{ConfigStore, LoadedConfig, Paths, ReloadEvent};
@@ -68,6 +68,7 @@ pub struct Gui {
     grid: GridLayout,
     palette_index: usize,
     palette_command: Option<String>,
+    palette_plan_task: Option<TaskId>,
     context_menu: Option<egui::Pos2>,
     file: Option<PathBuf>,
     use_shell_font: bool,
@@ -138,6 +139,7 @@ impl Gui {
             grid: GridLayout::default(),
             palette_index: 0,
             palette_command: None,
+            palette_plan_task: None,
             context_menu: None,
             file: None,
             use_shell_font: launch.use_shell_font,
@@ -255,6 +257,19 @@ impl Gui {
                         self.focused_cancel = None;
                     }
                     self.message = None;
+                    if self.palette_plan_task == Some(state.id) {
+                        self.palette_plan_task = None;
+                        let mut palette = self.ui.palette();
+                        palette.prompt = Some("AI plan".into());
+                        palette.preview = Some(
+                            outcome
+                                .result
+                                .as_ref()
+                                .and_then(|value| serde_json::to_string_pretty(value).ok())
+                                .unwrap_or_else(|| "AI returned an empty plan".into()),
+                        );
+                        self.ui.set_palette(palette);
+                    }
                     if state.command == "file.open" || state.command == "file.save" {
                         self.dirty = false;
                         if let Some(path) = outcome
@@ -290,7 +305,15 @@ impl Gui {
                     {
                         self.focused_cancel = None;
                     }
-                    self.message = Some(message);
+                    if self.palette_plan_task == Some(state.id) {
+                        self.palette_plan_task = None;
+                        let mut palette = self.ui.palette();
+                        palette.prompt = Some("AI plan failed".into());
+                        palette.preview = Some(message);
+                        self.ui.set_palette(palette);
+                    } else {
+                        self.message = Some(message);
+                    }
                 }
                 TaskEvent::Progress(state) => {
                     if let Some(progress) = state.progress {
@@ -464,6 +487,12 @@ impl Gui {
             KeyCode::Esc => self.close_palette(),
             KeyCode::Enter => {
                 let palette = self.ui.palette();
+                if let Some(prompt) = palette.query.strip_prefix('?').map(str::trim)
+                    && !prompt.is_empty()
+                {
+                    self.submit_palette_plan(prompt.to_string())?;
+                    return Ok(KeyOutcome::Pending);
+                }
                 if let Some(hit) = palette.hits.get(self.palette_index) {
                     let id = hit.id.clone();
                     self.choose_palette(&id)?;
@@ -565,6 +594,21 @@ impl Gui {
         }
         self.close_palette();
         let _ = self.execute_cmd(id, json!({}))?;
+        Ok(())
+    }
+
+    fn submit_palette_plan(&mut self, prompt: String) -> Result<(), CoreError> {
+        let (id, cancel) = self.runner.handle().submit(
+            Origin::User,
+            "ai.plan",
+            json!({"prompt": prompt, "apply": false}),
+        )?;
+        self.palette_plan_task = Some(id);
+        self.focused_cancel = Some(cancel);
+        let mut palette = self.ui.palette();
+        palette.prompt = Some("Planning…".into());
+        palette.preview = None;
+        self.ui.set_palette(palette);
         Ok(())
     }
 

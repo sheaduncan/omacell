@@ -3584,10 +3584,14 @@ name = "omacell-ai"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "calamine",
  "criterion",
  "insta",
  "omacell-conf",
  "omacell-core",
+ "omacell-fn",
+ "omacell-io",
+ "proptest",
  "regex",
  "reqwest",
  "schemars",
@@ -3619,6 +3623,7 @@ name = "omacell-cli"
 version = "0.0.0"
 dependencies = [
  "assert_cmd",
+ "async-trait",
  "clap",
  "clap_complete",
  "clap_mangen",

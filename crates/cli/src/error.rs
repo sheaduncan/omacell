@@ -57,7 +57,7 @@ impl CliError {
 
     /// Stub that names the owning work package.
     #[must_use]
-    #[allow(dead_code)] // WP-23 still has in-app AI stubs
+    #[allow(dead_code)]
     pub fn nyi(feature: &str, wp: &str) -> Self {
         Self::new("cli.not_yet", format!("{feature} arrives in {wp}"))
             .hint(format!("see docs/build/wp/{wp}-*.md"))

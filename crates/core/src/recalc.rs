@@ -187,6 +187,12 @@ pub enum AsyncState {
 pub trait AsyncNodeProvider: Send + Sync {
     /// Evaluate (or start) the request.
     fn evaluate(&self, key: ContentHash, req: &AsyncRequest) -> AsyncState;
+    /// Optional intern-free result (text/arrays) used when [`AsyncState::Ready`]
+    /// cannot carry workbook `StrId`s.
+    fn runtime_result(&self, key: ContentHash) -> Option<crate::eval::RuntimeValue> {
+        let _ = key;
+        None
+    }
 }
 
 /// In-memory mock: first call pending, later calls ready.

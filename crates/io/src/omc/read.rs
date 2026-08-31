@@ -144,7 +144,7 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
             }
             "extra" | "cf" | "validation" => load_extra(&mut wb, &mut extras, &fields)?,
             "custom" => load_custom(&mut wb, &mut custom_names, &fields[1..])?,
-            "aicache" => {}
+            "aicache" => load_aicache(&mut wb, &fields[1..])?,
             "changeset" => {
                 if saw_changeset {
                     return Err(error::omc_parse(format!(
@@ -1082,6 +1082,17 @@ fn decode_blob(s: &str) -> Vec<u8> {
     } else {
         s.as_bytes().to_vec()
     }
+}
+
+fn load_aicache(wb: &mut Workbook, fields: &[Field]) -> Result<(), CoreError> {
+    if fields.len() != 1 {
+        return Err(error::omc_parse("aicache record needs a JSON payload"));
+    }
+    wb.custom_parts.insert(
+        "xl/omacell/aicache.json".into(),
+        fields[0].value.as_bytes().to_vec(),
+    );
+    Ok(())
 }
 
 fn load_custom(

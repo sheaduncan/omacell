@@ -49,7 +49,7 @@ after a closing quote are parse errors.
 | `extra` | `extra	<sheet>	<kind>	<json-string>` | Opaque CF/DV/print/sparkline/autofilter fragments (`kind` = `cf`/`dv`/`print`/`sparkline`/`autofilter`). |
 | `custom` | `custom	<part>	<utf8>` | `Workbook::custom_parts` (e.g. `xl/omacell/meta.json`). Non-UTF-8 is dropped. |
 | `cf` / `validation` | sketch forms | Accepted as `extra` of kind `cf` / `dv` (raw remainder). |
-| `aicache` | reserved WP-23 | Accepted and skipped on read. |
+| `aicache` | `aicache	<json>` | AI-cell cache (`xl/omacell/aicache.json`). |
 | `changeset` | `changeset	id=	status=	origin=	…` | Optional header; carries summary counts (`cells`, `rows`, `columns`, `sheets`, `styles`) and `text`. |
 | `change` | `change	forward\|inverse	<cmd>	<json>` | Or sketch `change	<origin>	<cmd>	<json>` (proposed, forward only). |
 

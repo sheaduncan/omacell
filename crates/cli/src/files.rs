@@ -38,6 +38,7 @@ struct FileState {
     package: Option<OpcPackage>,
     extras: HashMap<String, WorksheetExtras>,
     config: Option<ReloadHandle>,
+    ai: Option<std::sync::Arc<omacell_ai::AiRuntime>>,
 }
 
 /// Sidecar retained by file command closures (package bytes live outside `Workbook`).
@@ -68,6 +69,10 @@ impl FileSession {
 
     pub(crate) fn attach_config(&self, config: ReloadHandle) {
         self.lock().config = Some(config);
+    }
+
+    pub(crate) fn attach_ai(&self, runtime: std::sync::Arc<omacell_ai::AiRuntime>) {
+        self.lock().ai = Some(runtime);
     }
 
     /// Path of the workbook attached to this session, if any.
@@ -194,8 +199,23 @@ fn file_open(
     if ctx.is_cancelled() {
         return Err(cancelled());
     }
+    let ai = (!ctx.is_preflight())
+        .then(|| session.lock().ai.clone())
+        .flatten();
+    let previous_cache = ai.as_ref().map(|runtime| {
+        let cache = opened
+            .workbook
+            .custom_parts
+            .get(omacell_ai::cache::AICACHE_PART)
+            .map(|bytes| omacell_ai::cache::AiCache::from_bytes(bytes))
+            .unwrap_or_default();
+        runtime.replace_workbook_cache(cache)
+    });
     let recalc = ctx.recalc_staged(&mut opened.workbook);
     if recalc.cancelled || ctx.is_cancelled() {
+        if let (Some(runtime), Some(cache)) = (ai, previous_cache) {
+            runtime.replace_workbook_cache(cache);
+        }
         return Err(cancelled());
     }
     if !ctx.is_preflight() {
@@ -257,8 +277,32 @@ fn file_save(
         return Err(cancelled());
     }
     ctx.report_progress(0, Some(1), "save");
+    let (ai, xlsx_export) = {
+        let state = session.lock();
+        let xlsx_export = state
+            .config
+            .as_ref()
+            .map(|config| config.snapshot().config.ai.functions.xlsx_export)
+            .unwrap_or_else(|| "formulas".into());
+        (state.ai.clone(), xlsx_export)
+    };
+    let values_export = kind == FileKind::Xlsx && xlsx_export == "values";
+    let mut output = None;
+    if ai.is_some() || values_export {
+        let mut copy = ctx.workbook_ref().clone();
+        if let Some(ai) = ai {
+            ai.write_workbook_cache(&mut copy)
+                .map_err(CoreError::from)?;
+        }
+        if values_export {
+            omacell_ai::strip_ai_formulas(&mut copy)?;
+            copy.custom_parts
+                .shift_remove(omacell_ai::cache::AICACHE_PART);
+        }
+        output = Some(copy);
+    }
     write_kind(
-        ctx.workbook_ref(),
+        output.as_ref().unwrap_or_else(|| ctx.workbook_ref()),
         &path,
         kind,
         package.as_ref(),
@@ -300,14 +344,25 @@ fn file_export(
         )
         .with_hint("use a .xlsx, .csv, .tsv, .omc, or .pdf destination")
     })?;
-    let (package, extras, keep_backups) = {
+    let (package, extras, keep_backups, ai, xlsx_export) = {
         let state = session.lock();
         let keep_backups = state
             .config
             .as_ref()
             .map(|config| config.snapshot().config.files.keep_backups)
             .unwrap_or(0);
-        (state.package.clone(), state.extras.clone(), keep_backups)
+        let xlsx_export = state
+            .config
+            .as_ref()
+            .map(|config| config.snapshot().config.ai.functions.xlsx_export)
+            .unwrap_or_else(|| "formulas".into());
+        (
+            state.package.clone(),
+            state.extras.clone(),
+            keep_backups,
+            state.ai.clone(),
+            xlsx_export,
+        )
     };
     if ctx.is_preflight() && !ctx.is_dry_run() {
         return Ok(Effect::query(serde_json::json!({})));
@@ -336,8 +391,23 @@ fn file_export(
             if ctx.is_preflight() {
                 validate_kind(ctx.workbook_ref(), &path, kind, package.as_ref(), &extras)?;
             } else {
+                let values_export = kind == FileKind::Xlsx && xlsx_export == "values";
+                let mut output = None;
+                if ai.is_some() || values_export {
+                    let mut copy = ctx.workbook_ref().clone();
+                    if let Some(ai) = &ai {
+                        ai.write_workbook_cache(&mut copy)
+                            .map_err(CoreError::from)?;
+                    }
+                    if values_export {
+                        omacell_ai::strip_ai_formulas(&mut copy)?;
+                        copy.custom_parts
+                            .shift_remove(omacell_ai::cache::AICACHE_PART);
+                    }
+                    output = Some(copy);
+                }
                 write_kind(
-                    ctx.workbook_ref(),
+                    output.as_ref().unwrap_or_else(|| ctx.workbook_ref()),
                     &path,
                     kind,
                     package.as_ref(),
