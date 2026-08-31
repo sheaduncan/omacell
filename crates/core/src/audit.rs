@@ -116,7 +116,8 @@ pub struct Neighborhood {
     pub dependents: Vec<String>,
 }
 
-/// Identity redaction hook for WP-22.
+/// Identity redaction hook. Detectors live in `omacell_ai::redact`; call
+/// `redact_json` on payloads that leave the machine (WP-22).
 pub fn redact_identity(report: AuditReport) -> AuditReport {
     report
 }

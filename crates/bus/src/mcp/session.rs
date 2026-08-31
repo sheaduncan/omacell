@@ -32,6 +32,8 @@ pub const MAX_RANGE_READ_BYTES: usize = 1_048_576;
 
 /// Called after an `ExternalAgent` proposal is stored.
 pub type ProposeHook = Box<dyn Fn(&Changeset) + Send + Sync>;
+/// Optional WP-22 workbook card (defaults to [`stub_card`]).
+pub type CardHook = Box<dyn Fn(&Workbook, Option<&str>) -> Json + Send + Sync>;
 
 /// Session-side MCP state (open path, render capability, notify hook).
 #[derive(Default)]
@@ -42,6 +44,8 @@ pub struct McpCtx {
     pub gui_running: bool,
     /// Called after an `ExternalAgent` proposal is stored.
     pub on_external_propose: Option<ProposeHook>,
+    /// Workbook card builder. `None` uses [`stub_card`].
+    pub card: Option<CardHook>,
 }
 
 impl std::fmt::Debug for McpCtx {
@@ -53,6 +57,7 @@ impl std::fmt::Debug for McpCtx {
                 "on_external_propose",
                 &self.on_external_propose.as_ref().map(|_| "set"),
             )
+            .field("card", &self.card.as_ref().map(|_| "set"))
             .finish()
     }
 }
@@ -85,7 +90,8 @@ impl McpSession {
             "audit" => audit(bus, parse_args::<EmptyArgs>(args)?),
             "card" => {
                 let _ = parse_args::<CardArgs>(args)?;
-                Ok(stub_card(bus.workbook(), ctx.open_path.as_deref()))
+                let path = ctx.open_path.clone();
+                Ok(card_payload_for(bus.workbook(), ctx, path.as_deref()))
             }
             "changeset_propose" => changeset_propose(bus, ctx, parse_args(args)?),
             "changeset_apply" => changeset_apply(bus, parse_args(args)?),
@@ -126,13 +132,20 @@ impl McpSession {
         match kind {
             ResourceKind::Card { file } => {
                 require_file(ctx, &file)?;
-                Ok(stub_card(bus.workbook(), Some(&file)))
+                Ok(card_payload_for(bus.workbook(), ctx, Some(&file)))
             }
             ResourceKind::Sheet { file, sheet } => {
                 require_file(ctx, &file)?;
                 sheet_summary(bus.workbook(), &sheet)
             }
         }
+    }
+}
+
+fn card_payload_for(wb: &Workbook, ctx: &McpCtx, path: Option<&str>) -> Json {
+    match &ctx.card {
+        Some(hook) => hook(wb, path),
+        None => stub_card(wb, path),
     }
 }
 

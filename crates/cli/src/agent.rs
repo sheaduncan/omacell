@@ -37,7 +37,7 @@ pub fn run_prompt(
     Ok(())
 }
 
-/// Build a WP-19 diagnostic bundle (identity-redacted until WP-22) and hand it off.
+/// Build a WP-19 diagnostic bundle (pattern-redacted) and hand it off.
 pub fn run_diagnose(
     cli: &Cli,
     book: Option<&Path>,
@@ -63,6 +63,7 @@ pub fn run_diagnose(
         bundle["diagnostic"] = serde_json::to_value(&diagnostic)
             .map_err(|err| CliError::new("agent.json", err.to_string()))?;
     }
+    let _ = omacell_ai::redact_json(&mut bundle);
     let diagnose_path = write_diagnostic_bundle(&paths.state_dir, &bundle)?;
     let result = hand_off(HandOffRequest {
         prompt: "Diagnose this Omacell workbook".into(),

@@ -1,0 +1,106 @@
+---
+source: crates/ai/tests/card.rs
+expression: card
+---
+{
+  "columns": [
+    {
+      "column": "A",
+      "distinct": 1,
+      "header_row": true,
+      "name": "Name",
+      "null_share": 0.5,
+      "samples": [
+        "Ada"
+      ],
+      "sheet": "Sheet1",
+      "type": "text"
+    },
+    {
+      "column": "B",
+      "distinct": 1,
+      "header_row": true,
+      "max": 10.0,
+      "min": 10.0,
+      "name": "Amount",
+      "null_share": 0.5,
+      "samples": [
+        "10"
+      ],
+      "sheet": "Sheet1",
+      "type": "number"
+    }
+  ],
+  "conditional_formats": 0,
+  "external_references": 0,
+  "file": "book.xlsx",
+  "formula_count": 1,
+  "functions": [],
+  "kind": "full",
+  "names": [],
+  "sample_rows": [
+    {
+      "origin": "A1",
+      "rows": [
+        [
+          "Name",
+          "Amount"
+        ],
+        [
+          "Ada",
+          "10"
+        ],
+        [
+          "",
+          ""
+        ]
+      ],
+      "sheet": "Sheet1"
+    }
+  ],
+  "schema": 1,
+  "sheets": [
+    {
+      "cols": 2,
+      "formulas": 1,
+      "name": "Sheet1",
+      "rows": 3
+    }
+  ],
+  "tables": [],
+  "token_budget": 2048,
+  "tokens": 208,
+  "validations": 0,
+  "values": [
+    [
+      {
+        "ref": "Sheet1!A1",
+        "value": "Name"
+      },
+      {
+        "ref": "Sheet1!B1",
+        "value": "Amount"
+      }
+    ],
+    [
+      {
+        "ref": "Sheet1!A2",
+        "value": "Ada"
+      },
+      {
+        "ref": "Sheet1!B2",
+        "value": "10"
+      }
+    ],
+    [
+      {
+        "ref": "Sheet1!A3",
+        "value": ""
+      },
+      {
+        "ref": "Sheet1!B3",
+        "value": ""
+      }
+    ]
+  ]
+}

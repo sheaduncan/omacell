@@ -1,0 +1,22 @@
+{
+  "protocol": "anthropic",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "body": {
+      "model": "claude",
+      "max_tokens": 1024,
+      "messages": [
+        { "role": "user", "content": "slow" }
+      ],
+      "stream": false
+    }
+  },
+  "response": {
+    "status": 200,
+    "delay_ms": 200,
+    "body": {
+      "content": [ { "type": "text", "text": "late" } ]
+    }
+  }
+}

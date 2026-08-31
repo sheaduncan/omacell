@@ -188,10 +188,10 @@ pub enum Commands {
         /// Workbook path.
         book: PathBuf,
     },
-    /// AI provider commands (WP-22).
+    /// AI provider, card, log, and usage.
     Ai {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
+        #[command(subcommand)]
+        cmd: AiCmd,
     },
     /// Hand off to the Omarchy default agent.
     Agent {
@@ -216,6 +216,31 @@ pub enum Commands {
         #[arg(long)]
         book: Option<PathBuf>,
     },
+}
+
+/// `omacell ai`.
+#[derive(Debug, Subcommand)]
+pub enum AiCmd {
+    /// Detect local servers and write a sparse user config.
+    Setup,
+    /// Print a workbook card.
+    Card {
+        /// Workbook path.
+        book: PathBuf,
+        /// `summary` / `columns` / `sample` / `full`.
+        #[arg(long, default_value = "summary")]
+        level: String,
+        /// A1 range for `full`.
+        #[arg(long)]
+        range: Option<String>,
+        /// Selection for dependency focus.
+        #[arg(long)]
+        selection: Option<String>,
+    },
+    /// Read `~/.local/state/omacell/ai/log.jsonl`.
+    Log,
+    /// Token usage totals from the audit log.
+    Usage,
 }
 
 /// `omacell agent diagnose`.

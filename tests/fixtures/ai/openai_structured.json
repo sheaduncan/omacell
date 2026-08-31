@@ -1,0 +1,31 @@
+{
+  "protocol": "openai_compatible",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "qwen",
+      "messages": [
+        { "role": "user", "content": "return json" }
+      ],
+      "stream": false,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "omacell",
+          "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } },
+          "strict": true
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "choices": [
+        { "message": { "role": "assistant", "content": "{\"ok\":true}" } }
+      ],
+      "usage": { "prompt_tokens": 4, "completion_tokens": 3 }
+    }
+  }
+}

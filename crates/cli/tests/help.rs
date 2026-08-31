@@ -57,6 +57,10 @@ fn help_snapshots() {
     assert_snapshot!("diff", help(&["diff", "--help"]));
     assert_snapshot!("audit", help(&["audit", "--help"]));
     assert_snapshot!("ai", help(&["ai", "--help"]));
+    assert_snapshot!("ai_setup", help(&["ai", "setup", "--help"]));
+    assert_snapshot!("ai_card", help(&["ai", "card", "--help"]));
+    assert_snapshot!("ai_log", help(&["ai", "log", "--help"]));
+    assert_snapshot!("ai_usage", help(&["ai", "usage", "--help"]));
     assert_snapshot!("agent", help(&["agent", "--help"]));
     assert_snapshot!("agent_diagnose", help(&["agent", "diagnose", "--help"]));
     assert_snapshot!("mcp", help(&["mcp", "--help"]));

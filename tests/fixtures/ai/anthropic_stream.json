@@ -1,0 +1,23 @@
+{
+  "protocol": "anthropic",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "body": {
+      "model": "claude",
+      "max_tokens": 1024,
+      "messages": [
+        { "role": "user", "content": "stream please" }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "stream": true,
+    "body": [
+      { "type": "content_block_delta", "delta": { "text": "Hi" } },
+      { "type": "message_delta", "usage": { "input_tokens": 1, "output_tokens": 1 } }
+    ]
+  }
+}

@@ -7,9 +7,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use omacell_bus::mcp::{McpCtx, McpSession, TOOLS};
+use omacell_ai::card::{CardLevel, CardRequest};
+use omacell_ai::policy::{PolicySnapshot, build_card, provider_is_local};
+use omacell_ai::{Slot, route_slot};
+use omacell_bus::mcp::{McpCtx, McpSession, TOOLS, stub_card};
 use omacell_bus::{Bus, codes};
 use omacell_conf::{Config, NotifyKind, notify_send};
+use omacell_core::workbook::Workbook;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
@@ -140,7 +144,7 @@ impl ServerHandler for OmacellMcp {
         Ok(ListResourceTemplatesResult {
             resource_templates: vec![
                 ResourceTemplate::new("omacell://{file}/card", "card")
-                    .with_description("Workbook card (summary until WP-22)")
+                    .with_description("Workbook card (summary)")
                     .with_mime_type("application/json"),
                 ResourceTemplate::new("omacell://{file}/{sheet}", "sheet")
                     .with_description("Sheet summary")
@@ -330,6 +334,34 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedLines<R> {
             }
             other => other,
         }
+    }
+}
+
+/// Session context for `omacell mcp`: proposal notify + WP-22 summary card.
+pub fn ctx_for_cli(open_path: Option<String>, config: Config) -> McpCtx {
+    let card_config = config.clone();
+    McpCtx {
+        open_path,
+        gui_running: false,
+        on_external_propose: Some(proposal_notifier(config)),
+        card: Some(Box::new(move |wb, path| {
+            summary_card(&card_config, wb, path)
+        })),
+    }
+}
+
+fn summary_card(config: &Config, wb: &Workbook, path: Option<&str>) -> Value {
+    let (provider, _) = route_slot(config, Slot::Default);
+    let local = provider_is_local(config, &provider);
+    let policy = PolicySnapshot::capture(config, Some(wb), local);
+    let request = CardRequest {
+        level: CardLevel::Summary,
+        file: path.map(str::to_string),
+        ..CardRequest::default()
+    };
+    match build_card(wb, None, request, &policy) {
+        Ok((card, _)) => card,
+        Err(_) => stub_card(wb, path),
     }
 }
 

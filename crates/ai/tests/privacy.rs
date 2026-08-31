@@ -1,0 +1,135 @@
+//! Privacy choke-point tests.
+
+use omacell_ai::card::{CardLevel, CardRequest};
+use omacell_ai::policy::{AI_PART, PolicySnapshot, SendLevel, WorkbookAi, build_card};
+use omacell_ai::redact::redact_text;
+use omacell_conf::schema::package_defaults;
+use omacell_core::workbook::Workbook;
+
+fn book_with_secret() -> Workbook {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_cell_contents(sheet, 0, 0, "email").unwrap();
+    wb.set_cell_contents(sheet, 1, 0, "alice@example.com")
+        .unwrap();
+    wb.set_cell_contents(sheet, 0, 1, "n").unwrap();
+    wb.set_cell_contents(sheet, 1, 1, "999888").unwrap();
+    wb
+}
+
+#[test]
+fn schema_level_payloads_contain_no_cell_values() {
+    let wb = book_with_secret();
+    let mut config = package_defaults().unwrap();
+    config.ai.privacy.send = "schema".into();
+    config.ai.privacy.local_full = false;
+    let policy = PolicySnapshot::capture(&config, Some(&wb), false);
+    assert_eq!(policy.send, SendLevel::Schema);
+    let (card, _) = build_card(
+        &wb,
+        None,
+        CardRequest {
+            level: CardLevel::Sample,
+            sample_rows: 5,
+            ..CardRequest::default()
+        },
+        &policy,
+    )
+    .unwrap();
+    let dumped = card.to_string();
+    assert!(!dumped.contains("alice@example.com"), "{dumped}");
+    assert!(!dumped.contains("999888"), "{dumped}");
+    assert!(dumped.contains("formula_count") || dumped.contains("sheets"));
+}
+
+#[test]
+fn redaction_applied_on_card_path() {
+    let wb = book_with_secret();
+    let mut config = package_defaults().unwrap();
+    config.ai.privacy.send = "full".into();
+    config.ai.privacy.suggest_redaction = true;
+    let policy = PolicySnapshot::capture(&config, Some(&wb), true);
+    let (card, suggestions) = build_card(
+        &wb,
+        None,
+        CardRequest {
+            level: CardLevel::Sample,
+            sample_rows: 5,
+            ..CardRequest::default()
+        },
+        &policy,
+    )
+    .unwrap();
+    let dumped = card.to_string();
+    assert!(
+        dumped.contains("[REDACTED:email]")
+            || suggestions.iter().any(|s| s.kind.as_str() == "email")
+    );
+    assert!(!dumped.contains("alice@example.com"), "{dumped}");
+}
+
+#[test]
+fn workbook_override_and_loopback_defaults() {
+    let mut wb = Workbook::new();
+    let part = WorkbookAi {
+        privacy_send: Some("schema".into()),
+        redact: vec![],
+    };
+    wb.custom_parts
+        .insert(AI_PART.into(), serde_json::to_vec(&part).unwrap());
+    let mut config = package_defaults().unwrap();
+    config.ai.privacy.send = "schema".into();
+    config.ai.privacy.local_full = true;
+    let local = PolicySnapshot::capture(&config, None, true);
+    assert_eq!(local.send, SendLevel::Full);
+    let cloud = PolicySnapshot::capture(&config, None, false);
+    assert_eq!(cloud.send, SendLevel::Schema);
+    let over = PolicySnapshot::capture(&config, Some(&wb), true);
+    assert_eq!(over.send, SendLevel::Schema);
+}
+
+#[test]
+fn accepted_redact_marks_replace_cells() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_cell_contents(sheet, 0, 0, "Name").unwrap();
+    wb.set_cell_contents(sheet, 1, 0, "Ada").unwrap();
+    wb.custom_parts.insert(
+        AI_PART.into(),
+        serde_json::to_vec(&WorkbookAi {
+            privacy_send: Some("full".into()),
+            redact: vec!["Sheet1!A2".into()],
+        })
+        .unwrap(),
+    );
+    let mut config = package_defaults().unwrap();
+    config.ai.privacy.send = "full".into();
+    config.ai.privacy.suggest_redaction = false;
+    let policy = PolicySnapshot::capture(&config, Some(&wb), true);
+    let (card, _) = build_card(
+        &wb,
+        None,
+        CardRequest {
+            level: CardLevel::Sample,
+            sample_rows: 5,
+            ..CardRequest::default()
+        },
+        &policy,
+    )
+    .unwrap();
+    let dumped = card.to_string();
+    assert!(dumped.contains("[REDACTED:mark]"), "{dumped}");
+    assert!(!dumped.contains("Ada"), "{dumped}");
+}
+
+#[test]
+fn redaction_applies_to_cell_inputs_and_image_alts() {
+    let (text, suggestions) = redact_text("contact alice@example.com or +1 415 555 0100");
+    assert!(text.contains("[REDACTED:email]"), "{text}");
+    assert!(text.contains("[REDACTED:phone]"), "{text}");
+    assert!(suggestions.iter().any(|s| s.kind.as_str() == "email"));
+    let (card, _) = redact_text("4111111111111111 GB82WEST12345698765432 123-45-6789");
+    assert!(card.contains("[REDACTED:card]"), "{card}");
+    assert!(card.contains("[REDACTED:iban]"), "{card}");
+    assert!(card.contains("[REDACTED:national-id]"), "{card}");
+}

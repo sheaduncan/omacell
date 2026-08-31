@@ -1,0 +1,18 @@
+{
+  "protocol": "openai_compatible",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "qwen",
+      "messages": [
+        { "role": "user", "content": "fail" }
+      ],
+      "stream": false
+    }
+  },
+  "response": {
+    "status": 500,
+    "body": { "error": { "message": "boom" } }
+  }
+}

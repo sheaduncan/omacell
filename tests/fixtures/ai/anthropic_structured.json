@@ -1,0 +1,26 @@
+{
+  "protocol": "anthropic",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "body": {
+      "model": "claude",
+      "max_tokens": 1024,
+      "messages": [
+        { "role": "user", "content": "return json" }
+      ],
+      "stream": false,
+      "output_format": {
+        "type": "json_schema",
+        "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "content": [ { "type": "text", "text": "{\"ok\":true}" } ],
+      "usage": { "input_tokens": 4, "output_tokens": 3 }
+    }
+  }
+}

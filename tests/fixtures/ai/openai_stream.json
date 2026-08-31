@@ -1,0 +1,23 @@
+{
+  "protocol": "openai_compatible",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "qwen",
+      "messages": [
+        { "role": "user", "content": "stream please" }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "stream": true,
+    "body": [
+      { "choices": [ { "delta": { "content": "Hel" } } ] },
+      { "choices": [ { "delta": { "content": "lo" } } ] },
+      { "usage": { "prompt_tokens": 1, "completion_tokens": 1 } }
+    ]
+  }
+}

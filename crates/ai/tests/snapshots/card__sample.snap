@@ -1,0 +1,74 @@
+---
+source: crates/ai/tests/card.rs
+expression: card
+---
+{
+  "columns": [
+    {
+      "column": "A",
+      "distinct": 1,
+      "header_row": true,
+      "name": "Name",
+      "null_share": 0.5,
+      "samples": [
+        "Ada"
+      ],
+      "sheet": "Sheet1",
+      "type": "text"
+    },
+    {
+      "column": "B",
+      "distinct": 1,
+      "header_row": true,
+      "max": 10.0,
+      "min": 10.0,
+      "name": "Amount",
+      "null_share": 0.5,
+      "samples": [
+        "10"
+      ],
+      "sheet": "Sheet1",
+      "type": "number"
+    }
+  ],
+  "conditional_formats": 0,
+  "external_references": 0,
+  "file": "book.xlsx",
+  "formula_count": 1,
+  "functions": [],
+  "kind": "sample",
+  "names": [],
+  "sample_rows": [
+    {
+      "origin": "A1",
+      "rows": [
+        [
+          "Name",
+          "Amount"
+        ],
+        [
+          "Ada",
+          "10"
+        ],
+        [
+          "",
+          ""
+        ]
+      ],
+      "sheet": "Sheet1"
+    }
+  ],
+  "schema": 1,
+  "sheets": [
+    {
+      "cols": 2,
+      "formulas": 1,
+      "name": "Sheet1",
+      "rows": 3
+    }
+  ],
+  "tables": [],
+  "token_budget": 2048,
+  "tokens": 154,
+  "validations": 0
+}

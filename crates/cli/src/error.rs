@@ -57,6 +57,7 @@ impl CliError {
 
     /// Stub that names the owning work package.
     #[must_use]
+    #[allow(dead_code)] // WP-23 still has in-app AI stubs
     pub fn nyi(feature: &str, wp: &str) -> Self {
         Self::new("cli.not_yet", format!("{feature} arrives in {wp}"))
             .hint(format!("see docs/build/wp/{wp}-*.md"))
@@ -77,6 +78,17 @@ impl CliError {
 impl From<io::Error> for CliError {
     fn from(err: io::Error) -> Self {
         Self::new("cli.io", err.to_string())
+    }
+}
+
+impl From<omacell_ai::AiError> for CliError {
+    fn from(err: omacell_ai::AiError) -> Self {
+        Self {
+            code: err.code,
+            message: err.message,
+            hint: err.hint,
+            exit: EXIT_ERROR,
+        }
     }
 }
 

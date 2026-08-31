@@ -12,8 +12,8 @@ pub use catalog::{
     SCHEMA, TOOLS, ToolSpec, catalog_json, render_markdown, schema_for_tool, tool_names,
 };
 pub use session::{
-    DEFAULT_PAGE_ROWS, MAX_MCP_JSON_BYTES, MAX_MCP_JSON_DEPTH, MAX_PAGE_ROWS, McpCtx, McpSession,
-    ProposeHook, stub_card,
+    CardHook, DEFAULT_PAGE_ROWS, MAX_MCP_JSON_BYTES, MAX_MCP_JSON_DEPTH, MAX_PAGE_ROWS, McpCtx,
+    McpSession, ProposeHook, stub_card,
 };
 pub use uri::{
     RESOURCE_TEMPLATES, ResourceKind, card_uri, parse_resource_uri, sheet_uri, templates_json,
