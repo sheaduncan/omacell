@@ -1219,12 +1219,12 @@ fn parse_sheet_spec(name: &str) -> Result<SheetSpec, ParseError> {
 }
 
 fn split_quoted_external(name: &str) -> (Option<String>, String) {
-    if let Some(rest) = name.strip_prefix('[') {
-        if let Some(end) = rest.find(']') {
-            let book = rest[..end].to_string();
-            let sheet = rest[end + 1..].to_string();
-            return (Some(book), sheet);
-        }
+    if let Some(rest) = name.strip_prefix('[')
+        && let Some(end) = rest.find(']')
+    {
+        let book = rest[..end].to_string();
+        let sheet = rest[end + 1..].to_string();
+        return (Some(book), sheet);
     }
     (None, name.to_string())
 }

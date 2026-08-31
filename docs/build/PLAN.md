@@ -16,7 +16,7 @@ The spec left several choices as ADRs. Agents need fixed contracts, so this plan
 
 | # | Decision | Default | Why | Revisit if |
 |---|---|---|---|---|
-| D1 | Language and build | Rust, stable toolchain, edition 2024, single Cargo workspace | One toolchain, memory safety on untrusted files, best agent ergonomics | Never (foundational) |
+| D1 | Language and build | Rust 1.98 (pin `rust-toolchain.toml`; workspace `rust-version` matches), edition 2024, single Cargo workspace | One toolchain, memory safety on untrusted files, best agent ergonomics | Never (foundational) |
 | D2 | Engine (ADR-002) | **Build** `omacell-core` per spec §11.3 | Full control over dynamic arrays, async AI nodes, storage budgets | WP-S1 shows IronCalc covers L1/L2 and the graph performance with a compatible license |
 | D3 | GUI toolkit (ADR-001) | **eframe/egui on wgpu**, custom grid painter | Pure Rust; agents ship it fastest; AccessKit and winit IME exist; front-end is isolated behind the command bus so a later swap is contained | WP-S2 fails IME or accessibility; then plan a Qt Quick front-end as a separate lane |
 | D4 | TUI | ratatui + crossterm | Standard, testable with `TestBackend` | — |
@@ -44,14 +44,19 @@ The spec left several choices as ADRs. Agents need fixed contracts, so this plan
 
 Mapping to the spec's milestones: Phases 0–3 deliver M1 (engine + CLI + TUI, `.xlsx` L1/L2). Phase 4 delivers M2 (GUI, daily-driver data tools). Phase 5 delivers the AI and agent parts of M2–M4. Phase 6 delivers M3 and the rest of M4. Phase 7 is 1.0.
 
-### Immediate dispatch point (28 August 2026)
+### Immediate dispatch point (31 August 2026)
 
-WP-00 through WP-04, WP-06, WP-S1, and WP-S2 are merged. Two packages are ready and may run concurrently:
+Merged: WP-00–WP-22, WP-15a, WP-05F, WP-24, WP-25, WP-26, WP-29, WP-S1, WP-S2. Gate G1 is in [`reports/G1.md`](../../reports/G1.md). Reports for every merged package live in `reports/`.
 
-- **Lane A:** [WP-05F](wp/WP-05F-function-runtime-foundation.md) on `wp/05f-function-runtime-foundation`.
-- **Lane D:** [WP-07a](wp/WP-07a-command-bus-changesets.md) on `wp/07a-command-bus-changesets`.
+Ready now (may run concurrently; one agent per lane):
 
-Do not start WP-05a/b/c until WP-05F is merged. Do not start WP-07b until WP-07a is merged. WP-08, WP-09, and WP-12 are also dependency-ready in their independent lanes if additional non-overlapping capacity is available.
+- **Lane D:** [WP-23](wp/WP-23-ai-features.md) — depends on WP-22, now merged.
+- **Lane B:** [WP-27](wp/WP-27-other-formats.md) — depends on WP-08 and WP-10, both merged.
+- **Lane A follow-up:** [WP-24a](wp/WP-24a-pivot-fidelity.md) — depends on WP-24, merged.
+
+[WP-28](wp/WP-28-packaging-release-hardening.md) waits on WP-23 and WP-27. [WP-30](wp/WP-30-repository-security-controls.md) is maintainer GitHub settings, not an agent PR.
+
+Do not start WP-28 until every package in its *Depends on* list is merged.
 
 ## 4. Gates (human checkpoints)
 
@@ -225,7 +230,7 @@ graph LR
   WP_27 --> WP_28
 ```
 
-Two near-critical paths now remain: engine/UI (`WP-00 → WP-01 → WP-02 → WP-04 → WP-07a → WP-14 → WP-15 → WP-15a → WP-16 → WP-25 → WP-26 → WP-28`) and functions/CLI/TUI (`WP-04/WP-06 → WP-05F → WP-05a/b/c → WP-13 → WP-15 → WP-15a → WP-16/WP-25`). WP-15a closes the §10.2/§11.5 single-writer task-runner gap found in WP-15 review before the GUI builds a second frontend lifecycle. WP-16 must consume that runner rather than own a toolkit lock around `Bus`. Session totals should be re-estimated after G1; treat package sizes as ordering signals, not commitments.
+Those paths have landed. The remaining critical path is AI + formats + release: `WP-23` in parallel with `WP-27` (and optional `WP-24a`), then `WP-28`. Treat package sizes as ordering signals, not commitments. The live queue is the *Immediate dispatch point* above.
 
 ## 7. Work-package index
 

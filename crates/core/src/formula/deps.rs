@@ -74,10 +74,10 @@ fn collect(expr: &Expr, inherited_sheet: Option<&SheetSpec>, deps: &mut Deps) {
             ));
         }
         ExprKind::Structured(sr) => {
-            if let Some(t) = &sr.table {
-                if !deps.tables.iter().any(|x| x.eq_ignore_ascii_case(t)) {
-                    deps.tables.push(t.clone());
-                }
+            if let Some(t) = &sr.table
+                && !deps.tables.iter().any(|x| x.eq_ignore_ascii_case(t))
+            {
+                deps.tables.push(t.clone());
             }
         }
         ExprKind::Call {

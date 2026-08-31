@@ -69,7 +69,7 @@ fn integer_p(mant: u64, exp: i32) -> bool {
     if keep >= 15 {
         return true;
     }
-    mant % 10u64.pow(15 - keep) == 0
+    mant.is_multiple_of(10u64.pow(15 - keep))
 }
 
 fn int_string(mant: u64, exp: i32) -> String {

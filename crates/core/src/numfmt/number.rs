@@ -134,7 +134,7 @@ pub fn split_fixed(n: f64, frac_places: usize) -> (Vec<u8>, Vec<u8>) {
 pub fn group_int(digits: &[u8], thousands: char) -> String {
     let mut s = String::new();
     for (i, d) in digits.iter().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             s.push(thousands);
         }
         s.push(char::from(b'0' + *d));

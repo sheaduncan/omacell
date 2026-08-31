@@ -11,9 +11,11 @@ nothing that phones home.
 One engine, three clients: a Wayland GUI, a TUI, and a JSON-speaking CLI that
 doubles as an IPC surface for scripts and AI agents.
 
-**Status:** pre-alpha. Gate G0 and the Phase-1 engine foundation through WP-04
-and WP-06 are merged. The next independent packages are WP-05F (function
-runtime foundation) and WP-07a (in-process command bus and changesets).
+**Status:** pre-alpha. Merged: WP-00–WP-22, WP-15a, WP-05F, WP-24–WP-26, WP-29,
+WP-S1, WP-S2 (reports in [`reports/`](reports/)). Remaining: WP-23 (in-app AI),
+WP-24a (pivot fidelity), WP-27 (other formats), WP-28 (release), WP-30 (GitHub
+settings). See
+[`docs/build/PLAN.md`](docs/build/PLAN.md) for the live dispatch point.
 
 ## Build
 

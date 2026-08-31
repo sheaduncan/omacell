@@ -315,19 +315,17 @@ fn apply_content_types(pkg: &mut OpcPackage) -> Result<(), CoreError> {
     while let Some(ev) = r.next()? {
         match ev {
             XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs } => {
-                if name == "Default" {
-                    if let (Some(ext), Some(cty)) =
+                if name == "Default"
+                    && let (Some(ext), Some(cty)) =
                         (attr(&attrs, "Extension"), attr(&attrs, "ContentType"))
-                    {
-                        defaults.push((ext.to_ascii_lowercase(), cty.to_string()));
-                    }
-                } else if name == "Override" {
-                    if let (Some(part), Some(cty)) =
+                {
+                    defaults.push((ext.to_ascii_lowercase(), cty.to_string()));
+                } else if name == "Override"
+                    && let (Some(part), Some(cty)) =
                         (attr(&attrs, "PartName"), attr(&attrs, "ContentType"))
-                    {
-                        let p = part.trim_start_matches('/').to_string();
-                        overrides.push((p, cty.to_string()));
-                    }
+                {
+                    let p = part.trim_start_matches('/').to_string();
+                    overrides.push((p, cty.to_string()));
                 }
             }
             _ => {}
@@ -339,10 +337,10 @@ fn apply_content_types(pkg: &mut OpcPackage) -> Result<(), CoreError> {
             part.content_type = Some(cty.clone());
             continue;
         }
-        if let Some((_, ext)) = key.rsplit_once('.') {
-            if let Some((_, cty)) = defaults.iter().find(|(e, _)| e.eq_ignore_ascii_case(ext)) {
-                part.content_type = Some(cty.clone());
-            }
+        if let Some((_, ext)) = key.rsplit_once('.')
+            && let Some((_, cty)) = defaults.iter().find(|(e, _)| e.eq_ignore_ascii_case(ext))
+        {
+            part.content_type = Some(cty.clone());
         }
     }
     Ok(())

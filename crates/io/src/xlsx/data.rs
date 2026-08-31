@@ -615,12 +615,12 @@ pub(crate) fn modeled_autofilter(filter: &AutoFilter, dxfs: &[CfDxf]) -> String 
                         ""
                     }
                 ));
-                if *op == NumOp::Between {
-                    if let Some(hi) = value2 {
-                        s.push_str(&format!(
-                            r#"<customFilter operator="lessThanOrEqual" val="{hi}"/>"#
-                        ));
-                    }
+                if *op == NumOp::Between
+                    && let Some(hi) = value2
+                {
+                    s.push_str(&format!(
+                        r#"<customFilter operator="lessThanOrEqual" val="{hi}"/>"#
+                    ));
                 }
                 s.push_str("</customFilters>");
             }

@@ -82,10 +82,10 @@ pub fn spawn_sigusr1_reloader(handle: ReloadHandle) -> Result<Sigusr1Guard, Core
     let thread_stop = Arc::clone(&stop);
     let join = thread::spawn(move || {
         while !thread_stop.load(Ordering::Relaxed) {
-            if flag.swap(false, Ordering::SeqCst) {
-                if let Err(err) = handle.reload() {
-                    tracing::warn!(code = %err.code, error = %err.message, "SIGUSR1 reload failed");
-                }
+            if flag.swap(false, Ordering::SeqCst)
+                && let Err(err) = handle.reload()
+            {
+                tracing::warn!(code = %err.code, error = %err.message, "SIGUSR1 reload failed");
             }
             thread::sleep(Duration::from_millis(20));
         }

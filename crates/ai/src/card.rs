@@ -109,17 +109,17 @@ pub(crate) fn build(
     if matches!(request.level, CardLevel::Sample | CardLevel::Full) {
         card["sample_rows"] = sample_rows(wb, request.sample_rows.clamp(1, 20));
     }
-    if request.level == CardLevel::Full {
-        if let Some(range) = &request.range {
-            let (values, page) = range_values(wb, range, request.offset, request.limit)?;
-            card["values"] = values;
-            card["page"] = page;
-        }
+    if request.level == CardLevel::Full
+        && let Some(range) = &request.range
+    {
+        let (values, page) = range_values(wb, range, request.offset, request.limit)?;
+        card["values"] = values;
+        card["page"] = page;
     }
-    if let Some(sel) = &request.selection {
-        if let Some(engine) = engine {
-            card["focus"] = focus(wb, engine, sel);
-        }
+    if let Some(sel) = &request.selection
+        && let Some(engine) = engine
+    {
+        card["focus"] = focus(wb, engine, sel);
     }
     card["truncated"] = json!(false);
     Ok(card)

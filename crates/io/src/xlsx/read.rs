@@ -1278,16 +1278,17 @@ fn load_sheet(
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "sheetView" =>
             {
-                if let Some(z) = attr(&attrs, "zoomScale").and_then(|s| s.parse::<f64>().ok()) {
-                    if z.is_finite() && z > 0.0 {
-                        let mut view = wb
-                            .sheet(id)
-                            .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
-                            .view
-                            .clone();
-                        view.zoom = z / 100.0;
-                        wb.set_sheet_view(id, view)?;
-                    }
+                if let Some(z) = attr(&attrs, "zoomScale").and_then(|s| s.parse::<f64>().ok())
+                    && z.is_finite()
+                    && z > 0.0
+                {
+                    let mut view = wb
+                        .sheet(id)
+                        .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
+                        .view
+                        .clone();
+                    view.zoom = z / 100.0;
+                    wb.set_sheet_view(id, view)?;
                 }
                 if attr(&attrs, "showGridLines").is_some_and(|s| !truthy(s)) {
                     let mut view = wb

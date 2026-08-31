@@ -1,6 +1,6 @@
 //! TUI session over the WP-13 composition objects.
 
-use std::io::{self, IsTerminal, stdout};
+use std::io::{IsTerminal, stdout};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -201,7 +201,7 @@ impl Tui {
     }
 
     /// Draw using the current workbook snapshot.
-    pub fn draw<B: Backend>(&self, terminal: &mut Terminal<B>) -> io::Result<()> {
+    pub fn draw<B: Backend>(&self, terminal: &mut Terminal<B>) -> Result<(), B::Error> {
         let loaded = self.store.snapshot();
         let unicode = loaded.config.tui.unicode_borders;
         let snapshot = self.runner.handle().snapshot();

@@ -12,13 +12,13 @@ description = "Terminal front-end for Omacell."
 workspace = true
 
 [dependencies]
-crossterm = "0.28"
+crossterm = "0.29"
 omacell-ai = { path = "../ai", version = "0.0.0" }
 omacell-bus = { path = "../bus", version = "0.0.0" }
 omacell-conf = { path = "../conf", version = "0.0.0" }
 omacell-core = { path = "../core", version = "0.0.0" }
 omacell-ui = { path = "../ui", version = "0.0.0" }
-ratatui = "0.29"
+ratatui = "0.30"
 serde_json = { workspace = true }
 
 [dev-dependencies]

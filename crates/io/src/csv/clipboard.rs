@@ -326,18 +326,18 @@ fn html_text(s: &str) -> String {
     let mut out = String::new();
     let mut rest = s;
     while !rest.is_empty() {
-        if let Some(stripped) = rest.strip_prefix('<') {
-            if let Some(end) = stripped.find('>') {
-                rest = &stripped[end + 1..];
-                continue;
-            }
+        if let Some(stripped) = rest.strip_prefix('<')
+            && let Some(end) = stripped.find('>')
+        {
+            rest = &stripped[end + 1..];
+            continue;
         }
-        if let Some(stripped) = rest.strip_prefix('&') {
-            if let Some((ent, tail)) = split_entity(stripped) {
-                out.push_str(&ent);
-                rest = tail;
-                continue;
-            }
+        if let Some(stripped) = rest.strip_prefix('&')
+            && let Some((ent, tail)) = split_entity(stripped)
+        {
+            out.push_str(&ent);
+            rest = tail;
+            continue;
         }
         let ch = rest.chars().next().unwrap();
         out.push(ch);

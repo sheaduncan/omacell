@@ -280,7 +280,7 @@ fn emit_progress(opts: &LoadOptions, rows: u64, bytes: u64, done: bool) {
     let Some(cb) = opts.on_progress.as_ref() else {
         return;
     };
-    if !done && (opts.progress_every == 0 || rows % opts.progress_every != 0) {
+    if !done && (opts.progress_every == 0 || !rows.is_multiple_of(opts.progress_every)) {
         return;
     }
     cb(LoadProgress {

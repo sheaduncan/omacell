@@ -490,11 +490,10 @@ fn overlay_slot(
             cache,
             registry,
         ) {
-            if !rule_fill_applied {
-                if let Some(fill) = rule_fill(val, rule, cache).or(rule.dxf.fill) {
-                    out.fill = Some(fill);
-                    rule_fill_applied = true;
-                }
+            if !rule_fill_applied && let Some(fill) = rule_fill(val, rule, cache).or(rule.dxf.fill)
+            {
+                out.fill = Some(fill);
+                rule_fill_applied = true;
             }
             if !rule_font_applied && let Some(font) = rule.dxf.font {
                 out.font = Some(font);

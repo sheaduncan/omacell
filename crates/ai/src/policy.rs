@@ -188,16 +188,15 @@ fn apply_marks(card: &mut Value, marks: &[String]) {
 fn apply_marks_value(value: &mut Value, marks: &[ParsedRef]) {
     match value {
         Value::Object(map) => {
-            if let Some(Value::String(cell_ref)) = map.get("ref").cloned() {
-                if let Some((sheet, row, col)) = parse_cell_ref(&cell_ref) {
-                    if mark_covers_any(marks, sheet.as_deref(), row, col) {
-                        if map.contains_key("value") {
-                            map.insert("value".into(), Value::String("[REDACTED:mark]".into()));
-                        }
-                        if map.contains_key("formula") {
-                            map.insert("formula".into(), Value::String("[REDACTED:mark]".into()));
-                        }
-                    }
+            if let Some(Value::String(cell_ref)) = map.get("ref").cloned()
+                && let Some((sheet, row, col)) = parse_cell_ref(&cell_ref)
+                && mark_covers_any(marks, sheet.as_deref(), row, col)
+            {
+                if map.contains_key("value") {
+                    map.insert("value".into(), Value::String("[REDACTED:mark]".into()));
+                }
+                if map.contains_key("formula") {
+                    map.insert("formula".into(), Value::String("[REDACTED:mark]".into()));
                 }
             }
             if let Some(rows) = map.get_mut("sample_rows") {
@@ -343,11 +342,11 @@ fn filter_level(card: &mut Value, send: SendLevel, level: CardLevel) {
             }
         }
         SendLevel::Sample => {
-            if matches!(level, CardLevel::Full) {
-                if let Some(obj) = card.as_object_mut() {
-                    obj.remove("values");
-                    obj.remove("page");
-                }
+            if matches!(level, CardLevel::Full)
+                && let Some(obj) = card.as_object_mut()
+            {
+                obj.remove("values");
+                obj.remove("page");
             }
         }
         SendLevel::Full => {}

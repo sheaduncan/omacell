@@ -496,10 +496,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_ident_or_cell(&mut self, start: usize) -> Result<TokenKind, ParseError> {
-        if self.style == RefStyle::R1C1 {
-            if let Some(kind) = self.try_r1c1(start)? {
-                return Ok(kind);
-            }
+        if self.style == RefStyle::R1C1
+            && let Some(kind) = self.try_r1c1(start)?
+        {
+            return Ok(kind);
         }
         if let Some(kind) = self.try_a1_cell(start)? {
             return Ok(kind);

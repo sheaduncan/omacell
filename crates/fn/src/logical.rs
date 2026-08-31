@@ -194,10 +194,10 @@ fn if_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
 }
 
 fn ifs_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
-    if args.len() < 2 || args.len() % 2 != 0 {
+    if args.len() < 2 || !args.len().is_multiple_of(2) {
         return RuntimeValue::error(ErrorKind::Value);
     }
-    for pair in args.chunks_exact(2) {
+    for pair in args.as_chunks::<2>().0 {
         let test = eval_one(ctx, &pair[0]);
         match as_bool_scalar(ctx, test) {
             Ok(true) => return eval_one(ctx, &pair[1]),
@@ -227,7 +227,7 @@ fn switch_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
     } else {
         (rest, None)
     };
-    for chunk in pairs.chunks_exact(2) {
+    for chunk in pairs.as_chunks::<2>().0 {
         let cand = eval_one(ctx, &chunk[0]);
         let cand = ctx.materialize(cand);
         let RuntimeValue::Scalar(s) = cand else {
