@@ -27,7 +27,7 @@ smallvec = { version = "1", features = ["serde"] }
 proptest = "1"
 rustc-hash = "2"
 indexmap = { version = "2", features = ["serde"] }
-criterion = "0.5"
+criterion = "0.8"
 rayon = "1"
 regex = "1"
 rustix = { version = "1", features = ["fs"] }
