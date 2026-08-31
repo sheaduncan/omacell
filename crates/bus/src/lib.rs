@@ -50,7 +50,7 @@ pub use policy::MutationPolicy;
 pub use registry::{CommandKind, CommandRegistry, CommandSpec, Exposure, RegisteredCommand};
 pub use resolve::MAX_RANGE_CELLS;
 pub use runner::{TaskRunner, TaskRunnerHandle, register_hold_command};
-pub use session::{Bus, DryRun};
+pub use session::{Bus, CommandObserver, DryRun};
 pub use task::{
     CancelHandle, LongOps, ReaderSnapshot, TaskEvent, TaskId, TaskProgress, TaskState, TaskStatus,
 };

@@ -113,10 +113,10 @@ pub enum Commands {
         /// Workbook path (optional with `--embedded`).
         book: Option<PathBuf>,
         /// Run the workbook's embedded script (`xl/omacell/scripts/main.lua`).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "python")]
         embedded: bool,
         /// Experimental Python subprocess speaking JSON-lines over stdio.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "embedded")]
         python: bool,
     },
     /// Embedded-script trust store (WP-20).

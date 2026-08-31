@@ -10,7 +10,7 @@ Invoke a command-bus command with a Lua table of JSON arguments.
 
 ## `omacell.book`
 
-`omacell.book -> book`
+`omacell.book() -> book`
 
 The active workbook object.
 
@@ -32,6 +32,12 @@ A cell on this sheet (`A1`).
 
 A range on this sheet (`A1:B2`).
 
+## `sheet:name`
+
+`sheet:name() -> string`
+
+The resolved worksheet name.
+
 ## `cell.value`
 
 `cell.value -> number|string|boolean|nil`
@@ -44,17 +50,35 @@ Evaluated cell value.
 
 Formula-bar text.
 
+## `cell.formula`
+
+`cell.formula -> string|nil`
+
+Formula source including the leading `=`, or nil for a literal cell.
+
+## `cell.style`
+
+`cell.style -> table`
+
+The cell's font, fill, border, alignment, protection, and number-format ids.
+
 ## `cell:set`
 
 `cell:set(input)`
 
 Set formula-bar text via `cell.set`.
 
+## `cell:set_style`
+
+`cell:set_style(patch)`
+
+Patch cell style through the `style.set` command.
+
 ## `range:cells`
 
-`range:cells() -> iterator`
+`range:cells() -> cell[]`
 
-Iterate cells in row-major order.
+Return cell objects in row-major order (iterate with `ipairs`).
 
 ## `omacell.fn`
 
@@ -127,4 +151,3 @@ Reserved for WP-23.
 `omacell.ai.fn(...)`
 
 Reserved for WP-23.
-

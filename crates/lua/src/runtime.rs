@@ -1,11 +1,12 @@
 //! Lua 5.4 runtime, sandbox profiles, and the `omacell` API.
 
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use mlua::{HookTriggers, Lua, Table, Value as LuaValue, VmState};
-use omacell_core::addr::{RefKind, parse_a1};
+use omacell_core::addr::{RefKind, parse_a1, quote_sheet_name};
 use omacell_core::coerce::Scalar;
 use omacell_core::error::CoreError;
 use omacell_core::eval::{ArgVal, ArrayLift, DynamicFn, DynamicFnBody, RuntimeValue};
@@ -14,12 +15,14 @@ use serde_json::Value as Json;
 use std::sync::Mutex;
 
 use crate::host::ScriptHost;
-use crate::trust::{TrustStore, hash_path, sha256_hex, trust_path};
+use crate::trust::{TrustStore, sha256_hex, trust_path};
 
 /// Instruction budget for embedded scripts (hook every 1000).
 pub const EMBEDDED_INSTRUCTION_LIMIT: u32 = 1_000_000;
 /// Memory budget for embedded scripts.
 pub const EMBEDDED_MEMORY_LIMIT: usize = 8 * 1024 * 1024;
+/// Maximum bytes in one user `init.lua` or plugin entry point.
+pub const MAX_USER_SCRIPT_BYTES: u64 = 1024 * 1024;
 /// Custom-part path for a workbook-embedded script.
 pub const EMBEDDED_PART: &str = "xl/omacell/scripts/main.lua";
 
@@ -87,13 +90,22 @@ impl ScriptPolicy {
         }
     }
 
+    /// Build policy from the retained, already-layered configuration.
+    #[must_use]
+    pub fn from_loaded(loaded: &omacell_conf::LoadedConfig) -> Self {
+        Self::from_config(
+            loaded.config.scripting.enabled,
+            &loaded.config.scripting.embedded_scripts,
+            &loaded.config.scripting.trusted_dirs,
+        )
+    }
+
     /// Apply a possibly stricter reload.
     pub fn tighten(&mut self, other: &Self) {
         self.enabled &= other.enabled;
         self.embedded = self.embedded.stricter(other.embedded);
-        if other.trusted_dirs.len() < self.trusted_dirs.len() {
-            self.trusted_dirs.clone_from(&other.trusted_dirs);
-        }
+        self.trusted_dirs
+            .retain(|dir| other.trusted_dirs.contains(dir));
     }
 }
 
@@ -116,19 +128,29 @@ pub struct Runtime {
     #[allow(dead_code)]
     host: Arc<Mutex<Box<dyn ScriptHost>>>,
     profile: Profile,
+    instruction_counter: Option<Arc<AtomicU32>>,
 }
 
 impl Runtime {
     /// Construct a VM for `profile`.
     pub fn new(profile: Profile, host: Box<dyn ScriptHost>) -> Result<Self, CoreError> {
-        let lua = match profile {
-            Profile::User => Lua::new(),
-            Profile::Embedded => embedded_lua()?,
+        let (lua, instruction_counter) = match profile {
+            Profile::User => (Lua::new(), None),
+            Profile::Embedded => {
+                let (lua, counter) = embedded_lua()?;
+                (lua, Some(counter))
+            }
         };
         let host = Arc::new(Mutex::new(host));
         let lua = Arc::new(Mutex::new(lua));
-        install_api(&lock_mutex(&lua), &host)?;
-        Ok(Self { lua, host, profile })
+        let function_depth = Arc::new(AtomicU32::new(0));
+        install_api(&lock_mutex(&lua), &host, profile, &function_depth)?;
+        Ok(Self {
+            lua,
+            host,
+            profile,
+            instruction_counter,
+        })
     }
 
     /// Profile in force.
@@ -139,11 +161,21 @@ impl Runtime {
 
     /// Run a host command (e.g. `file.save` after a script).
     pub fn execute_cmd(&self, id: &str, args: Json) -> Result<Json, CoreError> {
-        lock_mutex(&self.host).execute(id, args)
+        self.reset_instruction_budget();
+        dispatch_before_command(&lock_mutex(&self.lua), id)?;
+        let (result, events) = {
+            let mut host = lock_mutex(&self.host);
+            let result = host.execute(id, args)?;
+            let events = host.take_events();
+            (result, events)
+        };
+        dispatch_command_events(&lock_mutex(&self.lua), &events)?;
+        Ok(result)
     }
 
     /// Execute a chunk. Errors include file:line when Lua reports it.
     pub fn exec(&self, source: &str, name: &str) -> Result<(), CoreError> {
+        self.reset_instruction_budget();
         let lua = lock_mutex(&self.lua);
         lua.load(source)
             .set_name(name)
@@ -153,29 +185,29 @@ impl Runtime {
 
     /// Fire a named hook (`on_open`, …). Missing hooks are no-ops.
     pub fn emit_hook(&self, name: &str) -> Result<(), CoreError> {
+        self.reset_instruction_budget();
         let lua = lock_mutex(&self.lua);
-        let globals = lua.globals();
-        let omacell: Table = globals
-            .get("omacell")
-            .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-        let hook: Option<mlua::Function> = omacell.get(name).unwrap_or(None);
-        if let Some(hook) = hook {
-            hook.call::<()>(()).map_err(|e| lua_error(e, name))?;
+        dispatch_hook(&lua, name)
+    }
+
+    fn reset_instruction_budget(&self) {
+        if let Some(counter) = &self.instruction_counter {
+            counter.store(0, Ordering::Relaxed);
         }
-        Ok(())
     }
 }
 
-fn embedded_lua() -> Result<Lua, CoreError> {
+pub(crate) fn embedded_lua() -> Result<(Lua, Arc<AtomicU32>), CoreError> {
     let lua = Lua::new();
     lua.set_memory_limit(EMBEDDED_MEMORY_LIMIT)
         .map_err(|e| CoreError::new("lua.sandbox", e.to_string()))?;
     let counter = Arc::new(AtomicU32::new(0));
+    let hook_counter = Arc::clone(&counter);
     let limit = EMBEDDED_INSTRUCTION_LIMIT / 1000;
     lua.set_hook(
         HookTriggers::new().every_nth_instruction(1000),
         move |_lua, _debug| {
-            let n = counter.fetch_add(1, Ordering::Relaxed);
+            let n = hook_counter.fetch_add(1, Ordering::Relaxed);
             if n >= limit {
                 return Err(mlua::Error::RuntimeError(
                     "instruction limit exceeded".into(),
@@ -185,7 +217,7 @@ fn embedded_lua() -> Result<Lua, CoreError> {
         },
     );
     strip_embedded(&lua)?;
-    Ok(lua)
+    Ok((lua, counter))
 }
 
 fn strip_embedded(lua: &Lua) -> Result<(), CoreError> {
@@ -200,6 +232,12 @@ fn strip_embedded(lua: &Lua) -> Result<(), CoreError> {
         "loadfile",
         "dofile",
         "loadstring",
+        // Lua's hook is per-thread, and hook errors can be caught by pcall.
+        // Removing these prevents coroutine and protected-call bypasses of the
+        // hard instruction budget.
+        "coroutine",
+        "pcall",
+        "xpcall",
     ] {
         globals
             .set(name, LuaValue::Nil)
@@ -208,17 +246,36 @@ fn strip_embedded(lua: &Lua) -> Result<(), CoreError> {
     Ok(())
 }
 
-fn install_api(lua: &Lua, host: &Arc<Mutex<Box<dyn ScriptHost>>>) -> Result<(), CoreError> {
+fn install_api(
+    lua: &Lua,
+    host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    profile: Profile,
+    function_depth: &Arc<AtomicU32>,
+) -> Result<(), CoreError> {
     let omacell = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     let host_cmd = Arc::clone(host);
+    let cmd_depth = Arc::clone(function_depth);
     let cmd = lua
-        .create_function(move |_, (id, args): (String, LuaValue)| {
+        .create_function(move |lua, (id, args): (String, LuaValue)| {
+            host_api_available(&cmd_depth)?;
+            if profile == Profile::Embedded && !embedded_command_allowed(&id) {
+                return Err(mlua::Error::external(CoreError::new(
+                    "lua.sandbox",
+                    format!("command {id} is not available to embedded scripts"),
+                )));
+            }
             let json = lua_to_json(&args).map_err(mlua::Error::external)?;
-            let mut host = lock_mutex(&host_cmd);
-            host.execute(&id, json).map_err(mlua::Error::external)?;
-            Ok(())
+            dispatch_before_command(lua, &id).map_err(mlua::Error::external)?;
+            let (result, events) = {
+                let mut host = lock_mutex(&host_cmd);
+                let result = host.execute(&id, json).map_err(mlua::Error::external)?;
+                let events = host.take_events();
+                (result, events)
+            };
+            dispatch_command_events(lua, &events).map_err(mlua::Error::external)?;
+            json_to_lua(lua, &result)
         })
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     omacell
@@ -226,10 +283,13 @@ fn install_api(lua: &Lua, host: &Arc<Mutex<Box<dyn ScriptHost>>>) -> Result<(), 
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
 
     let host_fn = Arc::clone(host);
+    let register_depth = Arc::clone(function_depth);
     let register = lua
         .create_function(
             move |lua, (name, spec, func): (String, Table, mlua::Function)| {
-                register_lua_fn(lua, &host_fn, name, spec, func).map_err(mlua::Error::external)
+                host_api_available(&register_depth)?;
+                register_lua_fn(lua, &host_fn, &register_depth, name, spec, func)
+                    .map_err(mlua::Error::external)
             },
         )
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
@@ -237,11 +297,11 @@ fn install_api(lua: &Lua, host: &Arc<Mutex<Box<dyn ScriptHost>>>) -> Result<(), 
         .set("fn", register)
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
 
-    install_ui(lua, &omacell, host)?;
+    install_ui(lua, &omacell, host, function_depth)?;
     install_events(lua, &omacell)?;
-    install_keymap(lua, &omacell, host)?;
+    install_keymap(lua, &omacell, host, function_depth)?;
     install_ai(lua, &omacell)?;
-    install_book(lua, &omacell, host)?;
+    install_book(lua, &omacell, host, function_depth)?;
 
     lua.globals()
         .set("omacell", omacell)
@@ -253,14 +313,17 @@ fn install_ui(
     lua: &Lua,
     omacell: &Table,
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
     let ui = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     let h = Arc::clone(host);
+    let depth = Arc::clone(function_depth);
     ui.set(
         "status",
         lua.create_function(move |_, msg: String| {
+            host_api_available(&depth)?;
             lock_mutex(&h).status(&msg);
             Ok(())
         })
@@ -268,9 +331,11 @@ fn install_ui(
     )
     .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     let h = Arc::clone(host);
+    let depth = Arc::clone(function_depth);
     ui.set(
         "notify",
         lua.create_function(move |_, msg: String| {
+            host_api_available(&depth)?;
             lock_mutex(&h).notify(&msg);
             Ok(())
         })
@@ -278,9 +343,11 @@ fn install_ui(
     )
     .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     let h = Arc::clone(host);
+    let depth = Arc::clone(function_depth);
     ui.set(
         "prompt",
         lua.create_function(move |_, msg: String| {
+            host_api_available(&depth)?;
             lock_mutex(&h).prompt(&msg).map_err(mlua::Error::external)
         })
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?,
@@ -292,6 +359,9 @@ fn install_ui(
 }
 
 fn install_events(lua: &Lua, omacell: &Table) -> Result<(), CoreError> {
+    let hooks = lua
+        .create_table()
+        .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     for name in [
         "on_open",
         "on_change",
@@ -299,12 +369,21 @@ fn install_events(lua: &Lua, omacell: &Table) -> Result<(), CoreError> {
         "on_recalc",
         "on_theme_change",
     ] {
+        hooks
+            .set(
+                name,
+                lua.create_table()
+                    .map_err(|e| CoreError::new("lua.api", e.to_string()))?,
+            )
+            .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
         let key = name.to_string();
         let setter = lua
             .create_function(move |lua, func: mlua::Function| {
                 let g = lua.globals();
                 let omacell: Table = g.get("omacell")?;
-                omacell.set(key.as_str(), func)?;
+                let hooks: Table = omacell.get("_hooks")?;
+                let registered: Table = hooks.get(key.as_str())?;
+                registered.set(registered.raw_len() + 1, func)?;
                 Ok(())
             })
             .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
@@ -312,22 +391,79 @@ fn install_events(lua: &Lua, omacell: &Table) -> Result<(), CoreError> {
             .set(name, setter)
             .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     }
+    omacell
+        .set("_hooks", hooks)
+        .map_err(|e| CoreError::new("lua.api", e.to_string()))
+}
+
+fn dispatch_before_command(lua: &Lua, id: &str) -> Result<(), CoreError> {
+    if id == "file.save" {
+        dispatch_hook(lua, "on_before_save")?;
+    }
     Ok(())
+}
+
+fn dispatch_command_events(
+    lua: &Lua,
+    events: &[omacell_core::event::Event],
+) -> Result<(), CoreError> {
+    for event in events {
+        // The file adapter publishes its frozen BeforeSave event with the
+        // committed effect, after I/O. Lua receives the hook from
+        // dispatch_before_command instead so mutations land in the save.
+        if matches!(event, omacell_core::event::Event::BeforeSave { .. }) {
+            continue;
+        }
+        if let Some(name) = crate::host::hook_name(event) {
+            dispatch_hook(lua, name)?;
+        }
+    }
+    Ok(())
+}
+
+fn dispatch_hook(lua: &Lua, name: &str) -> Result<(), CoreError> {
+    let globals = lua.globals();
+    let omacell: Table = globals
+        .get("omacell")
+        .map_err(|error| CoreError::new("lua.api", error.to_string()))?;
+    let hooks: Table = omacell
+        .get("_hooks")
+        .map_err(|error| CoreError::new("lua.api", error.to_string()))?;
+    let registered: Table = hooks
+        .get(name)
+        .map_err(|error| CoreError::new("lua.api", error.to_string()))?;
+    for hook in registered.sequence_values::<mlua::Function>() {
+        hook.map_err(|error| CoreError::new("lua.api", error.to_string()))?
+            .call::<()>(())
+            .map_err(|error| lua_error(error, name))?;
+    }
+    Ok(())
+}
+
+fn embedded_command_allowed(id: &str) -> bool {
+    id != "edit.repeat"
+        && !matches!(
+            id.split_once('.').map(|(namespace, _)| namespace),
+            Some("file" | "macro" | "script" | "theme")
+        )
 }
 
 fn install_keymap(
     lua: &Lua,
     omacell: &Table,
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
     let keymap = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     let h = Arc::clone(host);
+    let depth = Arc::clone(function_depth);
     keymap
         .set(
             "set",
             lua.create_function(move |_, (mode, keys, cmd): (String, String, String)| {
+                host_api_available(&depth)?;
                 lock_mutex(&h).keymap_set(&mode, &keys, &cmd);
                 Ok(())
             })
@@ -363,10 +499,13 @@ fn install_book(
     lua: &Lua,
     omacell: &Table,
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
     let h = Arc::clone(host);
+    let depth = Arc::clone(function_depth);
     let getter = lua
         .create_function(move |lua, (): ()| {
+            host_api_available(&depth)?;
             let host = lock_mutex(&h);
             let wb = host.workbook();
             let name = wb
@@ -377,6 +516,7 @@ fn install_book(
             LuaBook {
                 host: Arc::clone(&h),
                 active: name,
+                function_depth: Arc::clone(&depth),
             }
             .into_lua_owned(lua)
         })
@@ -389,32 +529,49 @@ fn install_book(
 struct LuaBook {
     host: Arc<Mutex<Box<dyn ScriptHost>>>,
     active: String,
+    function_depth: Arc<AtomicU32>,
 }
 
 struct LuaSheet {
     host: Arc<Mutex<Box<dyn ScriptHost>>>,
     name: String,
+    function_depth: Arc<AtomicU32>,
 }
 
 struct LuaCell {
     host: Arc<Mutex<Box<dyn ScriptHost>>>,
     sheet: String,
     a1: String,
+    function_depth: Arc<AtomicU32>,
 }
 
 struct LuaRange {
     host: Arc<Mutex<Box<dyn ScriptHost>>>,
     sheet: String,
     a1: String,
+    function_depth: Arc<AtomicU32>,
 }
 
 impl mlua::UserData for LuaBook {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("sheet", |_, this, name: Option<String>| {
-            let name = name.unwrap_or_else(|| this.active.clone());
+            host_api_available(&this.function_depth)?;
+            let requested = name.unwrap_or_else(|| this.active.clone());
+            let host = lock_mutex(&this.host);
+            let id = host
+                .workbook()
+                .resolve_sheet_name(&requested)
+                .map_err(mlua::Error::external)?;
+            let name = host
+                .workbook()
+                .sheet(id)
+                .map(|sheet| sheet.name.clone())
+                .ok_or_else(|| mlua::Error::external("resolved worksheet is missing"))?;
+            drop(host);
             Ok(LuaSheet {
                 host: Arc::clone(&this.host),
                 name,
+                function_depth: Arc::clone(&this.function_depth),
             })
         });
     }
@@ -427,6 +584,7 @@ impl mlua::UserData for LuaSheet {
                 host: Arc::clone(&this.host),
                 sheet: this.name.clone(),
                 a1,
+                function_depth: Arc::clone(&this.function_depth),
             })
         });
         methods.add_method("range", |_, this, a1: String| {
@@ -434,6 +592,7 @@ impl mlua::UserData for LuaSheet {
                 host: Arc::clone(&this.host),
                 sheet: this.name.clone(),
                 a1,
+                function_depth: Arc::clone(&this.function_depth),
             })
         });
         methods.add_method("name", |_, this, (): ()| Ok(this.name.clone()));
@@ -443,16 +602,31 @@ impl mlua::UserData for LuaSheet {
 impl mlua::UserData for LuaCell {
     fn add_fields<F: mlua::UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("value", |lua, this| {
+            host_api_available(&this.function_depth)?;
             let host = lock_mutex(&this.host);
             cell_lua_value(lua, host.workbook(), &this.sheet, &this.a1)
         });
         fields.add_field_method_get("input", |_, this| {
+            host_api_available(&this.function_depth)?;
             let host = lock_mutex(&this.host);
             Ok(cell_input(host.workbook(), &this.sheet, &this.a1))
+        });
+        fields.add_field_method_get("formula", |_, this| {
+            host_api_available(&this.function_depth)?;
+            let host = lock_mutex(&this.host);
+            Ok(cell_formula(host.workbook(), &this.sheet, &this.a1))
+        });
+        fields.add_field_method_get("style", |lua, this| {
+            host_api_available(&this.function_depth)?;
+            let host = lock_mutex(&this.host);
+            let style = cell_style(host.workbook(), &this.sheet, &this.a1);
+            let json = serde_json::to_value(style).map_err(mlua::Error::external)?;
+            json_to_lua(lua, &json)
         });
     }
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("set", |_, this, input: String| {
+            host_api_available(&this.function_depth)?;
             let mut host = lock_mutex(&this.host);
             let r#ref = qualify(&this.sheet, &this.a1);
             host.execute(
@@ -462,12 +636,30 @@ impl mlua::UserData for LuaCell {
             .map_err(mlua::Error::external)?;
             Ok(())
         });
+        methods.add_method("set_style", |_, this, patch: LuaValue| {
+            host_api_available(&this.function_depth)?;
+            let mut args = match lua_to_json(&patch).map_err(mlua::Error::external)? {
+                Json::Object(args) => args,
+                _ => {
+                    return Err(mlua::Error::external(CoreError::new(
+                        "lua.args",
+                        "cell:set_style expects a table with string keys",
+                    )));
+                }
+            };
+            args.insert("range".into(), Json::String(qualify(&this.sheet, &this.a1)));
+            lock_mutex(&this.host)
+                .execute("style.set", Json::Object(args))
+                .map_err(mlua::Error::external)?;
+            Ok(())
+        });
     }
 }
 
 impl mlua::UserData for LuaRange {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("cells", |lua, this, (): ()| {
+            host_api_available(&this.function_depth)?;
             let host = lock_mutex(&this.host);
             let cells = range_cells(host.workbook(), &this.sheet, &this.a1)
                 .map_err(mlua::Error::external)?;
@@ -480,6 +672,7 @@ impl mlua::UserData for LuaRange {
                         host: Arc::clone(&this.host),
                         sheet: this.sheet.clone(),
                         a1,
+                        function_depth: Arc::clone(&this.function_depth),
                     },
                 )?;
             }
@@ -492,7 +685,7 @@ fn qualify(sheet: &str, a1: &str) -> String {
     if a1.contains('!') {
         a1.to_string()
     } else {
-        format!("{sheet}!{a1}")
+        format!("{}!{a1}", quote_sheet_name(sheet))
     }
 }
 
@@ -528,6 +721,49 @@ fn cell_input(wb: &omacell_core::workbook::Workbook, sheet: &str, a1: &str) -> S
     }
 }
 
+fn cell_formula(wb: &omacell_core::workbook::Workbook, sheet: &str, a1: &str) -> Option<String> {
+    let parsed = parse_a1(&qualify(sheet, a1)).ok()?;
+    let kind = wb.resolve_parsed(parsed).ok()?;
+    let (sheet_id, row, col) = match kind {
+        RefKind::Cell(cell) => (cell.sheet.unwrap_or(wb.active_sheet()), cell.row, cell.col),
+        RefKind::Range(range) => (
+            range.start.sheet.unwrap_or(wb.active_sheet()),
+            range.start.row,
+            range.start.col,
+        ),
+    };
+    let slot = wb.get(sheet_id, row, col).ok().flatten()?;
+    let formula = slot.formula?;
+    wb.intern().formulas.get(formula).map(str::to_string)
+}
+
+fn cell_style(
+    wb: &omacell_core::workbook::Workbook,
+    sheet: &str,
+    a1: &str,
+) -> omacell_core::style::Style {
+    let Some(parsed) = parse_a1(&qualify(sheet, a1)).ok() else {
+        return omacell_core::style::Style::default();
+    };
+    let Some(kind) = wb.resolve_parsed(parsed).ok() else {
+        return omacell_core::style::Style::default();
+    };
+    let (sheet_id, row, col) = match kind {
+        RefKind::Cell(cell) => (cell.sheet.unwrap_or(wb.active_sheet()), cell.row, cell.col),
+        RefKind::Range(range) => (
+            range.start.sheet.unwrap_or(wb.active_sheet()),
+            range.start.row,
+            range.start.col,
+        ),
+    };
+    wb.get(sheet_id, row, col)
+        .ok()
+        .flatten()
+        .and_then(|slot| wb.intern().styles.get(slot.style))
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn cell_lua_value(
     lua: &Lua,
     wb: &omacell_core::workbook::Workbook,
@@ -547,7 +783,15 @@ fn cell_lua_value(
     let Some(slot) = wb.get(sheet_id, row, col).map_err(mlua::Error::external)? else {
         return Ok(LuaValue::Nil);
     };
-    match slot.value {
+    stored_to_lua(lua, wb, slot.value)
+}
+
+fn stored_to_lua(
+    lua: &Lua,
+    wb: &omacell_core::workbook::Workbook,
+    value: Value,
+) -> mlua::Result<LuaValue> {
+    match value {
         Value::Empty => Ok(LuaValue::Nil),
         Value::Number(n) => Ok(LuaValue::Number(n)),
         Value::Bool(b) => Ok(LuaValue::Boolean(b)),
@@ -556,7 +800,24 @@ fn cell_lua_value(
             Ok(LuaValue::String(lua.create_string(t)?))
         }
         Value::Error(e) => Ok(LuaValue::String(lua.create_string(e.as_str())?)),
-        Value::Array(_) => Ok(LuaValue::Nil),
+        Value::Array(id) => {
+            let payload = wb
+                .intern()
+                .arrays
+                .get(id)
+                .ok_or_else(|| mlua::Error::external("missing workbook array payload"))?;
+            let rows = lua.create_table_with_capacity(payload.shape.rows as usize, 0)?;
+            for row in 0..payload.shape.rows as usize {
+                let columns = lua.create_table_with_capacity(payload.shape.cols as usize, 0)?;
+                for col in 0..payload.shape.cols as usize {
+                    let index = row * payload.shape.cols as usize + col;
+                    let value = payload.values.get(index).copied().unwrap_or(Value::Empty);
+                    columns.set(col + 1, stored_to_lua(lua, wb, value)?)?;
+                }
+                rows.set(row + 1, columns)?;
+            }
+            Ok(LuaValue::Table(rows))
+        }
     }
 }
 
@@ -573,6 +834,12 @@ fn range_cells(
             (s, c.row, c.col, c.row, c.col)
         }
         RefKind::Range(r) => {
+            if r.is_3d() {
+                return Err(CoreError::new(
+                    "lua.range",
+                    "range:cells does not support 3-D worksheet ranges",
+                ));
+            }
             let s = r.start.sheet.unwrap_or(wb.active_sheet());
             (
                 s,
@@ -583,26 +850,54 @@ fn range_cells(
             )
         }
     };
-    let _ = sheet_id;
-    let mut out = Vec::new();
+    let rows = u64::from(r1 - r0) + 1;
+    let cols = u64::from(c1 - c0) + 1;
+    let area = rows.saturating_mul(cols);
+    if area > omacell_bus::MAX_RANGE_CELLS {
+        return Err(CoreError::new(
+            "lua.range",
+            format!(
+                "range has {area} cells; maximum is {}",
+                omacell_bus::MAX_RANGE_CELLS
+            ),
+        ));
+    }
+    let sheet_name = wb
+        .sheet(sheet_id)
+        .map(|sheet| quote_sheet_name(&sheet.name))
+        .ok_or_else(|| CoreError::new("lua.range", "resolved worksheet is missing"))?;
+    let mut out = Vec::with_capacity(area as usize);
     for r in r0..=r1 {
         for c in c0..=c1 {
             let col = omacell_core::addr::col_to_letters(c).unwrap_or_else(|_| "?".into());
-            out.push(format!("{col}{}", r + 1));
+            out.push(format!("{sheet_name}!{col}{}", r + 1));
         }
     }
     Ok(out)
 }
 
 struct LuaBody {
+    lua: Lua,
     func: mlua::Function,
+    function_depth: Arc<AtomicU32>,
 }
 
 impl DynamicFnBody for LuaBody {
     fn eval(&self, args: &[ArgVal]) -> RuntimeValue {
+        let _evaluation = FunctionEvaluation::enter(&self.function_depth);
         let mut values = Vec::new();
         for arg in args {
-            values.push(runtime_to_lua_light(&arg.value));
+            let value = if arg.omitted {
+                LuaValue::Nil
+            } else {
+                match runtime_to_lua(&self.lua, &arg.value) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return RuntimeValue::error(omacell_core::error::ErrorKind::Value);
+                    }
+                }
+            };
+            values.push(value);
         }
         match self
             .func
@@ -614,12 +909,33 @@ impl DynamicFnBody for LuaBody {
     }
 }
 
-fn runtime_to_lua_light(value: &RuntimeValue) -> LuaValue {
+fn runtime_to_lua(lua: &Lua, value: &RuntimeValue) -> mlua::Result<LuaValue> {
     match value {
-        RuntimeValue::Scalar(Scalar::Empty) => LuaValue::Nil,
-        RuntimeValue::Scalar(Scalar::Number(n)) => LuaValue::Number(*n),
-        RuntimeValue::Scalar(Scalar::Bool(b)) => LuaValue::Boolean(*b),
-        _ => LuaValue::Nil,
+        RuntimeValue::Scalar(scalar) => scalar_to_lua(lua, scalar),
+        RuntimeValue::Array(array) => {
+            let rows = lua.create_table_with_capacity(array.rows as usize, 0)?;
+            for row in 0..array.rows as usize {
+                let columns = lua.create_table_with_capacity(array.cols as usize, 0)?;
+                for col in 0..array.cols as usize {
+                    let index = row * array.cols as usize + col;
+                    let value = array.values.get(index).unwrap_or(&Scalar::Empty);
+                    columns.set(col + 1, scalar_to_lua(lua, value)?)?;
+                }
+                rows.set(row + 1, columns)?;
+            }
+            Ok(LuaValue::Table(rows))
+        }
+        RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => Ok(LuaValue::Nil),
+    }
+}
+
+fn scalar_to_lua(lua: &Lua, value: &Scalar) -> mlua::Result<LuaValue> {
+    match value {
+        Scalar::Empty => Ok(LuaValue::Nil),
+        Scalar::Number(number) => Ok(LuaValue::Number(*number)),
+        Scalar::Bool(value) => Ok(LuaValue::Boolean(*value)),
+        Scalar::Text(value) => Ok(LuaValue::String(lua.create_string(value.as_ref())?)),
+        Scalar::Error(error) => Ok(LuaValue::String(lua.create_string(error.as_str())?)),
     }
 }
 
@@ -633,31 +949,127 @@ fn lua_to_runtime(value: &LuaValue) -> RuntimeValue {
             Ok(t) => RuntimeValue::Scalar(Scalar::Text(std::sync::Arc::<str>::from(t.as_ref()))),
             Err(_) => RuntimeValue::error(omacell_core::error::ErrorKind::Value),
         },
+        LuaValue::Table(table) => lua_table_to_runtime(table)
+            .unwrap_or_else(|| RuntimeValue::error(omacell_core::error::ErrorKind::Value)),
         _ => RuntimeValue::error(omacell_core::error::ErrorKind::Value),
+    }
+}
+
+fn lua_table_to_runtime(table: &Table) -> Option<RuntimeValue> {
+    let len = table.raw_len();
+    if len == 0 || table.clone().pairs::<LuaValue, LuaValue>().count() != len {
+        return None;
+    }
+    let first: LuaValue = table.raw_get(1).ok()?;
+    if matches!(first, LuaValue::Table(_)) {
+        let mut values = Vec::new();
+        let mut columns = None;
+        for row_index in 1..=len {
+            let row: Table = table.raw_get(row_index).ok()?;
+            let width = row.raw_len();
+            if width == 0 || row.clone().pairs::<LuaValue, LuaValue>().count() != width {
+                return None;
+            }
+            match columns {
+                Some(expected) if expected != width => return None,
+                None => columns = Some(width),
+                _ => {}
+            }
+            for col_index in 1..=width {
+                values.push(lua_to_scalar(&row.raw_get(col_index).ok()?)?);
+            }
+        }
+        return Some(RuntimeValue::array(
+            u32::try_from(len).ok()?,
+            u32::try_from(columns?).ok()?,
+            values,
+        ));
+    }
+    let mut values = Vec::with_capacity(len);
+    for index in 1..=len {
+        values.push(lua_to_scalar(&table.raw_get(index).ok()?)?);
+    }
+    Some(RuntimeValue::array(1, u32::try_from(len).ok()?, values))
+}
+
+fn lua_to_scalar(value: &LuaValue) -> Option<Scalar> {
+    match value {
+        LuaValue::Nil => Some(Scalar::Empty),
+        LuaValue::Boolean(value) => Some(Scalar::Bool(*value)),
+        LuaValue::Integer(value) => Some(Scalar::Number(*value as f64)),
+        LuaValue::Number(value) if value.is_finite() => Some(Scalar::Number(*value)),
+        LuaValue::String(value) => value
+            .to_str()
+            .ok()
+            .map(|value| Scalar::Text(Arc::<str>::from(value.as_ref()))),
+        _ => None,
     }
 }
 
 fn register_lua_fn(
     lua: &Lua,
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    function_depth: &Arc<AtomicU32>,
     name: String,
     spec: Table,
     func: mlua::Function,
 ) -> Result<(), CoreError> {
-    if !name.contains('.') {
-        return Err(
-            CoreError::new("lua.fn", "custom functions must be namespaced (USER.NAME)")
-                .with_hint("register omacell.fn(\"USER.DOUBLE\", spec, fn)"),
-        );
+    if !valid_custom_function_name(&name) {
+        return Err(CoreError::new(
+            "lua.fn",
+            "custom functions must use a valid namespace (USER.NAME)",
+        )
+        .with_hint("register omacell.fn(\"USER.DOUBLE\", spec, fn)"));
     }
-    let min_args: u8 = spec.get("min").unwrap_or(0);
-    let max_args: u8 = spec.get("max").unwrap_or(min_args.max(1));
-    let volatile: bool = spec.get("volatile").unwrap_or(false);
-    let lift: String = spec.get("array_lift").unwrap_or_else(|_| "none".into());
-    let array_lift = if lift == "all" {
-        ArrayLift::All
-    } else {
-        ArrayLift::None
+    for pair in spec.clone().pairs::<LuaValue, LuaValue>() {
+        let (key, _) = pair.map_err(|error| CoreError::new("lua.fn", error.to_string()))?;
+        let LuaValue::String(key) = key else {
+            return Err(CoreError::new(
+                "lua.fn",
+                "custom function spec keys must be strings",
+            ));
+        };
+        let key = key
+            .to_str()
+            .map_err(|error| CoreError::new("lua.fn", error.to_string()))?;
+        if !matches!(key.as_ref(), "min" | "max" | "volatile" | "array_lift") {
+            return Err(CoreError::new(
+                "lua.fn",
+                format!("unknown custom function spec field {key}"),
+            ));
+        }
+    }
+    let min_args = spec
+        .get::<Option<u8>>("min")
+        .map_err(|error| CoreError::new("lua.fn", error.to_string()))?
+        .unwrap_or(0);
+    let max_args = spec
+        .get::<Option<u8>>("max")
+        .map_err(|error| CoreError::new("lua.fn", error.to_string()))?
+        .unwrap_or(min_args.max(1));
+    if min_args > max_args {
+        return Err(CoreError::new(
+            "lua.fn",
+            "custom function min argument count exceeds max",
+        ));
+    }
+    let volatile = spec
+        .get::<Option<bool>>("volatile")
+        .map_err(|error| CoreError::new("lua.fn", error.to_string()))?
+        .unwrap_or(false);
+    let lift = spec
+        .get::<Option<String>>("array_lift")
+        .map_err(|error| CoreError::new("lua.fn", error.to_string()))?
+        .unwrap_or_else(|| "none".into());
+    let array_lift = match lift.as_str() {
+        "none" => ArrayLift::None,
+        "all" => ArrayLift::All,
+        _ => {
+            return Err(CoreError::new(
+                "lua.fn",
+                "array_lift must be 'none' or 'all'",
+            ));
+        }
     };
     let globals = lua.globals();
     let omacell: Table = globals
@@ -684,12 +1096,65 @@ fn register_lua_fn(
         max_args,
         volatile,
         array_lift,
-        body: Arc::new(LuaBody { func: body_fn }),
+        body: Arc::new(LuaBody {
+            lua: lua.clone(),
+            func: body_fn,
+            function_depth: Arc::clone(function_depth),
+        }),
     };
     lock_mutex(host).register_function(def)
 }
 
-fn lua_to_json(value: &LuaValue) -> Result<Json, CoreError> {
+struct FunctionEvaluation<'a>(&'a AtomicU32);
+
+impl<'a> FunctionEvaluation<'a> {
+    fn enter(depth: &'a AtomicU32) -> Self {
+        depth.fetch_add(1, Ordering::Relaxed);
+        Self(depth)
+    }
+}
+
+impl Drop for FunctionEvaluation<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+fn host_api_available(function_depth: &AtomicU32) -> mlua::Result<()> {
+    if function_depth.load(Ordering::Relaxed) == 0 {
+        Ok(())
+    } else {
+        Err(mlua::Error::external(CoreError::new(
+            "lua.fn",
+            "Omacell host APIs cannot be called from a worksheet function",
+        )))
+    }
+}
+
+fn valid_custom_function_name(name: &str) -> bool {
+    let parts = name.split('.').collect::<Vec<_>>();
+    parts.len() >= 2 && parts.into_iter().all(valid_name_part)
+}
+
+fn valid_name_part(part: &str) -> bool {
+    let mut chars = part.chars();
+    chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+pub(crate) fn lua_to_json(value: &LuaValue) -> Result<Json, CoreError> {
+    lua_to_json_inner(value, 0)
+}
+
+fn lua_to_json_inner(value: &LuaValue, depth: u8) -> Result<Json, CoreError> {
+    if depth >= 32 {
+        return Err(CoreError::new(
+            "lua.args",
+            "Lua command arguments exceed 32 nested tables",
+        ));
+    }
     match value {
         LuaValue::Nil => Ok(Json::Null),
         LuaValue::Boolean(b) => Ok(Json::Bool(*b)),
@@ -703,19 +1168,81 @@ fn lua_to_json(value: &LuaValue) -> Result<Json, CoreError> {
                 .to_string(),
         )),
         LuaValue::Table(t) => {
-            let mut map = serde_json::Map::new();
-            t.for_each(|k: LuaValue, v: LuaValue| {
-                if let LuaValue::String(s) = k {
-                    let key = s.to_str().map_err(mlua::Error::external)?.to_string();
-                    let json = lua_to_json(&v).map_err(mlua::Error::external)?;
-                    map.insert(key, json);
+            let mut object = serde_json::Map::new();
+            let mut sequence = Vec::<(usize, Json)>::new();
+            t.for_each(|key: LuaValue, value: LuaValue| {
+                let json = lua_to_json_inner(&value, depth + 1).map_err(mlua::Error::external)?;
+                match key {
+                    LuaValue::String(key) if sequence.is_empty() => {
+                        let key = key.to_str().map_err(mlua::Error::external)?.to_string();
+                        object.insert(key, json);
+                    }
+                    LuaValue::Integer(index) if object.is_empty() && index > 0 => {
+                        sequence.push((index as usize, json));
+                    }
+                    _ => {
+                        return Err(mlua::Error::external(CoreError::new(
+                            "lua.args",
+                            "tables must use either string keys or contiguous 1-based integer keys",
+                        )));
+                    }
                 }
                 Ok(())
             })
             .map_err(|e| CoreError::new("lua.args", e.to_string()))?;
-            Ok(Json::Object(map))
+            if sequence.is_empty() {
+                return Ok(Json::Object(object));
+            }
+            sequence.sort_by_key(|(index, _)| *index);
+            if sequence
+                .iter()
+                .enumerate()
+                .any(|(offset, (index, _))| *index != offset + 1)
+            {
+                return Err(CoreError::new(
+                    "lua.args",
+                    "array tables must use contiguous 1-based integer keys",
+                ));
+            }
+            Ok(Json::Array(
+                sequence.into_iter().map(|(_, value)| value).collect(),
+            ))
         }
         _ => Err(CoreError::new("lua.args", "unsupported Lua value")),
+    }
+}
+
+pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<LuaValue> {
+    match value {
+        Json::Null => Ok(LuaValue::Nil),
+        Json::Bool(value) => Ok(LuaValue::Boolean(*value)),
+        Json::Number(value) => {
+            if let Some(integer) = value.as_i64() {
+                Ok(LuaValue::Integer(integer))
+            } else if let Some(number) = value.as_f64() {
+                Ok(LuaValue::Number(number))
+            } else {
+                Err(mlua::Error::external(CoreError::new(
+                    "lua.result",
+                    "JSON number is not representable in Lua",
+                )))
+            }
+        }
+        Json::String(value) => Ok(LuaValue::String(lua.create_string(value)?)),
+        Json::Array(values) => {
+            let table = lua.create_table_with_capacity(values.len(), 0)?;
+            for (index, value) in values.iter().enumerate() {
+                table.set(index + 1, json_to_lua(lua, value)?)?;
+            }
+            Ok(LuaValue::Table(table))
+        }
+        Json::Object(values) => {
+            let table = lua.create_table_with_capacity(0, values.len())?;
+            for (key, value) in values {
+                table.set(key.as_str(), json_to_lua(lua, value)?)?;
+            }
+            Ok(LuaValue::Table(table))
+        }
     }
 }
 
@@ -745,11 +1272,10 @@ pub fn allow_embedded(
             "embedded scripts are denied by policy",
         ));
     }
-    let hash = if book.is_file() {
-        hash_path(book)?
-    } else {
-        sha256_hex(bytes)
-    };
+    // Hash the exact byte slice the caller parsed. Re-reading `book` here
+    // creates a check/use race where a different file can be swapped in after
+    // parsing but before trust is checked.
+    let hash = sha256_hex(bytes);
     if !store.contains_hash(&hash) {
         return Err(CoreError::new(
             "lua.untrusted",
@@ -758,6 +1284,90 @@ pub fn allow_embedded(
         .with_hint("omacell trust add <file>"));
     }
     Ok(())
+}
+
+/// Load `init.lua` followed by sorted `plugins/*/init.lua` entry points.
+///
+/// Every resolved file must remain beneath one of the canonical
+/// `policy.trusted_dirs`. Callers invoke this only for startup or an explicit
+/// source action; filesystem notifications must never call it directly.
+pub fn load_user_scripts(
+    runtime: &Runtime,
+    config_dir: &Path,
+    policy: &ScriptPolicy,
+) -> Result<Vec<std::path::PathBuf>, CoreError> {
+    if !policy.enabled {
+        return Err(CoreError::new("lua.disabled", "scripting is disabled"));
+    }
+    let mut candidates = vec![config_dir.join("init.lua")];
+    let plugins = config_dir.join("plugins");
+    if plugins.is_dir() {
+        let mut entries = std::fs::read_dir(&plugins)
+            .map_err(|error| CoreError::new("lua.io", error.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| CoreError::new("lua.io", error.to_string()))?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        if entries.len() > 1024 {
+            return Err(CoreError::new(
+                "lua.limit",
+                "more than 1024 plugin directories",
+            ));
+        }
+        candidates.extend(
+            entries
+                .into_iter()
+                .map(|entry| entry.path().join("init.lua")),
+        );
+    }
+
+    let mut loaded = Vec::new();
+    for candidate in candidates {
+        if !candidate.exists() {
+            continue;
+        }
+        let canonical = std::fs::canonicalize(&candidate)
+            .map_err(|error| CoreError::new("lua.io", error.to_string()))?;
+        let file = std::fs::File::open(&canonical)
+            .map_err(|error| CoreError::new("lua.io", error.to_string()))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| CoreError::new("lua.io", error.to_string()))?;
+        if !metadata.is_file() {
+            return Err(CoreError::new(
+                "lua.trust",
+                format!("{} is not a regular file", candidate.display()),
+            ));
+        }
+        if !policy
+            .trusted_dirs
+            .iter()
+            .any(|root| canonical.starts_with(root))
+        {
+            return Err(CoreError::new(
+                "lua.trust",
+                format!("{} is outside scripting.trusted_dirs", canonical.display()),
+            ));
+        }
+        if metadata.len() > MAX_USER_SCRIPT_BYTES {
+            return Err(CoreError::new(
+                "lua.limit",
+                format!("{} exceeds 1 MiB", canonical.display()),
+            ));
+        }
+        let mut source = String::new();
+        file.take(MAX_USER_SCRIPT_BYTES + 1)
+            .read_to_string(&mut source)
+            .map_err(|error| CoreError::new("lua.io", error.to_string()))?;
+        if source.len() as u64 > MAX_USER_SCRIPT_BYTES {
+            return Err(CoreError::new(
+                "lua.limit",
+                format!("{} exceeds 1 MiB", canonical.display()),
+            ));
+        }
+        runtime.exec(&source, &canonical.display().to_string())?;
+        loaded.push(canonical);
+    }
+    Ok(loaded)
 }
 
 /// Load the trust store from a state directory.

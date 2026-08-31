@@ -38,11 +38,17 @@ fn cmd_and_cell_objects() {
     let host = BusHost::new(bus());
     let rt = Runtime::new(Profile::User, Box::new(host)).unwrap();
     rt.exec(
-        r#"
-        omacell.cmd("cell.set", {ref = "A1", input = "2"})
+        r##"
+        local result = omacell.cmd("cell.set", {ref = "A1", input = "2"})
+        assert(result.changed == 1)
         omacell.cmd("cell.set", {ref = "B1", input = "=A1*3"})
         local c = omacell.book():sheet():cell("B1")
+        assert(omacell.book():sheet():name() == "Sheet1")
         assert(c.input == "=A1*3")
+        assert(c.formula == "=A1*3")
+        c:set_style({bold = true, wrap = true})
+        assert(c.style.font.bold == true)
+        assert(c.style.alignment.wrap == true)
         c:set("9")
         omacell.ui.status("ok")
         omacell.ui.notify("n")
@@ -52,10 +58,22 @@ fn cmd_and_cell_objects() {
         omacell.on_before_save(function() end)
         omacell.on_recalc(function() end)
         omacell.on_theme_change(function() end)
-        "#,
+        "##,
         "api.lua",
     )
     .unwrap();
+}
+
+#[test]
+fn command_arguments_preserve_nested_arrays() {
+    run(r#"
+        local result = omacell.cmd("range.set", {
+            range = "A1:B2",
+            values = {{"1", "2"}, {"3", "4"}},
+        })
+        assert(result.changed == 4)
+        assert(omacell.book():sheet():cell("B2").value == 4)
+        "#);
 }
 
 #[test]
@@ -69,10 +87,76 @@ fn custom_function_joins_calc_graph() {
         end)
         omacell.cmd("cell.set", {ref = "A1", input = "4"})
         omacell.cmd("cell.set", {ref = "B1", input = "=USER.DOUBLE(A1)"})
+        assert(omacell.book():sheet():cell("B1").value == 8)
         "#,
         "fn.lua",
     )
     .unwrap();
+}
+
+#[test]
+fn custom_functions_support_text_and_array_results() {
+    run(r#"
+        omacell.fn("USER.ECHO", {min = 1, max = 1}, function(x) return x end)
+        omacell.fn("USER.PAIR", {min = 1, max = 1}, function(x) return {x, x * 2} end)
+        omacell.cmd("cell.set", {ref = "A1", input = "hello"})
+        omacell.cmd("cell.set", {ref = "B1", input = "=USER.ECHO(A1)"})
+        omacell.cmd("cell.set", {ref = "C1", input = "=INDEX(USER.PAIR(3),1,2)"})
+        assert(omacell.book():sheet():cell("B1").value == "hello")
+        assert(omacell.book():sheet():cell("C1").value == 6)
+        "#);
+}
+
+#[test]
+fn custom_functions_cannot_reenter_mutating_host_apis() {
+    run(r##"
+        omacell.fn("USER.BAD", {min = 0, max = 0}, function()
+            omacell.cmd("cell.set", {ref = "A1", input = "reentrant"})
+            return 1
+        end)
+        omacell.cmd("cell.set", {ref = "B1", input = "=USER.BAD()"})
+        assert(omacell.book():sheet():cell("B1").value == "#VALUE!")
+        assert(omacell.book():sheet():cell("A1").value == nil)
+        "##);
+}
+
+#[test]
+fn custom_function_specs_fail_closed() {
+    let host = BusHost::new(bus());
+    let rt = Runtime::new(Profile::User, Box::new(host)).unwrap();
+    for source in [
+        r#"omacell.fn("BAD", {}, function() end)"#,
+        r#"omacell.fn("USER.BAD", {min = "one"}, function() end)"#,
+        r#"omacell.fn("USER.BAD", {min = 2, max = 1}, function() end)"#,
+        r#"omacell.fn("USER.BAD", {array_lift = "maybe"}, function() end)"#,
+        r#"omacell.fn("USER.BAD", {surprise = true}, function() end)"#,
+    ] {
+        assert!(rt.exec(source, "bad-spec.lua").is_err(), "{source}");
+    }
+}
+
+#[test]
+fn event_hooks_keep_every_registered_handler() {
+    let rt = run(r#"
+        count = 0
+        omacell.on_open(function() count = count + 1 end)
+        omacell.on_open(function() count = count + 10 end)
+        "#);
+    rt.emit_hook("on_open").unwrap();
+    rt.exec("assert(count == 11)", "assert-hook.lua").unwrap();
+}
+
+#[test]
+fn command_events_dispatch_to_registered_hooks() {
+    run(r#"
+        changes = 0
+        recalcs = 0
+        omacell.on_change(function() changes = changes + 1 end)
+        omacell.on_recalc(function() recalcs = recalcs + 1 end)
+        omacell.cmd("cell.set", {ref = "A1", input = "2"})
+        assert(changes == 1)
+        assert(recalcs == 1)
+        "#);
 }
 
 #[test]
@@ -87,6 +171,39 @@ fn range_cells_iterate() {
         assert(n == 2)
         "#);
     let _ = rt;
+}
+
+#[test]
+fn sheet_objects_resolve_names_and_range_iteration_is_bounded() {
+    let host = BusHost::new(bus());
+    let rt = Runtime::new(Profile::User, Box::new(host)).unwrap();
+    rt.exec(
+        r#"
+        omacell.cmd("sheet.add", {name = "Data Sheet"})
+        local sheet = omacell.book():sheet("data sheet")
+        assert(sheet:name() == "Data Sheet")
+        sheet:cell("A1"):set("7")
+        sheet:cell("A2"):set("8")
+        local total = 0
+        for _, cell in ipairs(sheet:range("A1:A2"):cells()) do
+            total = total + cell.value
+        end
+        assert(total == 15)
+        "#,
+        "sheet-names.lua",
+    )
+    .unwrap();
+    let err = rt
+        .exec(
+            r#"omacell.book():sheet("Data Sheet"):range("A:XFD"):cells()"#,
+            "huge-range.lua",
+        )
+        .unwrap_err();
+    assert!(err.message.contains("maximum is 100000"), "{err:?}");
+    assert!(
+        rt.exec(r#"omacell.book():sheet("missing")"#, "missing-sheet.lua")
+            .is_err()
+    );
 }
 
 #[test]

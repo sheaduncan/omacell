@@ -19,12 +19,13 @@ use omacell_core::workbook::Workbook;
 use serde_json::Value;
 
 pub use catalog::{API, ApiEntry, render_markdown};
-pub use commands::{ScriptGate, register_script_commands};
+pub use commands::{ScriptGate, attach_recorder, register_script_commands};
 pub use host::{ScriptHost, UiSink, hook_name};
-pub use recorder::{Recorder, json_to_lua, replay_lua};
+pub use recorder::{MAX_RECORDED_BYTES, MAX_RECORDED_STEPS, Recorder, json_to_lua, replay_lua};
 pub use runtime::{
-    EMBEDDED_INSTRUCTION_LIMIT, EMBEDDED_MEMORY_LIMIT, EMBEDDED_PART, EmbeddedMode, Profile,
-    Runtime, ScriptPolicy, allow_embedded, load_trust,
+    EMBEDDED_INSTRUCTION_LIMIT, EMBEDDED_MEMORY_LIMIT, EMBEDDED_PART, EmbeddedMode,
+    MAX_USER_SCRIPT_BYTES, Profile, Runtime, ScriptPolicy, allow_embedded, load_trust,
+    load_user_scripts,
 };
 pub use trust::{TrustEntry, TrustStore, hash_path, sha256_hex, trust_path};
 
@@ -34,15 +35,21 @@ pub struct BusHost {
     pub bus: Bus,
     /// Captured UI.
     pub ui: UiSink,
+    event_subscriber: omacell_bus::SubscriberId,
 }
 
 impl BusHost {
     /// Wrap a bus.
     #[must_use]
-    pub fn new(bus: Bus) -> Self {
+    pub fn new(mut bus: Bus) -> Self {
+        // One effect may legally carry MAX_EFFECT_RECORDS events plus the
+        // synthetic recalc event. Drain synchronously after every command so
+        // this remains bounded without dropping Lua hooks.
+        let event_subscriber = bus.subscribe(omacell_bus::MAX_EFFECT_RECORDS + 1);
         Self {
             bus,
             ui: UiSink::default(),
+            event_subscriber,
         }
     }
 }
@@ -66,6 +73,10 @@ impl ScriptHost for BusHost {
     fn register_function(&mut self, def: DynamicFn) -> Result<(), CoreError> {
         self.bus.engine_mut().registry_mut().register_dynamic(def);
         Ok(())
+    }
+
+    fn take_events(&mut self) -> Vec<omacell_core::event::Event> {
+        self.bus.drain(self.event_subscriber)
     }
 
     fn prompt(&mut self, message: &str) -> Result<String, CoreError> {

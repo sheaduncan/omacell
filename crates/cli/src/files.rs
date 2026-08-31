@@ -404,6 +404,35 @@ pub fn open_any(path: &Path) -> Result<Opened, CoreError> {
     open_any_with_plan(path, None)
 }
 
+/// Open an `.xlsx`/`.xlsm` or `.omc` from bytes already covered by a trust
+/// decision. Keeping parse and trust on one byte slice avoids path races.
+pub(crate) fn open_scriptable_bytes(path: &Path, bytes: &[u8]) -> Result<Opened, CoreError> {
+    match kind_from_path(path) {
+        Some(FileKind::Xlsx) => {
+            let doc = xlsx::open_bytes(bytes)?;
+            Ok(Opened {
+                workbook: doc.workbook,
+                kind: FileKind::Xlsx,
+                package: Some(doc.package),
+                extras: doc.extras,
+            })
+        }
+        Some(FileKind::Omc) => {
+            let doc = omc::open_bytes(bytes)?;
+            Ok(Opened {
+                workbook: doc.workbook,
+                kind: FileKind::Omc,
+                extras: doc.extras,
+                package: None,
+            })
+        }
+        _ => Err(CoreError::new(
+            "lua.embedded",
+            "embedded scripts require an .xlsx, .xlsm, or .omc workbook",
+        )),
+    }
+}
+
 pub(crate) fn open_any_with_plan(
     path: &Path,
     plan: Option<&csv::ImportPlan>,

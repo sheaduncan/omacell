@@ -1,5 +1,7 @@
 //! In-process command session: execute, propose, apply, revert, dry-run.
 
+use std::sync::Arc;
+
 use omacell_core::changeset::{ChangeSummary, Changeset, ChangesetId, CommandCall};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
@@ -25,6 +27,10 @@ pub struct DryRun {
     pub summary: ChangeSummary,
 }
 
+/// Post-commit callback used by command-stream consumers such as the macro
+/// recorder.
+pub type CommandObserver = Arc<dyn Fn(Origin, &CommandCall) + Send + Sync>;
+
 /// In-process command bus. The only mutation path outside `omacell-core`.
 pub struct Bus {
     workbook: Workbook,
@@ -33,6 +39,7 @@ pub struct Bus {
     changesets: ChangesetStore,
     events: EventBus,
     last_repeatable: Option<CommandCall>,
+    command_observers: Vec<CommandObserver>,
 }
 
 impl Bus {
@@ -47,6 +54,7 @@ impl Bus {
             changesets: ChangesetStore::new(),
             events: EventBus::new(),
             last_repeatable: None,
+            command_observers: Vec::new(),
         })
     }
 
@@ -76,6 +84,14 @@ impl Bus {
     /// Mutable registry so later packages can register commands.
     pub fn registry_mut(&mut self) -> &mut CommandRegistry {
         &mut self.registry
+    }
+
+    /// Observe successful direct commands after their transaction commits.
+    ///
+    /// Dry-runs, proposals, failed commands, and internal preflight passes are
+    /// never observed. Observers must not call back into this bus.
+    pub fn observe_commands(&mut self, observer: CommandObserver) {
+        self.command_observers.push(observer);
     }
 
     /// Changeset store.
@@ -155,7 +171,10 @@ impl Bus {
             };
             let calls = vec![call; repeat.count as usize];
             return match self.run_with_task(origin, &calls, Run::direct(), task) {
-                Ok(effect) => Outcome::success(effect.result),
+                Ok(effect) => {
+                    self.notify_command_observers(origin, &calls);
+                    Outcome::success(effect.result)
+                }
                 Err(error) => Outcome::failure(error),
             };
         }
@@ -171,11 +190,20 @@ impl Bus {
         match self.run_with_task(origin, std::slice::from_ref(&call), Run::direct(), task) {
             Ok(effect) => {
                 if repeatable {
-                    self.last_repeatable = Some(call);
+                    self.last_repeatable = Some(call.clone());
                 }
+                self.notify_command_observers(origin, std::slice::from_ref(&call));
                 Outcome::success(effect.result)
             }
             Err(err) => Outcome::failure(err),
+        }
+    }
+
+    fn notify_command_observers(&self, origin: Origin, calls: &[CommandCall]) {
+        for call in calls {
+            for observer in &self.command_observers {
+                observer(origin, call);
+            }
         }
     }
 

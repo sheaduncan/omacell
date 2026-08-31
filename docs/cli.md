@@ -30,7 +30,7 @@ Stubs that exit 3:
 - `omacell ai` (WP-22)
 - `omacell agent` / `omacell mcp` (WP-21)
 
-`omacell run script.lua book.xlsx` runs Lua (WP-20). `--embedded` runs `xl/omacell/scripts/main.lua` only when the workbook hash is in `~/.local/state/omacell/trust.toml` (`omacell trust add|remove|list`). `--python` is an experimental JSON-lines stdio bridge. `--dry-run` skips saving.
+`omacell run script.lua book.xlsx` runs Lua (WP-20). It explicitly loads trusted `init.lua`, then sorted `plugins/*/init.lua`, then the requested script. `--embedded` runs `xl/omacell/scripts/main.lua` only when the exact workbook bytes are trusted in `~/.local/state/omacell/trust.toml` (`omacell trust add|remove|list`); embedded Lua cannot invoke file, macro, script, or theme commands, nor indirectly replay one through `edit.repeat`. `omacell run --python script.py [book.xlsx]` is an experimental stdio bridge using the versioned IPC JSON-lines request/reply envelopes and 1 MiB frame cap. `--dry-run` is accepted only with `--embedded`; user Lua and Python have OS access and therefore cannot provide a no-write dry-run guarantee.
 
 `omacell ipc theme.reload --all --quiet` is the Omarchy theme-set hook. It enumerates live owned instances and executes the registered `theme.reload` command. It does not add an IPC `ControlOp`.
 

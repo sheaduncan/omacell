@@ -3,11 +3,18 @@
 use omacell_core::error::CoreError;
 use serde_json::Value;
 
+/// Maximum commands retained by one recording session.
+pub const MAX_RECORDED_STEPS: usize = 10_000;
+/// Maximum estimated command bytes retained by one recording session.
+pub const MAX_RECORDED_BYTES: usize = 16 * 1024 * 1024;
+
 /// Recorded command stream.
 #[derive(Clone, Debug, Default)]
 pub struct Recorder {
     steps: Vec<(String, Value)>,
     recording: bool,
+    retained_bytes: usize,
+    overflowed: bool,
 }
 
 impl Recorder {
@@ -20,6 +27,8 @@ impl Recorder {
     /// Start capturing.
     pub fn start(&mut self) {
         self.steps.clear();
+        self.retained_bytes = 0;
+        self.overflowed = false;
         self.recording = true;
     }
 
@@ -34,11 +43,29 @@ impl Recorder {
         self.recording
     }
 
+    /// Whether capture stopped because its bounded retention limit was hit.
+    #[must_use]
+    pub fn overflowed(&self) -> bool {
+        self.overflowed
+    }
+
     /// Record one successful command.
     pub fn push(&mut self, id: &str, args: Value) {
-        if self.recording {
-            self.steps.push((id.to_string(), args));
+        if !self.recording {
+            return;
         }
+        let bytes = id
+            .len()
+            .saturating_add(serde_json::to_vec(&args).map_or(MAX_RECORDED_BYTES + 1, |v| v.len()));
+        if self.steps.len() >= MAX_RECORDED_STEPS
+            || self.retained_bytes.saturating_add(bytes) > MAX_RECORDED_BYTES
+        {
+            self.recording = false;
+            self.overflowed = true;
+            return;
+        }
+        self.retained_bytes += bytes;
+        self.steps.push((id.to_string(), args));
     }
 
     /// Recorded steps.
@@ -100,6 +127,12 @@ fn lua_string(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let mut bytes = [0u8; 4];
+                for byte in c.encode_utf8(&mut bytes).as_bytes() {
+                    out.push_str(&format!("\\{byte:03}"));
+                }
+            }
             c => out.push(c),
         }
     }
@@ -112,57 +145,17 @@ pub fn replay_lua(
     source: &str,
     mut exec: impl FnMut(&str, Value) -> Result<Value, CoreError>,
 ) -> Result<(), CoreError> {
-    for line in source.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("--") {
-            continue;
-        }
-        let (id, args) = parse_cmd_line(line)?;
-        exec(&id, args)?;
-    }
-    Ok(())
-}
-
-fn parse_cmd_line(line: &str) -> Result<(String, Value), CoreError> {
-    let rest = line
-        .strip_prefix("omacell.cmd(")
-        .and_then(|s| s.strip_suffix(')'))
-        .ok_or_else(|| CoreError::new("macro.parse", "expected omacell.cmd(...)"))?;
-    let rest = rest.trim();
-    let mut chars = rest.chars();
-    if chars.next() != Some('"') {
-        return Err(CoreError::new("macro.parse", "expected command id string"));
-    }
-    let mut id = String::new();
-    loop {
-        match chars.next() {
-            Some('\\') => match chars.next() {
-                Some(c) => id.push(c),
-                None => break,
-            },
-            Some('"') => break,
-            Some(c) => id.push(c),
-            None => {
-                return Err(CoreError::new("macro.parse", "unterminated command id"));
-            }
-        }
-    }
-    let leftover: String = chars.collect();
-    let leftover = leftover.trim().trim_start_matches(',').trim();
-    let args = lua_table_to_json(leftover)?;
-    Ok((id, args))
-}
-
-fn lua_table_to_json(src: &str) -> Result<Value, CoreError> {
-    // The recorder emits a restricted Lua table subset we can eval as JSON
-    // after replacing Lua syntax.
-    let mut s = src.trim().to_string();
-    if s == "nil" || s.is_empty() {
-        return Ok(Value::Object(serde_json::Map::new()));
-    }
-    s = s.replace("[\"", "\"");
-    s = s.replace("\"] = ", "\": ");
-    s = s.replace(" = ", ": ");
-    s = s.replace("nil", "null");
-    serde_json::from_str(&s).map_err(|e| CoreError::new("macro.parse", e.to_string()))
+    let (lua, _counter) = crate::runtime::embedded_lua()?;
+    lua.scope(|scope| {
+        let omacell = lua.create_table()?;
+        let cmd = scope.create_function_mut(|lua, (id, args): (String, mlua::Value)| {
+            let args = crate::runtime::lua_to_json(&args).map_err(mlua::Error::external)?;
+            let result = exec(&id, args).map_err(mlua::Error::external)?;
+            crate::runtime::json_to_lua(lua, &result)
+        })?;
+        omacell.set("cmd", cmd)?;
+        lua.globals().set("omacell", omacell)?;
+        lua.load(source).set_name("recorded-macro.lua").exec()
+    })
+    .map_err(|error| CoreError::new("macro.parse", error.to_string()))
 }

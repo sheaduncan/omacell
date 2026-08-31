@@ -20,7 +20,7 @@ pub const API: &[ApiEntry] = &[
     },
     ApiEntry {
         name: "omacell.book",
-        signature: "omacell.book -> book",
+        signature: "omacell.book() -> book",
         doc: "The active workbook object.",
     },
     ApiEntry {
@@ -39,6 +39,11 @@ pub const API: &[ApiEntry] = &[
         doc: "A range on this sheet (`A1:B2`).",
     },
     ApiEntry {
+        name: "sheet:name",
+        signature: "sheet:name() -> string",
+        doc: "The resolved worksheet name.",
+    },
+    ApiEntry {
         name: "cell.value",
         signature: "cell.value -> number|string|boolean|nil",
         doc: "Evaluated cell value.",
@@ -49,14 +54,29 @@ pub const API: &[ApiEntry] = &[
         doc: "Formula-bar text.",
     },
     ApiEntry {
+        name: "cell.formula",
+        signature: "cell.formula -> string|nil",
+        doc: "Formula source including the leading `=`, or nil for a literal cell.",
+    },
+    ApiEntry {
+        name: "cell.style",
+        signature: "cell.style -> table",
+        doc: "The cell's font, fill, border, alignment, protection, and number-format ids.",
+    },
+    ApiEntry {
         name: "cell:set",
         signature: "cell:set(input)",
         doc: "Set formula-bar text via `cell.set`.",
     },
     ApiEntry {
+        name: "cell:set_style",
+        signature: "cell:set_style(patch)",
+        doc: "Patch cell style through the `style.set` command.",
+    },
+    ApiEntry {
         name: "range:cells",
-        signature: "range:cells() -> iterator",
-        doc: "Iterate cells in row-major order.",
+        signature: "range:cells() -> cell[]",
+        doc: "Return cell objects in row-major order (iterate with `ipairs`).",
     },
     ApiEntry {
         name: "omacell.fn",
@@ -131,5 +151,6 @@ pub fn render_markdown() -> String {
             entry.name, entry.signature, entry.doc
         ));
     }
+    let _ = out.pop();
     out
 }

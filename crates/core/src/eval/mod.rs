@@ -1477,7 +1477,13 @@ fn dispatch_fn(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[Option<Expr>]) -> Run
 }
 
 fn dispatch_dynamic(ctx: &mut EvalCtx<'_>, def: &DynamicFn, args: &[Option<Expr>]) -> RuntimeValue {
-    let argv = eval_args(ctx, args);
+    let argv = eval_args(ctx, args)
+        .into_iter()
+        .map(|arg| ArgVal {
+            omitted: arg.omitted,
+            value: ctx.materialize(arg.value),
+        })
+        .collect::<Vec<_>>();
     if def.array_lift == ArrayLift::All {
         eval_array_lifted(ctx, |_, cell_args| def.body.eval(cell_args), &argv)
     } else {

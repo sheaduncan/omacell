@@ -7,8 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use omacell_bus::ipc::{
-    ControlOp, IpcClient, Mode, default_runtime_dir, discovered_socket, list_live_instances,
+    ControlOp, IpcClient, MAX_FRAME_BYTES, Mode, Reply, Request, decode_request_bytes,
+    default_runtime_dir, discovered_socket, encode_line, list_live_instances,
 };
+use omacell_bus::{CommandKind, Exposure};
 use omacell_conf::schema::package_defaults;
 use omacell_conf::{
     HYPRLAND_SNIPPET, Layer, LoadOptions, LoadedConfig, Paths, SetupOptions, keys,
@@ -16,7 +18,9 @@ use omacell_conf::{
     validate_user_rel,
 };
 use omacell_core::addr::{RefKind, parse_a1};
+use omacell_core::changeset::{ChangesetId, CommandCall};
 use omacell_core::command::Outcome;
+use omacell_core::command::{CommandId, Origin};
 use omacell_core::eval::{eval_formula_in, format_runtime};
 use omacell_core::formula::parse;
 use omacell_core::graph::CellCoord;
@@ -1204,6 +1208,25 @@ fn cmd_run(
     python: bool,
     output: Output,
 ) -> Result<(), CliError> {
+    if embedded && book.is_some() {
+        return Err(CliError::new(
+            "cli.usage",
+            "--embedded takes the workbook as its only path",
+        )
+        .hint("use: omacell run --embedded book.xlsx")
+        .exit(EXIT_USAGE));
+    }
+    if cli.dry_run && !embedded {
+        return Err(CliError::new(
+            "cli.usage",
+            "--dry-run cannot safely execute a user Lua or Python program",
+        )
+        .hint("use --dry-run only with --embedded, whose runtime has no file/process access")
+        .exit(EXIT_USAGE));
+    }
+    if python {
+        return cmd_run_python(cli, script, book, output);
+    }
     let book = if embedded {
         script
     } else {
@@ -1213,48 +1236,67 @@ fn cmd_run(
                 .exit(EXIT_USAGE)
         })?
     };
-    if python {
-        return cmd_run_python(cli, script, book, output);
-    }
-    let mut app = init_app_book(cli, book)?;
+    let embedded_bytes = if embedded {
+        Some(std::fs::read(book).map_err(|e| CliError::new("lua.io", e.to_string()))?)
+    } else {
+        None
+    };
+    let mut app = if let Some(bytes) = embedded_bytes.as_deref() {
+        let app = App::with_scriptable_workbook_bytes(cli, book, bytes)?;
+        log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
+        app
+    } else {
+        init_app_book(cli, book)?
+    };
     let loaded = app.loaded();
-    let policy = omacell_lua::ScriptPolicy::from_config(
-        loaded.config.scripting.enabled,
-        &loaded.config.scripting.embedded_scripts,
-        &loaded.config.scripting.trusted_dirs,
-    );
+    let policy = omacell_lua::ScriptPolicy::from_loaded(&loaded);
     if !policy.enabled {
         return Err(CliError::new("lua.disabled", "scripting is disabled"));
     }
-    let bus = std::mem::replace(
-        &mut app.bus,
-        omacell_bus::Bus::new(
-            omacell_core::workbook::Workbook::new(),
-            omacell_core::recalc::RecalcEngine::new(omacell_core::eval::FnRegistry::new()),
-        )
-        .expect("empty bus"),
-    );
-    let host = omacell_lua::BusHost::new(bus);
+    let empty_bus = omacell_bus::Bus::new(
+        omacell_core::workbook::Workbook::new(),
+        omacell_core::recalc::RecalcEngine::new(omacell_core::eval::FnRegistry::new()),
+    )?;
+    let bus = std::mem::replace(&mut app.bus, empty_bus);
+    let host = CliScriptHost::new(bus);
     if embedded {
-        let bytes = std::fs::read(book).map_err(|e| CliError::new("lua.io", e.to_string()))?;
+        let bytes = embedded_bytes
+            .as_deref()
+            .ok_or_else(|| CliError::new("lua.io", "embedded workbook bytes were not retained"))?;
         let store = omacell_lua::load_trust(&app.paths.state_dir)?;
-        omacell_lua::allow_embedded(&policy, &store, book, &bytes)?;
-        let source = host
+        omacell_lua::allow_embedded(&policy, &store, book, bytes)?;
+        let part = host
+            .inner
             .bus
             .workbook()
             .custom_parts
             .get(omacell_lua::EMBEDDED_PART)
-            .and_then(|b| std::str::from_utf8(b).ok())
             .ok_or_else(|| {
                 CliError::new(
                     "lua.embedded",
                     "workbook has no xl/omacell/scripts/main.lua part",
+                )
+            })?;
+        let source = std::str::from_utf8(part)
+            .map_err(|_| {
+                CliError::new(
+                    "lua.embedded",
+                    "xl/omacell/scripts/main.lua is not valid UTF-8",
                 )
             })?
             .to_string();
         let rt = omacell_lua::Runtime::new(omacell_lua::Profile::Embedded, Box::new(host))?;
         rt.exec(&source, &book.display().to_string())?;
         if !cli.dry_run {
+            let current = omacell_lua::hash_path(book)?;
+            let opened = omacell_lua::sha256_hex(bytes);
+            if current != opened {
+                return Err(CliError::new(
+                    "file.changed",
+                    format!("{} changed while its script was running", book.display()),
+                )
+                .hint("reopen the workbook and grant trust to the current bytes"));
+            }
             rt.execute_cmd(
                 "file.save",
                 serde_json::json!({"path": book.display().to_string()}),
@@ -1266,6 +1308,7 @@ fn cmd_run(
     let source =
         std::fs::read_to_string(script).map_err(|e| CliError::new("lua.io", e.to_string()))?;
     let rt = omacell_lua::Runtime::new(omacell_lua::Profile::User, Box::new(host))?;
+    omacell_lua::load_user_scripts(&rt, &app.paths.user_config, &policy)?;
     rt.exec(&source, &script.display().to_string())?;
     if !cli.dry_run {
         rt.execute_cmd(
@@ -1277,10 +1320,84 @@ fn cmd_run(
     Ok(())
 }
 
-fn cmd_run_python(cli: &Cli, script: &Path, book: &Path, output: Output) -> Result<(), CliError> {
-    let mut app = init_app_book(cli, book)?;
+struct CliScriptHost {
+    inner: omacell_lua::BusHost,
+}
+
+impl CliScriptHost {
+    fn new(bus: omacell_bus::Bus) -> Self {
+        Self {
+            inner: omacell_lua::BusHost::new(bus),
+        }
+    }
+}
+
+impl omacell_lua::ScriptHost for CliScriptHost {
+    fn execute(
+        &mut self,
+        id: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, CoreError> {
+        omacell_lua::ScriptHost::execute(&mut self.inner, id, args)
+    }
+
+    fn workbook(&self) -> &omacell_core::workbook::Workbook {
+        omacell_lua::ScriptHost::workbook(&self.inner)
+    }
+
+    fn register_function(&mut self, def: omacell_core::eval::DynamicFn) -> Result<(), CoreError> {
+        omacell_lua::ScriptHost::register_function(&mut self.inner, def)
+    }
+
+    fn take_events(&mut self) -> Vec<omacell_core::event::Event> {
+        omacell_lua::ScriptHost::take_events(&mut self.inner)
+    }
+
+    fn prompt(&mut self, message: &str) -> Result<String, CoreError> {
+        eprint!("{message}: ");
+        io::stderr()
+            .flush()
+            .map_err(|error| CoreError::new("lua.prompt", error.to_string()))?;
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .map_err(|error| CoreError::new("lua.prompt", error.to_string()))?;
+        while answer.ends_with(['\n', '\r']) {
+            let _ = answer.pop();
+        }
+        Ok(answer)
+    }
+
+    fn status(&mut self, message: &str) {
+        eprintln!("{message}");
+    }
+
+    fn notify(&mut self, message: &str) {
+        eprintln!("{message}");
+    }
+
+    fn keymap_set(&mut self, mode: &str, keys: &str, cmd: &str) {
+        omacell_lua::ScriptHost::keymap_set(&mut self.inner, mode, keys, cmd);
+    }
+}
+
+fn cmd_run_python(
+    cli: &Cli,
+    script: &Path,
+    book: Option<&Path>,
+    output: Output,
+) -> Result<(), CliError> {
+    let mut app = if let Some(book) = book {
+        init_app_book(cli, book)?
+    } else {
+        init_app(cli)?
+    };
+    if !app.loaded().config.scripting.enabled {
+        return Err(CliError::new("lua.disabled", "scripting is disabled"));
+    }
     let mut child = std::process::Command::new("python3")
         .arg("-u")
+        .arg("--")
         .arg(script)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1298,36 +1415,33 @@ fn cmd_run_python(cli: &Cli, script: &Path, book: &Path, output: Output) -> Resu
             .take()
             .ok_or_else(|| CliError::new("lua.python", "python stdout is missing"))?,
     );
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let n = std::io::BufRead::read_line(&mut child_out, &mut line)
-            .map_err(|e| CliError::new("lua.python", e.to_string()))?;
-        if n == 0 {
-            break;
+    let bridge_result = (|| -> Result<(), CliError> {
+        loop {
+            let mut frame = Vec::new();
+            let mut limited = child_out.by_ref().take((MAX_FRAME_BYTES + 1) as u64);
+            let n = std::io::BufRead::read_until(&mut limited, b'\n', &mut frame)
+                .map_err(|e| CliError::new("lua.python", e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            let request = decode_request_bytes(&frame)?;
+            let reply = dispatch_python_request(&mut app, request);
+            let line = encode_line(&reply)?;
+            child_in
+                .write_all(line.as_bytes())
+                .map_err(|e| CliError::new("lua.python", e.to_string()))?;
+            child_in
+                .flush()
+                .map_err(|e| CliError::new("lua.python", e.to_string()))?;
         }
-        let req: serde_json::Value = serde_json::from_str(line.trim()).map_err(|e| {
-            CliError::new("lua.python", e.to_string()).hint("write JSON-lines {cmd, args}")
-        })?;
-        let id = req
-            .get("cmd")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CliError::new("lua.python", "missing cmd"))?;
-        let args = req
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let outcome = app.execute(id, args);
-        let reply = if outcome.ok {
-            serde_json::json!({"ok": true, "result": outcome.result})
-        } else {
-            serde_json::json!({"ok": false, "error": outcome.error.map(|e| e.to_string())})
-        };
-        writeln!(child_in, "{reply}").map_err(|e| CliError::new("lua.python", e.to_string()))?;
-        child_in
-            .flush()
-            .map_err(|e| CliError::new("lua.python", e.to_string()))?;
+        Ok(())
+    })();
+    if let Err(error) = bridge_result {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
     }
+    drop(child_in);
     let status = child
         .wait()
         .map_err(|e| CliError::new("lua.python", e.to_string()))?;
@@ -1337,14 +1451,156 @@ fn cmd_run_python(cli: &Cli, script: &Path, book: &Path, output: Output) -> Resu
             format!("python exited {status}"),
         ));
     }
-    if !cli.dry_run {
-        let _ = app.execute(
+    if let Some(book) = book {
+        let saved = app.bus.execute(
+            Origin::Script,
             "file.save",
             serde_json::json!({"path": book.display().to_string()}),
         );
+        if !saved.ok {
+            return Err(saved
+                .error
+                .unwrap_or_else(|| CoreError::new("lua.python", "workbook save failed"))
+                .into());
+        }
     }
     output.success(serde_json::json!({"ok": true, "python": true}), "ok")?;
     Ok(())
+}
+
+fn dispatch_python_request(app: &mut App, request: Request) -> Reply {
+    match request {
+        Request::Command {
+            id,
+            cmd,
+            args,
+            mode,
+        } => {
+            let command = match app.bus.registry().get_str(&cmd) {
+                Ok(command) if command.exposure == Exposure::Public => command,
+                Ok(_) => {
+                    return Reply::err(
+                        id,
+                        CoreError::new("command.internal", "internal command is not addressable"),
+                    );
+                }
+                Err(error) => return Reply::err(id, error),
+            };
+            let kind = command.kind;
+            let eligible = command.changeset_eligible;
+            let mode = mode.unwrap_or(match kind {
+                CommandKind::Query => Mode::Execute,
+                CommandKind::Mutating if eligible => Mode::Propose,
+                CommandKind::Mutating => Mode::Execute,
+            });
+            if kind == CommandKind::Mutating && eligible && mode == Mode::Execute {
+                return Reply::err(
+                    id,
+                    CoreError::new(
+                        "ipc.mode",
+                        "changeset-eligible mutating commands cannot use mode execute",
+                    ),
+                );
+            }
+            match mode {
+                Mode::Execute => outcome_to_reply(id, app.bus.execute(Origin::Script, &cmd, args)),
+                Mode::DryRun => match app.bus.dry_run(Origin::Script, &cmd, args) {
+                    Ok(dry) if dry.outcome.ok => Reply::ok(
+                        id,
+                        serde_json::json!({
+                            "dry_run": true,
+                            "summary": dry.summary,
+                            "result": dry.outcome.result,
+                        }),
+                    ),
+                    Ok(dry) => Reply::err(
+                        id,
+                        dry.outcome.error.unwrap_or_else(|| {
+                            CoreError::new("ipc.protocol", "dry-run failed without an error")
+                        }),
+                    ),
+                    Err(error) => Reply::err(id, error),
+                },
+                Mode::Propose => {
+                    let command_id = match CommandId::new(&cmd) {
+                        Ok(command_id) => command_id,
+                        Err(error) => return Reply::err(id, error),
+                    };
+                    match app.bus.propose(
+                        Origin::Script,
+                        vec![CommandCall {
+                            id: command_id,
+                            args,
+                        }],
+                    ) {
+                        Ok(changeset) => match serde_json::to_value(changeset) {
+                            Ok(value) => Reply::ok(id, value),
+                            Err(error) => {
+                                Reply::err(id, CoreError::new("ipc.frame", error.to_string()))
+                            }
+                        },
+                        Err(error) => Reply::err(id, error),
+                    }
+                }
+            }
+        }
+        Request::Control {
+            id, op, changeset, ..
+        } => match op {
+            ControlOp::Ping => Reply::ok(id, serde_json::json!({"pong": true})),
+            ControlOp::ChangesetList => match serde_json::to_value(app.bus.list_changesets()) {
+                Ok(value) => Reply::ok(id, value),
+                Err(error) => Reply::err(id, CoreError::new("ipc.frame", error.to_string())),
+            },
+            operation @ (ControlOp::ChangesetGet
+            | ControlOp::ChangesetApply
+            | ControlOp::ChangesetRevert) => {
+                let Some(changeset) = changeset else {
+                    return Reply::err(
+                        id,
+                        CoreError::new("ipc.protocol", "changeset id is required"),
+                    );
+                };
+                let changeset = match ChangesetId::new(changeset) {
+                    Ok(changeset) => changeset,
+                    Err(error) => return Reply::err(id, error),
+                };
+                let result = match operation {
+                    ControlOp::ChangesetGet => app.bus.get_changeset(&changeset).cloned(),
+                    ControlOp::ChangesetApply => app.bus.apply(Origin::Script, &changeset),
+                    ControlOp::ChangesetRevert => app.bus.revert(Origin::Script, &changeset),
+                    _ => unreachable!(),
+                };
+                match result.and_then(|value| {
+                    serde_json::to_value(value)
+                        .map_err(|error| CoreError::new("ipc.frame", error.to_string()))
+                }) {
+                    Ok(value) => Reply::ok(id, value),
+                    Err(error) => Reply::err(id, error),
+                }
+            }
+            ControlOp::Subscribe | ControlOp::Unsubscribe => Reply::err(
+                id,
+                CoreError::new(
+                    "ipc.protocol",
+                    "event subscriptions are unavailable on the Python stdio bridge",
+                ),
+            ),
+        },
+    }
+}
+
+fn outcome_to_reply(id: u64, outcome: Outcome) -> Reply {
+    if outcome.ok {
+        Reply::ok(id, outcome.result.unwrap_or(serde_json::Value::Null))
+    } else {
+        Reply::err(
+            id,
+            outcome
+                .error
+                .unwrap_or_else(|| CoreError::new("ipc.protocol", "command failed without error")),
+        )
+    }
 }
 
 fn cmd_trust(cli: &Cli, cmd: &TrustCmd, output: Output) -> Result<(), CliError> {
@@ -1355,7 +1611,7 @@ fn cmd_trust(cli: &Cli, cmd: &TrustCmd, output: Output) -> Result<(), CliError> 
         TrustCmd::Add { file } => {
             let hash = omacell_lua::hash_path(file)?;
             if !cli.dry_run {
-                store.add(hash.clone(), Some(file.display().to_string()));
+                store.add(hash.clone(), Some(file.display().to_string()))?;
                 store.save(&path)?;
             }
             output.success(

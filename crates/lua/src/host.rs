@@ -14,6 +14,10 @@ pub trait ScriptHost: Send {
     fn workbook(&self) -> &Workbook;
     /// Register a custom function on the live calc registry.
     fn register_function(&mut self, def: DynamicFn) -> Result<(), CoreError>;
+    /// Drain command-bus events produced by the most recent host action.
+    fn take_events(&mut self) -> Vec<Event> {
+        Vec::new()
+    }
     /// Prompt; tests inject a canned reply.
     fn prompt(&mut self, message: &str) -> Result<String, CoreError>;
     /// Status line.
