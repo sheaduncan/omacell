@@ -22,10 +22,10 @@ use omacell_core::tables::{Table, TableColumn};
 use omacell_core::value::Value;
 use omacell_core::workbook::{CalcMode, DateSystem, Workbook, WorkbookProtectionState};
 
-use super::XlsxDocument;
 use super::opc::{OpcPackage, Relationship, open_package};
 use super::warnings::FileWarnings;
 use super::xml::{XmlEvent, XmlReader, attr, decode_ooxml_text};
+use super::{XlsxDocument, split_twips_to_pixels};
 use crate::error;
 
 const REL_WS: &str =
@@ -1269,8 +1269,8 @@ fn load_sheet(
                     };
                 } else if x > 0.0 || y > 0.0 {
                     view.split = Some(SplitView {
-                        x_px: x.round().max(0.0) as u32,
-                        y_px: y.round().max(0.0) as u32,
+                        x_px: split_twips_to_pixels(x),
+                        y_px: split_twips_to_pixels(y),
                     });
                 }
                 wb.set_sheet_view(id, view)?;

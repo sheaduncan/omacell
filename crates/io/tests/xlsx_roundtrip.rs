@@ -1,5 +1,6 @@
 //! Open → save → open; L1/L2 diff empty. External loaders skip if absent.
 
+use std::io::{Cursor, Read};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -8,7 +9,7 @@ use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::intern::RichTextRun;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::sheet::{
-    Comment, Hyperlink, Note, ProtectedRange, ProtectionAllow, ProtectionState,
+    Comment, Hyperlink, Note, ProtectedRange, ProtectionAllow, ProtectionState, SplitView,
 };
 use omacell_core::style::{Color, Fill, Font, GradientFill, GradientKind, GradientStop, Style};
 use omacell_core::tables::{Table, TableId};
@@ -172,6 +173,36 @@ fn new_workbook_save_bytes_reopens() {
         slot.unwrap().value,
         omacell_core::value::Value::Number(n) if n == 42.0
     ));
+}
+
+#[test]
+fn split_panes_convert_pixels_to_ooxml_twips_and_back() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let mut view = wb.sheet(sheet).unwrap().view.clone();
+    view.split = Some(SplitView { x_px: 96, y_px: 40 });
+    wb.set_sheet_view(sheet, view.clone()).unwrap();
+
+    let bytes = save_workbook_bytes(&wb).unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut worksheet_xml = String::new();
+    archive
+        .by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut worksheet_xml)
+        .unwrap();
+    assert!(worksheet_xml.contains(r#"xSplit="1440" ySplit="600" state="split""#));
+    drop(archive);
+
+    let loaded = open_bytes(&bytes).unwrap();
+    assert_eq!(
+        loaded
+            .workbook
+            .sheet(loaded.workbook.active_sheet())
+            .unwrap()
+            .view,
+        view
+    );
 }
 
 #[test]

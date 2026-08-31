@@ -28,7 +28,7 @@ use super::opc::{
     sanitize_path,
 };
 use super::print as xlsx_print;
-use super::{XlsxDocument, xml};
+use super::{XlsxDocument, split_pixels_to_twips, xml};
 use crate::error;
 
 const NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -1675,7 +1675,8 @@ fn sheet_views_xml(sheet: &Sheet) -> String {
     } else if let Some(split) = v.split {
         pane = format!(
             r#"<pane xSplit="{}" ySplit="{}" state="split"/>"#,
-            split.x_px, split.y_px
+            split_pixels_to_twips(split.x_px),
+            split_pixels_to_twips(split.y_px)
         );
     }
     let selection = v.selection.to_a1();

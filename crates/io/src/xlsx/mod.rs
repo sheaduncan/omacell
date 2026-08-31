@@ -47,6 +47,18 @@ use omacell_core::workbook::Workbook;
 
 use crate::error;
 
+const TWIPS_PER_PIXEL_96_DPI: f64 = 15.0;
+
+fn split_twips_to_pixels(twips: f64) -> u32 {
+    (twips / TWIPS_PER_PIXEL_96_DPI)
+        .round()
+        .clamp(0.0, f64::from(u32::MAX)) as u32
+}
+
+fn split_pixels_to_twips(pixels: u32) -> u64 {
+    u64::from(pixels) * TWIPS_PER_PIXEL_96_DPI as u64
+}
+
 /// Opened workbook plus preserved package bytes and warnings.
 #[derive(Clone, Debug)]
 pub struct XlsxDocument {
