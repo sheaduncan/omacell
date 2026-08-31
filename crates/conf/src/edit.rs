@@ -1,6 +1,7 @@
 //! Sparse, comment-preserving edits to the user `config.toml`.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use omacell_core::error::CoreError;
 use toml_edit::{DocumentMut, Item, Table, value};
@@ -53,8 +54,8 @@ pub fn patch_ai_setup(
             block["kind"] = value(*kind);
             block["endpoint"] = value(*endpoint);
             block["local"] = value(true);
-            block.remove("secret_env");
-            block.remove("secret_cmd");
+            // Setup never creates secret references, but an endpoint refresh must
+            // not discard references the user already configured.
         }
     }
 
@@ -66,19 +67,25 @@ pub fn patch_ai_setup(
 
 fn atomic_write(path: &Path, body: &[u8]) -> Result<(), CoreError> {
     use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
     let parent = path
         .parent()
         .ok_or_else(|| error::io("config path has no parent"))?;
-    let tmp = parent.join(format!(".omacell-ai-setup-{}", std::process::id()));
+    let nonce = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+    let tmp = parent.join(format!(".omacell-ai-setup-{}-{nonce}", std::process::id()));
     let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&tmp)?;
         file.write_all(body)?;
         file.sync_all()?;
-        std::fs::rename(&tmp, path)
+        std::fs::rename(&tmp, path)?;
+        std::fs::File::open(parent)?.sync_all()
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -111,7 +118,7 @@ mod tests {
         assert!(text.contains("schema = 1"), "{text}");
         assert!(text.contains("enabled = true"), "{text}");
         assert!(text.contains("http://127.0.0.1:11434/v1"), "{text}");
-        assert!(!text.contains("secret_env"), "{text}");
+        assert!(text.contains("secret_env = \"DROP\""), "{text}");
         assert!(!text.contains("secret_cmd"), "{text}");
     }
 

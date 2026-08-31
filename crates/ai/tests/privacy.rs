@@ -128,8 +128,98 @@ fn redaction_applies_to_cell_inputs_and_image_alts() {
     assert!(text.contains("[REDACTED:email]"), "{text}");
     assert!(text.contains("[REDACTED:phone]"), "{text}");
     assert!(suggestions.iter().any(|s| s.kind.as_str() == "email"));
+    assert!(suggestions.iter().all(|s| !s.sample.contains('@')));
     let (card, _) = redact_text("4111111111111111 GB82WEST12345698765432 123-45-6789");
     assert!(card.contains("[REDACTED:card]"), "{card}");
     assert!(card.contains("[REDACTED:iban]"), "{card}");
     assert!(card.contains("[REDACTED:national-id]"), "{card}");
+}
+
+#[test]
+fn malformed_workbook_privacy_fails_closed() {
+    let mut wb = Workbook::new();
+    wb.custom_parts.insert(AI_PART.into(), b"not json".to_vec());
+    let mut config = package_defaults().unwrap();
+    config.ai.privacy.send = "full".into();
+    config.ai.privacy.local_full = true;
+    let policy = PolicySnapshot::capture(&config, Some(&wb), true);
+    assert_eq!(policy.send, SendLevel::Schema);
+
+    wb.custom_parts.insert(
+        AI_PART.into(),
+        serde_json::to_vec(&WorkbookAi {
+            privacy_send: Some("unrestricted".into()),
+            redact: vec![],
+        })
+        .unwrap(),
+    );
+    let policy = PolicySnapshot::capture(&config, Some(&wb), true);
+    assert_eq!(policy.send, SendLevel::Schema);
+}
+
+#[test]
+fn schema_keeps_formulas_but_strips_values() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_cell_contents(sheet, 0, 0, "secret@example.com")
+        .unwrap();
+    wb.set_cell_contents(sheet, 0, 1, "=A1&\"secret@example.com\"")
+        .unwrap();
+    let mut config = package_defaults().unwrap();
+    config.ai.privacy.send = "schema".into();
+    config.ai.privacy.suggest_redaction = true;
+    let policy = PolicySnapshot::capture(&config, Some(&wb), false);
+    let (card, _) = build_card(
+        &wb,
+        None,
+        CardRequest {
+            level: CardLevel::Full,
+            range: Some("Sheet1!A1:B1".into()),
+            token_budget: 4_096,
+            ..CardRequest::default()
+        },
+        &policy,
+    )
+    .unwrap();
+    let dumped = card.to_string();
+    assert!(dumped.contains("formula"), "{dumped}");
+    assert!(!dumped.contains("\"value\""), "{dumped}");
+    assert!(!dumped.contains("secret@example.com"), "{dumped}");
+}
+
+#[test]
+fn full_cards_are_paginated_and_budgeted() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_cell_contents(sheet, 0, 0, "first").unwrap();
+    wb.set_cell_contents(sheet, 1_048_575, 0, "last").unwrap();
+    let policy = PolicySnapshot {
+        enabled: true,
+        send: SendLevel::Full,
+        suggest_redaction: false,
+        log_content: false,
+        marks: vec![],
+        local: true,
+    };
+    let (card, _) = build_card(
+        &wb,
+        None,
+        CardRequest {
+            level: CardLevel::Full,
+            range: Some("Sheet1!A1:A1048576".into()),
+            limit: 64,
+            token_budget: 2_048,
+            ..CardRequest::default()
+        },
+        &policy,
+    )
+    .unwrap();
+    assert!(card["page"]["truncated"].as_bool().unwrap());
+    assert!(card["page"]["returned_rows"].as_u64().unwrap() <= 64);
+    assert!(card["tokens"].as_u64().unwrap() <= 2_048);
+    assert_eq!(
+        card["tokens"].as_u64().unwrap() as usize,
+        omacell_ai::estimate_tokens(&card)
+    );
+    assert!(card["truncated"].as_bool().unwrap());
 }

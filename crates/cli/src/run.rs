@@ -1057,7 +1057,7 @@ fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), 
     }
     let app = App::bootstrap_live(cli, book)?;
     crate::log::init(&app.paths, cli.verbose, cli.quiet, true);
-    let config = app.loaded().config.clone();
+    let reload = app.reload_handle();
     let crate::app::App {
         paths: _,
         store,
@@ -1069,7 +1069,7 @@ fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), 
             .current_path()
             .map(|p| p.display().to_string())
             .or_else(|| book.map(|p| p.display().to_string())),
-        config,
+        reload,
     );
     let runtime = omacell_bus::ipc::default_runtime_dir();
     let ipc = omacell_bus::ipc::serve(runtime, bus)?;

@@ -1,6 +1,6 @@
 //! Workbook card builder (spec A-2).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use omacell_core::addr::{RefKind, col_to_letters, parse_a1, quote_sheet_name};
 use omacell_core::audit::{dependents_of, precedents_of};
@@ -57,7 +57,7 @@ impl CardLevel {
 }
 
 /// Card request.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CardRequest {
     /// Level.
     pub level: CardLevel,
@@ -71,10 +71,29 @@ pub struct CardRequest {
     pub sample_rows: usize,
     /// Token budget (estimated).
     pub token_budget: usize,
+    /// Zero-based row offset within a requested full range.
+    pub offset: u32,
+    /// Maximum rows returned from a requested full range.
+    pub limit: u32,
+}
+
+impl Default for CardRequest {
+    fn default() -> Self {
+        Self {
+            level: CardLevel::Summary,
+            file: None,
+            selection: None,
+            range: None,
+            sample_rows: 8,
+            token_budget: 4096,
+            offset: 0,
+            limit: 128,
+        }
+    }
 }
 
 /// Build a card (values still present; [`crate::policy`] redacts and filters).
-pub fn build(
+pub(crate) fn build(
     wb: &Workbook,
     engine: Option<&RecalcEngine>,
     request: &CardRequest,
@@ -92,7 +111,9 @@ pub fn build(
     }
     if request.level == CardLevel::Full {
         if let Some(range) = &request.range {
-            card["values"] = range_values(wb, range)?;
+            let (values, page) = range_values(wb, range, request.offset, request.limit)?;
+            card["values"] = values;
+            card["page"] = page;
         }
     }
     if let Some(sel) = &request.selection {
@@ -100,10 +121,7 @@ pub fn build(
             card["focus"] = focus(wb, engine, sel);
         }
     }
-    card["tokens"] = json!(estimate_tokens(&card));
-    if request.token_budget > 0 {
-        card["token_budget"] = json!(request.token_budget);
-    }
+    card["truncated"] = json!(false);
     Ok(card)
 }
 
@@ -200,33 +218,94 @@ fn count_functions(src: &str, counts: &mut BTreeMap<String, u64>) {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum DistinctValue {
+    Number(u64),
+    Bool(bool),
+    Text(u32),
+    Error(omacell_core::error::ErrorKind),
+    Array(u32),
+}
+
+#[derive(Default)]
+struct ColumnStats {
+    nonempty: u64,
+    distinct: HashSet<DistinctValue>,
+    samples: Vec<String>,
+    saw_number: bool,
+    saw_text: bool,
+    saw_bool: bool,
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+impl ColumnStats {
+    fn add(&mut self, wb: &Workbook, value: &CellValue) {
+        let key = match value {
+            CellValue::Empty => return,
+            CellValue::Number(number) => {
+                self.saw_number = true;
+                if number.is_finite() {
+                    self.min = Some(self.min.map_or(*number, |current| current.min(*number)));
+                    self.max = Some(self.max.map_or(*number, |current| current.max(*number)));
+                }
+                DistinctValue::Number(number.to_bits())
+            }
+            CellValue::Bool(value) => {
+                self.saw_bool = true;
+                DistinctValue::Bool(*value)
+            }
+            CellValue::Text(id) => {
+                self.saw_text = true;
+                DistinctValue::Text(id.index())
+            }
+            CellValue::Error(kind) => {
+                self.saw_text = true;
+                DistinctValue::Error(*kind)
+            }
+            CellValue::Array(id) => {
+                self.saw_text = true;
+                DistinctValue::Array(id.index())
+            }
+        };
+        self.nonempty = self.nonempty.saturating_add(1);
+        self.distinct.insert(key);
+        if self.samples.len() < 5 {
+            self.samples.push(format_cell(wb, value));
+        }
+    }
+
+    fn inferred_type(&self) -> &'static str {
+        match (self.saw_number, self.saw_text, self.saw_bool) {
+            (true, false, false) => "number",
+            (false, true, false) => "text",
+            (false, false, true) => "boolean",
+            (false, false, false) => "empty",
+            _ => "mixed",
+        }
+    }
+}
+
 fn columns(wb: &Workbook) -> Value {
     let mut out = Vec::new();
     for sheet in wb.sheets() {
         let Some(used) = sheet.used_range() else {
             continue;
         };
+        let width = usize::from(used.max_col.saturating_sub(used.min_col)) + 1;
+        let mut stats: Vec<ColumnStats> = (0..width).map(|_| ColumnStats::default()).collect();
+        for (row, col, slot) in sheet.store.iter() {
+            if row <= used.min_row {
+                continue;
+            }
+            stats[usize::from(col.saturating_sub(used.min_col))].add(wb, &slot.value);
+        }
+        let rows = u64::from(used.max_row.saturating_sub(used.min_row));
         for col in used.min_col..=used.max_col {
             let header = cell_text(wb, sheet.id, used.min_row, col);
-            let mut values = Vec::new();
-            let mut nulls = 0u64;
-            let mut distinct = BTreeMap::new();
-            for row in used.min_row + 1..=used.max_row {
-                match wb.get(sheet.id, row, col).ok().flatten() {
-                    None => nulls += 1,
-                    Some(slot) if matches!(slot.value, CellValue::Empty) => nulls += 1,
-                    Some(slot) => {
-                        let text = format_cell(wb, &slot.value);
-                        *distinct.entry(text.clone()).or_insert(0u64) += 1;
-                        if values.len() < 5 {
-                            values.push(text);
-                        }
-                    }
-                }
-            }
-            let rows = u64::from(used.max_row.saturating_sub(used.min_row));
-            let inferred = infer_column_type(&distinct);
-            let (min, max) = numeric_bounds(&distinct);
+            let stat = &stats[usize::from(col.saturating_sub(used.min_col))];
+            let nulls = rows.saturating_sub(stat.nonempty);
+            let inferred = stat.inferred_type();
             let header_row = !header.is_empty() && inferred != "empty";
             let mut entry = json!({
                 "sheet": sheet.name,
@@ -234,14 +313,14 @@ fn columns(wb: &Workbook) -> Value {
                 "name": header,
                 "type": inferred,
                 "null_share": if rows == 0 { 0.0 } else { nulls as f64 / rows as f64 },
-                "distinct": distinct.len(),
-                "samples": values,
+                "distinct": stat.distinct.len(),
+                "samples": stat.samples,
                 "header_row": header_row,
             });
-            if let Some(min) = min {
+            if let Some(min) = stat.min {
                 entry["min"] = json!(min);
             }
-            if let Some(max) = max {
+            if let Some(max) = stat.max {
                 entry["max"] = json!(max);
             }
             out.push(entry);
@@ -277,7 +356,15 @@ fn sample_rows(wb: &Workbook, cap: usize) -> Value {
     Value::Array(out)
 }
 
-fn range_values(wb: &Workbook, range: &str) -> Result<Value, AiError> {
+const MAX_FULL_ROWS: u32 = 1_024;
+const MAX_FULL_CELLS: u64 = 65_536;
+
+fn range_values(
+    wb: &Workbook,
+    range: &str,
+    offset: u32,
+    limit: u32,
+) -> Result<(Value, Value), AiError> {
     let parsed = parse_a1(range).map_err(AiError::from)?;
     let kind = wb.resolve_parsed(parsed).map_err(AiError::from)?;
     let (sheet, r0, c0, r1, c1) = match kind {
@@ -296,18 +383,50 @@ fn range_values(wb: &Workbook, range: &str) -> Result<Value, AiError> {
             )
         }
     };
-    let mut rows = Vec::new();
-    for row in r0..=r1 {
-        let mut line = Vec::new();
-        for col in c0..=c1 {
-            line.push(json!({
-                "ref": format!("{}!{}{}", quote_sheet_name(&wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default()), col_to_letters(col).unwrap_or_else(|_| "A".into()), row + 1),
-                "value": cell_text(wb, sheet, row, col),
-            }));
+    let total_rows = r1.saturating_sub(r0).saturating_add(1);
+    let width = u64::from(c1.saturating_sub(c0)).saturating_add(1);
+    let offset = offset.min(total_rows);
+    let requested_rows = limit.clamp(1, MAX_FULL_ROWS);
+    let cell_limited_rows = (MAX_FULL_CELLS / width).max(1).min(u64::from(u32::MAX)) as u32;
+    let returned_rows = total_rows
+        .saturating_sub(offset)
+        .min(requested_rows)
+        .min(cell_limited_rows);
+    let start_row = r0.saturating_add(offset);
+    let end_row = start_row.saturating_add(returned_rows.saturating_sub(1));
+    let mut rows = Vec::with_capacity(returned_rows as usize);
+    if returned_rows > 0 {
+        for row in start_row..=end_row {
+            let mut line = Vec::new();
+            for col in c0..=c1 {
+                let mut cell = json!({
+                    "ref": format!("{}!{}{}", quote_sheet_name(&wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default()), col_to_letters(col).unwrap_or_else(|_| "A".into()), row + 1),
+                    "value": cell_text(wb, sheet, row, col),
+                });
+                if let Some(formula) = wb
+                    .get(sheet, row, col)
+                    .ok()
+                    .flatten()
+                    .and_then(|slot| slot.formula)
+                    .and_then(|id| wb.intern().formulas.get(id))
+                {
+                    cell["formula"] = json!(formula);
+                }
+                line.push(cell);
+            }
+            rows.push(Value::Array(line));
         }
-        rows.push(Value::Array(line));
     }
-    Ok(Value::Array(rows))
+    let truncated = offset.saturating_add(returned_rows) < total_rows;
+    Ok((
+        Value::Array(rows),
+        json!({
+            "offset": offset,
+            "returned_rows": returned_rows,
+            "total_rows": total_rows,
+            "truncated": truncated,
+        }),
+    ))
 }
 
 fn focus(wb: &Workbook, engine: &RecalcEngine, selection: &str) -> Value {
@@ -350,46 +469,103 @@ fn format_cell(wb: &Workbook, value: &CellValue) -> String {
     }
 }
 
-fn infer_column_type(distinct: &BTreeMap<String, u64>) -> &'static str {
-    if distinct.is_empty() {
-        return "empty";
-    }
-    let mut saw_number = false;
-    let mut saw_text = false;
-    let mut saw_bool = false;
-    for key in distinct.keys() {
-        if key.eq_ignore_ascii_case("TRUE") || key.eq_ignore_ascii_case("FALSE") {
-            saw_bool = true;
-        } else if key.parse::<f64>().is_ok() {
-            saw_number = true;
-        } else {
-            saw_text = true;
-        }
-    }
-    match (saw_number, saw_text, saw_bool) {
-        (true, false, false) => "number",
-        (false, true, false) => "text",
-        (false, false, true) => "boolean",
-        (false, false, false) => "empty",
-        _ => "mixed",
-    }
-}
-
-fn numeric_bounds(distinct: &BTreeMap<String, u64>) -> (Option<f64>, Option<f64>) {
-    let mut min = None;
-    let mut max = None;
-    for key in distinct.keys() {
-        if let Ok(n) = key.parse::<f64>() {
-            min = Some(min.map_or(n, |m: f64| m.min(n)));
-            max = Some(max.map_or(n, |m: f64| m.max(n)));
-        }
-    }
-    (min, max)
-}
-
 /// Deterministic token estimate (`ceil(chars/4)`).
 #[must_use]
 pub fn estimate_tokens(value: &Value) -> usize {
     let n = serde_json::to_string(value).map(|s| s.len()).unwrap_or(0);
     n.div_ceil(4)
+}
+
+pub(crate) fn enforce_budget(card: &mut Value, budget: usize) -> Result<(), AiError> {
+    if let Some(page_truncated) = card.pointer("/page/truncated").and_then(Value::as_bool)
+        && page_truncated
+    {
+        card["truncated"] = json!(true);
+    }
+    if budget > 0 {
+        card["token_budget"] = json!(budget);
+    }
+    set_token_estimate(card);
+    if budget == 0 || estimate_tokens(card) <= budget {
+        return Ok(());
+    }
+    card["truncated"] = json!(true);
+    for key in [
+        "values",
+        "sample_rows",
+        "columns",
+        "functions",
+        "tables",
+        "names",
+        "sheets",
+    ] {
+        while estimate_tokens(card) > budget && halve_array(card.get_mut(key)) {}
+    }
+    if let Some(returned) = card
+        .get("values")
+        .and_then(Value::as_array)
+        .map(|rows| rows.len() as u64)
+    {
+        let offset = card
+            .pointer("/page/offset")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let total = card
+            .pointer("/page/total_rows")
+            .and_then(Value::as_u64)
+            .unwrap_or(returned);
+        if let Some(page) = card.get_mut("page") {
+            page["returned_rows"] = json!(returned);
+            page["truncated"] = json!(offset.saturating_add(returned) < total);
+        }
+    }
+    if estimate_tokens(card) > budget {
+        for key in ["precedents", "dependents"] {
+            while estimate_tokens(card) > budget {
+                let changed = card
+                    .get_mut("focus")
+                    .and_then(|focus| focus.get_mut(key))
+                    .and_then(Value::as_array_mut)
+                    .is_some_and(|items| {
+                        if items.is_empty() {
+                            false
+                        } else {
+                            items.truncate(items.len() / 2);
+                            true
+                        }
+                    });
+                if !changed {
+                    break;
+                }
+            }
+        }
+    }
+    set_token_estimate(card);
+    if estimate_tokens(card) > budget {
+        return Err(AiError::new(
+            codes::PAYLOAD,
+            format!("token budget {budget} is too small for the minimum workbook card"),
+        ));
+    }
+    Ok(())
+}
+
+fn halve_array(value: Option<&mut Value>) -> bool {
+    let Some(items) = value.and_then(Value::as_array_mut) else {
+        return false;
+    };
+    if items.is_empty() {
+        return false;
+    }
+    let keep = items.len() / 2;
+    items.truncate(keep);
+    true
+}
+
+fn set_token_estimate(card: &mut Value) {
+    card["tokens"] = json!(0);
+    for _ in 0..3 {
+        let tokens = estimate_tokens(card);
+        card["tokens"] = json!(tokens);
+    }
 }

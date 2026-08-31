@@ -87,28 +87,28 @@ fn phone_re() -> &'static Regex {
 pub fn redact_text(text: &str) -> (String, Vec<Suggestion>) {
     let mut suggestions = Vec::new();
     let mut out = email_re()
-        .replace_all(text, |caps: &regex::Captures<'_>| {
+        .replace_all(text, |_caps: &regex::Captures<'_>| {
             suggestions.push(Suggestion {
                 kind: Kind::Email,
-                sample: caps[0].to_string(),
+                sample: Kind::Email.placeholder().to_string(),
             });
             Kind::Email.placeholder().to_string()
         })
         .into_owned();
     out = national_re()
-        .replace_all(&out, |caps: &regex::Captures<'_>| {
+        .replace_all(&out, |_caps: &regex::Captures<'_>| {
             suggestions.push(Suggestion {
                 kind: Kind::NationalId,
-                sample: caps[0].to_string(),
+                sample: Kind::NationalId.placeholder().to_string(),
             });
             Kind::NationalId.placeholder().to_string()
         })
         .into_owned();
     out = iban_re()
-        .replace_all(&out, |caps: &regex::Captures<'_>| {
+        .replace_all(&out, |_caps: &regex::Captures<'_>| {
             suggestions.push(Suggestion {
                 kind: Kind::Iban,
-                sample: caps[0].to_string(),
+                sample: Kind::Iban.placeholder().to_string(),
             });
             Kind::Iban.placeholder().to_string()
         })
@@ -119,7 +119,7 @@ pub fn redact_text(text: &str) -> (String, Vec<Suggestion>) {
             if (13..=19).contains(&digits.len()) && luhn(&digits) {
                 suggestions.push(Suggestion {
                     kind: Kind::Card,
-                    sample: caps[0].to_string(),
+                    sample: Kind::Card.placeholder().to_string(),
                 });
                 Kind::Card.placeholder().to_string()
             } else {
@@ -133,7 +133,7 @@ pub fn redact_text(text: &str) -> (String, Vec<Suggestion>) {
             if (10..=15).contains(&digits) {
                 suggestions.push(Suggestion {
                     kind: Kind::Phone,
-                    sample: caps[0].to_string(),
+                    sample: Kind::Phone.placeholder().to_string(),
                 });
                 Kind::Phone.placeholder().to_string()
             } else {
@@ -161,7 +161,7 @@ fn luhn(digits: &str) -> bool {
     sum % 10 == 0
 }
 
-/// Walk a JSON document and redact every string except formulas.
+/// Walk a JSON document and redact every string, including literal text in formulas.
 pub fn redact_json(value: &mut Value) -> Vec<Suggestion> {
     let mut suggestions = Vec::new();
     redact_value(value, &mut suggestions);
@@ -186,10 +186,7 @@ fn redact_value(value: &mut Value, suggestions: &mut Vec<Suggestion>) {
 }
 
 fn redact_object(map: &mut Map<String, Value>, suggestions: &mut Vec<Suggestion>) {
-    for (key, value) in map.iter_mut() {
-        if key == "formula" {
-            continue;
-        }
+    for value in map.values_mut() {
         redact_value(value, suggestions);
     }
 }

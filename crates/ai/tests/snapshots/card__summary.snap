@@ -21,6 +21,7 @@ expression: card
   ],
   "tables": [],
   "token_budget": 2048,
-  "tokens": 57,
+  "tokens": 70,
+  "truncated": false,
   "validations": 0
 }

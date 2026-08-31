@@ -22,7 +22,7 @@ pub use audit::{AuditLog, LogRecord, SessionStats, StatusSegment};
 pub use budget::{RateLimit, UsageTotals, check_cell_budget};
 pub use card::{CardLevel, CardRequest, estimate_tokens};
 pub use error::AiError;
-pub use http::{ReplayTransport, ReqwestTransport, SharedTransport};
+pub use http::{RecordingTransport, ReplayTransport, ReqwestTransport, SharedTransport};
 pub use policy::{
     AI_PART, PolicySnapshot, SendLevel, WorkbookAi, build_card, fence_data, workbook_config_overlay,
 };

@@ -1,0 +1,23 @@
+{
+  "protocol": "openai_compatible",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "openai/o3",
+      "messages": [
+        { "role": "user", "content": "o-series limit" }
+      ],
+      "stream": false,
+      "max_completion_tokens": 321
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "choices": [
+        { "message": { "role": "assistant", "content": "bounded" } }
+      ]
+    }
+  }
+}

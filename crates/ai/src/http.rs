@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -10,6 +11,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{AiError, codes};
+
+/// Maximum serialized provider request body.
+pub const MAX_PROVIDER_REQUEST_BYTES: usize = 8 * 1_048_576;
+/// Maximum provider response body, including an SSE stream.
+pub const MAX_PROVIDER_RESPONSE_BYTES: usize = 8 * 1_048_576;
+/// Maximum JSON nesting accepted at the provider boundary.
+pub const MAX_PROVIDER_JSON_DEPTH: usize = 64;
+const MAX_PROVIDER_HEADERS: usize = 64;
+const MAX_PROVIDER_HEADER_BYTES: usize = 16 * 1_024;
+const MAX_REPLAY_FIXTURE_BYTES: u64 = 32 * 1_048_576;
 
 /// One recorded HTTP exchange.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -103,28 +114,51 @@ impl ReqwestTransport {
 #[async_trait]
 impl Transport for ReqwestTransport {
     async fn send(&self, req: HttpRequest) -> Result<HttpResponse, AiError> {
-        let mut builder = self.client.post(&req.url).json(&req.body);
+        validate_request(&req)?;
+        let body = serde_json::to_vec(&req.body)
+            .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
+        let mut builder = self
+            .client
+            .post(&req.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body);
         for (key, value) in &req.headers {
             builder = builder.header(key, value);
         }
-        let response = builder
+        let mut response = builder
             .send()
             .await
             .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
         let status = response.status().as_u16();
-        let text = response
-            .text()
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
+            .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?
+        {
+            if bytes.len().saturating_add(chunk.len()) > MAX_PROVIDER_RESPONSE_BYTES {
+                return Err(AiError::new(
+                    codes::PROVIDER,
+                    format!("provider response exceeds {MAX_PROVIDER_RESPONSE_BYTES} bytes"),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
         if req.stream {
-            let chunks = parse_sse(&text);
+            let chunks = parse_sse(&bytes)?;
             return Ok(HttpResponse {
                 status,
                 body: Value::Null,
                 chunks,
             });
         }
-        let body = serde_json::from_str(&text).unwrap_or(Value::String(text));
+        let body = match serde_json::from_slice(&bytes) {
+            Ok(value) => {
+                validate_json(&value)?;
+                value
+            }
+            Err(_) => Value::String(String::from_utf8_lossy(&bytes).into_owned()),
+        };
         Ok(HttpResponse {
             status,
             body,
@@ -138,6 +172,102 @@ pub struct ReplayTransport {
     exchanges: Vec<RecordedExchange>,
 }
 
+/// Explicit human-operated recording wrapper. Authorization headers are never
+/// written, but request and response bodies may contain workbook data.
+pub struct RecordingTransport {
+    inner: SharedTransport,
+    directory: PathBuf,
+    protocol: String,
+    next: AtomicU64,
+}
+
+impl RecordingTransport {
+    /// Wrap a real transport and write replay fixtures under `directory`.
+    pub fn new(
+        inner: SharedTransport,
+        directory: impl Into<PathBuf>,
+        protocol: impl Into<String>,
+    ) -> Result<Self, AiError> {
+        let directory = directory.into();
+        std::fs::create_dir_all(&directory)
+            .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+                .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
+        }
+        Ok(Self {
+            inner,
+            directory,
+            protocol: protocol.into(),
+            next: AtomicU64::new(0),
+        })
+    }
+}
+
+#[async_trait]
+impl Transport for RecordingTransport {
+    async fn send(&self, req: HttpRequest) -> Result<HttpResponse, AiError> {
+        validate_request(&req)?;
+        let response = self.inner.send(req.clone()).await?;
+        let exchange = RecordedExchange {
+            protocol: self.protocol.clone(),
+            request: RecordedRequest {
+                method: "POST".into(),
+                path: url_path(&req.url),
+                body: req.body,
+            },
+            response: RecordedResponse {
+                status: response.status,
+                headers: BTreeMap::new(),
+                body: if req.stream {
+                    Value::Array(response.chunks.clone())
+                } else {
+                    response.body.clone()
+                },
+                stream: req.stream,
+                delay_ms: 0,
+            },
+        };
+        let sequence = self.next.fetch_add(1, Ordering::Relaxed);
+        let path = self
+            .directory
+            .join(format!("recording-{}-{sequence}.json", std::process::id()));
+        tokio::task::spawn_blocking(move || write_recording(&path, &exchange))
+            .await
+            .map_err(|err| {
+                AiError::new(codes::PROVIDER, format!("recording writer stopped: {err}"))
+            })??;
+        Ok(response)
+    }
+}
+
+fn write_recording(path: &Path, exchange: &RecordedExchange) -> Result<(), AiError> {
+    let body = serde_json::to_vec_pretty(exchange)
+        .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
+    if body.len() as u64 > MAX_REPLAY_FIXTURE_BYTES {
+        return Err(AiError::new(
+            codes::PROVIDER,
+            "recorded provider exchange exceeds the fixture size limit",
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
+    use std::io::Write as _;
+    file.write_all(&body)
+        .and_then(|()| file.sync_all())
+        .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))
+}
+
 impl ReplayTransport {
     /// Load every `*.json` in a directory, sorted by name.
     pub fn from_dir(dir: impl AsRef<Path>) -> Result<Self, AiError> {
@@ -149,11 +279,22 @@ impl ReplayTransport {
         paths.sort();
         let mut exchanges = Vec::new();
         for path in paths {
+            let size = std::fs::metadata(&path)
+                .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?
+                .len();
+            if size > MAX_REPLAY_FIXTURE_BYTES {
+                return Err(AiError::new(
+                    codes::PROVIDER,
+                    format!("{} exceeds the replay fixture limit", path.display()),
+                ));
+            }
             let text = std::fs::read_to_string(&path)
                 .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
             let parsed: RecordedExchange = serde_json::from_str(&text).map_err(|err| {
                 AiError::new(codes::PROVIDER, format!("{}: {err}", path.display()))
             })?;
+            validate_json(&parsed.request.body)?;
+            validate_json(&parsed.response.body)?;
             exchanges.push(parsed);
         }
         Ok(Self { exchanges })
@@ -169,6 +310,7 @@ impl ReplayTransport {
 #[async_trait]
 impl Transport for ReplayTransport {
     async fn send(&self, req: HttpRequest) -> Result<HttpResponse, AiError> {
+        validate_request(&req)?;
         let path = url_path(&req.url);
         let body = canonicalize(&req.body);
         let found = self.exchanges.iter().find(|ex| {
@@ -215,21 +357,117 @@ fn canonicalize(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
-fn parse_sse(text: &str) -> Vec<Value> {
+fn parse_sse(bytes: &[u8]) -> Result<Vec<Value>, AiError> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| AiError::new(codes::PROVIDER, "provider SSE is not UTF-8"))?;
     let mut out = Vec::new();
+    let mut data_lines = Vec::new();
     for line in text.lines() {
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
+        if line.is_empty() {
+            push_sse_data(&mut out, &mut data_lines)?;
             continue;
         }
-        if let Ok(value) = serde_json::from_str(data) {
-            out.push(value);
+        if let Some(data) = line.strip_prefix("data:") {
+            data_lines.push(data.trim_start());
         }
     }
-    out
+    push_sse_data(&mut out, &mut data_lines)?;
+    Ok(out)
+}
+
+fn push_sse_data(out: &mut Vec<Value>, lines: &mut Vec<&str>) -> Result<(), AiError> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let data = lines.join("\n");
+    lines.clear();
+    if data.trim().is_empty() || data.trim() == "[DONE]" {
+        return Ok(());
+    }
+    let value: Value = serde_json::from_str(&data).map_err(|err| {
+        AiError::new(codes::PROVIDER, format!("invalid provider SSE JSON: {err}"))
+    })?;
+    validate_json(&value)?;
+    out.push(value);
+    Ok(())
+}
+
+pub(crate) fn validate_request(req: &HttpRequest) -> Result<(), AiError> {
+    if req.url.len() > 8_192 {
+        return Err(AiError::new(codes::PROVIDER, "provider URL is too long"));
+    }
+    let url = reqwest::Url::parse(&req.url)
+        .map_err(|err| AiError::new(codes::PROVIDER, format!("invalid provider URL: {err}")))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(AiError::new(
+            codes::PROVIDER,
+            "provider URL must be absolute HTTP or HTTPS",
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(AiError::new(
+            codes::PROVIDER,
+            "provider URL must not contain credentials",
+        ));
+    }
+    if req.headers.len() > MAX_PROVIDER_HEADERS {
+        return Err(AiError::new(codes::PROVIDER, "too many provider headers"));
+    }
+    let header_bytes = req
+        .headers
+        .iter()
+        .try_fold(0usize, |total, (name, value)| {
+            let next = total.saturating_add(name.len()).saturating_add(value.len());
+            if name.contains('\r')
+                || name.contains('\n')
+                || value.contains('\r')
+                || value.contains('\n')
+            {
+                return Err(AiError::new(
+                    codes::PROVIDER,
+                    "provider header contains a line break",
+                ));
+            }
+            Ok(next)
+        })?;
+    if header_bytes > MAX_PROVIDER_HEADER_BYTES {
+        return Err(AiError::new(
+            codes::PROVIDER,
+            "provider headers exceed the size limit",
+        ));
+    }
+    validate_json(&req.body)?;
+    let bytes = serde_json::to_vec(&req.body)
+        .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
+    if bytes.len() > MAX_PROVIDER_REQUEST_BYTES {
+        return Err(AiError::new(
+            codes::PROVIDER,
+            format!("provider request exceeds {MAX_PROVIDER_REQUEST_BYTES} bytes"),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_json(value: &Value) -> Result<(), AiError> {
+    let mut stack = vec![(value, 1usize)];
+    while let Some((current, depth)) = stack.pop() {
+        if depth > MAX_PROVIDER_JSON_DEPTH {
+            return Err(AiError::new(
+                codes::PROVIDER,
+                format!("provider JSON exceeds depth {MAX_PROVIDER_JSON_DEPTH}"),
+            ));
+        }
+        match current {
+            Value::Array(items) => {
+                stack.extend(items.iter().map(|item| (item, depth.saturating_add(1))));
+            }
+            Value::Object(map) => {
+                stack.extend(map.values().map(|item| (item, depth.saturating_add(1))));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Shared transport handle.

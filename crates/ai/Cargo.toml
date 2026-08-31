@@ -16,7 +16,7 @@ async-trait = "0.1"
 omacell-conf = { path = "../conf", version = "0.0.0" }
 omacell-core = { path = "../core", version = "0.0.0" }
 regex = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -27,6 +27,11 @@ tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
 tracing = "0.1"
 
 [dev-dependencies]
+criterion = { workspace = true }
 insta = { version = "1", features = ["json"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+
+[[bench]]
+name = "card"
+harness = false

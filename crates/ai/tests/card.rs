@@ -1,7 +1,8 @@
 //! Golden workbook cards at every level.
 
 use insta::assert_json_snapshot;
-use omacell_ai::card::{CardLevel, CardRequest, build};
+use omacell_ai::card::{CardLevel, CardRequest};
+use omacell_ai::policy::{PolicySnapshot, SendLevel, build_card};
 use omacell_core::workbook::Workbook;
 
 fn fixture() -> Workbook {
@@ -18,23 +19,34 @@ fn fixture() -> Workbook {
 #[test]
 fn golden_levels() {
     let wb = fixture();
+    let policy = PolicySnapshot {
+        enabled: true,
+        send: SendLevel::Full,
+        suggest_redaction: false,
+        log_content: false,
+        marks: Vec::new(),
+        local: true,
+    };
     for (name, level) in [
         ("summary", CardLevel::Summary),
         ("columns", CardLevel::Columns),
         ("sample", CardLevel::Sample),
         ("full", CardLevel::Full),
     ] {
-        let card = build(
+        let (card, _) = build_card(
             &wb,
             None,
-            &CardRequest {
+            CardRequest {
                 level,
                 file: Some("book.xlsx".into()),
                 range: Some("Sheet1!A1:B3".into()),
                 sample_rows: 5,
                 token_budget: 2048,
                 selection: None,
+                offset: 0,
+                limit: 128,
             },
+            &policy,
         )
         .unwrap();
         assert_eq!(card["schema"], 1);

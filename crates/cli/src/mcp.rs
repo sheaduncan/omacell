@@ -12,7 +12,7 @@ use omacell_ai::policy::{PolicySnapshot, build_card, provider_is_local};
 use omacell_ai::{Slot, route_slot};
 use omacell_bus::mcp::{McpCtx, McpSession, TOOLS, stub_card};
 use omacell_bus::{Bus, codes};
-use omacell_conf::{Config, NotifyKind, notify_send};
+use omacell_conf::{Config, NotifyKind, ReloadHandle, notify_send};
 use omacell_core::workbook::Workbook;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
@@ -338,14 +338,14 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedLines<R> {
 }
 
 /// Session context for `omacell mcp`: proposal notify + WP-22 summary card.
-pub fn ctx_for_cli(open_path: Option<String>, config: Config) -> McpCtx {
-    let card_config = config.clone();
+pub fn ctx_for_cli(open_path: Option<String>, reload: ReloadHandle) -> McpCtx {
+    let notify_config = reload.snapshot().config;
     McpCtx {
         open_path,
         gui_running: false,
-        on_external_propose: Some(proposal_notifier(config)),
+        on_external_propose: Some(proposal_notifier(notify_config)),
         card: Some(Box::new(move |wb, path| {
-            summary_card(&card_config, wb, path)
+            summary_card(&reload.snapshot().config, wb, path)
         })),
     }
 }

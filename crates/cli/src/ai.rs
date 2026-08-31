@@ -26,12 +26,18 @@ pub fn run(cli: &Cli, cmd: &AiCmd, output: Output) -> Result<(), CliError> {
             level,
             range,
             selection,
+            offset,
+            limit,
         } => card(
             cli,
-            book,
-            level,
-            range.as_deref(),
-            selection.as_deref(),
+            CardOptions {
+                book,
+                level,
+                range: range.as_deref(),
+                selection: selection.as_deref(),
+                offset: *offset,
+                limit: *limit,
+            },
             output,
         ),
         AiCmd::Log => log(cli, output),
@@ -75,15 +81,17 @@ fn setup(cli: &Cli, output: Output) -> Result<(), CliError> {
     Ok(())
 }
 
-fn card(
-    cli: &Cli,
-    book: &Path,
-    level: &str,
-    range: Option<&str>,
-    selection: Option<&str>,
-    output: Output,
-) -> Result<(), CliError> {
-    let app = App::with_workbook_plan(cli, book, None)?;
+struct CardOptions<'a> {
+    book: &'a Path,
+    level: &'a str,
+    range: Option<&'a str>,
+    selection: Option<&'a str>,
+    offset: u32,
+    limit: u32,
+}
+
+fn card(cli: &Cli, options: CardOptions<'_>, output: Output) -> Result<(), CliError> {
+    let app = App::with_workbook_plan(cli, options.book, None)?;
     crate::log::init(&app.paths, cli.verbose, cli.quiet, false);
     let config = app.loaded().config;
     let (provider, _) = omacell_ai::route_slot(&config, omacell_ai::Slot::Default);
@@ -95,12 +103,14 @@ fn card(
         registry
     });
     let request = CardRequest {
-        level: CardLevel::parse(level).map_err(CliError::from)?,
-        file: Some(book.display().to_string()),
-        selection: selection.map(str::to_string),
-        range: range.map(str::to_string),
+        level: CardLevel::parse(options.level).map_err(CliError::from)?,
+        file: Some(options.book.display().to_string()),
+        selection: options.selection.map(str::to_string),
+        range: options.range.map(str::to_string),
         sample_rows: 8,
         token_budget: 4096,
+        offset: options.offset,
+        limit: options.limit,
     };
     let (card, suggestions) = build_card(app.bus.workbook(), Some(&engine), request, &policy)?;
     let json = json!({
@@ -134,9 +144,13 @@ fn usage(cli: &Cli, output: Output) -> Result<(), CliError> {
     let mut by_provider: BTreeMap<String, UsageTotals> = BTreeMap::new();
     for record in &records {
         let entry = by_provider.entry(record.provider.clone()).or_default();
-        entry.prompt_tokens += u64::from(record.usage.prompt_tokens);
-        entry.completion_tokens += u64::from(record.usage.completion_tokens);
-        entry.requests += 1;
+        entry.prompt_tokens = entry
+            .prompt_tokens
+            .saturating_add(u64::from(record.usage.prompt_tokens));
+        entry.completion_tokens = entry
+            .completion_tokens
+            .saturating_add(u64::from(record.usage.completion_tokens));
+        entry.requests = entry.requests.saturating_add(1);
     }
     output.success(
         json!({"providers": by_provider}),

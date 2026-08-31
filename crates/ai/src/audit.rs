@@ -1,7 +1,7 @@
 //! Local AI audit log (`~/.local/state/omacell/ai/log.jsonl`).
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{AiError, codes};
 use crate::provider::Usage;
+
+const MAX_LOG_BYTES: u64 = 16 * 1_048_576;
+const MAX_LOG_RECORD_BYTES: usize = 1_048_576;
 
 /// One log record. Content is omitted unless `log_content`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -55,7 +58,9 @@ impl AuditLog {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+            set_private_directory(parent)?;
         }
+        ensure_private_file(&path)?;
         Ok(Self { path })
     }
 
@@ -69,6 +74,19 @@ impl AuditLog {
         let mut line =
             serde_json::to_vec(record).map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
         line.push(b'\n');
+        if line.len() > MAX_LOG_RECORD_BYTES {
+            return Err(AiError::new(codes::LOG, "AI audit record is too large"));
+        }
+        let existing = file
+            .metadata()
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?
+            .len();
+        if existing.saturating_add(line.len() as u64) > MAX_LOG_BYTES {
+            return Err(
+                AiError::new(codes::LOG, "AI audit log reached its size limit")
+                    .with_hint("archive or remove the log before sending another AI request"),
+            );
+        }
         file.write_all(&line)
             .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
         Ok(())
@@ -79,7 +97,22 @@ impl AuditLog {
         if !self.path.is_file() {
             return Ok(Vec::new());
         }
-        let text = std::fs::read_to_string(&self.path)
+        let file = std::fs::File::open(&self.path)
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+        if file
+            .metadata()
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?
+            .len()
+            > MAX_LOG_BYTES
+        {
+            return Err(AiError::new(
+                codes::LOG,
+                "AI audit log exceeds its size limit",
+            ));
+        }
+        let mut text = String::new();
+        file.take(MAX_LOG_BYTES.saturating_add(1))
+            .read_to_string(&mut text)
             .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
         let mut out = Vec::new();
         for line in text.lines() {
@@ -124,9 +157,40 @@ pub struct SessionStats {
 impl SessionStats {
     /// Record one send.
     pub fn record(&mut self, bytes: u64) {
-        self.requests += 1;
-        self.bytes_sent += bytes;
+        self.requests = self.requests.saturating_add(1);
+        self.bytes_sent = self.bytes_sent.saturating_add(bytes);
     }
+}
+
+fn ensure_private_file(path: &Path) -> Result<(), AiError> {
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        let file = options
+            .open(path)
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    options
+        .open(path)
+        .map(|_| ())
+        .map_err(|err| AiError::new(codes::LOG, err.to_string()))
+}
+
+fn set_private_directory(path: &Path) -> Result<(), AiError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Status-line segment data (provider, privacy, session sends).

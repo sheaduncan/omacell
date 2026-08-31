@@ -10,9 +10,11 @@
         { "role": "user", "content": "return json" }
       ],
       "stream": false,
-      "output_format": {
-        "type": "json_schema",
-        "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+      "output_config": {
+        "format": {
+          "type": "json_schema",
+          "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+        }
       }
     }
   },

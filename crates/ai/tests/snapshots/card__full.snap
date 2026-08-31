@@ -38,6 +38,12 @@ expression: card
   "functions": [],
   "kind": "full",
   "names": [],
+  "page": {
+    "offset": 0,
+    "returned_rows": 3,
+    "total_rows": 3,
+    "truncated": false
+  },
   "sample_rows": [
     {
       "origin": "A1",
@@ -69,7 +75,8 @@ expression: card
   ],
   "tables": [],
   "token_budget": 2048,
-  "tokens": 208,
+  "tokens": 243,
+  "truncated": false,
   "validations": 0,
   "values": [
     [
@@ -98,6 +105,7 @@ expression: card
         "value": ""
       },
       {
+        "formula": "=B2+1",
         "ref": "Sheet1!B3",
         "value": ""
       }

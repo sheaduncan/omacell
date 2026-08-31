@@ -236,6 +236,12 @@ pub enum AiCmd {
         /// Selection for dependency focus.
         #[arg(long)]
         selection: Option<String>,
+        /// Zero-based row offset within `--range`.
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+        /// Maximum rows returned from `--range`.
+        #[arg(long, default_value_t = 128, value_parser = clap::value_parser!(u32).range(1..=1024))]
+        limit: u32,
     },
     /// Read `~/.local/state/omacell/ai/log.jsonl`.
     Log,

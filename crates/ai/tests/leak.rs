@@ -53,6 +53,20 @@ fn secret_does_not_land_in_config_or_logs() {
     })
     .unwrap();
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let log_path = home.path().join(".local/state/omacell/ai/log.jsonl");
+        let dir_mode = std::fs::metadata(log_path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = std::fs::metadata(&log_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+    }
+
     let mut files = Vec::new();
     walk_files(home.path(), &mut files);
     for path in files {

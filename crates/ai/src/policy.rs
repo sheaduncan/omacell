@@ -15,6 +15,9 @@ use crate::redact::{self, Suggestion};
 
 /// Custom part holding per-workbook privacy and redact marks.
 pub const AI_PART: &str = "xl/omacell/ai.json";
+const MAX_AI_PART_BYTES: usize = 1_048_576;
+const MAX_REDACT_MARKS: usize = 1_024;
+const MAX_REDACT_MARK_BYTES: usize = 256;
 
 /// Send level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -68,18 +71,35 @@ impl WorkbookAi {
     /// Parse `xl/omacell/ai.json` if present.
     #[must_use]
     pub fn from_workbook(wb: &Workbook) -> Self {
-        wb.custom_parts
-            .get(AI_PART)
-            .and_then(|bytes| serde_json::from_slice(bytes).ok())
-            .unwrap_or_default()
+        parse_workbook_ai(wb).unwrap_or_default()
     }
+}
+
+fn parse_workbook_ai(wb: &Workbook) -> Option<WorkbookAi> {
+    let bytes = wb.custom_parts.get(AI_PART)?;
+    if bytes.len() > MAX_AI_PART_BYTES {
+        return None;
+    }
+    let part: WorkbookAi = serde_json::from_slice(bytes).ok()?;
+    if part.redact.len() > MAX_REDACT_MARKS
+        || part
+            .redact
+            .iter()
+            .any(|mark| mark.len() > MAX_REDACT_MARK_BYTES || parse_a1(mark).is_err())
+    {
+        return None;
+    }
+    Some(part)
 }
 
 /// TOML overlay for `LoadOptions.workbook` (`[ai.privacy] send`).
 #[must_use]
 pub fn workbook_config_overlay(wb: &Workbook) -> Option<toml::Value> {
-    let part = WorkbookAi::from_workbook(wb);
+    let part = parse_workbook_ai(wb)?;
     let send = part.privacy_send?;
+    let send = SendLevel::parse(&send)
+        .map(|level| level.as_str().to_string())
+        .unwrap_or_else(|_| SendLevel::Schema.as_str().to_string());
     let mut privacy = toml::map::Map::new();
     privacy.insert("send".into(), toml::Value::String(send));
     let mut ai = toml::map::Map::new();
@@ -111,10 +131,15 @@ impl PolicySnapshot {
     /// Capture from config + workbook custom part + provider locality.
     #[must_use]
     pub fn capture(config: &Config, wb: Option<&Workbook>, provider_local: bool) -> Self {
-        let part = wb.map(WorkbookAi::from_workbook).unwrap_or_default();
+        let has_part = wb.is_some_and(|book| book.custom_parts.contains_key(AI_PART));
+        let part = wb.and_then(parse_workbook_ai);
+        let part_valid = !has_part || part.is_some();
+        let part = part.unwrap_or_default();
         let configured = SendLevel::parse(&config.ai.privacy.send).unwrap_or(SendLevel::Schema);
-        let send = if let Some(over) = part.privacy_send.as_deref() {
-            SendLevel::parse(over).unwrap_or(configured)
+        let send = if !part_valid {
+            SendLevel::Schema
+        } else if let Some(over) = part.privacy_send.as_deref() {
+            SendLevel::parse(over).unwrap_or(SendLevel::Schema)
         } else if provider_local && config.ai.privacy.local_full {
             SendLevel::Full
         } else {
@@ -145,6 +170,7 @@ pub fn build_card(
     }
     apply_marks(&mut card, &policy.marks);
     filter_level(&mut card, policy.send, request.level);
+    card::enforce_budget(&mut card, request.token_budget)?;
     Ok((card, suggestions))
 }
 
@@ -162,12 +188,15 @@ fn apply_marks(card: &mut Value, marks: &[String]) {
 fn apply_marks_value(value: &mut Value, marks: &[ParsedRef]) {
     match value {
         Value::Object(map) => {
-            if let (Some(Value::String(cell_ref)), Some(Value::String(_))) =
-                (map.get("ref").cloned(), map.get("value"))
-            {
+            if let Some(Value::String(cell_ref)) = map.get("ref").cloned() {
                 if let Some((sheet, row, col)) = parse_cell_ref(&cell_ref) {
                     if mark_covers_any(marks, sheet.as_deref(), row, col) {
-                        map.insert("value".into(), Value::String("[REDACTED:mark]".into()));
+                        if map.contains_key("value") {
+                            map.insert("value".into(), Value::String("[REDACTED:mark]".into()));
+                        }
+                        if map.contains_key("formula") {
+                            map.insert("formula".into(), Value::String("[REDACTED:mark]".into()));
+                        }
                     }
                 }
             }
@@ -300,7 +329,8 @@ fn mark_covers_column(mark: &ParsedRef, sheet: Option<&str>, col: u16) -> bool {
 fn sheet_matches(mark: &ParsedRef, sheet: Option<&str>) -> bool {
     match (mark.sheet.as_ref().map(|s| s.start.as_str()), sheet) {
         (Some(mark_sheet), Some(sheet)) => mark_sheet.eq_ignore_ascii_case(sheet),
-        _ => true,
+        (None, _) => true,
+        (Some(_), None) => false,
     }
 }
 
@@ -310,13 +340,13 @@ fn filter_level(card: &mut Value, send: SendLevel, level: CardLevel) {
             strip_values(card);
             if let Some(obj) = card.as_object_mut() {
                 obj.remove("sample_rows");
-                obj.remove("values");
             }
         }
         SendLevel::Sample => {
             if matches!(level, CardLevel::Full) {
                 if let Some(obj) = card.as_object_mut() {
                     obj.remove("values");
+                    obj.remove("page");
                 }
             }
         }
@@ -328,7 +358,6 @@ fn strip_values(value: &mut Value) {
     match value {
         Value::Object(map) => {
             map.remove("value");
-            map.remove("values");
             map.remove("samples");
             map.remove("sample_rows");
             map.remove("min");

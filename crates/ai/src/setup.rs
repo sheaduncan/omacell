@@ -97,17 +97,27 @@ fn probe(host: &str, port: u16) -> bool {
 }
 
 fn endpoint_reachable(endpoint: &str) -> bool {
-    let rest = endpoint
-        .split_once("://")
-        .map(|(_, r)| r)
-        .unwrap_or(endpoint);
-    let hostport = rest.split('/').next().unwrap_or(rest);
-    let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) => (h, p.parse().unwrap_or(80u16)),
-        None => (hostport, 80),
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return false;
     };
-    let host = host.trim_matches(|c| c == '[' || c == ']');
-    probe(host, port)
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let ip = if host.eq_ignore_ascii_case("localhost") {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    } else {
+        let Ok(ip) = host.parse::<std::net::IpAddr>() else {
+            return false;
+        };
+        if !ip.is_loopback() {
+            return false;
+        }
+        ip
+    };
+    let Some(port) = url.port_or_known_default() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_millis(80)).is_ok()
 }
 
 /// Keys written by setup (never secrets).

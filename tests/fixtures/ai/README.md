@@ -3,6 +3,10 @@
 Recorded OpenAI-compatible and Anthropic HTTP exchanges. Tests replay these
 through `omacell_ai::ReplayTransport`. No network.
 
-To record a new exchange against a real endpoint, capture the JSON POST path
-and body plus the response (or SSE JSON payloads) into a file named
-`<protocol>_<case>.json` matching `RecordedExchange` in `crates/ai/src/http.rs`.
+For an explicit human recording session, wrap `ReqwestTransport` in
+`RecordingTransport`. It writes private, replay-compatible files without HTTP
+headers. Request and response bodies can contain workbook data, so inspect and
+rename a recording before moving it into this directory.
+
+The committed set also contains hand-authored malformed-response fixtures.
+They prove both adapters fail closed on invalid provider tool calls.

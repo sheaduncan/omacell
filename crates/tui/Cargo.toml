@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 crossterm = "0.28"
+omacell-ai = { path = "../ai", version = "0.0.0" }
 omacell-bus = { path = "../bus", version = "0.0.0" }
 omacell-conf = { path = "../conf", version = "0.0.0" }
 omacell-core = { path = "../core", version = "0.0.0" }
