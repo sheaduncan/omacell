@@ -512,11 +512,37 @@ fn move_retargets_and_clears_source() {
     );
 }
 
-/// Published Excel XOR hash: password "password" → 0x83AF
+/// Published Excel XOR worksheet-protection hash vectors
 /// (OpenOffice / ECMA-376 legacy algorithm).
 #[test]
-fn protection_hash_matches_known_vector() {
-    assert_eq!(excel_xor_hash("password"), 0x83AF);
+fn protection_hash_matches_known_vectors() {
+    let corpus = include_str!("../../../tests/corpus/ops/protection_hash.tsv");
+    for (line_number, line) in corpus.lines().enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let fields: Vec<_> = line.split('\t').collect();
+        assert_eq!(
+            fields.len(),
+            3,
+            "protection hash corpus line {} must have three fields",
+            line_number + 1
+        );
+        let expected = u16::from_str_radix(fields[1], 16).unwrap_or_else(|error| {
+            panic!(
+                "invalid expected hash on protection hash corpus line {}: {error}",
+                line_number + 1
+            )
+        });
+        assert_eq!(
+            excel_xor_hash(fields[0]),
+            expected,
+            "protection hash corpus line {}: {}",
+            line_number + 1,
+            fields[2]
+        );
+    }
 }
 
 #[test]
