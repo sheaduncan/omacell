@@ -154,6 +154,28 @@ impl Config {
             &self.ai.privacy.send,
             &["schema", "sample", "full"],
         )?;
+        for (name, provider) in &self.ai.providers {
+            one_of(
+                &format!("ai.providers.{name}.kind"),
+                &provider.kind,
+                &["openai_compatible", "anthropic"],
+            )?;
+            non_empty(&format!("ai.providers.{name}.endpoint"), &provider.endpoint)?;
+            if !provider.endpoint.starts_with("http://")
+                && !provider.endpoint.starts_with("https://")
+            {
+                return invalid(
+                    &format!("ai.providers.{name}.endpoint"),
+                    "must be an absolute HTTP or HTTPS URL",
+                );
+            }
+            if provider.secret_env.is_some() && provider.secret_cmd.is_some() {
+                return invalid(
+                    &format!("ai.providers.{name}"),
+                    "configure only one of secret_env or secret_cmd",
+                );
+            }
+        }
         one_of(
             "ai.functions.xlsx_export",
             &self.ai.functions.xlsx_export,

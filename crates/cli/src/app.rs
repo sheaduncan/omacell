@@ -4,7 +4,9 @@ use std::path::Path;
 
 use omacell_bus::Bus;
 use omacell_conf::layer::LoadOptions;
-use omacell_conf::{ConfigStore, LoadedConfig, Paths, ReloadHandle, workbook_settings_overlay};
+use omacell_conf::{
+    ConfigStore, LoadedConfig, Paths, ReloadHandle, merge_overlays, workbook_settings_overlay,
+};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
 use omacell_core::eval::FnRegistry;
@@ -13,6 +15,7 @@ use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
 use omacell_io::csv::ImportPlan;
 use omacell_ui::{KeymapRoots, UiSession, register_ui_commands};
+use toml::Value as TomlValue;
 
 use crate::cli::Cli;
 use crate::files::{self, FileSession};
@@ -41,7 +44,7 @@ impl App {
         options.cli_sets = cli.sets.clone();
         if let Some(path) = &cli.from_workbook {
             let opened = files::open_any(path)?;
-            options.workbook = Some(workbook_settings_overlay(opened.workbook.settings()));
+            options.workbook = Some(workbook_overlay(&opened.workbook));
         }
         Self::from_parts(paths, options, Workbook::new(), FileSession::new(), false)
     }
@@ -58,7 +61,7 @@ impl App {
         options.config_file = cli.config.clone();
         options.theme_override = cli.theme.clone();
         options.cli_sets = cli.sets.clone();
-        options.workbook = Some(workbook_settings_overlay(opened.workbook.settings()));
+        options.workbook = Some(workbook_overlay(&opened.workbook));
         let file_session = FileSession::new();
         file_session.attach(book, &opened);
         Self::from_parts(paths, options, opened.workbook, file_session, false)
@@ -77,7 +80,7 @@ impl App {
         options.config_file = cli.config.clone();
         options.theme_override = cli.theme.clone();
         options.cli_sets = cli.sets.clone();
-        options.workbook = Some(workbook_settings_overlay(opened.workbook.settings()));
+        options.workbook = Some(workbook_overlay(&opened.workbook));
         let file_session = FileSession::new();
         file_session.attach(book, &opened);
         Self::from_parts(paths, options, opened.workbook, file_session, false)
@@ -95,9 +98,12 @@ impl App {
                 options.cli_sets = cli.sets.clone();
                 options.workbook = if let Some(settings_path) = &cli.from_workbook {
                     let settings_book = files::open_any(settings_path)?;
-                    Some(workbook_settings_overlay(settings_book.workbook.settings()))
+                    Some(workbook_ai_overlay(
+                        workbook_settings_overlay(settings_book.workbook.settings()),
+                        &opened.workbook,
+                    ))
                 } else {
-                    Some(workbook_settings_overlay(opened.workbook.settings()))
+                    Some(workbook_overlay(&opened.workbook))
                 };
                 let file_session = FileSession::new();
                 file_session.attach(path, &opened);
@@ -111,8 +117,7 @@ impl App {
                 options.cli_sets = cli.sets.clone();
                 if let Some(settings_path) = &cli.from_workbook {
                     let settings_book = files::open_any(settings_path)?;
-                    options.workbook =
-                        Some(workbook_settings_overlay(settings_book.workbook.settings()));
+                    options.workbook = Some(workbook_overlay(&settings_book.workbook));
                 }
                 Self::from_parts(paths, options, Workbook::new(), FileSession::new(), true)
             }
@@ -196,5 +201,16 @@ impl App {
         args: serde_json::Value,
     ) -> Result<omacell_bus::DryRun, CoreError> {
         self.bus.dry_run(Origin::User, id, args)
+    }
+}
+
+fn workbook_overlay(workbook: &Workbook) -> TomlValue {
+    workbook_ai_overlay(workbook_settings_overlay(workbook.settings()), workbook)
+}
+
+fn workbook_ai_overlay(base: TomlValue, workbook: &Workbook) -> TomlValue {
+    match omacell_ai::workbook_config_overlay(workbook) {
+        Some(extra) => merge_overlays(base, extra),
+        None => base,
     }
 }

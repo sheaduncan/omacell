@@ -374,6 +374,12 @@ pub struct AiProvider {
     /// Secret command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_cmd: Option<String>,
+    /// Request timeout milliseconds (0 = 30_000).
+    #[serde(default)]
+    pub timeout: u32,
+    /// Extra HTTP headers (never secrets).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
 }
 
 /// `[ai.models]`.

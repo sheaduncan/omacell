@@ -286,6 +286,21 @@ pub fn workbook_settings_overlay(settings: &WorkbookSettings) -> Value {
     ]))
 }
 
+/// Deep-merge `extra` into `base` (workbook overlays).
+#[must_use]
+pub fn merge_overlays(mut base: Value, extra: Value) -> Value {
+    let mut provenance = BTreeMap::new();
+    merge(
+        &mut base,
+        extra,
+        Layer::Workbook,
+        "workbook",
+        "",
+        &mut provenance,
+    );
+    base
+}
+
 fn finish_load(
     paths: &Paths,
     value: Value,

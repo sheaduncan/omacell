@@ -47,12 +47,7 @@ fn ipc_all_and_socket_are_mutually_exclusive() {
 }
 
 #[test]
-fn stubs_exit_three_with_hint() {
-    let (_home, mut cmd) = home();
-    cmd.args(["ai", "setup"])
-        .assert()
-        .code(3)
-        .stderr(predicate::str::contains("arrives in WP-"));
+fn gui_without_display_exits_error() {
     let (_home, mut cmd) = home();
     cmd.env_remove("WAYLAND_DISPLAY")
         .env_remove("DISPLAY")
@@ -104,12 +99,11 @@ fn tui_rejects_ambiguous_or_ignored_arguments_before_tty_setup() {
 #[test]
 fn json_error_shape() {
     let (_home, mut cmd) = home();
-    cmd.args(["--json", "ai", "setup"])
+    cmd.args(["--json", "query", "/no/such/omacell-missing.xlsx", "A1"])
         .assert()
-        .code(3)
+        .code(1)
         .stderr(predicate::str::contains("\"code\""))
-        .stderr(predicate::str::contains("\"message\""))
-        .stderr(predicate::str::contains("\"hint\""));
+        .stderr(predicate::str::contains("\"message\""));
 }
 
 #[test]

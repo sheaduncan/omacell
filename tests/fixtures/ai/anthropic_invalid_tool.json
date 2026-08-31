@@ -1,0 +1,28 @@
+{
+  "protocol": "anthropic",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "body": {
+      "model": "claude",
+      "max_tokens": 321,
+      "messages": [
+        { "role": "user", "content": "invalid claude tool response" }
+      ],
+      "stream": false
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "tool_bad",
+          "name": "sum",
+          "input": []
+        }
+      ]
+    }
+  }
+}

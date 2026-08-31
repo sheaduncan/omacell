@@ -6,6 +6,7 @@
 #![deny(missing_docs)]
 
 mod agent;
+mod ai;
 mod app;
 mod cli;
 mod error;

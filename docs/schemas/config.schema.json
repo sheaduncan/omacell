@@ -355,6 +355,13 @@
           "description": "Endpoint URL.",
           "type": "string"
         },
+        "headers": {
+          "description": "Extra HTTP headers (never secrets).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "kind": {
           "description": "Wire kind.",
           "type": "string"
@@ -377,6 +384,13 @@
             "string",
             "null"
           ]
+        },
+        "timeout": {
+          "description": "Request timeout milliseconds (0 = 30_000).",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
         }
       },
       "additionalProperties": false,
