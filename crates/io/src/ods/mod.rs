@@ -10,11 +10,20 @@ use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
 
 use crate::error;
-use crate::xlsx::{acquire_lock, peer_lock_blocks, release_lock};
+use crate::xlsx::{SaveOptions, atomic_write_bytes, peer_lock_blocks};
 
 /// Open an `.ods` path.
 pub fn open(path: &Path) -> Result<Workbook, CoreError> {
     peer_lock_blocks(path)?;
+    let len = std::fs::metadata(path)
+        .map_err(|e| error::ods_format(e.to_string()))?
+        .len();
+    if len > crate::xlsx::MAX_PACKAGE_BYTES {
+        return Err(error::xlsx_limit(format!(
+            "compressed ODS is {len} bytes; maximum is {}",
+            crate::xlsx::MAX_PACKAGE_BYTES
+        )));
+    }
     let bytes = std::fs::read(path).map_err(|e| error::ods_format(e.to_string()))?;
     open_bytes(&bytes)
 }
@@ -26,12 +35,8 @@ pub fn open_bytes(bytes: &[u8]) -> Result<Workbook, CoreError> {
 
 /// Save a workbook as ODS.
 pub fn save(wb: &Workbook, path: &Path) -> Result<(), CoreError> {
-    peer_lock_blocks(path)?;
     let bytes = save_bytes(wb)?;
-    let _ = acquire_lock(path);
-    let result = std::fs::write(path, bytes).map_err(|e| error::ods_format(e.to_string()));
-    let _ = release_lock(path);
-    result
+    atomic_write_bytes(path, &bytes, SaveOptions::default())
 }
 
 /// Encode ODS bytes (no lock).

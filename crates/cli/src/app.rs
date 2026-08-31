@@ -10,7 +10,8 @@ use omacell_ai::{PromptSet, register_ai_functions};
 use omacell_bus::Bus;
 use omacell_conf::layer::LoadOptions;
 use omacell_conf::{
-    ConfigStore, LoadedConfig, Paths, ReloadHandle, merge_overlays, workbook_settings_overlay,
+    ConfigStore, LoadedConfig, Paths, ReloadHandle, load_with_options, merge_overlays,
+    workbook_settings_overlay,
 };
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
@@ -48,28 +49,25 @@ impl App {
     /// Build paths + config without a workbook overlay.
     pub fn bootstrap(cli: &Cli) -> Result<Self, CoreError> {
         let paths = Paths::from_env()?;
-        let mut options = LoadOptions::from_process();
-        options.config_file = cli.config.clone();
-        options.theme_override = cli.theme.clone();
-        options.cli_sets = cli.sets.clone();
+        let mut options = load_options(cli);
+        let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
         if let Some(path) = &cli.from_workbook {
-            let opened = files::open_any(path)?;
+            let opened = files::open_any(path, libreoffice_fallback)?;
             options.workbook = Some(workbook_overlay(&opened.workbook));
         }
         Self::from_parts(paths, options, Workbook::new(), FileSession::new(), false)
     }
 
-    /// Bootstrap from an already-opened workbook (JSON `--jq`, etc.).
-    pub fn with_opened(
+    /// Bootstrap a JSON workbook using a dotted `--jq` selector.
+    pub fn with_workbook_pointer(
         cli: &Cli,
         book: &Path,
-        opened: crate::files::Opened,
+        pointer: Option<&str>,
     ) -> Result<Self, CoreError> {
         let paths = Paths::from_env()?;
-        let mut options = LoadOptions::from_process();
-        options.config_file = cli.config.clone();
-        options.theme_override = cli.theme.clone();
-        options.cli_sets = cli.sets.clone();
+        let mut options = load_options(cli);
+        let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
+        let opened = files::open_any_with_pointer(book, pointer, libreoffice_fallback)?;
         options.workbook = Some(workbook_overlay(&opened.workbook));
         let file_session = FileSession::new();
         file_session.attach(book, &opened);
@@ -83,11 +81,9 @@ impl App {
         plan: Option<&ImportPlan>,
     ) -> Result<Self, CoreError> {
         let paths = Paths::from_env()?;
-        let opened = files::open_any_with_plan(book, plan)?;
-        let mut options = LoadOptions::from_process();
-        options.config_file = cli.config.clone();
-        options.theme_override = cli.theme.clone();
-        options.cli_sets = cli.sets.clone();
+        let mut options = load_options(cli);
+        let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
+        let opened = files::open_any_with_plan(book, plan, libreoffice_fallback)?;
         options.workbook = Some(workbook_overlay(&opened.workbook));
         let file_session = FileSession::new();
         file_session.attach(book, &opened);
@@ -118,13 +114,11 @@ impl App {
         match book {
             Some(path) => {
                 let paths = Paths::from_env()?;
-                let opened = files::open_any(path)?;
-                let mut options = LoadOptions::from_process();
-                options.config_file = cli.config.clone();
-                options.theme_override = cli.theme.clone();
-                options.cli_sets = cli.sets.clone();
+                let mut options = load_options(cli);
+                let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
+                let opened = files::open_any(path, libreoffice_fallback)?;
                 options.workbook = if let Some(settings_path) = &cli.from_workbook {
-                    let settings_book = files::open_any(settings_path)?;
+                    let settings_book = files::open_any(settings_path, libreoffice_fallback)?;
                     Some(workbook_ai_overlay(
                         workbook_settings_overlay(settings_book.workbook.settings()),
                         &opened.workbook,
@@ -138,12 +132,10 @@ impl App {
             }
             None => {
                 let paths = Paths::from_env()?;
-                let mut options = LoadOptions::from_process();
-                options.config_file = cli.config.clone();
-                options.theme_override = cli.theme.clone();
-                options.cli_sets = cli.sets.clone();
+                let mut options = load_options(cli);
+                let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
                 if let Some(settings_path) = &cli.from_workbook {
-                    let settings_book = files::open_any(settings_path)?;
+                    let settings_book = files::open_any(settings_path, libreoffice_fallback)?;
                     options.workbook = Some(workbook_overlay(&settings_book.workbook));
                 }
                 Self::from_parts(paths, options, Workbook::new(), FileSession::new(), true)
@@ -324,6 +316,24 @@ impl App {
     ) -> Result<omacell_bus::DryRun, CoreError> {
         self.bus.dry_run(Origin::User, id, args)
     }
+}
+
+fn load_options(cli: &Cli) -> LoadOptions {
+    let mut options = LoadOptions::from_process();
+    options.config_file = cli.config.clone();
+    options.theme_override = cli.theme.clone();
+    options.cli_sets = cli.sets.clone();
+    options
+}
+
+fn configured_libreoffice_fallback(
+    paths: &Paths,
+    options: &LoadOptions,
+) -> Result<bool, CoreError> {
+    Ok(load_with_options(paths, options)?
+        .config
+        .integrations
+        .libreoffice_fallback)
 }
 
 fn workbook_overlay(workbook: &Workbook) -> TomlValue {

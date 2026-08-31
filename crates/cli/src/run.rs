@@ -666,9 +666,7 @@ fn cmd_convert(
     }
     let plan = plan.map(read_import_plan).transpose()?;
     let mut app = if jq.is_some() {
-        let opened = crate::files::open_any_with_pointer(input, jq)
-            .map_err(|e| CliError::new(e.code, e.message))?;
-        crate::app::App::with_opened(cli, input, opened)
+        crate::app::App::with_workbook_pointer(cli, input, jq)
             .map_err(|e| CliError::new(e.code, e.message))?
     } else {
         init_app_book_plan(cli, input, plan.as_ref())?

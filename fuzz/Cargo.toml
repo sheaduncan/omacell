@@ -122,5 +122,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "other_formats"
+path = "fuzz_targets/other_formats.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

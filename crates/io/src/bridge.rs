@@ -4,9 +4,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use omacell_core::error::CoreError;
 
 use crate::error;
+use crate::temp::PrivateTempDir;
 use crate::xlsx::{self, peer_lock_blocks};
 
 const CONVERT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -19,22 +23,24 @@ pub fn open_xls(path: &Path, libreoffice_fallback: bool) -> Result<xlsx::XlsxDoc
             "LibreOffice fallback is disabled ([integrations] libreoffice_fallback = false)",
         ));
     }
-    let soffice = ["soffice", "libreoffice"]
-        .into_iter()
-        .find(|bin| Command::new(bin).arg("--version").output().is_ok())
+    let soffice = find_libreoffice()
         .ok_or_else(|| error::xls_bridge("LibreOffice (soffice) is not installed"))?;
-    let dir = tempfile_dir()?;
+    let source = path
+        .canonicalize()
+        .map_err(|err| error::xls_bridge(format!("{}: {err}", path.display())))?;
+    let dir = PrivateTempDir::new("xls")
+        .map_err(|err| error::xls_bridge(format!("create private temp directory: {err}")))?;
     let status = run_timed(
-        Command::new(soffice)
+        Command::new(&soffice)
             .arg(format!(
                 "-env:UserInstallation=file://{}",
-                dir.join("profile").display()
+                dir.path().join("profile").display()
             ))
-            .env("HOME", &dir)
+            .env("HOME", dir.path())
             .env("SAL_USE_VCLPLUGIN", "svp")
             .args(["--headless", "--convert-to", "xlsx", "--outdir"])
-            .arg(&dir)
-            .arg(path)
+            .arg(dir.path())
+            .arg(&source)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null()),
@@ -42,18 +48,42 @@ pub fn open_xls(path: &Path, libreoffice_fallback: bool) -> Result<xlsx::XlsxDoc
     )?;
     if !status {
         return Err(error::xls_bridge(format!(
-            "{soffice} failed to convert {}",
+            "{} failed to convert {}",
+            soffice.display(),
             path.display()
         )));
     }
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("book");
-    let converted = dir.join(format!("{stem}.xlsx"));
+    let stem = source
+        .file_stem()
+        .ok_or_else(|| error::xls_bridge("input path has no file name"))?;
+    let mut converted = dir.path().join(stem);
+    converted.set_extension("xlsx");
     if !converted.exists() {
         return Err(error::xls_bridge(
             "LibreOffice did not produce an .xlsx file",
         ));
     }
     xlsx::open(&converted)
+}
+
+fn find_libreoffice() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        for name in ["soffice", "libreoffice"] {
+            let candidate = dir.join(name);
+            let Ok(metadata) = candidate.metadata() else {
+                continue;
+            };
+            #[cfg(unix)]
+            let executable = metadata.is_file() && metadata.permissions().mode() & 0o111 != 0;
+            #[cfg(not(unix))]
+            let executable = metadata.is_file();
+            if executable {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 fn run_timed(cmd: &mut Command, timeout: Duration) -> Result<bool, CoreError> {
@@ -71,17 +101,4 @@ fn run_timed(cmd: &mut Command, timeout: Duration) -> Result<bool, CoreError> {
             Err(e) => return Err(error::xls_bridge(e.to_string())),
         }
     }
-}
-
-fn tempfile_dir() -> Result<PathBuf, CoreError> {
-    let dir = std::env::temp_dir().join(format!(
-        "omacell-xls-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&dir).map_err(|e| error::xls_bridge(e.to_string()))?;
-    Ok(dir)
 }

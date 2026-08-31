@@ -31,16 +31,19 @@ pub fn open_bytes(bytes: &[u8]) -> Result<Workbook, CoreError> {
 
 struct CellStyle {
     style: Style,
+    num_fmt: Option<String>,
 }
 
 fn parse_styles(bytes: &[u8]) -> Result<BTreeMap<String, CellStyle>, CoreError> {
     if bytes.is_empty() {
         return Ok(BTreeMap::new());
     }
+    let number_formats = parse_number_formats(bytes)?;
     let mut reader = XmlReader::new(bytes);
     let mut out = BTreeMap::new();
     let mut name = String::new();
     let mut current = Style::default();
+    let mut current_num_fmt = None;
     let mut in_cell = false;
     while let Some(ev) = reader.next()? {
         match ev {
@@ -49,17 +52,24 @@ fn parse_styles(bytes: &[u8]) -> Result<BTreeMap<String, CellStyle>, CoreError> 
                 name = attr(&attrs, "name").unwrap_or("").to_string();
                 in_cell = family == "table-cell" || family.is_empty();
                 current = Style::default();
+                current_num_fmt = attr(&attrs, "data-style-name")
+                    .and_then(|style_name| number_formats.get(style_name))
+                    .cloned();
             }
             XmlEvent::Empty { name: tag, attrs } if tag == "style" => {
                 let family = attr(&attrs, "family").unwrap_or("");
                 name = attr(&attrs, "name").unwrap_or("").to_string();
                 in_cell = family == "table-cell" || family.is_empty();
                 current = Style::default();
+                current_num_fmt = attr(&attrs, "data-style-name")
+                    .and_then(|style_name| number_formats.get(style_name))
+                    .cloned();
                 if in_cell && !name.is_empty() {
                     out.insert(
                         name.clone(),
                         CellStyle {
                             style: current.clone(),
+                            num_fmt: current_num_fmt.clone(),
                         },
                     );
                 }
@@ -82,6 +92,7 @@ fn parse_styles(bytes: &[u8]) -> Result<BTreeMap<String, CellStyle>, CoreError> 
                         name.clone(),
                         CellStyle {
                             style: current.clone(),
+                            num_fmt: current_num_fmt.clone(),
                         },
                     );
                 }
@@ -92,6 +103,238 @@ fn parse_styles(bytes: &[u8]) -> Result<BTreeMap<String, CellStyle>, CoreError> 
     }
     let _ = bytes;
     Ok(out)
+}
+
+#[derive(Clone, Copy)]
+enum NumberStyleKind {
+    Number,
+    Percentage,
+    Currency,
+    Date,
+    Time,
+}
+
+struct NumberStyle {
+    name: String,
+    kind: NumberStyleKind,
+    code: String,
+    text: Option<(String, bool)>,
+}
+
+fn parse_number_formats(bytes: &[u8]) -> Result<BTreeMap<String, String>, CoreError> {
+    let mut reader = XmlReader::new(bytes);
+    let mut out = BTreeMap::new();
+    let mut current: Option<NumberStyle> = None;
+    while let Some(event) = reader.next()? {
+        match event {
+            XmlEvent::Start { name, attrs } => {
+                if let Some(kind) = number_style_kind(&name) {
+                    current = Some(NumberStyle {
+                        name: attr(&attrs, "name").unwrap_or("").to_string(),
+                        kind,
+                        code: String::new(),
+                        text: None,
+                    });
+                } else if let Some(style) = current.as_mut() {
+                    if name == "text" || name == "currency-symbol" {
+                        style.text = Some((String::new(), name == "currency-symbol"));
+                    } else {
+                        append_number_component(style, &name, &attrs)?;
+                    }
+                }
+            }
+            XmlEvent::Empty { name, attrs } => {
+                if let Some(kind) = number_style_kind(&name) {
+                    let style_name = attr(&attrs, "name").unwrap_or("");
+                    if !style_name.is_empty() {
+                        out.insert(
+                            style_name.to_string(),
+                            default_number_code(kind).to_string(),
+                        );
+                    }
+                } else if let Some(style) = current.as_mut() {
+                    append_number_component(style, &name, &attrs)?;
+                }
+            }
+            XmlEvent::Text(text) => {
+                if let Some((collected, _)) = current.as_mut().and_then(|style| style.text.as_mut())
+                {
+                    collected.push_str(&text);
+                }
+            }
+            XmlEvent::End { name } => {
+                if name == "text" || name == "currency-symbol" {
+                    if let Some(style) = current.as_mut()
+                        && let Some((text, currency)) = style.text.take()
+                    {
+                        if currency {
+                            style.code.insert_str(0, &excel_literal(&text));
+                        } else {
+                            style.code.push_str(&excel_literal(&text));
+                        }
+                    }
+                } else if number_style_kind(&name).is_some()
+                    && let Some(mut style) = current.take()
+                    && !style.name.is_empty()
+                {
+                    finish_number_code(&mut style);
+                    out.insert(style.name, style.code);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn number_style_kind(name: &str) -> Option<NumberStyleKind> {
+    match name {
+        "number-style" => Some(NumberStyleKind::Number),
+        "percentage-style" => Some(NumberStyleKind::Percentage),
+        "currency-style" => Some(NumberStyleKind::Currency),
+        "date-style" => Some(NumberStyleKind::Date),
+        "time-style" => Some(NumberStyleKind::Time),
+        _ => None,
+    }
+}
+
+fn append_number_component(
+    style: &mut NumberStyle,
+    name: &str,
+    attrs: &[(String, String)],
+) -> Result<(), CoreError> {
+    match name {
+        "number" => style.code.push_str(&decimal_pattern(attrs)?),
+        "scientific-number" => {
+            style.code.push_str(&decimal_pattern(attrs)?);
+            style.code.push_str("E+00");
+        }
+        "fraction" => style.code.push_str("# ?/?"),
+        "day" => style
+            .code
+            .push_str(if attr(attrs, "style") == Some("long") {
+                "dd"
+            } else {
+                "d"
+            }),
+        "month" => {
+            let long = attr(attrs, "style") == Some("long");
+            let textual = attr(attrs, "textual") == Some("true");
+            style.code.push_str(match (textual, long) {
+                (true, true) => "mmmm",
+                (true, false) => "mmm",
+                (false, true) => "mm",
+                (false, false) => "m",
+            });
+        }
+        "year" => style
+            .code
+            .push_str(if attr(attrs, "style") == Some("long") {
+                "yyyy"
+            } else {
+                "yy"
+            }),
+        "hours" => style
+            .code
+            .push_str(if attr(attrs, "style") == Some("long") {
+                "hh"
+            } else {
+                "h"
+            }),
+        "minutes" => style
+            .code
+            .push_str(if attr(attrs, "style") == Some("long") {
+                "mm"
+            } else {
+                "m"
+            }),
+        "seconds" => {
+            style
+                .code
+                .push_str(if attr(attrs, "style") == Some("long") {
+                    "ss"
+                } else {
+                    "s"
+                });
+            let decimals = bounded_count(attrs, "decimal-places", 15, 0)?;
+            if decimals > 0 {
+                style.code.push('.');
+                style.code.extend(std::iter::repeat_n('0', decimals));
+            }
+        }
+        "am-pm" => style.code.push_str(" AM/PM"),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn decimal_pattern(attrs: &[(String, String)]) -> Result<String, CoreError> {
+    let integers = bounded_count(attrs, "min-integer-digits", 30, 1)?.max(1);
+    let decimals = bounded_count(attrs, "decimal-places", 30, 0)?;
+    let grouping = attr(attrs, "grouping") == Some("true");
+    let mut code = if grouping {
+        format!("#,##{}", "0".repeat(integers))
+    } else {
+        "0".repeat(integers)
+    };
+    if decimals > 0 {
+        code.push('.');
+        code.extend(std::iter::repeat_n('0', decimals));
+    }
+    Ok(code)
+}
+
+fn bounded_count(
+    attrs: &[(String, String)],
+    name: &str,
+    maximum: usize,
+    default: usize,
+) -> Result<usize, CoreError> {
+    let Some(raw) = attr(attrs, name) else {
+        return Ok(default);
+    };
+    raw.parse::<usize>()
+        .ok()
+        .filter(|value| *value <= maximum)
+        .ok_or_else(|| error::ods_format(format!("invalid number-format {name} value {raw:?}")))
+}
+
+fn finish_number_code(style: &mut NumberStyle) {
+    if style.code.is_empty() {
+        style.code.push_str(default_number_code(style.kind));
+    }
+    match style.kind {
+        NumberStyleKind::Percentage if !style.code.contains('%') => style.code.push('%'),
+        NumberStyleKind::Currency
+            if !style
+                .code
+                .chars()
+                .any(|ch| matches!(ch, '$' | '\u{00a3}' | '\u{20ac}' | '\u{00a5}')) =>
+        {
+            style.code.insert(0, '$');
+        }
+        _ => {}
+    }
+}
+
+fn default_number_code(kind: NumberStyleKind) -> &'static str {
+    match kind {
+        NumberStyleKind::Number => "0.00",
+        NumberStyleKind::Percentage => "0.00%",
+        NumberStyleKind::Currency => "$#,##0.00",
+        NumberStyleKind::Date => "m/d/yyyy",
+        NumberStyleKind::Time => "h:mm:ss",
+    }
+}
+
+fn excel_literal(text: &str) -> String {
+    if text
+        .chars()
+        .all(|ch| matches!(ch, '/' | '-' | ':' | ' ' | ',' | '.' | '%' | '$'))
+    {
+        text.to_string()
+    } else {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    }
 }
 
 fn apply_text_props(font: &mut Font, attrs: &[(String, String)]) {
@@ -113,6 +356,9 @@ fn apply_text_props(font: &mut Font, attrs: &[(String, String)]) {
 
 fn parse_color(spec: &str) -> Option<Color> {
     let hex = spec.strip_prefix('#')?;
+    if !matches!(hex.len(), 6 | 8) {
+        return None;
+    }
     let rgb = u32::from_str_radix(hex, 16).ok()?;
     let argb = if hex.len() == 6 {
         0xFF00_0000 | rgb
@@ -150,7 +396,7 @@ fn parse_content_inner(
                 let sheet = if sheet_index == 0 {
                     let id = wb.active_sheet();
                     if table_name != "Sheet1" {
-                        let _ = wb.rename_sheet(id, &table_name);
+                        wb.rename_sheet(id, &table_name)?;
                     }
                     id
                 } else {
@@ -171,14 +417,19 @@ fn parse_content_inner(
             _ => {}
         }
     }
+    if sheet_index == 0 {
+        return Err(error::ods_format(
+            "content.xml contains no spreadsheet table",
+        ));
+    }
     for (name, addr) in names {
         if let Some(range) = parse_ods_range(wb, &addr) {
-            let _ = wb.define_name(DefinedName {
+            wb.define_name(DefinedName {
                 name,
                 scope: NameScope::Workbook,
                 referent: NameReferent::Range(range),
                 comment: None,
-            });
+            })?;
         }
     }
     Ok(())
@@ -194,7 +445,7 @@ fn parse_table(
     while let Some(ev) = reader.next()? {
         match ev {
             XmlEvent::Start { name, attrs } if name == "table-row" => {
-                let repeat = repeat_count(&attrs);
+                let repeat = repeated(&attrs, "number-rows-repeated", MAX_ROWS)?;
                 let start_row = row;
                 parse_row(wb, reader, sheet, start_row, styles)?;
                 row = row
@@ -207,7 +458,7 @@ fn parse_table(
             }
             XmlEvent::Empty { name, attrs } if name == "table-row" => {
                 row = row
-                    .checked_add(repeat_count(&attrs))
+                    .checked_add(repeated(&attrs, "number-rows-repeated", MAX_ROWS)?)
                     .filter(|r| *r <= MAX_ROWS)
                     .ok_or_else(|| error::ods_format("row repeat exceeds the grid"))?;
             }
@@ -215,7 +466,9 @@ fn parse_table(
             _ => {}
         }
     }
-    Ok(())
+    Err(error::ods_format(
+        "unexpected end of content.xml inside table",
+    ))
 }
 
 fn parse_row(
@@ -237,14 +490,22 @@ fn parse_row(
             }
             XmlEvent::Start { name, attrs } if name == "covered-table-cell" => {
                 col = col
-                    .checked_add(repeat_count(&attrs))
+                    .checked_add(repeated(
+                        &attrs,
+                        "number-columns-repeated",
+                        u32::from(MAX_COLS),
+                    )?)
                     .filter(|c| *c <= u32::from(MAX_COLS))
                     .ok_or_else(|| error::ods_format("covered cells exceed the grid"))?;
                 skip_until(reader, "covered-table-cell")?;
             }
             XmlEvent::Empty { name, attrs } if name == "covered-table-cell" => {
                 col = col
-                    .checked_add(repeat_count(&attrs))
+                    .checked_add(repeated(
+                        &attrs,
+                        "number-columns-repeated",
+                        u32::from(MAX_COLS),
+                    )?)
                     .filter(|c| *c <= u32::from(MAX_COLS))
                     .ok_or_else(|| error::ods_format("covered cells exceed the grid"))?;
             }
@@ -252,7 +513,9 @@ fn parse_row(
             _ => {}
         }
     }
-    Ok(())
+    Err(error::ods_format(
+        "unexpected end of content.xml inside table row",
+    ))
 }
 
 fn emit_cell(
@@ -264,29 +527,29 @@ fn emit_cell(
     text: &str,
     styles: &BTreeMap<String, CellStyle>,
 ) -> Result<u32, CoreError> {
-    let repeat = repeat_count(&attrs);
-    let span_cols = attr(&attrs, "number-columns-spanned")
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(1)
-        .max(1);
-    let span_rows = attr(&attrs, "number-rows-spanned")
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(1)
-        .max(1);
-    write_cell(wb, sheet, row, col as u16, &attrs, text, styles)?;
-    if span_cols > 1 || span_rows > 1 {
-        let end_row = row.saturating_add(span_rows - 1);
-        let end_col = (col as u16).saturating_add((span_cols as u16).saturating_sub(1));
-        if let (Ok(start), Ok(end)) = (
-            CellRef::new(row, col as u16),
-            CellRef::new(end_row, end_col),
-        ) {
-            let _ = omacell_core::ops::merge(wb, sheet, RangeRef::from_corners(start, end));
+    let repeat = repeated(&attrs, "number-columns-repeated", u32::from(MAX_COLS))?;
+    let span_cols = positive_count(&attrs, "number-columns-spanned", u32::from(MAX_COLS))?;
+    let span_rows = positive_count(&attrs, "number-rows-spanned", MAX_ROWS)?;
+    let advance = repeat
+        .checked_mul(span_cols)
+        .and_then(|count| col.checked_add(count))
+        .filter(|end| *end <= u32::from(MAX_COLS))
+        .ok_or_else(|| error::ods_format("repeated cell exceeds the column grid"))?;
+    let end_row = row
+        .checked_add(span_rows - 1)
+        .filter(|end| *end < MAX_ROWS)
+        .ok_or_else(|| error::ods_format("cell span exceeds the row grid"))?;
+    for index in 0..repeat {
+        let start_col = col + index * span_cols;
+        let end_col = start_col + span_cols - 1;
+        write_cell(wb, sheet, row, start_col as u16, &attrs, text, styles)?;
+        if span_cols > 1 || span_rows > 1 {
+            let start = CellRef::new(row, start_col as u16)?;
+            let end = CellRef::new(end_row, end_col as u16)?;
+            omacell_core::ops::merge(wb, sheet, RangeRef::from_corners(start, end))?;
         }
     }
-    col.checked_add(repeat.max(span_cols))
-        .filter(|c| *c <= u32::from(MAX_COLS))
-        .ok_or_else(|| error::ods_format("column repeat exceeds the grid"))
+    Ok(advance)
 }
 
 fn collect_cell_text(reader: &mut XmlReader<'_>) -> Result<String, CoreError> {
@@ -299,7 +562,7 @@ fn collect_cell_text(reader: &mut XmlReader<'_>) -> Result<String, CoreError> {
             XmlEvent::End { name } => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 && name == "table-cell" {
-                    break;
+                    return Ok(text.trim_end_matches('\n').to_string());
                 }
                 if name == "p" {
                     text.push('\n');
@@ -308,7 +571,9 @@ fn collect_cell_text(reader: &mut XmlReader<'_>) -> Result<String, CoreError> {
             _ => {}
         }
     }
-    Ok(text.trim_end_matches('\n').to_string())
+    Err(error::ods_format(
+        "unexpected end of content.xml inside table cell",
+    ))
 }
 
 fn skip_until(reader: &mut XmlReader<'_>, end: &str) -> Result<(), CoreError> {
@@ -325,7 +590,9 @@ fn skip_until(reader: &mut XmlReader<'_>, end: &str) -> Result<(), CoreError> {
             _ => {}
         }
     }
-    Ok(())
+    Err(error::ods_format(format!(
+        "unexpected end of content.xml inside {end}"
+    )))
 }
 
 fn write_cell(
@@ -337,30 +604,41 @@ fn write_cell(
     text: &str,
     styles: &BTreeMap<String, CellStyle>,
 ) -> Result<(), CoreError> {
+    let value_type = attr(attrs, "value-type").unwrap_or("string");
     if let Some(formula) = attr(attrs, "formula") {
         let src = ods_formula_to_excel(formula);
         wb.set_formula_text(sheet, row, col, &src)?;
     } else {
-        match attr(attrs, "value-type").unwrap_or("string") {
+        match value_type {
             "float" | "percentage" | "currency" => {
-                let n = attr(attrs, "value")
-                    .or(attr(attrs, "currency"))
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .or_else(|| text.parse().ok())
-                    .unwrap_or(0.0);
+                let raw = attr(attrs, "value")
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| (!text.is_empty()).then_some(text))
+                    .ok_or_else(|| error::ods_format("numeric cell is missing office:value"))?;
+                let n = raw
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| error::ods_format(format!("invalid numeric value {raw:?}")))?;
                 wb.set_number(sheet, row, col, n)?;
             }
             "boolean" => {
                 let v = attr(attrs, "boolean-value").unwrap_or(text);
-                let b = v.eq_ignore_ascii_case("true");
+                let b = match v {
+                    "true" | "1" => true,
+                    "false" | "0" => false,
+                    _ => {
+                        return Err(error::ods_format(format!("invalid boolean value {v:?}")));
+                    }
+                };
                 wb.set_cell_contents(sheet, row, col, if b { "TRUE" } else { "FALSE" })?;
             }
             "date" => {
-                if let Some(serial) = attr(attrs, "date-value").and_then(ods_date_serial) {
-                    wb.set_number(sheet, row, col, serial as f64)?;
-                } else if !text.is_empty() {
-                    wb.set_text(sheet, row, col, text)?;
-                }
+                let raw = attr(attrs, "date-value")
+                    .ok_or_else(|| error::ods_format("date cell is missing office:date-value"))?;
+                let serial = ods_date_serial(raw)
+                    .ok_or_else(|| error::ods_format(format!("invalid ODS date {raw:?}")))?;
+                wb.set_number(sheet, row, col, serial as f64)?;
             }
             _ => {
                 if !text.is_empty() {
@@ -369,10 +647,22 @@ fn write_cell(
             }
         }
     }
-    if let Some(style_name) = attr(attrs, "style-name")
-        && let Some(cs) = styles.get(style_name)
-    {
-        wb.set_cell_style(sheet, row, col, cs.style.clone())?;
+    let cell_style = attr(attrs, "style-name").and_then(|style_name| styles.get(style_name));
+    let fallback_num_fmt = match value_type {
+        "percentage" => Some("0.00%"),
+        "currency" => Some("$#,##0.00"),
+        "date" => Some("m/d/yyyy"),
+        _ => None,
+    };
+    if cell_style.is_some() || fallback_num_fmt.is_some() {
+        let mut style = cell_style.map(|cs| cs.style.clone()).unwrap_or_default();
+        if let Some(code) = cell_style
+            .and_then(|cs| cs.num_fmt.as_deref())
+            .or(fallback_num_fmt)
+        {
+            style.num_fmt = wb.intern_num_fmt(code)?;
+        }
+        wb.set_cell_style(sheet, row, col, style)?;
     }
     Ok(())
 }
@@ -405,12 +695,16 @@ fn ods_formula_to_excel(src: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch == '[' {
             while chars.peek().is_some_and(|c| *c != ']') {
-                let n = chars.next().unwrap();
+                let Some(n) = chars.next() else {
+                    break;
+                };
                 if n != '.' {
                     out.push(n);
                 }
             }
             let _ = chars.next();
+        } else if ch == ';' {
+            out.push(',');
         } else {
             out.push(ch);
         }
@@ -418,39 +712,37 @@ fn ods_formula_to_excel(src: &str) -> String {
     out
 }
 
-fn repeat_count(attrs: &[(String, String)]) -> u32 {
-    attr(attrs, "number-columns-repeated")
-        .or_else(|| attr(attrs, "number-rows-repeated"))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
-        .clamp(1, MAX_REPEATED)
+fn repeated(attrs: &[(String, String)], name: &str, maximum: u32) -> Result<u32, CoreError> {
+    positive_count(attrs, name, maximum.min(MAX_REPEATED))
+}
+
+fn positive_count(attrs: &[(String, String)], name: &str, maximum: u32) -> Result<u32, CoreError> {
+    let Some(raw) = attr(attrs, name) else {
+        return Ok(1);
+    };
+    raw.parse::<u32>()
+        .ok()
+        .filter(|value| (1..=maximum).contains(value))
+        .ok_or_else(|| error::ods_format(format!("invalid {name} value {raw:?}")))
 }
 
 fn copy_row(wb: &mut Workbook, sheet: SheetId, src: u32, repeat: u32) -> Result<(), CoreError> {
     let Some(used) = wb.used_range(sheet)? else {
         return Ok(());
     };
+    let cells = (used.min_col..=used.max_col)
+        .filter_map(|col| {
+            wb.get(sheet, src, col)
+                .ok()
+                .flatten()
+                .copied()
+                .map(|slot| (col, slot))
+        })
+        .collect::<Vec<_>>();
     for i in 1..repeat {
         let dest = src + i;
-        for col in used.min_col..=used.max_col {
-            if let Some(slot) = wb.get(sheet, src, col)? {
-                let input = if let Some(fid) = slot.formula {
-                    wb.intern().formulas.get(fid).unwrap_or("").to_string()
-                } else {
-                    match slot.value {
-                        omacell_core::value::Value::Number(n) => n.to_string(),
-                        omacell_core::value::Value::Bool(true) => "TRUE".into(),
-                        omacell_core::value::Value::Bool(false) => "FALSE".into(),
-                        omacell_core::value::Value::Text(id) => {
-                            wb.intern().strings.get(id).unwrap_or("").to_string()
-                        }
-                        _ => continue,
-                    }
-                };
-                if !input.is_empty() {
-                    wb.set_cell_contents(sheet, dest, col, &input)?;
-                }
-            }
+        for (col, slot) in &cells {
+            wb.set_slot(sheet, dest, *col, *slot)?;
         }
     }
     Ok(())
@@ -458,14 +750,13 @@ fn copy_row(wb: &mut Workbook, sheet: SheetId, src: u32, repeat: u32) -> Result<
 
 fn parse_ods_range(wb: &Workbook, addr: &str) -> Option<RangeRef> {
     let addr = addr.trim().trim_start_matches('$');
-    let (sheet_name, body) = addr.split_once('.').unwrap_or(("", addr));
-    let sheet_name = sheet_name.trim_start_matches('$');
+    let (sheet_name, body) = split_ods_sheet(addr).unwrap_or_else(|| (String::new(), addr));
     let sheet = if sheet_name.is_empty() {
         wb.active_sheet()
     } else {
-        wb.sheet_by_name(sheet_name)?.id
+        wb.sheet_by_name(&sheet_name)?.id
     };
-    let body = body.replace('$', "");
+    let body = body.replace(['$', '.'], "");
     let (start, end) = match body.split_once(':') {
         Some((a, b)) => (parse_a1_cell(a)?, parse_a1_cell(b)?),
         None => {
@@ -476,6 +767,29 @@ fn parse_ods_range(wb: &Workbook, addr: &str) -> Option<RangeRef> {
     let start = start.on_sheet(sheet);
     let end = end.on_sheet(sheet);
     Some(RangeRef::from_corners(start, end))
+}
+
+fn split_ods_sheet(addr: &str) -> Option<(String, &str)> {
+    if let Some(rest) = addr.strip_prefix('\'') {
+        let bytes = rest.as_bytes();
+        let mut index = 0usize;
+        while index < bytes.len() {
+            if bytes[index] == b'\'' {
+                if bytes.get(index + 1) == Some(&b'\'') {
+                    index += 2;
+                    continue;
+                }
+                let tail = rest.get(index + 1..)?.strip_prefix('.')?;
+                let quoted = rest.get(..index)?.replace("''", "'");
+                return Some((quoted, tail));
+            }
+            index += 1;
+        }
+        None
+    } else {
+        addr.split_once('.')
+            .map(|(sheet, tail)| (sheet.to_string(), tail))
+    }
 }
 
 fn parse_a1_cell(text: &str) -> Option<CellRef> {

@@ -8,9 +8,10 @@ use omacell_core::workbook::Workbook;
 use crate::csv::{ClipboardFormat, ClipboardTable, parse_clipboard};
 use crate::error;
 use crate::xlsx::xml::escape;
-use crate::xlsx::{acquire_lock, peer_lock_blocks, release_lock};
+use crate::xlsx::{SaveOptions, atomic_write_bytes, peer_lock_blocks};
 
 const MAX_TABLE_FILE_BYTES: usize = 8 * 1_048_576;
+const MAX_TABLE_EXPORT_CELLS: u64 = 1_000_000;
 
 /// Open an HTML file (first `<table>`).
 pub fn open_html(path: &Path) -> Result<Workbook, CoreError> {
@@ -24,6 +25,12 @@ pub fn open_markdown(path: &Path) -> Result<Workbook, CoreError> {
 
 /// Open HTML or Markdown bytes.
 pub fn open_bytes(bytes: &[u8], kind: ClipboardFormat) -> Result<Workbook, CoreError> {
+    if bytes.len() > MAX_TABLE_FILE_BYTES {
+        return Err(error::xlsx_limit(format!(
+            "table file is {} bytes; maximum is {MAX_TABLE_FILE_BYTES}",
+            bytes.len()
+        )));
+    }
     let text = std::str::from_utf8(bytes).map_err(|e| error::html_format(e.to_string()))?;
     table_to_workbook(parse_clipboard(text, kind).map_err(|err| {
         let mut mapped = CoreError::new(error::codes::HTML_FORMAT, err.message);
@@ -36,13 +43,15 @@ pub fn open_bytes(bytes: &[u8], kind: ClipboardFormat) -> Result<Workbook, CoreE
 
 fn open_kind(path: &Path, kind: ClipboardFormat) -> Result<Workbook, CoreError> {
     peer_lock_blocks(path)?;
-    let bytes = std::fs::read(path).map_err(|e| error::html_format(e.to_string()))?;
-    if bytes.len() > MAX_TABLE_FILE_BYTES {
+    let len = std::fs::metadata(path)
+        .map_err(|e| error::html_format(e.to_string()))?
+        .len();
+    if len > MAX_TABLE_FILE_BYTES as u64 {
         return Err(error::xlsx_limit(format!(
-            "table file is {} bytes; maximum is {MAX_TABLE_FILE_BYTES}",
-            bytes.len()
+            "table file is {len} bytes; maximum is {MAX_TABLE_FILE_BYTES}",
         )));
     }
+    let bytes = std::fs::read(path).map_err(|e| error::html_format(e.to_string()))?;
     open_bytes(&bytes, kind)
 }
 
@@ -60,7 +69,7 @@ fn table_to_workbook(table: ClipboardTable) -> Result<Workbook, CoreError> {
     }
     for rec in table.rows {
         for (c, cell) in rec.iter().enumerate() {
-            if !cell.starts_with('0')
+            if !has_significant_leading_zero(cell)
                 && let Ok(n) = cell.parse::<f64>()
                 && n.is_finite()
             {
@@ -89,11 +98,7 @@ pub fn export_markdown(wb: &Workbook) -> Result<Vec<u8>, CoreError> {
 
 /// Save HTML/Markdown with a peer lock.
 pub fn save(path: &Path, bytes: &[u8]) -> Result<(), CoreError> {
-    peer_lock_blocks(path)?;
-    let _ = acquire_lock(path);
-    let result = std::fs::write(path, bytes).map_err(|e| error::html_format(e.to_string()));
-    let _ = release_lock(path);
-    result
+    atomic_write_bytes(path, bytes, SaveOptions::default())
 }
 
 enum Markup {
@@ -109,6 +114,14 @@ fn export_markup(wb: &Workbook, kind: Markup) -> Result<String, CoreError> {
             Markup::Markdown => String::new(),
         });
     };
+    let row_count = u64::from(used.max_row - used.min_row + 1);
+    let col_count = u64::from(used.max_col - used.min_col + 1);
+    let cells = row_count.saturating_mul(col_count);
+    if cells > MAX_TABLE_EXPORT_CELLS {
+        return Err(error::xlsx_limit(format!(
+            "table export would visit {cells} cells; maximum is {MAX_TABLE_EXPORT_CELLS}"
+        )));
+    }
     let mut rows = Vec::new();
     for row in used.min_row..=used.max_row {
         let mut rec = Vec::new();
@@ -156,10 +169,23 @@ fn md_row(rec: &[String]) -> String {
     let mut out = String::from("|");
     for cell in rec {
         out.push(' ');
-        out.push_str(&cell.replace('|', "\\|"));
+        let escaped = cell
+            .replace('\\', "\\\\")
+            .replace('|', "\\|")
+            .replace("\r\n", "<br>")
+            .replace(['\r', '\n'], "<br>");
+        out.push_str(&escaped);
         out.push_str(" |");
     }
     out
+}
+
+fn has_significant_leading_zero(value: &str) -> bool {
+    let digits = value
+        .strip_prefix(['+', '-'])
+        .unwrap_or(value)
+        .strip_prefix('0');
+    digits.is_some_and(|rest| rest.as_bytes().first().is_some_and(u8::is_ascii_digit))
 }
 
 fn display_cell(wb: &Workbook, sheet: omacell_core::addr::SheetId, row: u32, col: u16) -> String {

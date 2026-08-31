@@ -16,4 +16,5 @@ pub mod ods;
 pub mod omc;
 pub mod parquet;
 pub mod pdf;
+mod temp;
 pub mod xlsx;

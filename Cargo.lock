@@ -4023,6 +4023,7 @@ name = "omacell-io"
 version = "0.0.0"
 dependencies = [
  "arrow",
+ "bytes",
  "calamine",
  "criterion",
  "csv",

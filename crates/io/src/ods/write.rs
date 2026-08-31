@@ -15,6 +15,8 @@ use crate::error;
 use crate::xlsx::opc::MAX_PACKAGE_BYTES;
 use crate::xlsx::xml::escape;
 
+const MAX_ODS_DENSE_CELLS: u64 = 1_000_000;
+
 /// Encode a workbook as ODS bytes.
 pub fn save_bytes(wb: &Workbook) -> Result<Vec<u8>, CoreError> {
     let mut buf = Cursor::new(Vec::new());
@@ -56,9 +58,20 @@ fn manifest() -> String {
 }
 
 fn content_xml(wb: &Workbook) -> Result<String, CoreError> {
+    for sheet in wb.sheets() {
+        if let Some(used) = sheet.used_range() {
+            let cells = u64::from(used.max_row + 1) * u64::from(used.max_col + 1);
+            if cells > MAX_ODS_DENSE_CELLS {
+                return Err(error::xlsx_limit(format!(
+                    "ODS dense export for sheet {:?} would visit {cells} cells; maximum is {MAX_ODS_DENSE_CELLS}",
+                    sheet.name
+                )));
+            }
+        }
+    }
     let mut out = String::from(
         r#"<?xml version="1.0" encoding="UTF-8"?>
-<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" office:version="1.3">
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2" office:version="1.3">
 <office:automatic-styles>
 "#,
     );
@@ -126,7 +139,7 @@ fn content_xml(wb: &Workbook) -> Result<String, CoreError> {
                                 .unwrap_or_default();
                             if let Some(fid) = slot.formula {
                                 let src = wb.intern().formulas.get(fid).unwrap_or("");
-                                let of = excel_formula_to_ods(src);
+                                let of = excel_formula_to_ods(src)?;
                                 out.push_str(&format!(
                                     r#"<table:table-cell table:formula="{}"{style_attr}{span}/>"#,
                                     escape(&of)
@@ -134,6 +147,11 @@ fn content_xml(wb: &Workbook) -> Result<String, CoreError> {
                             } else {
                                 match slot.value {
                                     Value::Number(n) => {
+                                        if !n.is_finite() {
+                                            return Err(error::ods_format(
+                                                "cannot export a non-finite ODS number",
+                                            ));
+                                        }
                                         out.push_str(&format!(
                                             r#"<table:table-cell office:value-type="float" office:value="{n}"{style_attr}{span}><text:p>{n}</text:p></table:table-cell>"#
                                         ));
@@ -188,6 +206,7 @@ fn content_xml(wb: &Workbook) -> Result<String, CoreError> {
                 col_to_letters(range.end.col).unwrap_or_else(|_| "A".into()),
                 range.end.row + 1
             );
+            let sheet_name = ods_quote_sheet(sheet_name);
             let addr = if a == b {
                 format!("${sheet_name}.${a}")
             } else {
@@ -265,7 +284,99 @@ fn rgb(color: Color) -> Option<u32> {
     }
 }
 
-fn excel_formula_to_ods(src: &str) -> String {
+fn excel_formula_to_ods(src: &str) -> Result<String, CoreError> {
     let body = src.trim().trim_start_matches('=');
-    format!("of:={body}")
+    let bytes = body.as_bytes();
+    let mut converted = String::with_capacity(body.len() + 16);
+    let mut index = 0usize;
+    let mut quoted = false;
+    while index < bytes.len() {
+        let ch = body[index..].chars().next().unwrap_or('\0');
+        let width = ch.len_utf8();
+        if ch == '"' {
+            converted.push(ch);
+            if quoted && bytes.get(index + width) == Some(&b'"') {
+                converted.push('"');
+                index += width * 2;
+                continue;
+            }
+            quoted = !quoted;
+            index += width;
+        } else if ch == ',' && !quoted {
+            converted.push(';');
+            index += width;
+        } else if ch == '!' && !quoted {
+            return Err(error::ods_format(
+                "basic ODS export does not support cross-sheet formula references",
+            ));
+        } else if !quoted
+            && formula_boundary_before(bytes, index)
+            && let Some(first_end) = a1_ref_end(body, index)
+        {
+            converted.push_str("[.");
+            converted.push_str(&body[index..first_end]);
+            if bytes.get(first_end) == Some(&b':')
+                && let Some(second_end) = a1_ref_end(body, first_end + 1)
+            {
+                converted.push_str(":.");
+                converted.push_str(&body[first_end + 1..second_end]);
+                index = second_end;
+            } else {
+                index = first_end;
+            }
+            converted.push(']');
+        } else {
+            converted.push(ch);
+            index += width;
+        }
+    }
+    Ok(format!("of:={converted}"))
+}
+
+fn formula_boundary_before(bytes: &[u8], index: usize) -> bool {
+    index == 0
+        || !bytes[index - 1].is_ascii_alphanumeric()
+            && !matches!(bytes[index - 1], b'_' | b'.' | b'!')
+}
+
+fn a1_ref_end(formula: &str, start: usize) -> Option<usize> {
+    let bytes = formula.as_bytes();
+    let mut index = start;
+    if bytes.get(index) == Some(&b'$') {
+        index += 1;
+    }
+    let letters_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_alphabetic) && index - letters_start < 3 {
+        index += 1;
+    }
+    if index == letters_start || bytes.get(index).is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let letters = formula.get(letters_start..index)?;
+    omacell_core::addr::col_from_letters(letters).ok()?;
+    if bytes.get(index) == Some(&b'$') {
+        index += 1;
+    }
+    let digits_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        index += 1;
+    }
+    if index == digits_start {
+        return None;
+    }
+    let row = formula.get(digits_start..index)?.parse::<u32>().ok()?;
+    if row == 0 || row > omacell_core::limits::MAX_ROWS {
+        return None;
+    }
+    if bytes
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'('))
+    {
+        return None;
+    }
+    Some(index)
+}
+
+fn ods_quote_sheet(name: &str) -> String {
+    format!("'{}'", name.replace('\'', "''"))
 }

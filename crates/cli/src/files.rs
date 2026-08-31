@@ -201,7 +201,12 @@ fn file_open(
     if ctx.is_cancelled() {
         return Err(cancelled());
     }
-    let mut opened = open_any_with_cancel(&path, ctx)?;
+    let libreoffice_fallback = session
+        .lock()
+        .config
+        .as_ref()
+        .is_some_and(|config| config.snapshot().config.integrations.libreoffice_fallback);
+    let mut opened = open_any_with_cancel(&path, ctx, libreoffice_fallback)?;
     if ctx.is_cancelled() {
         return Err(cancelled());
     }
@@ -486,11 +491,23 @@ fn cancelled() -> CoreError {
         .with_hint("the live workbook and destination file were left unchanged")
 }
 
-fn open_any_with_cancel(path: &Path, ctx: &CommandContext<'_>) -> Result<Opened, CoreError> {
+fn open_any_with_cancel(
+    path: &Path,
+    ctx: &CommandContext<'_>,
+    libreoffice_fallback: bool,
+) -> Result<Opened, CoreError> {
     let cancel = ctx.cancel_flag().cloned();
     let progress = ctx.progress_sink();
     if let Some(kind) = kind_from_path(path) {
-        return open_kind(path, kind, None, cancel, progress, None, true);
+        return open_kind(
+            path,
+            kind,
+            None,
+            cancel,
+            progress,
+            None,
+            libreoffice_fallback,
+        );
     }
     if let Ok(opened) = open_kind(
         path,
@@ -499,7 +516,7 @@ fn open_any_with_cancel(path: &Path, ctx: &CommandContext<'_>) -> Result<Opened,
         cancel.clone(),
         progress.clone(),
         None,
-        true,
+        libreoffice_fallback,
     ) {
         return Ok(opened);
     }
@@ -510,16 +527,24 @@ fn open_any_with_cancel(path: &Path, ctx: &CommandContext<'_>) -> Result<Opened,
         cancel.clone(),
         progress.clone(),
         None,
-        true,
+        libreoffice_fallback,
     ) {
         return Ok(opened);
     }
-    open_kind(path, FileKind::Csv, None, cancel, progress, None, true)
+    open_kind(
+        path,
+        FileKind::Csv,
+        None,
+        cancel,
+        progress,
+        None,
+        libreoffice_fallback,
+    )
 }
 
 /// Open a workbook by extension, then content sniff.
-pub fn open_any(path: &Path) -> Result<Opened, CoreError> {
-    open_any_with_plan(path, None)
+pub fn open_any(path: &Path, libreoffice_fallback: bool) -> Result<Opened, CoreError> {
+    open_any_with_plan(path, None, libreoffice_fallback)
 }
 
 /// Open an `.xlsx`/`.xlsm` or `.omc` from bytes already covered by a trust
@@ -554,28 +579,76 @@ pub(crate) fn open_scriptable_bytes(path: &Path, bytes: &[u8]) -> Result<Opened,
 pub(crate) fn open_any_with_plan(
     path: &Path,
     plan: Option<&csv::ImportPlan>,
+    libreoffice_fallback: bool,
 ) -> Result<Opened, CoreError> {
     if plan.is_some() {
-        return open_kind(path, FileKind::Csv, plan, None, None, None, true);
+        return open_kind(
+            path,
+            FileKind::Csv,
+            plan,
+            None,
+            None,
+            None,
+            libreoffice_fallback,
+        );
     }
     if let Some(kind) = kind_from_path(path) {
-        return open_kind(path, kind, None, None, None, None, true);
+        return open_kind(path, kind, None, None, None, None, libreoffice_fallback);
     }
-    if let Ok(opened) = open_kind(path, FileKind::Xlsx, None, None, None, None, true) {
+    if let Ok(opened) = open_kind(
+        path,
+        FileKind::Xlsx,
+        None,
+        None,
+        None,
+        None,
+        libreoffice_fallback,
+    ) {
         return Ok(opened);
     }
-    if let Ok(opened) = open_kind(path, FileKind::Omc, None, None, None, None, true) {
+    if let Ok(opened) = open_kind(
+        path,
+        FileKind::Omc,
+        None,
+        None,
+        None,
+        None,
+        libreoffice_fallback,
+    ) {
         return Ok(opened);
     }
-    open_kind(path, FileKind::Csv, None, None, None, None, true)
+    open_kind(
+        path,
+        FileKind::Csv,
+        None,
+        None,
+        None,
+        None,
+        libreoffice_fallback,
+    )
 }
 
 pub(crate) fn open_any_with_pointer(
     path: &Path,
     json_pointer: Option<&str>,
+    libreoffice_fallback: bool,
 ) -> Result<Opened, CoreError> {
     let kind = kind_from_path(path).unwrap_or(FileKind::Json);
-    open_kind(path, kind, None, None, None, json_pointer, true)
+    if kind != FileKind::Json {
+        return Err(CoreError::new(
+            "file.format",
+            "--jq is only valid for JSON input",
+        ));
+    }
+    open_kind(
+        path,
+        kind,
+        None,
+        None,
+        None,
+        json_pointer,
+        libreoffice_fallback,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -759,20 +832,20 @@ fn write_kind(
             ));
         }
         FileKind::Ods => {
-            omacell_io::ods::save(wb, path)?;
+            let bytes = omacell_io::ods::save_bytes(wb)?;
+            atomic_write_format_bytes(path, &bytes, keep_backups, cancel)?;
         }
         FileKind::Json => {
-            omacell_io::xlsx::peer_lock_blocks(path)?;
             let bytes = omacell_io::json::export(wb)?;
-            atomic_write_bytes(path, &bytes, cancel)?;
+            atomic_write_format_bytes(path, &bytes, keep_backups, cancel)?;
         }
         FileKind::Html => {
             let bytes = omacell_io::html::export_html(wb)?;
-            omacell_io::html::save(path, &bytes)?;
+            atomic_write_format_bytes(path, &bytes, keep_backups, cancel)?;
         }
         FileKind::Markdown => {
             let bytes = omacell_io::html::export_markdown(wb)?;
-            omacell_io::html::save(path, &bytes)?;
+            atomic_write_format_bytes(path, &bytes, keep_backups, cancel)?;
         }
         FileKind::Parquet | FileKind::Xls => {
             return Err(CoreError::new("file.format", "this format is read-only")
@@ -780,6 +853,23 @@ fn write_kind(
         }
     }
     Ok(())
+}
+
+fn atomic_write_format_bytes(
+    path: &Path,
+    bytes: &[u8],
+    keep_backups: u32,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), CoreError> {
+    let options = SaveOptions {
+        keep_backups,
+        lock: true,
+    };
+    if let Some(cancel) = cancel {
+        xlsx::atomic_write_bytes_with_cancel(path, bytes, options, cancel)
+    } else {
+        xlsx::atomic_write_bytes(path, bytes, options)
+    }
 }
 
 fn atomic_write_bytes(
@@ -1128,5 +1218,14 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"private");
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn jq_selector_is_rejected_for_non_json_input() {
+        let err = match open_any_with_pointer(Path::new("book.xlsx"), Some(".items"), false) {
+            Ok(_) => panic!("non-JSON --jq unexpectedly succeeded"),
+            Err(err) => err,
+        };
+        assert_eq!(err.code, "file.format");
     }
 }

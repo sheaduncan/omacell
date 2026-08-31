@@ -26,8 +26,9 @@ mod write;
 pub(crate) mod xml;
 
 pub use atomic::{
-    SaveOptions, acquire_lock, lock_path, peer_lock_blocks, release_lock, save, save_with_cancel,
-    save_workbook, save_workbook_with_cancel,
+    SaveOptions, acquire_lock, atomic_write_bytes, atomic_write_bytes_with_cancel, lock_path,
+    peer_lock_blocks, release_lock, save, save_with_cancel, save_workbook,
+    save_workbook_with_cancel,
 };
 pub use diff::{DiffReport, diff};
 pub use opc::{
@@ -74,6 +75,7 @@ pub struct XlsxDocument {
 
 /// Open a path.
 pub fn open(path: &Path) -> Result<XlsxDocument, CoreError> {
+    peer_lock_blocks(path)?;
     let len = std::fs::metadata(path)
         .map_err(|e| error::xlsx_zip(e.to_string()))?
         .len();

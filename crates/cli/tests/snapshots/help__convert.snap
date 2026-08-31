@@ -18,7 +18,7 @@ Options:
       --plan <FILE>           Shared WP-08 CSV import plan JSON
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
-      --jq <PATH>             jq-style dotted path into a JSON array (`.items`)
+      --jq <PATH>             Dotted selector into a JSON array (`.items`)
       --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
   -q, --quiet                 Suppress non-error human output
   -v, --verbose...            Increase log verbosity
