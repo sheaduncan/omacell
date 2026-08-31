@@ -1,7 +1,5 @@
 //! Status-line segment model.
 
-use omacell_core::error::ErrorKind;
-use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 
 /// One status-line cell.
@@ -71,15 +69,7 @@ pub fn diagnose_offer(wb: &Workbook, diagnose_offers: bool, agent_visible: bool)
     if !diagnose_offers || !agent_visible {
         return None;
     }
-    let mut refs = 0u32;
-    for sheet in wb.sheets() {
-        for (_, _, slot) in sheet.store.iter() {
-            if matches!(slot.value, Value::Error(ErrorKind::Ref)) {
-                refs += 1;
-            }
-        }
-    }
-    if refs >= 2 {
+    if wb.ref_error_count() >= 2 {
         Some("#REF! cascade · Diagnose with agent".into())
     } else {
         None

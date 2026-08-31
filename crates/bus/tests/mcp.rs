@@ -4,9 +4,12 @@ use omacell_bus::mcp::{
     McpCtx, McpSession, TOOLS, catalog_json, parse_resource_uri, render_markdown, stub_card,
     tool_names,
 };
-use omacell_bus::{Bus, codes, register_audit_commands};
+use omacell_bus::{
+    Bus, CommandKind, CommandSpec, Effect, Exposure, codes, register_audit_commands,
+};
 use omacell_core::command::Origin;
 use omacell_core::eval::FnRegistry;
+use omacell_core::event::Event;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use serde_json::{Value, json};
@@ -82,7 +85,7 @@ fn catalog_is_sorted_complete_and_matches_docs() {
 fn every_tool_and_resource_against_fixture() {
     let mut bus = bus();
     let mut ctx = McpCtx {
-        open_path: Some("/tmp/fixture.xlsx".into()),
+        open_path: Some("/workbooks/fixture.xlsx".into()),
         ..McpCtx::default()
     };
     bus.execute(Origin::User, "cell.set", json!({"ref": "A1", "input": "1"}));
@@ -102,7 +105,7 @@ fn every_tool_and_resource_against_fixture() {
     );
 
     let listed = call_ok(&mut bus, &mut ctx, "workbook_list", json!({}));
-    assert_eq!(listed["files"][0], "/tmp/fixture.xlsx");
+    assert_eq!(listed["files"][0], "/workbooks/fixture.xlsx");
 
     let read = call_ok(
         &mut bus,
@@ -225,6 +228,9 @@ fn errors_unknown_tool_bad_args_pagination_and_policy() {
     let err = call(&mut bus, &mut ctx, "range_read", json!({"extra": true})).unwrap_err();
     assert_eq!(err.code, codes::MCP_ARGS);
 
+    let err = call(&mut bus, &mut ctx, "card", json!({"extra": true})).unwrap_err();
+    assert_eq!(err.code, codes::MCP_ARGS);
+
     let err = call(
         &mut bus,
         &mut ctx,
@@ -248,7 +254,116 @@ fn errors_unknown_tool_bad_args_pagination_and_policy() {
     assert_eq!(err.code, codes::MCP_RENDER);
     assert!(err.message.contains("GUI not running"));
 
+    let err = call(
+        &mut bus,
+        &mut ctx,
+        "command_run",
+        json!({"id": "edit.undo", "args": {}}),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, codes::COMMAND_DENIED);
+
     parse_resource_uri("http://x").unwrap_err();
+}
+
+#[test]
+fn card_named_sheet_has_a_distinct_resource_uri() {
+    let mut bus = bus();
+    let renamed = bus.execute(
+        Origin::User,
+        "sheet.rename",
+        json!({"sheet": "Sheet1", "name": "card"}),
+    );
+    assert!(renamed.ok, "{:?}", renamed.error);
+    let ctx = McpCtx {
+        open_path: Some("book.xlsx".into()),
+        ..McpCtx::default()
+    };
+    let resources = McpSession::list_resources(&bus, &ctx);
+    assert_eq!(resources.len(), 2);
+    assert_ne!(resources[0]["uri"], resources[1]["uri"]);
+    let sheet_uri = resources[1]["uri"].as_str().unwrap();
+    assert!(sheet_uri.ends_with("/%63ard"));
+    let sheet = McpSession::read_resource(&bus, &ctx, sheet_uri).unwrap();
+    assert_eq!(sheet["name"], "card");
+}
+
+#[test]
+fn opening_a_workbook_discards_changesets_from_the_previous_workbook() {
+    let mut bus = bus();
+    bus.registry_mut()
+        .register::<omacell_bus::args::EmptyArgs, _>(
+            CommandSpec {
+                id: "file.open",
+                doc: "test workbook open",
+                kind: CommandKind::Mutating,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, _args| {
+                Ok(Effect {
+                    events: vec![Event::WorkbookOpened {
+                        path: Some("next.xlsx".into()),
+                    }],
+                    ..Effect::default()
+                })
+            },
+        )
+        .unwrap();
+    let proposed = bus
+        .propose(
+            Origin::ExternalAgent,
+            vec![omacell_core::changeset::CommandCall {
+                id: omacell_core::command::CommandId::new("cell.set").unwrap(),
+                args: json!({"ref": "A1", "input": "old"}),
+            }],
+        )
+        .unwrap();
+    assert_eq!(
+        proposed.status,
+        omacell_core::changeset::ChangesetStatus::Proposed
+    );
+    assert_eq!(bus.list_changesets().len(), 1);
+    let opened = bus.execute(Origin::User, "file.open", json!({}));
+    assert!(opened.ok, "{:?}", opened.error);
+    assert!(bus.list_changesets().is_empty());
+}
+
+#[test]
+fn range_read_caps_serialized_page_bytes_without_stalling_pagination() {
+    let mut bus = bus();
+    let value = "x".repeat(32_768);
+    let values: Vec<Vec<Option<String>>> = (0..40).map(|_| vec![Some(value.clone())]).collect();
+    let written = bus.execute(
+        Origin::User,
+        "range.set",
+        json!({"range": "A1:A40", "values": values}),
+    );
+    assert!(written.ok, "{:?}", written.error);
+    let mut ctx = McpCtx::default();
+    let first = call_ok(
+        &mut bus,
+        &mut ctx,
+        "range_read",
+        json!({"range": "A1:A40", "fields": ["values"], "limit": 40}),
+    );
+    let returned = first["rows"].as_array().unwrap().len();
+    assert!(returned > 0 && returned < 40);
+    assert_eq!(first["truncated"], true);
+    let second = call_ok(
+        &mut bus,
+        &mut ctx,
+        "range_read",
+        json!({
+            "range": "A1:A40",
+            "fields": ["values"],
+            "offset": returned,
+            "limit": 40
+        }),
+    );
+    assert_eq!(second["rows"].as_array().unwrap().len(), 40 - returned);
+    assert_eq!(second["truncated"], false);
 }
 
 #[test]

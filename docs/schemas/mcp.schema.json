@@ -126,7 +126,7 @@
       "name": "changeset_revert"
     },
     {
-      "description": "Invoke any public registry command. Mutating calls default to a changeset proposal.",
+      "description": "Invoke a public query or changeset-eligible command. Mutations default to a proposal.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -230,7 +230,7 @@
       "name": "formula_set"
     },
     {
-      "description": "Read values, formulas, and/or formats from an A1 range (paginated by row).",
+      "description": "Read values, formulas, and/or formats from an A1 range (row-paginated, 1 MiB pages).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,

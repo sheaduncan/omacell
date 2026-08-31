@@ -182,6 +182,8 @@ The MCP tool names, argument schemas, and resource URI templates freeze with thi
 
 `<file>` is a percent-encoded path (one URI segment). Write tools default to `Origin::ExternalAgent` changeset proposals. `apply=true` is denied by mutation policy.
 
+`Workbook::ref_error_count()` exposes the incrementally maintained `#REF!` count used to gate the WP-21 diagnose offer without scanning stored cells during paint.
+
 ## Corpora
 
 - [`tests/corpus/addr/a1.tsv`](../tests/corpus/addr/a1.tsv)

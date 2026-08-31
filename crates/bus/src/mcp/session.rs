@@ -9,9 +9,9 @@ use omacell_core::workbook::Workbook;
 use serde_json::{Map, Value as Json};
 
 use super::catalog::{
-    ChangesetIdArgs, ChangesetProposeArgs, CommandRunArgs, EmptyArgs, ExportArgs, FormulaSetArgs,
-    RangeReadArgs, RangeWriteArgs, RecalcArgs, RenderArgs, SheetAddToolArgs, SheetRenameToolArgs,
-    WorkbookOpenArgs, WorkbookSaveArgs,
+    CardArgs, ChangesetIdArgs, ChangesetProposeArgs, CommandRunArgs, EmptyArgs, ExportArgs,
+    FormulaSetArgs, RangeReadArgs, RangeWriteArgs, RecalcArgs, RenderArgs, SheetAddToolArgs,
+    SheetRenameToolArgs, WorkbookOpenArgs, WorkbookSaveArgs,
 };
 use super::uri::{ResourceKind, card_uri, parse_resource_uri, sheet_uri};
 use crate::error::codes;
@@ -27,6 +27,8 @@ pub const MAX_PAGE_ROWS: u32 = 1_024;
 pub const MAX_MCP_JSON_BYTES: usize = 1_048_576;
 /// Maximum JSON nesting for MCP arguments.
 pub const MAX_MCP_JSON_DEPTH: u32 = 32;
+/// Maximum serialized cell rows returned by one `range_read` page.
+pub const MAX_RANGE_READ_BYTES: usize = 1_048_576;
 
 /// Called after an `ExternalAgent` proposal is stored.
 pub type ProposeHook = Box<dyn Fn(&Changeset) + Send + Sync>;
@@ -81,7 +83,10 @@ impl McpSession {
             "commands_list" => commands_list(bus, parse_args::<EmptyArgs>(args)?),
             "recalc" => recalc(bus, parse_args(args)?),
             "audit" => audit(bus, parse_args::<EmptyArgs>(args)?),
-            "card" => Ok(stub_card(bus.workbook(), ctx.open_path.as_deref())),
+            "card" => {
+                let _ = parse_args::<CardArgs>(args)?;
+                Ok(stub_card(bus.workbook(), ctx.open_path.as_deref()))
+            }
             "changeset_propose" => changeset_propose(bus, ctx, parse_args(args)?),
             "changeset_apply" => changeset_apply(bus, parse_args(args)?),
             "changeset_revert" => changeset_revert(bus, parse_args(args)?),
@@ -237,14 +242,22 @@ fn workbook_list(ctx: &McpCtx, _args: EmptyArgs) -> Result<Json, CoreError> {
     Ok(serde_json::json!({ "files": files }))
 }
 
-fn workbook_save(bus: &mut Bus, ctx: &McpCtx, args: WorkbookSaveArgs) -> Result<Json, CoreError> {
+fn workbook_save(
+    bus: &mut Bus,
+    ctx: &mut McpCtx,
+    args: WorkbookSaveArgs,
+) -> Result<Json, CoreError> {
     let mut payload = Map::new();
     if let Some(path) = args.path {
         payload.insert("path".into(), Json::String(path));
     } else if let Some(path) = &ctx.open_path {
         payload.insert("path".into(), Json::String(path.clone()));
     }
-    user_execute(bus, "file.save", Json::Object(payload))
+    let result = user_execute(bus, "file.save", Json::Object(payload))?;
+    if let Some(path) = result.get("path").and_then(Json::as_str) {
+        ctx.open_path = Some(path.to_string());
+    }
+    Ok(result)
 }
 
 fn sheet_list(bus: &Bus, _args: EmptyArgs) -> Result<Json, CoreError> {
@@ -310,14 +323,16 @@ fn range_read(bus: &Bus, args: RangeReadArgs) -> Result<Json, CoreError> {
         }));
     }
     let end_row = (start_row.saturating_add(limit) - 1).min(max_row);
-    let truncated = end_row < max_row;
     let want_values = fields.contains(&"values");
     let want_formulas = fields.contains(&"formulas");
     let want_formats = fields.contains(&"formats");
     let wb = bus.workbook();
     let mut rows = Vec::new();
+    let mut rows_bytes = 2usize;
+    let mut byte_limited = false;
     for row in start_row..=end_row {
         let mut cells = Vec::new();
+        let mut row_bytes = 2usize;
         for col in min_col..=max_col {
             let slot = wb.get(sheet, row, col)?.cloned();
             let mut cell = Map::new();
@@ -352,10 +367,41 @@ fn range_read(bus: &Bus, args: RangeReadArgs) -> Result<Json, CoreError> {
                     .unwrap_or_else(|| "General".into());
                 cell.insert("format".into(), Json::String(fmt));
             }
-            cells.push(Json::Object(cell));
+            let cell = Json::Object(cell);
+            let cell_bytes = serde_json::to_vec(&cell)
+                .map_err(|err| CoreError::new(codes::MCP_ARGS, err.to_string()))?
+                .len()
+                .saturating_add(1);
+            row_bytes = row_bytes.saturating_add(cell_bytes);
+            if row_bytes > MAX_RANGE_READ_BYTES {
+                return Err(CoreError::new(
+                    codes::MCP_ARGS,
+                    format!(
+                        "one range_read row exceeds the {MAX_RANGE_READ_BYTES}-byte response budget"
+                    ),
+                )
+                .with_hint("request a narrower column range"));
+            }
+            cells.push(cell);
         }
+        if rows_bytes.saturating_add(row_bytes) > MAX_RANGE_READ_BYTES {
+            if rows.is_empty() {
+                return Err(CoreError::new(
+                    codes::MCP_ARGS,
+                    format!(
+                        "one range_read row exceeds the {MAX_RANGE_READ_BYTES}-byte response budget"
+                    ),
+                )
+                .with_hint("request a narrower column range"));
+            }
+            byte_limited = true;
+            break;
+        }
+        rows_bytes = rows_bytes.saturating_add(row_bytes);
         rows.push(Json::Array(cells));
     }
+    let returned_rows = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+    let truncated = byte_limited || start_row.saturating_add(returned_rows) <= max_row;
     Ok(serde_json::json!({
         "range": args.range,
         "offset": args.offset,
@@ -397,12 +443,12 @@ fn command_run(bus: &mut Bus, ctx: &McpCtx, args: CommandRunArgs) -> Result<Json
         let call = command_call(&args.id, args.args)?;
         return write_calls(bus, ctx, args.apply, vec![call]);
     }
-    if args.apply && mutating {
+    if mutating {
         return Err(CoreError::new(
             codes::COMMAND_DENIED,
-            "external agents cannot apply mutations",
+            "external agents cannot run mutations that are not changeset-eligible",
         )
-        .with_hint("propose, then run omacell changeset apply <id> as the user"));
+        .with_hint("use a dedicated MCP tool or a changeset-eligible command"));
     }
     user_execute(bus, &args.id, args.args)
 }

@@ -281,6 +281,7 @@ fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
         ui,
         roots,
         long_ops: omacell_bus::LongOps::production(),
+        file: book.map(Path::to_path_buf),
     };
     omacell_tui::run(launch)?;
     Ok(())

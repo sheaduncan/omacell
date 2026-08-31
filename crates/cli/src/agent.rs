@@ -2,7 +2,8 @@
 
 use std::path::Path;
 
-use omacell_conf::{HandOffRequest, hand_off};
+use omacell_conf::{HandOffRequest, Paths, hand_off, shell_command, write_diagnostic_bundle};
+use omacell_core::addr::{RefKind, parse_a1};
 use omacell_core::audit::diagnose;
 use omacell_core::graph::CellCoord;
 use serde_json::json;
@@ -28,7 +29,7 @@ pub fn run_prompt(
     let json = serde_json::to_value(&result)
         .map_err(|err| CliError::new("agent.json", err.to_string()))?;
     let human = if result.hidden {
-        format!("no default agent; run: {}", result.argv.join(" "))
+        format!("no default agent; run: {}", shell_command(&result.argv))
     } else {
         "handed to omarchy agent".into()
     };
@@ -52,44 +53,54 @@ pub fn run_diagnose(
     if let Some(pid) = pid {
         bundle["process"] = process_meta(pid);
     }
-    let mut diagnose_path = None;
+    let paths = Paths::from_env()?;
     if let Some(book) = book {
         let app = App::with_workbook_plan(cli, book, None)?;
         let wb = app.bus.workbook();
-        let origin = CellCoord::new(wb.active_sheet(), 0, 0);
+        let origin = diagnosis_origin(wb, selection)?;
         let diagnostic = diagnose(wb, app.bus.engine(), origin);
         bundle["workbook"] = json!(book.display().to_string());
         bundle["diagnostic"] = serde_json::to_value(&diagnostic)
             .map_err(|err| CliError::new("agent.json", err.to_string()))?;
-        let dir = app.paths.state_dir.join("diagnose");
-        std::fs::create_dir_all(&dir).map_err(|err| CliError::new("agent.io", err.to_string()))?;
-        let path = dir.join(format!("bundle-{}.json", std::process::id()));
-        std::fs::write(
-            &path,
-            serde_json::to_vec_pretty(&bundle)
-                .map_err(|err| CliError::new("agent.json", err.to_string()))?,
-        )
-        .map_err(|err| CliError::new("agent.io", err.to_string()))?;
-        diagnose_path = Some(path);
     }
+    let diagnose_path = write_diagnostic_bundle(&paths.state_dir, &bundle)?;
     let result = hand_off(HandOffRequest {
         prompt: "Diagnose this Omacell workbook".into(),
         workbook: book.map(|p| p.to_path_buf()),
         selection: selection.map(str::to_string),
-        diagnose: diagnose_path.clone(),
+        diagnose: Some(diagnose_path.clone()),
     })?;
     let json = json!({
         "handoff": result,
-        "bundle": diagnose_path.as_ref().map(|p| p.display().to_string()),
+        "bundle": diagnose_path.display().to_string(),
         "pid": pid,
     });
     let human = if result.hidden {
-        format!("no default agent; run: {}", result.argv.join(" "))
+        format!("no default agent; run: {}", shell_command(&result.argv))
     } else {
         "handed diagnostic bundle to omarchy agent".into()
     };
     output.success(json, &human)?;
     Ok(())
+}
+
+fn diagnosis_origin(
+    wb: &omacell_core::workbook::Workbook,
+    selection: Option<&str>,
+) -> Result<CellCoord, CliError> {
+    let Some(selection) = selection else {
+        return Ok(CellCoord::new(wb.active_sheet(), 0, 0));
+    };
+    let resolved = wb.resolve_parsed(parse_a1(selection)?)?;
+    let cell = match resolved {
+        RefKind::Cell(cell) => cell,
+        RefKind::Range(range) => range.start,
+    };
+    Ok(CellCoord::new(
+        cell.sheet.unwrap_or_else(|| wb.active_sheet()),
+        cell.row,
+        cell.col,
+    ))
 }
 
 fn process_meta(pid: u32) -> serde_json::Value {

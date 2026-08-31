@@ -22,7 +22,10 @@ pub mod theme;
 mod validate;
 pub mod watch;
 
-pub use agent::{DefaultAgent, HandOff, HandOffRequest, detect_default_agent, hand_off, on_path};
+pub use agent::{
+    DefaultAgent, HandOff, HandOffRequest, detect_default_agent, hand_off, on_path, shell_command,
+    write_diagnostic_bundle,
+};
 pub use layer::{
     Explain, Layer, LoadOptions, LoadedConfig, Migration, Provenance, load, load_with_env,
     load_with_options, reset_user_file, reset_user_rel, show_all_json, validate_user_rel,

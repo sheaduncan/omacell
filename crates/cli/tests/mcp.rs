@@ -1,5 +1,6 @@
 //! rmcp client contract tests against `omacell mcp`.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -104,18 +105,33 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
         .unwrap();
 
     let client = connect(socket.clone()).await;
+    assert_eq!(
+        std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let second_client = connect(socket.clone()).await;
+    assert!(
+        !second_client
+            .list_tools(Default::default())
+            .await
+            .unwrap()
+            .tools
+            .is_empty()
+    );
+    drop(second_client);
     let listed = client.list_tools(Default::default()).await.unwrap();
     let names: Vec<String> = listed.tools.iter().map(|t| t.name.to_string()).collect();
     for tool in tool_names() {
         assert!(names.contains(&tool.to_string()), "missing {tool}");
     }
 
-    let _ = call_tool(
+    call_tool(
         &client,
         "workbook_open",
         json!({"path": book.display().to_string()}),
     )
-    .await;
+    .await
+    .unwrap();
 
     for tool in [
         "workbook_list",
@@ -158,14 +174,113 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
     .unwrap();
     assert_eq!(proposed["status"], "proposed");
 
-    let resources = client.list_resources(Default::default()).await.unwrap();
-    assert!(!resources.resources.is_empty());
-    let uri = resources.resources[0].uri.clone();
-    let read = client
-        .read_resource(ReadResourceRequestParams::new(uri))
+    let formula = call_tool(
+        &client,
+        "formula_set",
+        json!({"ref": "Z2", "formula": "1+1"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(formula["status"], "proposed");
+
+    let add = call_tool(&client, "sheet_add", json!({"name": "AgentData"}))
         .await
         .unwrap();
-    assert!(!read.contents.is_empty());
+    assert_eq!(add["status"], "proposed");
+
+    let rename = call_tool(
+        &client,
+        "sheet_rename",
+        json!({"sheet": "Sheet1", "name": "Renamed"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rename["status"], "proposed");
+
+    let query = call_tool(
+        &client,
+        "command_run",
+        json!({"id": "audit.run", "args": {}}),
+    )
+    .await
+    .unwrap();
+    assert!(query.get("findings").is_some());
+    let denied = call_tool(
+        &client,
+        "command_run",
+        json!({"id": "file.print", "args": {}}),
+    )
+    .await
+    .unwrap_err();
+    assert!(denied.contains("command.denied"));
+
+    let batch = call_tool(
+        &client,
+        "changeset_propose",
+        json!({"commands": [{"id": "cell.set", "args": {"ref": "Z3", "input": "batch"}}]}),
+    )
+    .await
+    .unwrap();
+    let batch_id = batch["id"].as_str().unwrap();
+    let apply_err = call_tool(&client, "changeset_apply", json!({"id": batch_id}))
+        .await
+        .unwrap_err();
+    assert!(apply_err.contains("command.denied"));
+    let revert_err = call_tool(&client, "changeset_revert", json!({"id": batch_id}))
+        .await
+        .unwrap_err();
+    assert!(revert_err.contains("command.denied"));
+
+    let export_path = home.path().join("export.csv");
+    call_tool(
+        &client,
+        "export",
+        json!({"path": export_path.display().to_string()}),
+    )
+    .await
+    .unwrap();
+    assert!(export_path.is_file());
+
+    let saved_path = home.path().join("saved.xlsx");
+    call_tool(
+        &client,
+        "workbook_save",
+        json!({"path": saved_path.display().to_string()}),
+    )
+    .await
+    .unwrap();
+    assert!(saved_path.is_file());
+    let books = call_tool(&client, "workbook_list", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(books["files"][0], saved_path.display().to_string());
+
+    let resources = client.list_resources(Default::default()).await.unwrap();
+    assert!(!resources.resources.is_empty());
+    for resource in resources.resources {
+        let read = client
+            .read_resource(ReadResourceRequestParams::new(resource.uri))
+            .await
+            .unwrap();
+        assert!(!read.contents.is_empty());
+    }
+
+    let bad_card = call_tool(&client, "card", json!({"extra": true}))
+        .await
+        .unwrap_err();
+    assert!(bad_card.contains("mcp.args"));
+
+    call_tool(
+        &client,
+        "workbook_open",
+        json!({"path": book.display().to_string()}),
+    )
+    .await
+    .unwrap();
+    let changesets = call_tool(&client, "changeset_list", json!({}))
+        .await
+        .unwrap();
+    assert!(changesets.as_array().unwrap().is_empty());
 
     let render_err = call_tool(&client, "render", json!({"range": "A1"}))
         .await
@@ -175,6 +290,24 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
     drop(client);
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[test]
+fn socket_refuses_to_replace_a_regular_file() {
+    let home = TempDir::new().unwrap();
+    let runtime = home.path().join("run");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let socket = home.path().join("not-a-socket");
+    std::fs::write(&socket, b"keep me").unwrap();
+    let output = std::process::Command::new(cargo_bin("omacell"))
+        .env("HOME", home.path())
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .args(["mcp", "--socket", socket.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to replace non-socket"));
+    assert_eq!(std::fs::read(&socket).unwrap(), b"keep me");
 }
 
 #[tokio::test]

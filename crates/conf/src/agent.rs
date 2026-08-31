@@ -1,10 +1,15 @@
 //! Omarchy default-agent detection and `omacell agent` hand-off (spec A-5.3).
 
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use omacell_core::error::CoreError;
 use serde::Serialize;
+
+static DIAGNOSTIC_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Detected Omarchy default agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -65,29 +70,14 @@ pub fn detect_default_agent() -> Option<DefaultAgent> {
 
 /// Build `omarchy agent prompt …` argv. Spawns only when a default agent exists.
 pub fn hand_off(req: HandOffRequest) -> Result<HandOff, CoreError> {
-    let cwd = req
-        .workbook
+    let workbook = req.workbook.as_ref().map(|path| absolute_path(path));
+    let cwd = workbook
         .as_ref()
         .and_then(|p| p.parent())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let mut argv = vec!["omarchy".into(), "agent".into(), "prompt".into()];
-    if let Some(book) = &req.workbook {
-        argv.push("--workbook".into());
-        argv.push(book.display().to_string());
-    }
-    if let Some(sel) = &req.selection {
-        argv.push("--selection".into());
-        argv.push(sel.clone());
-    }
-    argv.push("--skill".into());
-    argv.push("omacell".into());
-    if let Some(path) = &req.diagnose {
-        argv.push("--diagnose".into());
-        argv.push(path.display().to_string());
-    }
-    argv.push("--".into());
-    argv.push(req.prompt);
+    argv.push(contextual_prompt(&req, workbook.as_deref()));
     let hidden = detect_default_agent().is_none();
     if hidden {
         return Ok(HandOff {
@@ -114,6 +104,93 @@ pub fn hand_off(req: HandOffRequest) -> Result<HandOff, CoreError> {
         argv,
         launched: true,
     })
+}
+
+fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+fn contextual_prompt(req: &HandOffRequest, workbook: Option<&Path>) -> String {
+    let mut prompt = req.prompt.clone();
+    prompt.push_str("\n\nOmacell hand-off context:\n- Use the installed omacell skill.\n");
+    if let Some(path) = workbook {
+        prompt.push_str(&format!("- Workbook: {}\n", path.display()));
+    }
+    if let Some(selection) = &req.selection {
+        prompt.push_str(&format!("- Current selection: {selection}\n"));
+    }
+    if let Some(path) = &req.diagnose {
+        prompt.push_str(&format!(
+            "- Read the diagnostic bundle: {}\n",
+            absolute_path(path).display()
+        ));
+    }
+    prompt.push_str(
+        "- Propose workbook edits as changesets; do not apply them without the user's review.",
+    );
+    prompt
+}
+
+/// Render argv as a copy/paste-safe POSIX shell command.
+#[must_use]
+pub fn shell_command(argv: &[String]) -> String {
+    argv.iter()
+        .map(|arg| {
+            if !arg.is_empty()
+                && arg
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&b))
+            {
+                arg.clone()
+            } else {
+                format!("'{}'", arg.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Persist a private diagnostic bundle under the Omacell state directory.
+pub fn write_diagnostic_bundle(
+    state_dir: &Path,
+    bundle: &serde_json::Value,
+) -> Result<PathBuf, CoreError> {
+    let dir = state_dir.join("diagnose");
+    std::fs::create_dir_all(&dir).map_err(|err| CoreError::new("agent.io", err.to_string()))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+        .map_err(|err| CoreError::new("agent.io", err.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(bundle)
+        .map_err(|err| CoreError::new("agent.json", err.to_string()))?;
+    for _ in 0..1_024 {
+        let sequence = DIAGNOSTIC_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = dir.join(format!("bundle-{}-{sequence}.json", std::process::id()));
+        let opened = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path);
+        match opened {
+            Ok(mut file) => {
+                file.write_all(&bytes)
+                    .map_err(|err| CoreError::new("agent.io", err.to_string()))?;
+                file.write_all(b"\n")
+                    .map_err(|err| CoreError::new("agent.io", err.to_string()))?;
+                return Ok(path);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(CoreError::new("agent.io", err.to_string())),
+        }
+    }
+    Err(CoreError::new(
+        "agent.io",
+        "could not allocate a unique diagnostic bundle path",
+    ))
 }
 
 /// Whether `name` is an executable on `PATH`.

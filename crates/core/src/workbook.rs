@@ -250,6 +250,7 @@ pub struct Workbook {
     /// Custom number-format codes keyed by `numFmtId` (≥ 164).
     num_fmts: IndexMap<u32, String>,
     next_num_fmt: u32,
+    ref_errors: u64,
 }
 
 impl Default for Workbook {
@@ -307,6 +308,7 @@ impl Workbook {
             active: id,
             num_fmts: IndexMap::new(),
             next_num_fmt: CUSTOM_NUM_FMT_START,
+            ref_errors: 0,
         }
     }
 
@@ -412,6 +414,12 @@ impl Workbook {
     #[must_use]
     pub fn active_sheet(&self) -> SheetId {
         self.active
+    }
+
+    /// Number of stored cells whose current value is `#REF!`.
+    #[must_use]
+    pub fn ref_error_count(&self) -> u64 {
+        self.ref_errors
     }
 
     /// Set the active sheet.
@@ -834,6 +842,17 @@ impl Workbook {
                 None => sheet.store.clear(row, col)?,
             }
         };
+        let old_ref = old
+            .as_ref()
+            .is_some_and(|slot| matches!(slot.value, Value::Error(crate::error::ErrorKind::Ref)));
+        let new_ref = slot
+            .as_ref()
+            .is_some_and(|slot| matches!(slot.value, Value::Error(crate::error::ErrorKind::Ref)));
+        match (old_ref, new_ref) {
+            (false, true) => self.ref_errors = self.ref_errors.saturating_add(1),
+            (true, false) => self.ref_errors = self.ref_errors.saturating_sub(1),
+            _ => {}
+        }
         if let Some(s) = slot {
             self.hold_slot(&s);
         }
@@ -1244,6 +1263,7 @@ impl Workbook {
                         store.set(*row, *col, *slot)?;
                     }
                 }
+                self.recount_ref_errors();
                 Ok(())
             }
             Delta::ShiftCols {
@@ -1260,6 +1280,7 @@ impl Workbook {
                         store.set(*row, *col, *slot)?;
                     }
                 }
+                self.recount_ref_errors();
                 Ok(())
             }
             Delta::CalcMode { before, after } => {
@@ -1286,6 +1307,9 @@ impl Workbook {
             .sheets
             .shift_remove_index(pos)
             .ok_or_else(|| CoreError::sheet_id("sheet vanished"))?;
+        self.ref_errors = self
+            .ref_errors
+            .saturating_sub(sheet_ref_error_count(&sheet));
         self.names_by_lower.remove(&sheet.name.to_lowercase());
         if self.active == id {
             self.active = self.sheets.keys().copied().next().unwrap_or(id);
@@ -1294,6 +1318,9 @@ impl Workbook {
     }
 
     fn link_sheet(&mut self, index: usize, sheet: Sheet) -> Result<(), CoreError> {
+        self.ref_errors = self
+            .ref_errors
+            .saturating_add(sheet_ref_error_count(&sheet));
         self.names_by_lower
             .insert(sheet.name.to_lowercase(), sheet.id);
         let idx = index.min(self.sheets.len());
@@ -1407,6 +1434,10 @@ impl Workbook {
             active_after,
         });
         Ok(sheet)
+    }
+
+    fn recount_ref_errors(&mut self) {
+        self.ref_errors = self.sheets.values().map(sheet_ref_error_count).sum();
     }
 
     /// Move `id` to tab index `index` (0-based).
@@ -2427,6 +2458,7 @@ impl Workbook {
         self.ensure_sheet_not_used_by_pivot(id)?;
         let n = i32::try_from(count).map_err(|_| CoreError::addr_ref("row count too large"))?;
         self.sheet_mut(id)?.store.shift_rows(at, n)?;
+        self.recount_ref_errors();
         self.undo.record(Delta::ShiftRows {
             sheet: id,
             at,
@@ -2454,6 +2486,7 @@ impl Workbook {
             .iter_region(at, 0, at + actual - 1, crate::limits::MAX_COLS - 1)
             .collect();
         self.sheet_mut(id)?.store.shift_rows(at, -n)?;
+        self.recount_ref_errors();
         self.undo.record(Delta::ShiftRows {
             sheet: id,
             at,
@@ -2471,6 +2504,7 @@ impl Workbook {
         self.ensure_sheet_not_used_by_pivot(id)?;
         let n = i32::from(count);
         self.sheet_mut(id)?.store.shift_cols(at, n)?;
+        self.recount_ref_errors();
         self.undo.record(Delta::ShiftCols {
             sheet: id,
             at,
@@ -2498,6 +2532,7 @@ impl Workbook {
             .iter_region(0, at, crate::limits::MAX_ROWS - 1, at + actual - 1)
             .collect();
         self.sheet_mut(id)?.store.shift_cols(at, -n)?;
+        self.recount_ref_errors();
         self.undo.record(Delta::ShiftCols {
             sheet: id,
             at,
@@ -2775,6 +2810,14 @@ impl Workbook {
         self.expand_tables_at(id, row, col);
         Ok(old)
     }
+}
+
+fn sheet_ref_error_count(sheet: &Sheet) -> u64 {
+    sheet
+        .store
+        .iter()
+        .filter(|(_, _, slot)| matches!(slot.value, Value::Error(crate::error::ErrorKind::Ref)))
+        .count() as u64
 }
 
 fn content_flags(prev: Option<CellSlot>) -> CellFlags {

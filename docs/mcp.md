@@ -4,6 +4,8 @@ Generated from `omacell_bus::mcp::TOOLS`. Do not edit by hand.
 
 Write tools default to proposing a changeset. `apply=true` is denied for external agents; apply from `omacell changeset apply`.
 
+JSON-RPC input frames are capped at 2 MiB; the optional Unix socket allows 32 concurrent clients and is mode 0600.
+
 ## `audit`
 
 Run the deterministic workbook audit (`omacell audit --json`).
@@ -30,7 +32,7 @@ Revert an applied changeset. External agents are denied; use the CLI.
 
 ## `command_run`
 
-Invoke any public registry command. Mutating calls default to a changeset proposal.
+Invoke a public query or changeset-eligible command. Mutations default to a proposal.
 
 ## `commands_list`
 
@@ -46,7 +48,7 @@ Set one cell's formula. Defaults to proposing a changeset.
 
 ## `range_read`
 
-Read values, formulas, and/or formats from an A1 range (paginated by row).
+Read values, formulas, and/or formats from an A1 range (row-paginated, 1 MiB pages).
 
 ## `range_write`
 

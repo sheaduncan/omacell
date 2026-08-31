@@ -1,6 +1,7 @@
 //! TUI session over the WP-13 composition objects.
 
 use std::io::{self, IsTerminal, stdout};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ use omacell_bus::{
     Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskId, TaskRunner,
 };
 use omacell_conf::{ConfigStore, Paths, ReloadEvent};
-use omacell_core::addr::SheetId;
+use omacell_core::addr::{SheetId, quote_sheet_name};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
@@ -45,6 +46,8 @@ pub struct Launch {
     pub roots: KeymapRoots,
     /// Long-operation classifier (composition layer).
     pub long_ops: LongOps,
+    /// Workbook path from `omacell --tui [file]`, if any.
+    pub file: Option<PathBuf>,
 }
 
 /// Running TUI. Tests drive [`Self::draw`] / [`Self::step_key`].
@@ -67,6 +70,7 @@ pub struct Tui {
     last_queued: Option<TaskId>,
     focused_cancel: Option<CancelHandle>,
     quit_after: Option<TaskId>,
+    file: Option<PathBuf>,
     _ipc: Option<IpcHandle>,
 }
 
@@ -115,6 +119,7 @@ impl Tui {
             last_queued: None,
             focused_cancel: None,
             quit_after: None,
+            file: launch.file,
             _ipc: ipc_handle,
         })
     }
@@ -316,6 +321,36 @@ impl Tui {
         let Some(handoff) = self.ui.take_agent_handoff() else {
             return;
         };
+        let handle = self.runner.handle();
+        let snapshot = handle.snapshot();
+        let selection = selection_a1(&self.ui, &snapshot.workbook);
+        let diagnose = if handoff.diagnose {
+            let diagnostic_ref = cursor_a1(&self.ui, &snapshot.workbook);
+            let outcome = handle.submit_wait(
+                Origin::User,
+                "audit.diagnose",
+                serde_json::json!({"ref": diagnostic_ref}),
+            );
+            if !outcome.ok {
+                self.message = outcome.error.map(|error| error.message);
+                return;
+            }
+            let bundle = serde_json::json!({
+                "schema": 1,
+                "workbook": self.file.as_ref().map(|path| path.display().to_string()),
+                "selection": &selection,
+                "diagnostic": outcome.result,
+            });
+            match omacell_conf::write_diagnostic_bundle(&self.paths.state_dir, &bundle) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    self.message = Some(error.message);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let prompt = if handoff.diagnose {
             "Diagnose this Omacell workbook".into()
         } else if handoff.prompt.is_empty() {
@@ -325,12 +360,15 @@ impl Tui {
         };
         match omacell_conf::hand_off(omacell_conf::HandOffRequest {
             prompt,
-            workbook: None,
-            selection: None,
-            diagnose: None,
+            workbook: self.file.clone(),
+            selection: Some(selection),
+            diagnose,
         }) {
             Ok(result) if result.hidden => {
-                self.message = Some(format!("no default agent; run: {}", result.argv.join(" ")));
+                self.message = Some(format!(
+                    "no default agent; run: {}",
+                    omacell_conf::shell_command(&result.argv)
+                ));
             }
             Ok(_) => self.message = Some("handed to omarchy agent".into()),
             Err(err) => self.message = Some(err.message),
@@ -360,6 +398,14 @@ impl Tui {
                     self.message = None;
                     if state.command == "file.open" || state.command == "file.save" {
                         self.dirty = false;
+                        if let Some(path) = outcome
+                            .result
+                            .as_ref()
+                            .and_then(|value| value.get("path"))
+                            .and_then(|value| value.as_str())
+                        {
+                            self.file = Some(PathBuf::from(path));
+                        }
                     } else {
                         let mutating = self
                             .catalog
@@ -820,6 +866,28 @@ impl Tui {
     fn sync_active_sheet(&mut self) {
         self.adopt_snapshot();
     }
+}
+
+fn selection_a1(ui: &UiSession, wb: &Workbook) -> String {
+    let selection = ui.selection();
+    let sheet = wb
+        .sheet(selection.sheet)
+        .map(|sheet| sheet.name.as_str())
+        .unwrap_or("Sheet1");
+    format!(
+        "{}!{}",
+        quote_sheet_name(sheet),
+        selection.active().to_range().to_a1()
+    )
+}
+
+fn cursor_a1(ui: &UiSession, wb: &Workbook) -> String {
+    let selection = ui.selection();
+    let sheet = wb
+        .sheet(selection.sheet)
+        .map(|sheet| sheet.name.as_str())
+        .unwrap_or("Sheet1");
+    format!("{}!{}", quote_sheet_name(sheet), selection.cursor.to_a1())
 }
 
 struct TerminalRestore {

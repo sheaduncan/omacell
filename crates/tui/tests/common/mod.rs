@@ -108,6 +108,7 @@ fn harness_opts_with_workbook(
             ui,
             roots,
             long_ops: LongOps::production().with("test.hold"),
+            file: None,
         },
         false,
     )

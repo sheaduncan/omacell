@@ -83,11 +83,14 @@ pub fn card_uri(file: &str) -> String {
 /// Sheet resource for an open file.
 #[must_use]
 pub fn sheet_uri(file: &str, sheet: &str) -> String {
-    format!(
-        "omacell://{}/{}",
-        encode_segment(file),
+    // `card` is the reserved resource name. Keep a worksheet with that exact
+    // name addressable by using an equivalent, non-canonical percent encoding.
+    let encoded_sheet = if sheet == "card" {
+        "%63ard".to_string()
+    } else {
         encode_segment(sheet)
-    )
+    };
+    format!("omacell://{}/{}", encode_segment(file), encoded_sheet)
 }
 
 /// Parse `omacell://<file>/card` or `omacell://<file>/<sheet>`.
