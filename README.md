@@ -46,4 +46,4 @@ for the product, and [`docs/build/PLAN.md`](docs/build/PLAN.md) for the build or
 
 ## License
 
-MIT. Placeholder — confirm before the first public tag.
+[MIT](LICENSE).

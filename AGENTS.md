@@ -53,7 +53,7 @@ Cold start GUI < 300 ms, TUI < 100 ms · 100 MB CSV first paint < 1 s · 50 MB `
 
 ## Git workflow
 - Branch `wp/NN-slug` from `main`; PR title `WP-NN: <title>`; one package per PR.
-- Atomic, conventional commits (`feat(core): …`, `test(fn): …`, `docs: …`); do not mix unrelated changes; never force-push shared branches; never merge your own PR.
+- Atomic, conventional commits (`feat(core): …`, `test(fn): …`, `docs: …`); do not mix unrelated changes; never force-push shared branches. Every PR needs a distinct review pass and green CI before merge; a solo maintainer may perform that review.
 - The PR description links the report and lists the acceptance boxes ticked.
 
 ## Reporting
