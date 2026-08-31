@@ -116,11 +116,15 @@ pub const MAX_VALIDATION_LIST_ITEMS: usize = 32_767;
 
 impl Default for DataValidation {
     fn default() -> Self {
+        let a1 = crate::addr::CellRef {
+            sheet: None,
+            row: 0,
+            col: 0,
+            row_abs: false,
+            col_abs: false,
+        };
         Self {
-            range: RangeRef::from_corners(
-                crate::addr::CellRef::new(0, 0).unwrap(),
-                crate::addr::CellRef::new(0, 0).unwrap(),
-            ),
+            range: RangeRef::from_corners(a1, a1),
             kind: DvType::Any,
             op: DvOp::Between,
             formula1: None,

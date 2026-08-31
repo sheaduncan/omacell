@@ -339,7 +339,9 @@ fn html_text(s: &str) -> String {
             rest = tail;
             continue;
         }
-        let ch = rest.chars().next().unwrap();
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
         out.push(ch);
         rest = &rest[ch.len_utf8()..];
     }
