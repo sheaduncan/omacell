@@ -6,7 +6,21 @@ license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Sandboxed Lua scripting surface for Omacell."
+description = "Sandboxed Lua 5.4 scripting surface for Omacell."
 
 [lints]
 workspace = true
+
+[dependencies]
+mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
+omacell-bus = { path = "../bus", version = "0.0.0" }
+schemars = { workspace = true }
+omacell-conf = { path = "../conf", version = "0.0.0" }
+omacell-core = { path = "../core", version = "0.0.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+
+[dev-dependencies]
+omacell-fn = { path = "../fn", version = "0.0.0" }
+tempfile = "3"

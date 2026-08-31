@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 egui_kittest = { version = "0.32", features = ["wgpu", "snapshot", "eframe"] }
 omacell-fn = { path = "../fn", version = "0.0.0" }
+omacell-lua = { path = "../lua", version = "0.0.0" }
 criterion = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }

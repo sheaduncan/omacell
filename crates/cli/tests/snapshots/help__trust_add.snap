@@ -1,20 +1,17 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"run\", \"--help\"])"
+expression: "help(&[\"trust\", \"add\", \"--help\"])"
 ---
-Run a Lua script (WP-20)
+Grant a file hash
 
-Usage: omacell run [OPTIONS] <SCRIPT> [BOOK]
+Usage: omacell trust add [OPTIONS] <FILE>
 
 Arguments:
-  <SCRIPT>  Script path (workbook path when `--embedded`)
-  [BOOK]    Workbook path (optional with `--embedded`)
+  <FILE>  Workbook or script path
 
 Options:
-      --embedded              Run the workbook's embedded script (`xl/omacell/scripts/main.lua`)
       --json                  Machine-readable stdout (and stderr errors)
       --dry-run               Validate writes without changing files
-      --python                Experimental Python subprocess speaking JSON-lines over stdio
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
       --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`

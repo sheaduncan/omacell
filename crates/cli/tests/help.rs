@@ -26,6 +26,10 @@ fn help_snapshots() {
     assert_snapshot!("eval", help(&["eval", "--help"]));
     assert_snapshot!("recalc", help(&["recalc", "--help"]));
     assert_snapshot!("run", help(&["run", "--help"]));
+    assert_snapshot!("trust", help(&["trust", "--help"]));
+    assert_snapshot!("trust_add", help(&["trust", "add", "--help"]));
+    assert_snapshot!("trust_remove", help(&["trust", "remove", "--help"]));
+    assert_snapshot!("trust_list", help(&["trust", "list", "--help"]));
     assert_snapshot!("fn", help(&["fn", "--help"]));
     assert_snapshot!("fn_list", help(&["fn", "list", "--help"]));
     assert_snapshot!("fn_doc", help(&["fn", "doc", "--help"]));

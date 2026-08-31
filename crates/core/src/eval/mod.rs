@@ -3,7 +3,7 @@
 mod ops;
 mod registry;
 
-pub use registry::{ArrayLift, FnBody, FnDef, FnRegistry};
+pub use registry::{ArrayLift, DynamicFn, DynamicFnBody, FnBody, FnDef, FnRegistry};
 
 use std::sync::Arc;
 
@@ -1444,6 +1444,12 @@ fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> 
         }
         return dispatch_fn(ctx, def, args);
     }
+    if let Some(def) = ctx.registry.lookup_dynamic(name) {
+        if args.len() < def.min_args as usize || args.len() > def.max_args as usize {
+            return RuntimeValue::error(ErrorKind::Value);
+        }
+        return dispatch_dynamic(ctx, def, args);
+    }
     // Defined name that is a lambda / formula.
     if let Some(n) = ctx.wb.names().resolve(ctx.cell.sheet, name) {
         let referent = n.referent.clone();
@@ -1470,9 +1476,18 @@ fn dispatch_fn(ctx: &mut EvalCtx<'_>, def: &FnDef, args: &[Option<Expr>]) -> Run
     }
 }
 
+fn dispatch_dynamic(ctx: &mut EvalCtx<'_>, def: &DynamicFn, args: &[Option<Expr>]) -> RuntimeValue {
+    let argv = eval_args(ctx, args);
+    if def.array_lift == ArrayLift::All {
+        eval_array_lifted(ctx, |_, cell_args| def.body.eval(cell_args), &argv)
+    } else {
+        def.body.eval(&argv)
+    }
+}
+
 fn eval_array_lifted(
     ctx: &mut EvalCtx<'_>,
-    eval: fn(&mut EvalCtx<'_>, &[ArgVal]) -> RuntimeValue,
+    mut eval: impl FnMut(&mut EvalCtx<'_>, &[ArgVal]) -> RuntimeValue,
     args: &[ArgVal],
 ) -> RuntimeValue {
     let args: Vec<ArgVal> = args

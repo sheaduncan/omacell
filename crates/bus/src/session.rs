@@ -453,6 +453,9 @@ fn clone_engine(engine: &RecalcEngine) -> RecalcEngine {
     for def in engine.registry().iter() {
         registry.register(*def);
     }
+    for def in engine.registry().iter_dynamic() {
+        registry.register_dynamic(def.clone());
+    }
     let mut cloned = RecalcEngine::new(registry);
     cloned.set_threads(engine.threads());
     cloned

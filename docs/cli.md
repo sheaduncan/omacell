@@ -27,10 +27,10 @@ See `omacell --help` and the per-command help snapshots. `omacell --tui [file]` 
 
 Stubs that exit 3:
 
-- `omacell run` (WP-20)
-- `omacell audit` (WP-19)
 - `omacell ai` (WP-22)
 - `omacell agent` / `omacell mcp` (WP-21)
+
+`omacell run script.lua book.xlsx` runs Lua (WP-20). `--embedded` runs `xl/omacell/scripts/main.lua` only when the workbook hash is in `~/.local/state/omacell/trust.toml` (`omacell trust add|remove|list`). `--python` is an experimental JSON-lines stdio bridge. `--dry-run` skips saving.
 
 `omacell ipc theme.reload --all --quiet` is the Omarchy theme-set hook. It enumerates live owned instances and executes the registered `theme.reload` command. It does not add an IPC `ControlOp`.
 

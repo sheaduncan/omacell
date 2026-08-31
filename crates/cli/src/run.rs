@@ -33,6 +33,7 @@ use omacell_tui::Launch;
 use crate::app::App;
 use crate::cli::{
     ChangesetCmd, Cli, Commands, ConfigCmd, FnCmd, KeysCmd, QueryFormat, SetupCmd, ThemeCmd,
+    TrustCmd,
 };
 use crate::error::{CliError, EXIT_OK, EXIT_USAGE};
 use crate::log;
@@ -97,7 +98,6 @@ fn dispatch(cli: &Cli, output: Output) -> Result<(), CliError> {
     }
     match &cli.command {
         None => cmd_gui(cli),
-        Some(Commands::Run { .. }) => Err(CliError::nyi("omacell run", "WP-20")),
         Some(Commands::Ai { .. }) => Err(CliError::nyi("omacell ai", "WP-22")),
         Some(Commands::Agent { .. }) => Err(CliError::nyi("omacell agent", "WP-21")),
         Some(Commands::Mcp { .. }) => Err(CliError::nyi("omacell mcp", "WP-21")),
@@ -167,10 +167,16 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
         Commands::Setup { cmd } => cmd_setup(cli, cmd, output),
         Commands::Catalog => cmd_commands(cli, output),
         Commands::Audit { book } => cmd_audit(cli, book, output),
-        Commands::Run { .. }
-        | Commands::Ai { .. }
-        | Commands::Agent { .. }
-        | Commands::Mcp { .. } => unreachable!("stubs handled earlier"),
+        Commands::Run {
+            script,
+            book,
+            embedded,
+            python,
+        } => cmd_run(cli, script, book.as_deref(), *embedded, *python, output),
+        Commands::Trust { cmd } => cmd_trust(cli, cmd, output),
+        Commands::Ai { .. } | Commands::Agent { .. } | Commands::Mcp { .. } => {
+            unreachable!("stubs handled earlier")
+        }
     }
 }
 
@@ -1188,6 +1194,203 @@ fn cmd_changeset(cmd: &ChangesetCmd, dry_run: bool, output: Output) -> Result<()
             Ok(())
         }
     }
+}
+
+fn cmd_run(
+    cli: &Cli,
+    script: &Path,
+    book: Option<&Path>,
+    embedded: bool,
+    python: bool,
+    output: Output,
+) -> Result<(), CliError> {
+    let book = if embedded {
+        script
+    } else {
+        book.ok_or_else(|| {
+            CliError::new("cli.usage", "omacell run requires a workbook path")
+                .hint("omacell run script.lua book.xlsx")
+                .exit(EXIT_USAGE)
+        })?
+    };
+    if python {
+        return cmd_run_python(cli, script, book, output);
+    }
+    let mut app = init_app_book(cli, book)?;
+    let loaded = app.loaded();
+    let policy = omacell_lua::ScriptPolicy::from_config(
+        loaded.config.scripting.enabled,
+        &loaded.config.scripting.embedded_scripts,
+        &loaded.config.scripting.trusted_dirs,
+    );
+    if !policy.enabled {
+        return Err(CliError::new("lua.disabled", "scripting is disabled"));
+    }
+    let bus = std::mem::replace(
+        &mut app.bus,
+        omacell_bus::Bus::new(
+            omacell_core::workbook::Workbook::new(),
+            omacell_core::recalc::RecalcEngine::new(omacell_core::eval::FnRegistry::new()),
+        )
+        .expect("empty bus"),
+    );
+    let host = omacell_lua::BusHost::new(bus);
+    if embedded {
+        let bytes = std::fs::read(book).map_err(|e| CliError::new("lua.io", e.to_string()))?;
+        let store = omacell_lua::load_trust(&app.paths.state_dir)?;
+        omacell_lua::allow_embedded(&policy, &store, book, &bytes)?;
+        let source = host
+            .bus
+            .workbook()
+            .custom_parts
+            .get(omacell_lua::EMBEDDED_PART)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .ok_or_else(|| {
+                CliError::new(
+                    "lua.embedded",
+                    "workbook has no xl/omacell/scripts/main.lua part",
+                )
+            })?
+            .to_string();
+        let rt = omacell_lua::Runtime::new(omacell_lua::Profile::Embedded, Box::new(host))?;
+        rt.exec(&source, &book.display().to_string())?;
+        if !cli.dry_run {
+            rt.execute_cmd(
+                "file.save",
+                serde_json::json!({"path": book.display().to_string()}),
+            )?;
+        }
+        output.success(serde_json::json!({"ok": true, "embedded": true}), "ok")?;
+        return Ok(());
+    }
+    let source =
+        std::fs::read_to_string(script).map_err(|e| CliError::new("lua.io", e.to_string()))?;
+    let rt = omacell_lua::Runtime::new(omacell_lua::Profile::User, Box::new(host))?;
+    rt.exec(&source, &script.display().to_string())?;
+    if !cli.dry_run {
+        rt.execute_cmd(
+            "file.save",
+            serde_json::json!({"path": book.display().to_string()}),
+        )?;
+    }
+    output.success(serde_json::json!({"ok": true}), "ok")?;
+    Ok(())
+}
+
+fn cmd_run_python(cli: &Cli, script: &Path, book: &Path, output: Output) -> Result<(), CliError> {
+    let mut app = init_app_book(cli, book)?;
+    let mut child = std::process::Command::new("python3")
+        .arg("-u")
+        .arg(script)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            CliError::new("lua.python", e.to_string()).hint("install python3 or omit --python")
+        })?;
+    let mut child_in = child
+        .stdin
+        .take()
+        .ok_or_else(|| CliError::new("lua.python", "python stdin is missing"))?;
+    let mut child_out = std::io::BufReader::new(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| CliError::new("lua.python", "python stdout is missing"))?,
+    );
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = std::io::BufRead::read_line(&mut child_out, &mut line)
+            .map_err(|e| CliError::new("lua.python", e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        let req: serde_json::Value = serde_json::from_str(line.trim()).map_err(|e| {
+            CliError::new("lua.python", e.to_string()).hint("write JSON-lines {cmd, args}")
+        })?;
+        let id = req
+            .get("cmd")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| CliError::new("lua.python", "missing cmd"))?;
+        let args = req
+            .get("args")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let outcome = app.execute(id, args);
+        let reply = if outcome.ok {
+            serde_json::json!({"ok": true, "result": outcome.result})
+        } else {
+            serde_json::json!({"ok": false, "error": outcome.error.map(|e| e.to_string())})
+        };
+        writeln!(child_in, "{reply}").map_err(|e| CliError::new("lua.python", e.to_string()))?;
+        child_in
+            .flush()
+            .map_err(|e| CliError::new("lua.python", e.to_string()))?;
+    }
+    let status = child
+        .wait()
+        .map_err(|e| CliError::new("lua.python", e.to_string()))?;
+    if !status.success() {
+        return Err(CliError::new(
+            "lua.python",
+            format!("python exited {status}"),
+        ));
+    }
+    if !cli.dry_run {
+        let _ = app.execute(
+            "file.save",
+            serde_json::json!({"path": book.display().to_string()}),
+        );
+    }
+    output.success(serde_json::json!({"ok": true, "python": true}), "ok")?;
+    Ok(())
+}
+
+fn cmd_trust(cli: &Cli, cmd: &TrustCmd, output: Output) -> Result<(), CliError> {
+    let paths = init_paths(cli)?;
+    let path = omacell_lua::trust_path(&paths.state_dir);
+    let mut store = omacell_lua::TrustStore::load(&path)?;
+    match cmd {
+        TrustCmd::Add { file } => {
+            let hash = omacell_lua::hash_path(file)?;
+            if !cli.dry_run {
+                store.add(hash.clone(), Some(file.display().to_string()));
+                store.save(&path)?;
+            }
+            output.success(
+                serde_json::json!({"sha256": hash, "path": file.display().to_string()}),
+                &hash,
+            )?;
+        }
+        TrustCmd::Remove { file } => {
+            let hash = if Path::new(file).is_file() {
+                omacell_lua::hash_path(Path::new(file))?
+            } else {
+                file.to_ascii_lowercase()
+            };
+            let removed = store.remove(&hash);
+            if !cli.dry_run {
+                store.save(&path)?;
+            }
+            output.success(
+                serde_json::json!({"removed": removed, "sha256": hash}),
+                "ok",
+            )?;
+        }
+        TrustCmd::List => {
+            let json = serde_json::to_value(&store.files)
+                .map_err(|e| CliError::new("trust.serialize", e.to_string()))?;
+            let human = store
+                .files
+                .iter()
+                .map(|e| e.sha256.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            output.success(json, &human)?;
+        }
+    }
+    Ok(())
 }
 
 fn finish_outcome(outcome: Outcome, output: Output) -> Result<(), CliError> {

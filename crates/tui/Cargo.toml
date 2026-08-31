@@ -22,6 +22,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 omacell-fn = { path = "../fn", version = "0.0.0" }
+omacell-lua = { path = "../lua", version = "0.0.0" }
 omacell-io = { path = "../io", version = "0.0.0" }
 criterion = { workspace = true }
 insta = "1"

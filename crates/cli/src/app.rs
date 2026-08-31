@@ -141,6 +141,10 @@ impl App {
         omacell_bus::register_data_commands(bus.registry_mut())?;
         omacell_bus::register_audit_commands(bus.registry_mut())?;
         omacell_bus::register_analysis_commands(bus.registry_mut())?;
+        omacell_lua::register_script_commands(
+            bus.registry_mut(),
+            omacell_lua::ScriptGate::default(),
+        )?;
         Ok(Self {
             paths,
             store,

@@ -24,6 +24,8 @@ fn apply_config_preserves_interaction_state() {
     omacell_bus::register_data_commands(&mut registry).unwrap();
     omacell_bus::register_audit_commands(&mut registry).unwrap();
     omacell_bus::register_analysis_commands(&mut registry).unwrap();
+    omacell_lua::register_script_commands(&mut registry, omacell_lua::ScriptGate::default())
+        .unwrap();
     register_ui_commands(&mut registry, &session).unwrap();
     session.begin_edit(EditSurface::InCell, "=A1+1");
     let before_edit = session.edit();
