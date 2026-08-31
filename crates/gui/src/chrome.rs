@@ -104,6 +104,11 @@ pub fn status(
         calc,
         &theme.name,
     );
+    line.set_offer(omacell_ui::diagnose_offer(
+        wb,
+        session.config().ai.agent.diagnose_offers,
+        session.agent_visible(),
+    ));
     let zoom = format!("{}%", (session.viewport().zoom * 100.0).round());
     for seg in &mut line.segments {
         match seg.id.as_str() {

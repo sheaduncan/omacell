@@ -13,6 +13,7 @@ Options:
       --json                  Machine-readable stdout (and stderr errors)
       --write                 Write the recalculated workbook back
       --dry-run               Validate writes without changing files
+      --wait                  Wait for async AI cells to settle (no-op extra until WP-22)
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
       --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`

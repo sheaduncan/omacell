@@ -41,6 +41,7 @@ fn setup() -> (tempfile::TempDir, Tui, Terminal<TestBackend>) {
             ui,
             roots,
             long_ops: LongOps::production(),
+            file: None,
         },
         false,
     )

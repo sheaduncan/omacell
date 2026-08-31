@@ -24,6 +24,7 @@ mod handler;
 #[cfg(unix)]
 pub mod ipc;
 mod logical;
+pub mod mcp;
 mod policy;
 mod registry;
 mod resolve;

@@ -370,6 +370,9 @@ impl Gui {
                 self.refresh_palette("");
                 self.palette_command = None;
             }
+            if cmd == "ai.agent" {
+                self.dispatch_agent();
+            }
             return Ok(Outcome::success(json!({"ok": true})));
         }
         let args = inject_chart_range(&self.ui, cmd, args);
@@ -390,6 +393,64 @@ impl Gui {
                 self.message = Some(err.message.clone());
                 Ok(Outcome::failure(err))
             }
+        }
+    }
+
+    fn dispatch_agent(&mut self) {
+        let Some(handoff) = self.ui.take_agent_handoff() else {
+            return;
+        };
+        let handle = self.runner.handle();
+        let snapshot = handle.snapshot();
+        let selection = selection_a1(&self.ui, &snapshot.workbook);
+        let diagnose = if handoff.diagnose {
+            let diagnostic_ref = cursor_a1(&self.ui, &snapshot.workbook);
+            let outcome = handle.submit_wait(
+                Origin::User,
+                "audit.diagnose",
+                json!({"ref": diagnostic_ref}),
+            );
+            if !outcome.ok {
+                self.message = outcome.error.map(|error| error.message);
+                return;
+            }
+            let bundle = json!({
+                "schema": 1,
+                "workbook": self.file.as_ref().map(|path| path.display().to_string()),
+                "selection": &selection,
+                "diagnostic": outcome.result,
+            });
+            match omacell_conf::write_diagnostic_bundle(&self.paths.state_dir, &bundle) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    self.message = Some(error.message);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let prompt = if handoff.diagnose {
+            "Diagnose this Omacell workbook".into()
+        } else if handoff.prompt.is_empty() {
+            "Help with this workbook".into()
+        } else {
+            handoff.prompt
+        };
+        match omacell_conf::hand_off(omacell_conf::HandOffRequest {
+            prompt,
+            workbook: self.file.clone(),
+            selection: Some(selection),
+            diagnose,
+        }) {
+            Ok(result) if result.hidden => {
+                self.message = Some(format!(
+                    "no default agent; run: {}",
+                    omacell_conf::shell_command(&result.argv)
+                ));
+            }
+            Ok(_) => self.message = Some("handed to omarchy agent".into()),
+            Err(err) => self.message = Some(err.message),
         }
     }
 
@@ -953,6 +1014,28 @@ impl Gui {
         }
         let _ = state.save(&self.paths.state_dir);
     }
+}
+
+fn selection_a1(ui: &UiSession, wb: &omacell_core::workbook::Workbook) -> String {
+    let selection = ui.selection();
+    let sheet = wb
+        .sheet(selection.sheet)
+        .map(|sheet| sheet.name.as_str())
+        .unwrap_or("Sheet1");
+    format!(
+        "{}!{}",
+        quote_sheet_name(sheet),
+        selection.active().to_range().to_a1()
+    )
+}
+
+fn cursor_a1(ui: &UiSession, wb: &omacell_core::workbook::Workbook) -> String {
+    let selection = ui.selection();
+    let sheet = wb
+        .sheet(selection.sheet)
+        .map(|sheet| sheet.name.as_str())
+        .unwrap_or("Sheet1");
+    format!("{}!{}", quote_sheet_name(sheet), selection.cursor.to_a1())
 }
 
 impl eframe::App for Gui {

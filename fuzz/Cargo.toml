@@ -25,6 +25,9 @@ path = "../crates/io"
 [dependencies.omacell-cli]
 path = "../crates/cli"
 
+[dependencies.serde_json]
+version = "1"
+
 [dependencies.zip]
 version = "2"
 default-features = false
@@ -89,6 +92,13 @@ bench = false
 [[bin]]
 name = "cli_args"
 path = "fuzz_targets/cli_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_json"
+path = "fuzz_targets/mcp_json.rs"
 test = false
 doc = false
 bench = false

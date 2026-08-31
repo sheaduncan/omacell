@@ -36,8 +36,8 @@ use omacell_tui::Launch;
 
 use crate::app::App;
 use crate::cli::{
-    ChangesetCmd, Cli, Commands, ConfigCmd, FnCmd, KeysCmd, QueryFormat, SetupCmd, ThemeCmd,
-    TrustCmd,
+    AgentCmd, ChangesetCmd, Cli, Commands, ConfigCmd, FnCmd, KeysCmd, QueryFormat, SetupCmd,
+    ThemeCmd, TrustCmd,
 };
 use crate::error::{CliError, EXIT_OK, EXIT_USAGE};
 use crate::log;
@@ -103,8 +103,6 @@ fn dispatch(cli: &Cli, output: Output) -> Result<(), CliError> {
     match &cli.command {
         None => cmd_gui(cli),
         Some(Commands::Ai { .. }) => Err(CliError::nyi("omacell ai", "WP-22")),
-        Some(Commands::Agent { .. }) => Err(CliError::nyi("omacell agent", "WP-21")),
-        Some(Commands::Mcp { .. }) => Err(CliError::nyi("omacell mcp", "WP-21")),
         Some(cmd) => {
             let app_needed = !matches!(
                 cmd,
@@ -164,7 +162,7 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
         } => cmd_query(cli, book, range, *format, *formulas, output),
         Commands::Set { book, range, value } => cmd_set(cli, book, range, value, output),
         Commands::Eval { book, formula } => cmd_eval(cli, book, formula, output),
-        Commands::Recalc { book, write } => cmd_recalc(cli, book, *write, output),
+        Commands::Recalc { book, write, wait } => cmd_recalc(cli, book, *write, *wait, output),
         Commands::Config { cmd } => cmd_config(cli, cmd, output),
         Commands::Theme { cmd } => cmd_theme(cli, cmd, output),
         Commands::Keys { cmd } => cmd_keys(cli, cmd, output),
@@ -178,9 +176,21 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
             python,
         } => cmd_run(cli, script, book.as_deref(), *embedded, *python, output),
         Commands::Trust { cmd } => cmd_trust(cli, cmd, output),
-        Commands::Ai { .. } | Commands::Agent { .. } | Commands::Mcp { .. } => {
-            unreachable!("stubs handled earlier")
-        }
+        Commands::Agent {
+            cmd,
+            prompt,
+            book,
+            selection,
+        } => cmd_agent(
+            cli,
+            cmd.as_ref(),
+            prompt.as_deref(),
+            book.as_deref(),
+            selection.as_deref(),
+            output,
+        ),
+        Commands::Mcp { socket, book } => cmd_mcp(cli, socket.as_deref(), book.as_deref()),
+        Commands::Ai { .. } => unreachable!("ai stub handled earlier"),
     }
 }
 
@@ -271,6 +281,7 @@ fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
         ui,
         roots,
         long_ops: omacell_bus::LongOps::production(),
+        file: book.map(Path::to_path_buf),
     };
     omacell_tui::run(launch)?;
     Ok(())
@@ -972,7 +983,13 @@ fn cmd_audit(cli: &Cli, book: &Path, output: Output) -> Result<(), CliError> {
     Ok(())
 }
 
-fn cmd_recalc(cli: &Cli, book: &Path, write: bool, output: Output) -> Result<(), CliError> {
+fn cmd_recalc(
+    cli: &Cli,
+    book: &Path,
+    write: bool,
+    wait: bool,
+    output: Output,
+) -> Result<(), CliError> {
     let mut app = init_app_book(cli, book)?;
     let args = serde_json::json!({"mode": "rebuild"});
     let outcome = if cli.dry_run {
@@ -980,6 +997,7 @@ fn cmd_recalc(cli: &Cli, book: &Path, write: bool, output: Output) -> Result<(),
     } else {
         app.execute("calc.recalc", args)
     };
+    let _ = wait;
     if write && outcome.ok {
         let save_args = serde_json::json!({"path": book.display().to_string()});
         let save = if cli.dry_run {
@@ -990,6 +1008,78 @@ fn cmd_recalc(cli: &Cli, book: &Path, write: bool, output: Output) -> Result<(),
         return finish_outcome(save, output);
     }
     finish_outcome(outcome, output)
+}
+
+fn cmd_agent(
+    cli: &Cli,
+    cmd: Option<&AgentCmd>,
+    prompt: Option<&str>,
+    book: Option<&Path>,
+    selection: Option<&str>,
+    output: Output,
+) -> Result<(), CliError> {
+    match cmd {
+        Some(AgentCmd::Diagnose {
+            pid,
+            book: dbook,
+            selection: dsel,
+        }) => crate::agent::run_diagnose(
+            cli,
+            dbook.as_deref().or(book),
+            dsel.as_deref().or(selection),
+            *pid,
+            output,
+        ),
+        None => {
+            let Some(prompt) = prompt else {
+                return Err(
+                    CliError::new("cli.usage", "omacell agent requires a prompt")
+                        .hint("omacell agent \"Reconcile Inputs against Ledger\"")
+                        .exit(EXIT_USAGE),
+                );
+            };
+            crate::agent::run_prompt(prompt, book, selection, output)
+        }
+    }
+}
+
+fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), CliError> {
+    if cli.dry_run {
+        return Err(
+            CliError::new("cli.usage", "--dry-run is not valid for omacell mcp")
+                .hint("MCP is a long-running server")
+                .exit(EXIT_USAGE),
+        );
+    }
+    let app = App::bootstrap_live(cli, book)?;
+    crate::log::init(&app.paths, cli.verbose, cli.quiet, true);
+    let config = app.loaded().config.clone();
+    let crate::app::App {
+        paths: _,
+        store,
+        bus,
+        files,
+    } = app;
+    let ctx = omacell_bus::mcp::McpCtx {
+        open_path: files
+            .current_path()
+            .map(|p| p.display().to_string())
+            .or_else(|| book.map(|p| p.display().to_string())),
+        gui_running: false,
+        on_external_propose: Some(crate::mcp::proposal_notifier(config)),
+    };
+    let runtime = omacell_bus::ipc::default_runtime_dir();
+    let ipc = omacell_bus::ipc::serve(runtime, bus)?;
+    let handler = crate::mcp::OmacellMcp::new(
+        ipc.bus().clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(ctx)),
+    );
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| CliError::new("mcp.runtime", err.to_string()))?;
+    let _keep = (store, files, ipc);
+    rt.block_on(crate::mcp::serve(handler, socket.map(Path::to_path_buf)))
 }
 
 fn cmd_diff(a: &Path, b: &Path, output: Output) -> Result<(), CliError> {

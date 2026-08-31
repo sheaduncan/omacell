@@ -24,10 +24,12 @@ omacell-lua = { path = "../lua", version = "0.0.0" }
 omacell-gui = { path = "../gui", version = "0.0.0" }
 omacell-tui = { path = "../tui", version = "0.0.0" }
 omacell-ui = { path = "../ui", version = "0.0.0" }
+rmcp = { version = "3.1", default-features = false, features = ["server", "client", "transport-io", "transport-async-rw", "transport-child-process", "schemars"] }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 signal-hook = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "process"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

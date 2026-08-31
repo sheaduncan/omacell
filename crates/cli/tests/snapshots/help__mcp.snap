@@ -2,15 +2,14 @@
 source: crates/cli/tests/help.rs
 expression: "help(&[\"mcp\", \"--help\"])"
 ---
-MCP server (WP-21)
+MCP server (stdio, or `--socket`)
 
-Usage: omacell mcp [OPTIONS] [ARGS]...
-
-Arguments:
-  [ARGS]...  
+Usage: omacell mcp [OPTIONS]
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)
+      --socket <SOCKET>       Unix socket path. Default is stdio
+      --book <BOOK>           Workbook to open before serving
       --dry-run               Validate writes without changing files
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`

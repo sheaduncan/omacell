@@ -248,10 +248,6 @@ pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
         wp: "WP-23",
     },
     DeferredCommand {
-        id: "ai.agent",
-        wp: "WP-21",
-    },
-    DeferredCommand {
         id: "chart.export",
         wp: "WP-25",
     },

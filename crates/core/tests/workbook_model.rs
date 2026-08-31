@@ -3,11 +3,12 @@
 use std::path::PathBuf;
 
 use omacell_core::addr::{SheetId, parse_a1};
-use omacell_core::error::codes;
+use omacell_core::error::{ErrorKind, codes};
 use omacell_core::geometry::AxisGeometry;
 use omacell_core::names::{DefinedName, NameReferent, NameScope, validate_defined_name};
 use omacell_core::sheet::{SheetVisibility, validate_sheet_name};
-use omacell_core::storage::CellSlot;
+use omacell_core::storage::{CellFlags, CellSlot};
+use omacell_core::style::StyleId;
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use proptest::prelude::*;
@@ -173,6 +174,32 @@ fn undo_redo_restores_structurally_deleted_cells() {
             Value::Number(value)
         );
     }
+}
+
+#[test]
+fn ref_error_count_tracks_cell_and_structural_undo_paths() {
+    let mut wb = Workbook::new();
+    let first = wb.active_sheet();
+    let second = wb.add_sheet("Data").unwrap();
+    let reference_error = CellSlot {
+        value: Value::Error(ErrorKind::Ref),
+        formula: None,
+        style: StyleId::DEFAULT,
+        flags: CellFlags::DEFAULT,
+    };
+    wb.set_slot(first, 1, 0, reference_error).unwrap();
+    wb.set_slot(second, 0, 0, reference_error).unwrap();
+    assert_eq!(wb.ref_error_count(), 2);
+
+    wb.delete_rows(first, 1, 1).unwrap();
+    assert_eq!(wb.ref_error_count(), 1);
+    wb.undo().unwrap();
+    assert_eq!(wb.ref_error_count(), 2);
+
+    wb.remove_sheet(second).unwrap();
+    assert_eq!(wb.ref_error_count(), 1);
+    wb.undo().unwrap();
+    assert_eq!(wb.ref_error_count(), 2);
 }
 
 #[test]

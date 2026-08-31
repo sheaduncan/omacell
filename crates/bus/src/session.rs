@@ -189,7 +189,16 @@ impl Bus {
         });
         match self.run_with_task(origin, std::slice::from_ref(&call), Run::direct(), task) {
             Ok(effect) => {
-                if repeatable {
+                let opened_workbook = effect
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, Event::WorkbookOpened { .. }));
+                if opened_workbook {
+                    // Changesets and repeat state belong to the workbook they
+                    // were computed against. Never carry them across an open.
+                    self.changesets = ChangesetStore::new();
+                    self.last_repeatable = None;
+                } else if repeatable {
                     self.last_repeatable = Some(call.clone());
                 }
                 self.notify_command_observers(origin, std::slice::from_ref(&call));

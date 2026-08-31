@@ -5,11 +5,13 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod agent;
 mod app;
 mod cli;
 mod error;
 mod files;
 mod log;
+mod mcp;
 mod output;
 mod reload;
 mod run;

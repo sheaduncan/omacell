@@ -69,6 +69,12 @@ impl FileSession {
     pub(crate) fn attach_config(&self, config: ReloadHandle) {
         self.lock().config = Some(config);
     }
+
+    /// Path of the workbook attached to this session, if any.
+    #[must_use]
+    pub fn current_path(&self) -> Option<PathBuf> {
+        self.lock().path.clone()
+    }
 }
 
 /// `file.open`

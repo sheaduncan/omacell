@@ -46,6 +46,7 @@ fn tui_with_hold(start: Arc<Barrier>, release: Arc<AtomicBool>) -> (tempfile::Te
             ui,
             roots,
             long_ops: LongOps::production(),
+            file: None,
         },
         false,
     )

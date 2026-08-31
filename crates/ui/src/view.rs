@@ -42,6 +42,15 @@ struct SelectArgs {
     range: String,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AgentArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    #[serde(default)]
+    diagnose: bool,
+}
+
 fn count(args: &CountArgs) -> i64 {
     i64::from(if args.count == 0 { 1 } else { args.count })
 }
@@ -218,6 +227,25 @@ pub fn register_ui_commands(
             HandlerKind::Changeset,
         ),
     ];
+    let agent_inner = session.inner.clone();
+    registry.register::<AgentArgs, _>(
+        CommandSpec {
+            id: "ai.agent",
+            doc: "Hand the workbook to the Omarchy default agent",
+            kind: CommandKind::Query,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        move |_ctx, args| {
+            let mut g = agent_inner.lock().unwrap_or_else(|p| p.into_inner());
+            g.pending_agent = Some(crate::session::AgentHandoff {
+                prompt: args.prompt.unwrap_or_default(),
+                diagnose: args.diagnose,
+            });
+            Ok(Effect::query(serde_json::json!({"queued": true})))
+        },
+    )?;
     for (id, doc, kind) in specs {
         let inner = inner.clone();
         let kind = *kind;

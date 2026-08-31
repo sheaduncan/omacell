@@ -25,8 +25,8 @@ Commands:
   diff       Semantic `.xlsx` diff
   audit      Deterministic audit (WP-19)
   ai         AI provider commands (WP-22)
-  agent      Hand off to the Omarchy default agent (WP-21)
-  mcp        MCP server (WP-21)
+  agent      Hand off to the Omarchy default agent
+  mcp        MCP server (stdio, or `--socket`)
 
 Arguments:
   [FILE]...  Workbook paths. With no subcommand, opens the graphical UI
