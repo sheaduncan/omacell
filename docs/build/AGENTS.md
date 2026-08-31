@@ -10,7 +10,7 @@ You are building **Omacell**, a spreadsheet for Omarchy Linux. The design spec i
 5. `docs/contracts.md` (frozen public types) and `docs/schemas/` when touching commands, config, IPC, MCP, or the workbook card.
 
 ## Toolchain and commands
-- Rust stable (pinned in `rust-toolchain.toml`), edition 2024, one Cargo workspace.
+- Rust 1.98 (pinned in `rust-toolchain.toml`; workspace `rust-version` matches the pin), edition 2024, one Cargo workspace.
 - `just check` = `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo doc --no-deps`. It must pass before you open a PR.
 - `just test-fast` for unit tests while iterating; `just bench` for criterion; `just fuzz <target>`; `just corpus-verify`; `just perf-baseline`.
 - Cross-check scripts (`scripts/lo-crosscheck.py`, openpyxl loaders) require LibreOffice/Python; tests using them must skip cleanly when absent.

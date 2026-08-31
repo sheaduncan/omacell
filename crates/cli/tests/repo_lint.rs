@@ -122,3 +122,32 @@ fn todo_markers_name_a_work_package() {
         violations.join("\n")
     );
 }
+
+fn assert_copies_match(canonical: &Path, copy: &Path) {
+    let left = fs::read_to_string(canonical)
+        .unwrap_or_else(|err| panic!("read {}: {err}", canonical.display()));
+    let right =
+        fs::read_to_string(copy).unwrap_or_else(|err| panic!("read {}: {err}", copy.display()));
+    assert_eq!(
+        left,
+        right,
+        "{} and {} drifted; edit the canonical path and copy it",
+        canonical.display(),
+        copy.display()
+    );
+}
+
+#[test]
+fn agents_md_bundle_copy_matches_root() {
+    let root = workspace_root();
+    assert_copies_match(&root.join("AGENTS.md"), &root.join("docs/build/AGENTS.md"));
+}
+
+#[test]
+fn design_spec_bundle_copy_matches_docs_spec() {
+    let root = workspace_root();
+    assert_copies_match(
+        &root.join("docs/spec/omacell-design-spec.md"),
+        &root.join("docs/build/spec/omacell-design-spec.md"),
+    );
+}

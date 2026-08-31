@@ -286,18 +286,18 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
         }
         "edit.cycleanchor" => inner.edit.cycle_anchor()?,
         _ => {
-            if let Some((dr, dc)) = edge_delta(cmd) {
-                if let Some(next) = snapshot_edge(wb, inner.selection.cursor, dr, dc) {
-                    if cmd.starts_with("sel.") {
-                        let current = inner.selection.cursor;
-                        inner.selection.extend = ExtendMode::Extend;
-                        inner.selection.move_by(
-                            i64::from(next.row) - i64::from(current.row),
-                            i64::from(next.col) - i64::from(current.col),
-                        );
-                    } else {
-                        inner.selection.replace(Area::cell(next));
-                    }
+            if let Some((dr, dc)) = edge_delta(cmd)
+                && let Some(next) = snapshot_edge(wb, inner.selection.cursor, dr, dc)
+            {
+                if cmd.starts_with("sel.") {
+                    let current = inner.selection.cursor;
+                    inner.selection.extend = ExtendMode::Extend;
+                    inner.selection.move_by(
+                        i64::from(next.row) - i64::from(current.row),
+                        i64::from(next.col) - i64::from(current.col),
+                    );
+                } else {
+                    inner.selection.replace(Area::cell(next));
                 }
             }
         }

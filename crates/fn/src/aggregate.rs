@@ -240,13 +240,13 @@ struct IfsPair {
 }
 
 fn parse_ifs(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<(Vec<Scalar>, Vec<IfsPair>), ErrorKind> {
-    if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+    if args.len() < 3 || !(args.len() - 1).is_multiple_of(2) {
         return Err(ErrorKind::Value);
     }
     let first = args.first().ok_or(ErrorKind::Value)?;
     let values = flatten(ctx, &first.value)?;
     let mut pairs = Vec::new();
-    for chunk in args.get(1..).unwrap_or(&[]).chunks_exact(2) {
+    for chunk in args.get(1..).unwrap_or(&[]).as_chunks::<2>().0 {
         let tests = flatten(ctx, &chunk[0].value)?;
         if tests.len() != values.len() {
             return Err(ErrorKind::Value);
@@ -260,12 +260,12 @@ fn parse_ifs(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<(Vec<Scalar>, Vec<Ifs
 }
 
 fn countifs_pairs(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<(usize, Vec<IfsPair>), ErrorKind> {
-    if args.len() < 2 || args.len() % 2 != 0 {
+    if args.len() < 2 || !args.len().is_multiple_of(2) {
         return Err(ErrorKind::Value);
     }
     let mut pairs = Vec::new();
     let mut len = None;
-    for chunk in args.chunks_exact(2) {
+    for chunk in args.as_chunks::<2>().0 {
         let tests = flatten(ctx, &chunk[0].value)?;
         match len {
             None => len = Some(tests.len()),

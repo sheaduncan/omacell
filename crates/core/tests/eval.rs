@@ -290,21 +290,21 @@ fn set_literal_or_formula(wb: &mut Workbook, sheet: SheetId, row: u32, col: u16,
         );
         return;
     }
-    if rest.starts_with('#') {
-        if let Some(e) = ErrorKind::from_display(rest) {
-            let _ = wb.set_slot(
-                sheet,
-                row,
-                col,
-                omacell_core::storage::CellSlot {
-                    value: Value::Error(e),
-                    formula: None,
-                    style: omacell_core::style::StyleId::DEFAULT,
-                    flags: CellFlags::DEFAULT,
-                },
-            );
-            return;
-        }
+    if rest.starts_with('#')
+        && let Some(e) = ErrorKind::from_display(rest)
+    {
+        let _ = wb.set_slot(
+            sheet,
+            row,
+            col,
+            omacell_core::storage::CellSlot {
+                value: Value::Error(e),
+                formula: None,
+                style: omacell_core::style::StyleId::DEFAULT,
+                flags: CellFlags::DEFAULT,
+            },
+        );
+        return;
     }
     if let Some(inner) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
         let _ = wb.set_text(sheet, row, col, inner);

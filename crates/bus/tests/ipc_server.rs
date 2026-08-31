@@ -190,11 +190,10 @@ fn subscribe_receives_changeset_events() {
     for _ in 0..20 {
         if let Some(omacell_bus::ipc::ServerRecord::Event { event, .. }) =
             client.poll_record().unwrap()
+            && matches!(event, omacell_core::event::Event::ChangesetProposed { .. })
         {
-            if matches!(event, omacell_core::event::Event::ChangesetProposed { .. }) {
-                saw = true;
-                break;
-            }
+            saw = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(20));
     }

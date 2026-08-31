@@ -12,7 +12,7 @@ description = "Layered configuration, theme resolution, and Omarchy adapters for
 workspace = true
 
 [dependencies]
-fontdb = "0.23"
+fontdb = "0.24"
 notify = "6"
 omacell-core = { path = "../core", version = "0.0.0" }
 schemars = { workspace = true }

@@ -57,7 +57,7 @@ fn is_utf8(bytes: &[u8]) -> bool {
 }
 
 fn sniff_utf16(bytes: &[u8]) -> Option<TextEncoding> {
-    if bytes.len() < 8 || bytes.len() % 2 != 0 {
+    if bytes.len() < 8 || !bytes.len().is_multiple_of(2) {
         return None;
     }
     let mut even_nul = 0u32;

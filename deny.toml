@@ -12,20 +12,9 @@ targets = [
 [advisories]
 yanked = "deny"
 ignore = [
-    # Transitive via calamine (dev-only). Runtime `omacell-io` uses quick-xml 0.41.
-    # Remove when calamine ≥ 0.36 is allowed by the workspace MSRV.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-    # Transitive via pre-approved `fontdb` 0.23 (WP-12). Remove when fontdb
-    # switches to skrifa.
+    # Unmaintained `ttf-parser` (info). Direct dep for WP-26 PDF embedding;
+    # also still used by `fontdb`. No skrifa migration yet.
     "RUSTSEC-2026-0192",
-    # Transitive via pre-approved `ratatui` 0.29 (WP-15). `paste` is unmaintained
-    # (RUSTSEC-2024-0436). ratatui ≥ 0.30 needs rustc 1.88, above the workspace
-    # MSRV 1.85. Remove when MSRV allows the upgrade.
-    "RUSTSEC-2024-0436",
-    # Transitive via pre-approved `resvg`/`usvg` 0.45 (WP-25). `rustybuzz` is
-    # unmaintained (RUSTSEC-2026-0206). Remove when resvg switches off rustybuzz.
-    "RUSTSEC-2026-0206",
 ]
 
 [licenses]

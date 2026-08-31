@@ -49,15 +49,15 @@ pub(crate) fn parse_value(s: &str, locale: LocaleId, system: DateSystem) -> Resu
     if t.is_empty() {
         return Ok(0.0);
     }
-    if t.contains(':') {
-        if let Some(n) = parse_time_string(t, locale) {
-            return Ok(n);
-        }
+    if t.contains(':')
+        && let Some(n) = parse_time_string(t, locale)
+    {
+        return Ok(n);
     }
-    if looks_like_date(t) {
-        if let Some(n) = parse_date_string(t, locale, system) {
-            return Ok(n as f64);
-        }
+    if looks_like_date(t)
+        && let Some(n) = parse_date_string(t, locale, system)
+    {
+        return Ok(n as f64);
     }
     let seps = locale.separators();
     parse_number_seps(t, seps.decimal, seps.thousands, locale, true)

@@ -41,7 +41,7 @@ impl Fenwick {
             if *e == 0 {
                 self.tree.remove(&i);
             }
-            let lsb = i & i.wrapping_neg();
+            let lsb = i.isolate_lowest_one();
             i = match i.checked_add(lsb) {
                 Some(next) => next,
                 None => break,
@@ -56,7 +56,7 @@ impl Fenwick {
             if let Some(v) = self.tree.get(&i) {
                 s += *v;
             }
-            i -= i & i.wrapping_neg();
+            i -= i.isolate_lowest_one();
         }
         s
     }

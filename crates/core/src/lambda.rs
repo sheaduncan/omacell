@@ -51,7 +51,7 @@ pub fn param_of(expr: &Expr) -> Option<LambdaParam> {
 /// Evaluate `LET(name, value, ..., calc)`.
 pub fn eval_let(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
     // At least name, value, calc.
-    if args.len() < 3 || args.len() % 2 == 0 {
+    if args.len() < 3 || args.len().is_multiple_of(2) {
         return RuntimeValue::error(ErrorKind::Value);
     }
     let calc = match args.last() {

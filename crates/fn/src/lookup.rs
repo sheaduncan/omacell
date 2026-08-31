@@ -467,34 +467,34 @@ fn scan_x(
         if args::exact_eq(lookup, &keys[i]) {
             return Ok(Some(i));
         }
-        if approx_small || approx_large {
-            if let Ok(c) = coerce::compare(&keys[i], lookup) {
-                let ok = if approx_small {
-                    matches!(
-                        c,
-                        omacell_core::coerce::Cmp::Lt | omacell_core::coerce::Cmp::Eq
-                    )
-                } else {
-                    matches!(
-                        c,
-                        omacell_core::coerce::Cmp::Gt | omacell_core::coerce::Cmp::Eq
-                    )
-                };
-                if ok {
-                    let replace = match best {
-                        None => true,
-                        Some(b) => {
-                            let cb = coerce::compare(&keys[i], &keys[b])?;
-                            if approx_small {
-                                matches!(cb, omacell_core::coerce::Cmp::Gt)
-                            } else {
-                                matches!(cb, omacell_core::coerce::Cmp::Lt)
-                            }
+        if (approx_small || approx_large)
+            && let Ok(c) = coerce::compare(&keys[i], lookup)
+        {
+            let ok = if approx_small {
+                matches!(
+                    c,
+                    omacell_core::coerce::Cmp::Lt | omacell_core::coerce::Cmp::Eq
+                )
+            } else {
+                matches!(
+                    c,
+                    omacell_core::coerce::Cmp::Gt | omacell_core::coerce::Cmp::Eq
+                )
+            };
+            if ok {
+                let replace = match best {
+                    None => true,
+                    Some(b) => {
+                        let cb = coerce::compare(&keys[i], &keys[b])?;
+                        if approx_small {
+                            matches!(cb, omacell_core::coerce::Cmp::Gt)
+                        } else {
+                            matches!(cb, omacell_core::coerce::Cmp::Lt)
                         }
-                    };
-                    if replace {
-                        best = Some(i);
                     }
+                };
+                if replace {
+                    best = Some(i);
                 }
             }
         }
