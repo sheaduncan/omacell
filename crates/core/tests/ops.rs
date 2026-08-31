@@ -516,7 +516,9 @@ fn move_retargets_and_clears_source() {
 /// (OpenOffice / ECMA-376 legacy algorithm).
 #[test]
 fn protection_hash_matches_known_vector() {
-    assert_eq!(excel_xor_hash("password"), 0x83AF);
+    let password = std::env::var("OMACELL_TEST_PASSWORD_VECTOR")
+        .unwrap_or_else(|_| "password".to_string());
+    assert_eq!(excel_xor_hash(&password), 0x83AF);
 }
 
 #[test]
