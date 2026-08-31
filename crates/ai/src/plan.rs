@@ -11,6 +11,7 @@ use crate::error::{AiError, codes};
 
 /// One planned command.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct PlannedCommand {
     /// Registry id.
     pub id: String,
@@ -21,12 +22,13 @@ pub struct PlannedCommand {
 
 /// Model plan envelope.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Plan {
     /// Ordered commands.
     pub commands: Vec<PlannedCommand>,
 }
 
-/// Command prefixes autopilot / injection must never emit.
+/// Defense-in-depth exclusions within the explicit command catalog.
 pub const FORBIDDEN_PREFIXES: &[&str] = &[
     "trust.",
     "script.",
@@ -47,6 +49,12 @@ pub fn forbidden(id: &str) -> bool {
 pub fn parse_plan(value: &Value, catalog: &BTreeSet<String>) -> Result<Plan, AiError> {
     let plan: Plan = serde_json::from_value(value.clone())
         .map_err(|err| AiError::new(codes::PAYLOAD, format!("plan JSON: {err}")))?;
+    if plan.commands.len() > 200 {
+        return Err(AiError::new(
+            codes::PAYLOAD,
+            "plan exceeds the 200-command limit",
+        ));
+    }
     for cmd in &plan.commands {
         if cmd.id.split('.').count() < 2 {
             return Err(AiError::new(
@@ -61,7 +69,7 @@ pub fn parse_plan(value: &Value, catalog: &BTreeSet<String>) -> Result<Plan, AiE
             )
             .with_hint("models cannot change trust, network, scripting, files, or AI policy"));
         }
-        if !catalog.is_empty() && !catalog.contains(&cmd.id) {
+        if !catalog.contains(&cmd.id) {
             return Err(AiError::new(
                 codes::PAYLOAD,
                 format!("unknown command {}", cmd.id),
@@ -100,12 +108,15 @@ pub fn plan_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "required": ["commands"],
+        "additionalProperties": false,
         "properties": {
             "commands": {
                 "type": "array",
+                "maxItems": 200,
                 "items": {
                     "type": "object",
                     "required": ["id"],
+                    "additionalProperties": false,
                     "properties": {
                         "id": {"type": "string"},
                         "args": {"type": "object"}

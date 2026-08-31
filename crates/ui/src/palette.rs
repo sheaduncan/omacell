@@ -34,6 +34,8 @@ pub struct Palette {
     pub hits: Vec<PaletteHit>,
     /// Inline argument prompt (schema-driven).
     pub prompt: Option<String>,
+    /// Multi-line AI plan preview.
+    pub preview: Option<String>,
 }
 
 impl Palette {
@@ -42,6 +44,7 @@ impl Palette {
         self.open = true;
         self.query.clear();
         self.prompt = None;
+        self.preview = None;
     }
 
     /// Close.
@@ -50,6 +53,7 @@ impl Palette {
         self.query.clear();
         self.hits.clear();
         self.prompt = None;
+        self.preview = None;
     }
 
     /// Record a successful command for recents.
@@ -74,16 +78,18 @@ impl Palette {
         self.query = query.to_string();
         if let Some(rest) = query.strip_prefix('?') {
             self.hits.clear();
+            self.preview = None;
             let request = rest.trim();
             self.prompt = Some(if request.is_empty() {
                 "Type a sentence after ? for an AI plan".into()
             } else {
                 ai.and_then(|provider| provider.plan(request))
-                    .unwrap_or_else(|| format!("plan {request:?} (omacell ai plan / ai.plan)"))
+                    .unwrap_or_else(|| "Press Enter to propose an AI plan".into())
             });
             return;
         }
         self.prompt = None;
+        self.preview = None;
         let q = query.to_ascii_lowercase();
         let mut hits: Vec<PaletteHit> = commands
             .iter()
@@ -119,6 +125,7 @@ impl Palette {
 
     /// Build an inline prompt from a command's JSON Schema required fields.
     pub fn prompt_for(&mut self, command: &CommandJson) {
+        self.preview = None;
         let required = command
             .arg_schema
             .get("required")

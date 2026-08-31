@@ -1,6 +1,6 @@
 //! Shared AI runtime: async cells, chat, settle, and task dispatch.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -30,6 +30,8 @@ use crate::provider::{
 };
 use crate::redact::redact_json;
 
+const MAX_MODEL_TEXT_BYTES: usize = 1_048_576;
+
 /// Queued async cell.
 #[derive(Clone, Debug)]
 struct Job {
@@ -57,8 +59,8 @@ struct Inner {
     rate: RateLimit,
     session: SessionStats,
     confirm: Option<String>,
-    lua_tasks: BTreeMap<String, Value>,
     catalog: BTreeSet<String>,
+    catalog_payload: Vec<Value>,
 }
 
 impl AiRuntime {
@@ -88,8 +90,8 @@ impl AiRuntime {
                 rate: RateLimit::from_config(&config),
                 session: SessionStats::default(),
                 confirm: None,
-                lua_tasks: BTreeMap::new(),
                 catalog: BTreeSet::new(),
+                catalog_payload: Vec::new(),
             }),
         })
     }
@@ -102,11 +104,6 @@ impl AiRuntime {
     #[must_use]
     pub fn confirmation(&self) -> Option<String> {
         self.lock().confirm.clone()
-    }
-
-    /// Register a Lua-defined task template.
-    pub fn register_lua_task(&self, name: String, spec: Value) {
-        self.lock().lua_tasks.insert(name, spec);
     }
 
     /// Effective config.
@@ -122,14 +119,22 @@ impl AiRuntime {
     }
 
     /// Public command catalog the planner may emit.
-    pub fn set_catalog(&self, ids: BTreeSet<String>) {
-        self.lock().catalog = ids;
+    pub fn set_catalog(&self, entries: Vec<(String, Value)>) {
+        let mut g = self.lock();
+        g.catalog = entries.iter().map(|(id, _)| id.clone()).collect();
+        g.catalog_payload = entries.into_iter().map(|(_, entry)| entry).collect();
     }
 
     /// Snapshot of the planner catalog.
     #[must_use]
     pub fn catalog(&self) -> BTreeSet<String> {
         self.lock().catalog.clone()
+    }
+
+    /// Command documentation and argument schemas sent to planners.
+    #[must_use]
+    pub fn catalog_payload(&self) -> Vec<Value> {
+        self.lock().catalog_payload.clone()
     }
 
     /// Session counters for the status line.
@@ -151,7 +156,13 @@ impl AiRuntime {
     /// Privacy snapshot for this workbook.
     #[must_use]
     pub fn policy(&self, wb: Option<&Workbook>) -> PolicySnapshot {
-        let (name, _) = route_slot(&self.config, Slot::Default);
+        self.policy_for(Slot::Default, wb)
+    }
+
+    /// Privacy snapshot for the provider selected by `slot`.
+    #[must_use]
+    pub fn policy_for(&self, slot: Slot, wb: Option<&Workbook>) -> PolicySnapshot {
+        let (name, _) = route_slot(&self.config, slot);
         let local = provider_is_local(&self.config, &name);
         PolicySnapshot::capture(&self.config, wb, local)
     }
@@ -163,7 +174,18 @@ impl AiRuntime {
         engine: Option<&RecalcEngine>,
         selection: Option<String>,
     ) -> Result<Value, AiError> {
-        let policy = self.policy(Some(wb));
+        self.workbook_card_for(Slot::Default, wb, engine, selection)
+    }
+
+    /// Fenced workbook card using the privacy policy of `slot`'s provider.
+    pub fn workbook_card_for(
+        &self,
+        slot: Slot,
+        wb: &Workbook,
+        engine: Option<&RecalcEngine>,
+        selection: Option<String>,
+    ) -> Result<Value, AiError> {
+        let policy = self.policy_for(slot, Some(wb));
         let req = CardRequest {
             selection,
             ..CardRequest::default()
@@ -176,6 +198,18 @@ impl AiRuntime {
         let req = CardRequest { level, ..req };
         let (card, _) = build_card(wb, engine, req, &policy)?;
         Ok(card)
+    }
+
+    /// Install a newly opened workbook's cache and discard per-workbook state.
+    ///
+    /// Returns the previous cache so a staged open can roll back on failure.
+    pub fn replace_workbook_cache(&self, cache: AiCache) -> AiCache {
+        let mut g = self.lock();
+        g.pending.clear();
+        g.results.clear();
+        g.cells.clear();
+        g.confirm = None;
+        std::mem::replace(&mut g.cache, cache)
     }
 
     /// Force the next evaluate of `hash` to miss the cache.
@@ -271,7 +305,6 @@ impl AiRuntime {
         let provider = provider_from_config(&provider_name, spec, Arc::clone(&self.transport))?;
         let system = self.prompts.get("system");
         let task_t = self.prompts.get(task);
-        let request_bytes = user.len() as u64;
         let messages = vec![
             ChatMessage {
                 role: Role::System,
@@ -281,7 +314,7 @@ impl AiRuntime {
             },
             ChatMessage {
                 role: Role::User,
-                content: user,
+                content: user.clone(),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
             },
@@ -296,13 +329,30 @@ impl AiRuntime {
             cancel: crate::provider::Cancel::new(),
             timeout: provider_timeout(spec),
         };
+        let request_record = json!({
+            "task": task,
+            "model": model,
+            "messages": &req.messages,
+            "schema": &req.json_schema,
+            "tools": &req.tools,
+            "max_output_tokens": req.max_output_tokens,
+        });
+        let request_bytes = serde_json::to_vec(&request_record)
+            .map_err(|err| AiError::new(codes::PAYLOAD, err.to_string()))?
+            .len() as u64;
+        let request_hash = hash_json(&request_record);
         self.lock().rate.allow()?;
         let started = std::time::Instant::now();
         let out = self.handle.block_on(provider.chat(req))?;
+        if out.text.len() > MAX_MODEL_TEXT_BYTES {
+            return Err(AiError::new(
+                codes::PAYLOAD,
+                "model text response exceeds the 1 MiB limit",
+            ));
+        }
         let bytes = out.text.len() as u64;
-        self.lock().session.record(bytes);
+        self.lock().session.record(request_bytes);
         let log = AuditLog::open(&self.state_dir)?;
-        let payload = json!({"task": task, "model": model});
         log.append(&LogRecord {
             ts: now_ms(),
             task: task.into(),
@@ -310,10 +360,15 @@ impl AiRuntime {
             model,
             request_bytes,
             response_bytes: bytes,
-            request_hash: hash_json(&payload),
+            request_hash,
             latency_ms: started.elapsed().as_millis() as u64,
             usage: out.usage,
-            content: None,
+            content: self
+                .config
+                .ai
+                .privacy
+                .log_content
+                .then(|| json!({"request": user, "response": out.text.clone()})),
         })?;
         Ok(out)
     }
@@ -321,7 +376,7 @@ impl AiRuntime {
     /// Drain pending AI cells in batches (default 50).
     pub fn settle(&self, policy: &PolicySnapshot) -> Result<usize, AiError> {
         let batch = self.config.ai.functions.batch_size.max(1) as usize;
-        let jobs: Vec<Job> = {
+        let mut jobs: Vec<Job> = {
             let mut g = self.lock();
             g.confirm = None;
             let n = g.pending.len() as u32;
@@ -334,6 +389,9 @@ impl AiRuntime {
         if jobs.is_empty() {
             return Ok(0);
         }
+        jobs.sort_by_key(|job| job.hash.0);
+        let retry_jobs = jobs.clone();
+        let mut completed = HashSet::new();
         let mut groups: BTreeMap<String, Vec<Job>> = BTreeMap::new();
         for job in jobs {
             groups.entry(job.name.clone()).or_default().push(job);
@@ -352,13 +410,19 @@ impl AiRuntime {
                 let user = fence_data("AI cell batch", &data);
                 let schema = json!({
                     "type": "object",
+                    "required": ["results"],
+                    "additionalProperties": false,
                     "properties": {
                         "results": {
                             "type": "array",
+                            "minItems": chunk.len(),
+                            "maxItems": chunk.len(),
                             "items": {
                                 "type": "object",
+                                "required": ["i", "value"],
+                                "additionalProperties": false,
                                 "properties": {
-                                    "i": {"type": "integer"},
+                                    "i": {"type": "integer", "minimum": 0, "maximum": chunk.len().saturating_sub(1)},
                                     "value": {}
                                 }
                             }
@@ -370,44 +434,51 @@ impl AiRuntime {
                     Ok(reply) => reply,
                     Err(err) => {
                         let mut g = self.lock();
-                        for job in chunk {
-                            g.pending.insert(job.hash, job.clone());
+                        for job in &retry_jobs {
+                            if !completed.contains(&job.hash) {
+                                g.pending.insert(job.hash, job.clone());
+                            }
                         }
                         return Err(err);
                     }
                 };
-                let parsed: Value = serde_json::from_str(&reply.text)
-                    .unwrap_or_else(|_| json!({"results": [{"i": 0, "value": reply.text}]}));
-                let results = parsed
-                    .get("results")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                let model = route_slot(&self.config, Slot::Default).1;
+                let results = match parse_batch_results(&reply.text, chunk.len()) {
+                    Ok(results) => results,
+                    Err(err) => {
+                        let mut g = self.lock();
+                        for job in &retry_jobs {
+                            if !completed.contains(&job.hash) {
+                                g.pending.insert(job.hash, job.clone());
+                            }
+                        }
+                        return Err(err);
+                    }
+                };
+                let (provider, model) = route_slot(&self.config, Slot::Default);
                 let version = self.prompts.get(task).version;
                 let mut g = self.lock();
                 for (i, job) in chunk.iter().enumerate() {
-                    let value = results
-                        .iter()
-                        .find(|row| row.get("i").and_then(Value::as_u64) == Some(i as u64))
-                        .and_then(|row| row.get("value"))
-                        .cloned()
-                        .or_else(|| results.get(i).and_then(|row| row.get("value")).cloned())
-                        .unwrap_or(Value::String(reply.text.clone()));
+                    let (value, runtime) = &results[i];
+                    let input_hash = hash_json(&job.args);
                     let entry = CacheEntry {
                         task: job.name.clone(),
                         template_version: version.clone(),
+                        provider: provider.clone(),
                         model: model.clone(),
                         value: value.clone(),
-                        prompt_hash: hash_json(&job.args),
+                        prompt_hash: input_hash.clone(),
+                        input_hash,
                         ts: now_ms(),
                         prompt_tokens: reply.usage.prompt_tokens,
                         completion_tokens: reply.usage.completion_tokens,
                         pinned: false,
                     };
                     g.cache.insert(job.hash, entry.clone());
-                    g.results.insert(job.hash, json_to_runtime(&value));
-                    let _ = cache::write_disk(&self.cache_dir, job.hash, &entry);
+                    g.results.insert(job.hash, runtime.clone());
+                    if let Err(error) = cache::write_disk(&self.cache_dir, job.hash, &entry) {
+                        tracing::warn!(code = %error.code, message = %error.message, "AI disk cache write failed");
+                    }
+                    completed.insert(job.hash);
                     done += 1;
                 }
             }
@@ -426,20 +497,21 @@ impl AsyncNodeProvider for AiRuntime {
         let args = args_json(&req.args);
         let task = task_prompt(&req.name);
         let version = self.prompts.get(task).version;
-        let model = route_slot(&self.config, Slot::Default).1;
+        let (provider, model) = route_slot(&self.config, Slot::Default);
+        let input_hash = hash_json(&args);
         let mut g = self.lock();
         g.cells.insert(req.cell, key);
         if let Some(entry) = g.cache.get(key).cloned()
-            && cache_fresh(&entry, &version, &model)
+            && cache_fresh(&entry, &version, &provider, &model, &input_hash)
+            && let Ok(rt) = json_to_runtime(&entry.value)
         {
-            let rt = json_to_runtime(&entry.value);
             g.results.insert(key, rt);
             return AsyncState::Ready(omacell_core::value::Value::Empty);
         }
         if let Some(disk) = cache::read_disk(&self.cache_dir, key)
-            && cache_fresh(&disk, &version, &model)
+            && cache_fresh(&disk, &version, &provider, &model, &input_hash)
+            && let Ok(rt) = json_to_runtime(&disk.value)
         {
-            let rt = json_to_runtime(&disk.value);
             g.cache.insert(key, disk.clone());
             g.results.insert(key, rt);
             return AsyncState::Ready(omacell_core::value::Value::Empty);
@@ -463,8 +535,69 @@ impl AsyncNodeProvider for AiRuntime {
     }
 }
 
-fn cache_fresh(entry: &CacheEntry, version: &str, model: &str) -> bool {
-    entry.pinned || (entry.template_version == version && entry.model == model)
+fn cache_fresh(
+    entry: &CacheEntry,
+    version: &str,
+    provider: &str,
+    model: &str,
+    input_hash: &str,
+) -> bool {
+    entry.input_hash == input_hash
+        && (entry.pinned
+            || (entry.template_version == version
+                && entry.provider == provider
+                && entry.model == model))
+}
+
+fn parse_batch_results(text: &str, expected: usize) -> Result<Vec<(Value, RuntimeValue)>, AiError> {
+    let parsed: Value = serde_json::from_str(text)
+        .map_err(|err| AiError::new(codes::PAYLOAD, format!("invalid AI cell JSON: {err}")))?;
+    let rows = parsed
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AiError::new(codes::PAYLOAD, "AI cell response is missing results"))?;
+    if rows.len() != expected {
+        return Err(AiError::new(
+            codes::PAYLOAD,
+            format!(
+                "AI cell response returned {} of {expected} results",
+                rows.len()
+            ),
+        ));
+    }
+    let mut ordered: Vec<Option<(Value, RuntimeValue)>> = vec![None; expected];
+    for row in rows {
+        let index = row
+            .get("i")
+            .and_then(Value::as_u64)
+            .and_then(|i| usize::try_from(i).ok())
+            .filter(|i| *i < expected)
+            .ok_or_else(|| AiError::new(codes::PAYLOAD, "AI cell result has invalid index"))?;
+        if ordered[index].is_some() {
+            return Err(AiError::new(
+                codes::PAYLOAD,
+                format!("AI cell response repeats result {index}"),
+            ));
+        }
+        let value = row
+            .get("value")
+            .cloned()
+            .ok_or_else(|| AiError::new(codes::PAYLOAD, "AI cell result is missing value"))?;
+        let runtime = json_to_runtime(&value)?;
+        ordered[index] = Some((value, runtime));
+    }
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| {
+            value.ok_or_else(|| {
+                AiError::new(
+                    codes::PAYLOAD,
+                    format!("AI cell response is missing result {i}"),
+                )
+            })
+        })
+        .collect()
 }
 
 /// Debounce helper for completion (`[ai.completion] debounce`).

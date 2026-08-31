@@ -247,9 +247,26 @@ impl App {
             let catalog = bus
                 .registry()
                 .iter()
-                .filter(|(_, cmd)| cmd.exposure == omacell_bus::Exposure::Public)
-                .map(|(id, _)| id.to_string())
-                .collect();
+                .filter(|(_, cmd)| {
+                    cmd.exposure == omacell_bus::Exposure::Public && cmd.changeset_eligible
+                })
+                .map(|(id, cmd)| {
+                    let args = serde_json::to_value(&cmd.descriptor.arg_schema).map_err(|err| {
+                        CoreError::new(
+                            "ai.catalog",
+                            format!("cannot serialize schema for {id}: {err}"),
+                        )
+                    })?;
+                    Ok((
+                        id.to_string(),
+                        serde_json::json!({
+                            "id": id,
+                            "doc": cmd.descriptor.doc,
+                            "args": args,
+                        }),
+                    ))
+                })
+                .collect::<Result<Vec<_>, CoreError>>()?;
             runtime.set_catalog(catalog);
         }
         let script_gate = omacell_lua::ScriptGate::default();

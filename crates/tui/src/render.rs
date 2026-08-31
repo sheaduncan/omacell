@@ -1124,7 +1124,16 @@ fn draw_palette(
     } else {
         terminal_text(&format!("palette: {}", palette.query))
     };
-    frame.render_widget(List::new(items).block(chrome_block(title, unicode)), popup);
+    if let Some(preview) = &palette.preview {
+        frame.render_widget(
+            Paragraph::new(terminal_text(preview))
+                .wrap(Wrap { trim: false })
+                .block(chrome_block(title, unicode)),
+            popup,
+        );
+    } else {
+        frame.render_widget(List::new(items).block(chrome_block(title, unicode)), popup);
+    }
 }
 
 fn draw_panel(

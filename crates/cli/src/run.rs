@@ -990,12 +990,13 @@ fn cmd_recalc(
 ) -> Result<(), CliError> {
     let mut app = init_app_book(cli, book)?;
     let args = serde_json::json!({"mode": "rebuild"});
-    let outcome = if cli.dry_run {
+    let mut outcome = if cli.dry_run {
         app.dry_run("calc.recalc", args.clone())?.outcome
     } else {
         app.execute("calc.recalc", args.clone())
     };
     if wait
+        && !cli.dry_run
         && outcome.ok
         && let Some(ai) = app.ai.clone()
     {
@@ -1005,9 +1006,8 @@ fn cmd_recalc(
             omacell_ai::policy::provider_is_local(&config, &name)
         };
         let policy = omacell_ai::PolicySnapshot::capture(&config, Some(app.bus.workbook()), local);
-        let _ = ai.settle(&policy);
-        let _ = ai.write_workbook_cache(app.bus.workbook_mut());
-        let _ = app.execute("calc.recalc", args);
+        ai.settle(&policy)?;
+        outcome = app.execute("calc.recalc", args);
     }
     if write && outcome.ok {
         let save_args = serde_json::json!({"path": book.display().to_string()});

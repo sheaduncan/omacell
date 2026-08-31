@@ -3623,6 +3623,7 @@ name = "omacell-cli"
 version = "0.0.0"
 dependencies = [
  "assert_cmd",
+ "async-trait",
  "clap",
  "clap_complete",
  "clap_mangen",

@@ -4,7 +4,7 @@ Generated from `omacell_lua::catalog::API`. Do not edit by hand.
 
 ## Runtime profiles
 
-User-profile scripts have the documented API and Lua standard library. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt or change keymaps, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.
+User-profile scripts have the documented API and Lua standard library. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt, change keymaps, register AI extensions or AI payload hooks, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.
 
 ## `omacell.cmd`
 
@@ -148,22 +148,22 @@ Register a theme-changed handler.
 
 `omacell.ai.task(name, spec)`
 
-Register a named AI task (prompt/schema).
+Reserve named AI-task metadata in this user-script runtime; dispatch is not implemented.
 
 ## `omacell.ai.fn`
 
 `omacell.ai.fn(name, spec)`
 
-Register an AI-backed worksheet function (sync; not an async graph node).
+Reserve an AI worksheet-function name; calls currently return `#N/A`.
 
 ## `omacell.on_ai_request`
 
 `omacell.on_ai_request(fn)`
 
-Register a pre-request hook. The payload is already fenced.
+Reserve a pre-request hook; AI dispatch does not invoke it yet.
 
 ## `omacell.on_ai_response`
 
 `omacell.on_ai_response(fn)`
 
-Register a post-response hook.
+Reserve a post-response hook; AI dispatch does not invoke it yet.

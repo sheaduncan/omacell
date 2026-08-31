@@ -24,7 +24,7 @@ Commands:
   changeset  Changesets on a running instance
   diff       Semantic `.xlsx` diff
   audit      Deterministic audit (WP-19)
-  ai         AI provider, card, log, and usage
+  ai         AI provider, card, plans, log, and usage
   agent      Hand off to the Omarchy default agent
   mcp        MCP server (stdio, or `--socket`)
 

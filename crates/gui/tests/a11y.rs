@@ -25,6 +25,7 @@ fn focused_cell_is_in_the_accesskit_tree() {
 }
 
 #[test]
+#[ignore = "nightly wall-clock smoke bound; shared CI software runners are nondeterministic"]
 fn first_frame_renders_within_software_ci_smoke_budget() {
     // The product's 300 ms target is gated on the fixed integrated-GPU
     // reference host (WP-28). GitHub's cold lavapipe initialization takes

@@ -31,7 +31,10 @@ fn ranking_is_stable() {
     p.rank(&commands, "cell");
     let cell: Vec<_> = p.hits.iter().map(|h| h.id.clone()).collect();
     p.rank(&commands, "?hello");
-    assert!(p.prompt.as_ref().unwrap().contains("ai.plan"));
+    assert_eq!(
+        p.prompt.as_deref(),
+        Some("Press Enter to propose an AI plan")
+    );
     assert_debug_snapshot!((empty, cell));
 }
 

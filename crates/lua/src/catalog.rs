@@ -131,22 +131,22 @@ pub const API: &[ApiEntry] = &[
     ApiEntry {
         name: "omacell.ai.task",
         signature: "omacell.ai.task(name, spec)",
-        doc: "Register a named AI task (prompt/schema).",
+        doc: "Reserve named AI-task metadata in this user-script runtime; dispatch is not implemented.",
     },
     ApiEntry {
         name: "omacell.ai.fn",
         signature: "omacell.ai.fn(name, spec)",
-        doc: "Register an AI-backed worksheet function (sync; not an async graph node).",
+        doc: "Reserve an AI worksheet-function name; calls currently return `#N/A`.",
     },
     ApiEntry {
         name: "omacell.on_ai_request",
         signature: "omacell.on_ai_request(fn)",
-        doc: "Register a pre-request hook. The payload is already fenced.",
+        doc: "Reserve a pre-request hook; AI dispatch does not invoke it yet.",
     },
     ApiEntry {
         name: "omacell.on_ai_response",
         signature: "omacell.on_ai_response(fn)",
-        doc: "Register a post-response hook.",
+        doc: "Reserve a post-response hook; AI dispatch does not invoke it yet.",
     },
 ];
 
@@ -157,7 +157,7 @@ pub fn render_markdown() -> String {
     out.push_str("Generated from `omacell_lua::catalog::API`. Do not edit by hand.\n\n");
     out.push_str(
         "## Runtime profiles\n\n\
-User-profile scripts have the documented API and Lua standard library. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt or change keymaps, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.\n\n",
+User-profile scripts have the documented API and Lua standard library. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt, change keymaps, register AI extensions or AI payload hooks, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.\n\n",
     );
     for entry in API {
         out.push_str(&format!(

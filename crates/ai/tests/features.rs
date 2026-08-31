@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use omacell_ai::PolicySnapshot;
 use omacell_ai::agent::validate_tool;
 use omacell_ai::formula::parse_and_eval;
 use omacell_ai::functions::{is_ai_formula, register_ai_functions, strip_ai_formulas};
@@ -13,10 +12,12 @@ use omacell_ai::import_assist::parse_plan_overlay;
 use omacell_ai::plan::{forbidden, parse_plan, to_calls};
 use omacell_ai::prompts::PromptSet;
 use omacell_ai::runtime::AiRuntime;
+use omacell_ai::{PolicySnapshot, SendLevel, Slot};
 use omacell_conf::schema::package_defaults;
 use omacell_core::eval::FnRegistry;
 use omacell_core::graph::CellCoord;
 use omacell_core::recalc::RecalcEngine;
+use omacell_core::value::Value as CellValue;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
 use omacell_io::xlsx::{open_bytes, save_workbook_bytes};
@@ -45,14 +46,14 @@ fn catalog() -> BTreeSet<String> {
     [
         "cell.set",
         "range.sort",
-        "range.filter",
+        "filter.set",
         "sheet.add",
         "sheet.rename",
         "condfmt.add",
         "table.create",
         "edit.filldown",
-        "nav.gotospecial",
-        "audit.run",
+        "format.bold",
+        "range.removeduplicates",
     ]
     .into_iter()
     .map(str::to_string)
@@ -118,7 +119,7 @@ fn two_hundred_plan_evals_match_commands() {
     let cat = catalog();
     let templates = [
         ("sort column {n}", "range.sort", json!({"range": "A1:F10"})),
-        ("filter {n}", "range.filter", json!({"range": "A1:A20"})),
+        ("filter {n}", "filter.set", json!({"range": "A1:A20"})),
         ("add a sheet {n}", "sheet.add", json!({"name": "S"})),
         (
             "rename sheet {n}",
@@ -137,12 +138,12 @@ fn two_hundred_plan_evals_match_commands() {
             "table.create",
             json!({"range": "A1:C10"}),
         ),
+        ("bold cells {n}", "format.bold", json!({"range": "A1:A10"})),
         (
-            "go to special {n}",
-            "nav.gotospecial",
-            json!({"kind": "formulas"}),
+            "remove duplicates {n}",
+            "range.removeduplicates",
+            json!({"range": "A1:C10"}),
         ),
-        ("run audit {n}", "audit.run", json!({})),
     ];
     let mut n = 0u32;
     for i in 0..200 {
@@ -177,7 +178,7 @@ fn injection_suite_rejects_policy_commands() {
             forbidden(id) || err.message.contains("unknown") || err.message.contains("forbidden"),
             "{id}: {err:?}"
         );
-        assert!(validate_tool("command_run", &format!(r#"{{"id":"{id}"}}"#), true).is_err());
+        assert!(validate_tool("command_run", &format!(r#"{{"id":"{id}"}}"#), true, &cat,).is_err());
     }
 }
 
@@ -212,18 +213,122 @@ fn async_cells_batch_and_cache_skips_http() {
 }
 
 #[test]
-fn batching_fifty_plus_cells_uses_two_requests() {
-    let mut config = enabled_config();
-    config.ai.functions.batch_size = 50;
-    config.ai.functions.max_cells_per_recalc = 500;
-    let (ai, transport, _rt, _tmp) = runtime(config.clone(), json!({"results":[]}));
+fn malformed_cell_batch_is_rejected_and_requeued() {
+    let config = enabled_config();
+    let (ai, transport, _rt, _tmp) = runtime(config.clone(), json!({"value": "wrong shape"}));
     let mut registry = FnRegistry::new();
     register_ai_functions(&mut registry);
     let mut engine = RecalcEngine::new(registry);
     engine.set_async_provider(ai.clone());
     let mut wb = Workbook::new();
     let sheet = wb.active_sheet();
-    for i in 0..51u32 {
+    wb.set_cell_contents(sheet, 0, 0, r#"=AI("name")"#).unwrap();
+    let _ = engine.recalc_rebuild(&mut wb);
+    let policy = PolicySnapshot::capture(&config, Some(&wb), true);
+    let err = ai.settle(&policy).unwrap_err();
+    assert_eq!(err.code, "ai.payload");
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 1);
+    assert!(ai.settle(&policy).is_err());
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn ai_table_result_spills_a_rectangular_array() {
+    let config = enabled_config();
+    let (ai, _transport, _rt, _tmp) = runtime(
+        config.clone(),
+        json!({"results":[{"i":0,"value":[[1,2],[3,4]]}]}),
+    );
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_cell_contents(sheet, 0, 0, r#"=AI.TABLE("two by two")"#)
+        .unwrap();
+    let _ = engine.recalc_rebuild(&mut wb);
+    let policy = PolicySnapshot::capture(&config, Some(&wb), true);
+    ai.settle(&policy).unwrap();
+    let result = engine.recalc_rebuild(&mut wb);
+    assert!(result.pending_async.is_empty());
+    assert_eq!(
+        wb.get(sheet, 0, 1).unwrap().unwrap().value,
+        CellValue::Number(2.0)
+    );
+    assert_eq!(
+        wb.get(sheet, 1, 0).unwrap().unwrap().value,
+        CellValue::Number(3.0)
+    );
+    assert_eq!(
+        wb.get(sheet, 1, 1).unwrap().unwrap().value,
+        CellValue::Number(4.0)
+    );
+}
+
+#[test]
+fn privacy_policy_follows_the_routed_provider_slot() {
+    let mut config = enabled_config();
+    config.ai.privacy.send = "schema".into();
+    config.ai.privacy.local_full = true;
+    config.ai.providers.insert(
+        "cloud".into(),
+        omacell_conf::schema::AiProvider {
+            kind: "openai_compatible".into(),
+            endpoint: "https://example.invalid/v1".into(),
+            local: false,
+            secret_env: None,
+            secret_cmd: None,
+            timeout: 0,
+            headers: Default::default(),
+        },
+    );
+    config.ai.models.fast = "cloud:fast".into();
+    let (ai, _transport, _rt, _tmp) = runtime(config, json!({}));
+    assert_eq!(ai.policy_for(Slot::Default, None).send, SendLevel::Full);
+    assert_eq!(ai.policy_for(Slot::Fast, None).send, SendLevel::Schema);
+}
+
+#[test]
+fn opening_another_workbook_discards_per_workbook_ai_state() {
+    let config = enabled_config();
+    let (ai, _transport, _rt, _tmp) =
+        runtime(config.clone(), json!({"results":[{"i":0,"value":"Ada"}]}));
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_cell_contents(sheet, 0, 0, r#"=AI("name")"#).unwrap();
+    let _ = engine.recalc_rebuild(&mut wb);
+    let policy = PolicySnapshot::capture(&config, Some(&wb), true);
+    ai.settle(&policy).unwrap();
+    ai.replace_workbook_cache(Default::default());
+    let mut next = Workbook::new();
+    ai.write_workbook_cache(&mut next).unwrap();
+    let cache = omacell_ai::cache::AiCache::from_bytes(
+        next.custom_parts
+            .get(omacell_ai::cache::AICACHE_PART)
+            .unwrap(),
+    );
+    assert!(cache.entries.is_empty());
+}
+
+#[test]
+fn batching_fifty_plus_cells_uses_two_requests() {
+    let mut config = enabled_config();
+    config.ai.functions.batch_size = 50;
+    config.ai.functions.max_cells_per_recalc = 500;
+    let results: Vec<_> = (0..50).map(|i| json!({"i": i, "value": i})).collect();
+    let (ai, transport, _rt, _tmp) = runtime(config.clone(), json!({"results": results}));
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    for i in 0..100u32 {
         wb.set_cell_contents(sheet, i, 0, &format!(r#"=AI("{i}")"#))
             .unwrap();
     }
@@ -350,9 +455,28 @@ fn strip_ai_formulas_keeps_values() {
             .unwrap()
             .as_str()
     ));
-    strip_ai_formulas(&mut wb);
+    strip_ai_formulas(&mut wb).unwrap();
     let slot = wb.get(sheet, 0, 0).unwrap().unwrap();
     assert!(slot.formula.is_none());
+}
+
+#[test]
+fn strip_ai_formulas_preserves_formula_like_text_exactly() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_cell_contents(sheet, 0, 0, r#"=AI("x")"#).unwrap();
+    let text = wb.intern_text("=not a formula");
+    let mut slot = *wb.get(sheet, 0, 0).unwrap().unwrap();
+    slot.value = CellValue::Text(text);
+    wb.set_slot(sheet, 0, 0, slot).unwrap();
+    wb.release_text(text);
+    strip_ai_formulas(&mut wb).unwrap();
+    let slot = wb.get(sheet, 0, 0).unwrap().unwrap();
+    assert!(slot.formula.is_none());
+    let CellValue::Text(id) = slot.value else {
+        panic!("expected text, got {:?}", slot.value);
+    };
+    assert_eq!(wb.intern().strings.get(id), Some("=not a formula"));
 }
 
 #[test]
@@ -377,10 +501,20 @@ fn unknown_plan_command_is_rejected() {
     assert!(err.message.contains("unknown"));
 }
 
+#[test]
+fn empty_plan_catalog_fails_closed() {
+    let err = parse_plan(
+        &json!({"commands":[{"id":"cell.set","args":{}}]}),
+        &BTreeSet::new(),
+    )
+    .unwrap_err();
+    assert!(err.message.contains("unknown"));
+}
+
 proptest::proptest! {
     #[test]
     fn plan_ids_are_dotted_and_not_forbidden(n in 0u8..10) {
-        let ids = ["cell.set", "range.sort", "sheet.add", "audit.run"];
+        let ids = ["cell.set", "range.sort", "sheet.add", "format.bold"];
         let id = ids[n as usize % ids.len()];
         let plan = parse_plan(&json!({"commands":[{"id": id, "args": {}}]}), &catalog()).unwrap();
         assert!(!omacell_ai::forbidden(&plan.commands[0].id));

@@ -1,7 +1,12 @@
 //! Content-addressed AI-cell cache (workbook part + disk).
 
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
 use omacell_core::recalc::ContentHash;
 use serde::{Deserialize, Serialize};
@@ -12,6 +17,9 @@ use crate::error::{AiError, codes};
 /// Custom part holding the workbook-local cache.
 pub const AICACHE_PART: &str = "xl/omacell/aicache.json";
 
+const MAX_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CACHE_ENTRIES: usize = 100_000;
+
 /// One cached cell result.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CacheEntry {
@@ -19,12 +27,18 @@ pub struct CacheEntry {
     pub task: String,
     /// Prompt-template version.
     pub template_version: String,
-    /// Provider:model.
+    /// Provider name.
+    #[serde(default)]
+    pub provider: String,
+    /// Model name.
     pub model: String,
     /// JSON value (scalar or array).
     pub value: Value,
     /// SHA-256 of the prompt.
     pub prompt_hash: String,
+    /// SHA-256 of the evaluated arguments (guards the compact cache key).
+    #[serde(default)]
+    pub input_hash: String,
     /// Unix ms.
     pub ts: u64,
     /// Prompt tokens.
@@ -48,7 +62,15 @@ impl AiCache {
     /// Load from a workbook custom part.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        serde_json::from_slice(bytes).unwrap_or_default()
+        if bytes.len() > MAX_CACHE_BYTES {
+            return Self::default();
+        }
+        let cache: Self = serde_json::from_slice(bytes).unwrap_or_default();
+        if cache.entries.len() > MAX_CACHE_ENTRIES {
+            Self::default()
+        } else {
+            cache
+        }
     }
 
     /// Key for [`ContentHash`].
@@ -65,7 +87,18 @@ impl AiCache {
 
     /// Insert.
     pub fn insert(&mut self, hash: ContentHash, entry: CacheEntry) {
-        self.entries.insert(Self::key(hash), entry);
+        let key = Self::key(hash);
+        if !self.entries.contains_key(&key) && self.entries.len() >= MAX_CACHE_ENTRIES {
+            let removable = self
+                .entries
+                .iter()
+                .find_map(|(key, entry)| (!entry.pinned).then(|| key.clone()));
+            let Some(removable) = removable else {
+                return;
+            };
+            self.entries.remove(&removable);
+        }
+        self.entries.insert(key, entry);
     }
 
     /// Remove one key.
@@ -75,7 +108,15 @@ impl AiCache {
 
     /// Serialize.
     pub fn to_bytes(&self) -> Result<Vec<u8>, AiError> {
-        serde_json::to_vec(self).map_err(|err| AiError::new(codes::PAYLOAD, err.to_string()))
+        let bytes = serde_json::to_vec(self)
+            .map_err(|err| AiError::new(codes::PAYLOAD, err.to_string()))?;
+        if bytes.len() > MAX_CACHE_BYTES {
+            return Err(AiError::new(
+                codes::PAYLOAD,
+                "AI workbook cache exceeds the 16 MiB limit",
+            ));
+        }
+        Ok(bytes)
     }
 }
 
@@ -90,17 +131,40 @@ pub fn disk_path(cache_dir: &Path, hash: ContentHash) -> PathBuf {
 pub fn write_disk(cache_dir: &Path, hash: ContentHash, entry: &CacheEntry) -> Result<(), AiError> {
     let path = disk_path(cache_dir, hash);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder
+            .create(parent)
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+        #[cfg(unix)]
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
     }
     let bytes =
         serde_json::to_vec(entry).map_err(|err| AiError::new(codes::PAYLOAD, err.to_string()))?;
-    std::fs::write(&path, bytes).map_err(|err| AiError::new(codes::LOG, err.to_string()))
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(&path)
+        .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+    #[cfg(unix)]
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+    file.write_all(&bytes)
+        .map_err(|err| AiError::new(codes::LOG, err.to_string()))
 }
 
 /// Read one disk entry.
 #[must_use]
 pub fn read_disk(cache_dir: &Path, hash: ContentHash) -> Option<CacheEntry> {
     let path = disk_path(cache_dir, hash);
+    if std::fs::metadata(&path).ok()?.len() > MAX_CACHE_BYTES as u64 {
+        return None;
+    }
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }

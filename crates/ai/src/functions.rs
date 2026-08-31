@@ -2,7 +2,7 @@
 
 use omacell_core::addr::SheetId;
 use omacell_core::coerce::Scalar;
-use omacell_core::error::ErrorKind;
+use omacell_core::error::{CoreError, ErrorKind};
 use omacell_core::eval::{ArgVal, ArrayLift, EvalCtx, FnDef, FnRegistry, RuntimeValue};
 use omacell_core::storage::CellSlot;
 use omacell_core::value::Value;
@@ -64,36 +64,82 @@ fn scalar_json(s: &Scalar) -> serde_json::Value {
     }
 }
 
-/// JSON → runtime value (text/number/bool/array).
-#[must_use]
-pub fn json_to_runtime(value: &serde_json::Value) -> RuntimeValue {
+/// JSON → runtime value (text/number/bool/rectangular array).
+pub fn json_to_runtime(value: &serde_json::Value) -> Result<RuntimeValue, crate::AiError> {
     match value {
-        serde_json::Value::Null => RuntimeValue::Scalar(Scalar::Empty),
-        serde_json::Value::Bool(b) => RuntimeValue::Scalar(Scalar::Bool(*b)),
+        serde_json::Value::Null => Ok(RuntimeValue::Scalar(Scalar::Empty)),
+        serde_json::Value::Bool(b) => Ok(RuntimeValue::Scalar(Scalar::Bool(*b))),
         serde_json::Value::Number(n) => {
-            RuntimeValue::Scalar(Scalar::Number(n.as_f64().unwrap_or(0.0)))
+            let number = n.as_f64().filter(|n| n.is_finite()).ok_or_else(|| {
+                crate::AiError::new(crate::error::codes::PAYLOAD, "invalid JSON number")
+            })?;
+            Ok(RuntimeValue::Scalar(Scalar::Number(number)))
         }
-        serde_json::Value::String(s) => RuntimeValue::Scalar(Scalar::Text(s.as_str().into())),
+        serde_json::Value::String(s) => Ok(RuntimeValue::Scalar(Scalar::Text(s.as_str().into()))),
         serde_json::Value::Array(items) => {
-            let values: Vec<Scalar> = items
-                .iter()
-                .map(|v| match json_to_runtime(v) {
-                    RuntimeValue::Scalar(s) => s,
-                    _ => Scalar::Empty,
-                })
-                .collect();
-            let cols = values.len().max(1) as u32;
-            RuntimeValue::array(1, cols, values)
+            if items.is_empty() {
+                return Err(crate::AiError::new(
+                    crate::error::codes::PAYLOAD,
+                    "AI array result must not be empty",
+                ));
+            }
+            if items.iter().all(serde_json::Value::is_array) {
+                let rows = items.len() as u32;
+                let cols = items[0].as_array().map_or(0, Vec::len);
+                if cols == 0
+                    || items
+                        .iter()
+                        .any(|row| row.as_array().map_or(0, Vec::len) != cols)
+                {
+                    return Err(crate::AiError::new(
+                        crate::error::codes::PAYLOAD,
+                        "AI array result must be rectangular and non-empty",
+                    ));
+                }
+                let mut values = Vec::with_capacity(items.len() * cols);
+                for row in items {
+                    for item in row.as_array().into_iter().flatten() {
+                        values.push(json_scalar(item)?);
+                    }
+                }
+                Ok(RuntimeValue::array(rows, cols as u32, values))
+            } else if items.iter().any(serde_json::Value::is_array) {
+                Err(crate::AiError::new(
+                    crate::error::codes::PAYLOAD,
+                    "AI array result mixes scalar and row values",
+                ))
+            } else {
+                let values = items
+                    .iter()
+                    .map(json_scalar)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(RuntimeValue::array(1, values.len() as u32, values))
+            }
         }
         serde_json::Value::Object(map) => {
             if let Some(err) = map.get("error").and_then(|v| v.as_str()) {
-                return RuntimeValue::error(ErrorKind::from_display(err).unwrap_or(ErrorKind::Na));
+                return Ok(RuntimeValue::error(
+                    ErrorKind::from_display(err).unwrap_or(ErrorKind::Na),
+                ));
             }
             if let Some(v) = map.get("value") {
                 return json_to_runtime(v);
             }
-            RuntimeValue::Scalar(Scalar::Text(value.to_string().into()))
+            Err(crate::AiError::new(
+                crate::error::codes::PAYLOAD,
+                "AI result object must contain value or error",
+            ))
         }
+    }
+}
+
+fn json_scalar(value: &serde_json::Value) -> Result<Scalar, crate::AiError> {
+    match json_to_runtime(value)? {
+        RuntimeValue::Scalar(value) => Ok(value),
+        _ => Err(crate::AiError::new(
+            crate::error::codes::PAYLOAD,
+            "nested AI arrays are not supported",
+        )),
     }
 }
 
@@ -140,33 +186,35 @@ pub fn stored_input(wb: &Workbook, slot: &CellSlot) -> String {
 }
 
 /// Replace AI formulas with their cached values (xlsx `values` export).
-pub fn strip_ai_formulas(wb: &mut Workbook) {
-    let jobs: Vec<(SheetId, u32, u16, String)> = {
-        let sheets: Vec<(SheetId, omacell_core::storage::UsedRange)> = wb
+pub fn strip_ai_formulas(wb: &mut Workbook) -> Result<(), CoreError> {
+    type SheetCells = (SheetId, Vec<(u32, u16, CellSlot)>);
+    let jobs: Vec<(SheetId, u32, u16, CellSlot)> = {
+        let sheets: Vec<SheetCells> = wb
             .sheets()
-            .filter_map(|sheet| sheet.used_range().map(|used| (sheet.id, used)))
+            .map(|sheet| (sheet.id, sheet.store.iter().collect()))
             .collect();
         let mut out = Vec::new();
-        for (id, used) in sheets {
-            for row in used.min_row..=used.max_row {
-                for col in used.min_col..=used.max_col {
-                    let Some(slot) = wb.get(id, row, col).ok().flatten() else {
-                        continue;
-                    };
-                    let Some(fid) = slot.formula else {
-                        continue;
-                    };
-                    let src = wb.intern().formulas.get(fid).unwrap_or("");
-                    if !is_ai_formula(src) {
-                        continue;
-                    }
-                    out.push((id, row, col, stored_input(wb, slot)));
+        for (id, cells) in sheets {
+            for (row, col, mut slot) in cells {
+                let Some(fid) = slot.formula else {
+                    continue;
+                };
+                let src = wb.intern().formulas.get(fid).unwrap_or("");
+                if is_ai_formula(src) {
+                    slot.formula = None;
+                    slot.flags = slot
+                        .flags
+                        .with(omacell_core::storage::CellFlags::DIRTY, false)
+                        .with(omacell_core::storage::CellFlags::STALE, false)
+                        .with(omacell_core::storage::CellFlags::ARRAY, false);
+                    out.push((id, row, col, slot));
                 }
             }
         }
         out
     };
-    for (id, row, col, input) in jobs {
-        let _ = wb.set_cell_contents(id, row, col, &input);
+    for (id, row, col, slot) in jobs {
+        wb.set_slot(id, row, col, slot)?;
     }
+    Ok(())
 }

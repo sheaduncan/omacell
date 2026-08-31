@@ -165,6 +165,9 @@ pub fn palette(
         .show(ctx, |ui| {
             ui.label(palette.prompt.as_deref().unwrap_or("palette"));
             ui.label(&palette.query);
+            if let Some(preview) = &palette.preview {
+                ui.monospace(preview);
+            }
             for (i, hit) in palette.hits.iter().take(12).enumerate() {
                 let text = format!("{}  {}", hit.id, hit.doc);
                 let rich = if i == selected {

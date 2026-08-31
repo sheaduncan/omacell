@@ -300,9 +300,9 @@ fn install_api(
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
 
     install_ui(lua, &omacell, host, profile, function_depth)?;
-    install_events(lua, &omacell)?;
+    install_events(lua, &omacell, profile)?;
     install_keymap(lua, &omacell, host, profile, function_depth)?;
-    install_ai(lua, &omacell, host, function_depth)?;
+    install_ai(lua, &omacell, host, profile, function_depth)?;
     install_book(lua, &omacell, host, function_depth)?;
 
     lua.globals()
@@ -387,7 +387,7 @@ fn install_ui(
         .map_err(|e| CoreError::new("lua.api", e.to_string()))
 }
 
-fn install_events(lua: &Lua, omacell: &Table) -> Result<(), CoreError> {
+fn install_events(lua: &Lua, omacell: &Table, profile: Profile) -> Result<(), CoreError> {
     let hooks = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
@@ -400,6 +400,9 @@ fn install_events(lua: &Lua, omacell: &Table) -> Result<(), CoreError> {
         "on_ai_request",
         "on_ai_response",
     ] {
+        if profile == Profile::Embedded && matches!(name, "on_ai_request" | "on_ai_response") {
+            continue;
+        }
         hooks
             .set(
                 name,
@@ -506,8 +509,12 @@ fn install_ai(
     lua: &Lua,
     omacell: &Table,
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
+    profile: Profile,
     function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
+    if profile == Profile::Embedded {
+        return Ok(());
+    }
     let ai = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;

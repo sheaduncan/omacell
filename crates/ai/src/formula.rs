@@ -11,6 +11,7 @@ use crate::error::{AiError, codes};
 
 /// Model output for a generated formula.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FormulaOut {
     /// Formula-bar text (`=SUM(A1:A10)`).
     pub formula: String,
@@ -19,7 +20,7 @@ pub struct FormulaOut {
 /// JSON schema.
 #[must_use]
 pub fn formula_schema() -> Value {
-    json!({"type":"object","required":["formula"],"properties":{"formula":{"type":"string"}}})
+    json!({"type":"object","required":["formula"],"additionalProperties":false,"properties":{"formula":{"type":"string"}}})
 }
 
 /// Parse model JSON and evaluate in a scratch cell. Rejects unparseable output.

@@ -2,13 +2,14 @@
 source: crates/cli/tests/help.rs
 expression: "help(&[\"ai\", \"--help\"])"
 ---
-AI provider, card, log, and usage
+AI provider, card, plans, log, and usage
 
 Usage: omacell ai [OPTIONS] <COMMAND>
 
 Commands:
   setup  Detect local servers and write a sparse user config
   card   Print a workbook card
+  plan   Propose registry commands from a natural-language request
   log    Read `~/.local/state/omacell/ai/log.jsonl`
   usage  Token usage totals from the audit log
 

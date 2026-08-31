@@ -42,7 +42,7 @@ impl PromptSet {
             ),
             (
                 "cell",
-                "Return JSON {\"value\": ...} for the task. <!-- version: 1 -->\n",
+                "For every input row, return JSON {\"results\":[{\"i\":0,\"value\":...}]}. Preserve every input index exactly once. Results are values, never formulas. <!-- version: 2 -->\n",
             ),
             (
                 "plan",
@@ -51,6 +51,18 @@ impl PromptSet {
             (
                 "formula",
                 "Return JSON {\"formula\":\"=...\"} using the card. <!-- version: 1 -->\n",
+            ),
+            (
+                "formula_explain",
+                "Explain the requested formula in plain language. Return JSON {\"explanation\":\"...\"}. <!-- version: 1 -->\n",
+            ),
+            (
+                "formula_fix",
+                "Fix the requested formula. Return JSON {\"formula\":\"=...\"}. <!-- version: 1 -->\n",
+            ),
+            (
+                "formula_refactor",
+                "Refactor the requested formula without changing its result. Return JSON {\"formula\":\"=...\"}. <!-- version: 1 -->\n",
             ),
             (
                 "complete",
@@ -74,23 +86,23 @@ impl PromptSet {
             ),
             (
                 "extract",
-                "Extract. Return JSON {\"value\":...}. <!-- version: 1 -->\n",
+                "Extract the requested field for every input row. Return {\"results\":[{\"i\":0,\"value\":...}]} and preserve every input index exactly once. <!-- version: 2 -->\n",
             ),
             (
                 "classify",
-                "Classify. Return JSON {\"value\":...}. <!-- version: 1 -->\n",
+                "Classify every input row. Return {\"results\":[{\"i\":0,\"value\":...}]} and preserve every input index exactly once. <!-- version: 2 -->\n",
             ),
             (
                 "fill",
-                "Transform by example. Return JSON {\"results\":[{\"i\":0,\"value\":...}]}. <!-- version: 1 -->\n",
+                "Transform every input row by example. Return {\"results\":[{\"i\":0,\"value\":...}]} and preserve every input index exactly once. <!-- version: 2 -->\n",
             ),
             (
                 "table",
-                "Spill a table. Return JSON {\"rows\":[[...]]}. <!-- version: 1 -->\n",
+                "For every input row, produce a rectangular table value. Return {\"results\":[{\"i\":0,\"value\":[[...]]}]} and preserve every input index exactly once. <!-- version: 2 -->\n",
             ),
             (
                 "translate",
-                "Translate. Return JSON {\"value\":\"...\"}. <!-- version: 1 -->\n",
+                "Translate every input row. Return {\"results\":[{\"i\":0,\"value\":\"...\"}]} and preserve every input index exactly once. <!-- version: 2 -->\n",
             ),
         ] {
             set.templates.insert(name.into(), parse_template(body));
