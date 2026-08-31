@@ -50,7 +50,9 @@ pub use handler::{CommandContext, Effect, TaskCtl};
 pub use policy::MutationPolicy;
 pub use registry::{CommandKind, CommandRegistry, CommandSpec, Exposure, RegisteredCommand};
 pub use resolve::MAX_RANGE_CELLS;
-pub use runner::{TaskRunner, TaskRunnerHandle, register_hold_command};
+#[cfg(feature = "test-util")]
+pub use runner::register_hold_command;
+pub use runner::{TaskRunner, TaskRunnerHandle};
 pub use session::{Bus, CommandObserver, DryRun};
 pub use task::{
     CancelHandle, LongOps, ReaderSnapshot, TaskEvent, TaskId, TaskProgress, TaskState, TaskStatus,

@@ -22,6 +22,7 @@ ratatui = "0.30"
 serde_json = { workspace = true }
 
 [dev-dependencies]
+omacell-bus = { path = "../bus", version = "0.0.0", features = ["test-util"] }
 omacell-fn = { path = "../fn", version = "0.0.0" }
 omacell-lua = { path = "../lua", version = "0.0.0" }
 omacell-io = { path = "../io", version = "0.0.0" }

@@ -4,12 +4,55 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Instant;
 
-use omacell_bus::{Bus, LongOps, TaskEvent, TaskRunner, register_hold_command};
+use omacell_bus::args::EmptyArgs;
+use omacell_bus::{
+    Bus, CommandKind, CommandSpec, Effect, Exposure, LongOps, TaskEvent, TaskRunner,
+};
 use omacell_core::command::Origin;
+use omacell_core::error::CoreError;
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use serde_json::json;
+
+fn register_hold_command(
+    registry: &mut omacell_bus::CommandRegistry,
+    start: Arc<Barrier>,
+    release: Arc<AtomicBool>,
+) -> Result<(), CoreError> {
+    registry.register::<EmptyArgs, _>(
+        CommandSpec {
+            id: "test.hold",
+            doc: "Test-only barrier hold (WP-15a)",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        move |ctx, _args| {
+            if ctx.is_preflight() {
+                return Ok(Effect::query(serde_json::json!({})));
+            }
+            start.wait();
+            loop {
+                if ctx.is_cancelled() {
+                    return Err(CoreError::new(
+                        omacell_bus::codes::TASK_CANCELLED,
+                        "task cancelled",
+                    ));
+                }
+                if release.load(Ordering::SeqCst) {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            Ok(Effect {
+                result: serde_json::json!({"held": true}),
+                ..Effect::default()
+            })
+        },
+    )
+}
 
 fn bus_with_hold(start: Arc<Barrier>, release: Arc<AtomicBool>) -> Bus {
     let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).unwrap();
