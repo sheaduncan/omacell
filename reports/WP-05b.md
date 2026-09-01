@@ -119,10 +119,13 @@ Host: rustc 1.98 / Linux.
 
 ## Open questions / decisions needed
 
-1. Resolved 2026-08-31: `CHAR(128)` is `€`; `CHAR`/`CODE` use Windows-1252.
-2. Resolved 2026-08-31: retain Excel's documented `DATEDIF` month-end/leap quirks; pathological corpus rows cover them.
-3. Resolved 2026-08-31: `YEARFRAC` basis 1 divides actual days by the applicable year length or the average length of all covered years.
-4. Whether WP-13/`format_cell` should show spilled arrays as `{…}` in the UI (today only the corpus runner does).
+1. **Resolved 2026-08-31:** `CHAR(128)` is `€`; `CHAR`/`CODE` use Windows-1252.
+2. **Resolved 2026-08-31:** retain Excel's documented `DATEDIF` month-end/leap
+   quirks; pathological corpus rows cover them.
+3. **Resolved 2026-08-31:** `YEARFRAC` basis 1 divides actual days by the
+   applicable year length or the average length of all covered years.
+4. **Resolved:** spilled cells show their values and the formula bar shows the
+   anchor formula; only legacy CSE formulas use `{=…}` notation.
 
 ## RFC (only if a frozen contract changed)
 

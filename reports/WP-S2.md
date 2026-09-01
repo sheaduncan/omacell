@@ -52,7 +52,8 @@ Spike CLI: `--measure`, `--frames N`.
 - Frozen row-index column in addition to the required frozen header row — needed to verify virtualization; still throwaway.
 - Tessellation feathering disabled so hairlines can be 1 device pixel (§11.4). WP-16 should keep this for the grid layer only if product chrome needs AA.
 - CJK IME and Orca were not completed (environment). They are not recorded as failures, but they remain blocking exit criteria; see Open questions. Qt was **not** tried inside this spike.
-- ADR is updated in this PR; it is not merged until a human merges. Same pattern as WP-00 vs CI-on-main.
+- The spike/report merged, but ADR-001 intentionally remains proposed until the
+  live CJK IME and Orca gates are completed.
 
 ## Measurements
 
@@ -93,10 +94,16 @@ An earlier 240-frame run on the same adapter: startup to first update 196.9 ms, 
 
 ## Open questions / decisions needed
 
-1. **CJK IME on Wayland — blocks ADR-001.** Re-test with a real engine (`fcitx5-chinese-addons`, mozc, or rime) focused in the spike field. If composition never reaches egui, that is Qt-swap trigger 1 in ADR-001.
-2. **Orca speech — blocks ADR-001.** The AT-SPI node exists, but Orca was not installed. Run Orca against the focused spike cell and confirm that it reads the address and value. Failure is Qt-swap trigger 2.
-3. **1.5× hairline is 1–2 px.** Device-pixel snap + no feathering is close; WP-16 may need stroke centering tweaks so 1.5× is strictly 1 px like 1.25×.
-4. **Product cold start.** Spike first update was 143–197 ms, but that excludes tessellation/render/present and therefore does not establish the < 300 ms first-frame budget. WP-16 needs a presentation-aware measurement.
+1. **Human / WP-28 G4 — CJK IME on Wayland blocks ADR-001.** Re-test with a
+   real engine (`fcitx5-chinese-addons`, mozc, or rime). If composition never
+   reaches egui, that is Qt-swap trigger 1.
+2. **Human / WP-28 G4 — Orca speech blocks ADR-001.** The AT-SPI node exists;
+   run Orca and confirm the focused cell address and value are spoken. Failure is
+   Qt-swap trigger 2.
+3. **WP-28 G4:** verify the production painter's device-pixel snapping at 1.25×,
+   1.5×, and 2×; a one-logical-pixel gridline must remain one physical pixel.
+4. **Human / WP-28 fixed host:** measure presentation-aware product cold start;
+   the 143–197 ms pre-render spike update is not evidence for the 300 ms gate.
 
 ## RFC (only if a frozen contract changed)
 
@@ -105,8 +112,8 @@ None. G0 has not happened; this package does not touch frozen contracts.
 ## Checklist
 
 - [x] `just check` green on the workspace (spike excluded; fmt, clippy `-D warnings`, `cargo test --workspace`, `cargo doc --workspace --no-deps`)
-- [ ] Every acceptance criterion ticked with evidence — blocked on CJK IME and Orca exit checks
-  - [ ] ADR merged with measurements — ADR remains proposed until the two exit checks pass; merge is the human's job
+- [ ] Every acceptance criterion ticked with evidence — **HUMAN / WP-28 G4:** blocked on CJK IME and Orca exit checks
+  - [ ] **HUMAN / WP-28 G4:** ADR-001 remains proposed until both live checks pass and the measured decision is recorded
   - [x] Spike lives under `spikes/` and is excluded from the workspace (`Cargo.toml` `exclude = ["spikes"]`) and CI (`just check` does not build it)
 - [x] Docs warning-free; public items documented (no product API)
 - [x] Baselines recorded (if the package has performance gates) — measurements in this report and ADR-001; not `just perf-baseline` (no criterion benches in the workspace)

@@ -1,5 +1,9 @@
 # Open-question triage — 31 August 2026
 
+> This is the decision snapshot used for the follow-up work. Current completion,
+> explicit post-1.0 scope, human gates, and the remaining pre-WP-28 queue are
+> tracked in `reports/integration-audit-2026-09-01.md`.
+
 Resolves the 83 `## Open questions` bullets across `reports/WP-*.md` against
 Excel 365 semantics and Omarchy 4.0 "Quattro" (released 14 Aug 2026).
 Each item carries a **Decision**, the evidence, a confidence mark, and an

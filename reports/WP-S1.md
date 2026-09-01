@@ -116,9 +116,11 @@ CLI 428 KiB. The spike includes its harness and `anyhow`, so the observed
 
 ## Open questions / decisions needed
 
-1. Human merge of this PR records ADR-002 as decided. No further engine ADR unless IronCalc later ships a public DAG + async hook + 64 B-class storage.
-2. Whether a *test-only* IronCalc oracle (dev-dep, still not `crates/core`) is worth a later package. Not decided here; default is LibreOffice/openpyxl as in D12.
-3. Planning-time questions, now answered:
+1. **Resolved:** merge recorded ADR-002 as decided. No further engine ADR unless
+   IronCalc later ships a public DAG + async hook + 64 B-class storage.
+2. **Resolved:** do not add a test-only IronCalc oracle; LibreOffice, openpyxl,
+   Excel-authored fixtures, and the live Excel checklist provide better coverage.
+3. **Resolved planning questions:**
    - crates.io `ironcalc` 0.8.3 includes xlsx I/O; `ironcalc_base` is the engine.
    - Graph is not public; `CellOrRange` exists internally; eval is full-sheet (#849).
    - 1M workbook ran (761 MB RSS, 1.69 s eval).
@@ -132,7 +134,7 @@ None. G0 has not happened. This package does not touch frozen types.
 ## Checklist
 
 - [x] `just check` green on this worktree (spike excluded from the workspace). See Measurements / commit notes if CI on GitHub has not run.
-- [x] Acceptance: ADR filled with **build** and measured numbers (`docs/adr/0002-engine.md`). Spike lives under `spikes/` (workspace `exclude`). **Not merged** — human merge is required for "ADR merged".
+- [x] Acceptance: ADR filled with **build** and measured numbers (`docs/adr/0002-engine.md`). Spike lives under `spikes/` (workspace `exclude`). Merge recorded the human ADR decision.
 - [x] Docs warning-free; no new public product items
 - [x] Baselines recorded in the ADR/report (spike, not `just perf-baseline` — no criterion target in this package)
 - [x] No new `TODO(` without a `WP-` reference; IronCalc is spike-only, not a product dependency

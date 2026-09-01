@@ -28,7 +28,12 @@ Ship: an Arch package that installs cleanly on Omarchy, documentation that match
 
 ## Implementation notes
 
-- Humans decide the final name and license before the first public tag; this package must not block on them.
+- Entry gate: complete P1, P2, and P3 in
+  `reports/integration-audit-2026-09-01.md` before creating the WP-28 branch,
+  unless a human records a different owner in the relevant report. WP-28 is not
+  a catch-all for unfinished engine, IPC, or AI integration.
+- MIT is decided. Humans must clear the final name before the first public tag;
+  implementation and non-release CI must not block on that external decision.
 - Do not write into `/usr/share/omarchy` or `~/.config/omarchy` from the package; only `setup omarchy` (user-run) touches the latter.
 
 ## Acceptance criteria

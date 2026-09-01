@@ -789,7 +789,7 @@ Runs on any Linux with Wayland (X11 through XWayland, best effort). Omarchy-spec
 1. Name: *Omacell* is the working name; still open are Omarchy's blessing for the "Oma-" prefix, a trademark clearance search, and handles/domains (`omacell.com` and the main social handles are already held by unrelated parties).
 2. ADR-001 toolkit and ADR-002 engine, after M0.
 3. Default cell font: monospace (Omarchy-native) vs. proportional (Excel-native). Current default: monospace.
-4. License: MIT (matching Omarchy) vs. a copyleft option. Current lean: MIT.
+4. License: **MIT**, decided 31 Aug 2026 to match Omarchy.
 5. Whether to propose Omacell as an Omarchy default app or remain an ecosystem package. Current lean: ecosystem package until 1.0.
 6. Whether `.omc` should be a first-class save target in the UI or remain an export.
 7. Whether to map Excel's `COPILOT()` to `AI()` on import. Current lean: import inert, offer a one-key conversion.

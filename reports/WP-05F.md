@@ -107,7 +107,9 @@ Host: rustc 1.98.0, Linux.
 ## Open questions / decisions needed
 
 1. Resolved 2026-08-31: zero-sized `SEQUENCE` results use `#CALC!`.
-2. Workbook-level locale is not on frozen `WorkbookSettings`; engine default is `en-US` via `RecalcEngine::set_locale`.
+2. **Resolved:** locale remains application-level, not workbook state; formats
+   stay locale-independent and `RecalcEngine::set_locale` supplies the runtime
+   locale.
 
 ## RFC (only if a frozen contract changed)
 

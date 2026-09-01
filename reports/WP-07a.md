@@ -103,9 +103,11 @@ No new crates.io dependencies. `proptest` is workspace-dev; `omacell-core` / `sc
 
 ## Open questions / decisions needed
 
-1. Confirm `edit.undo` / `edit.redo` ids for WP-14 keymaps (Appendix A `Ctrl+Z` / `Ctrl+Y` still bind here).
-2. Should `Ipc` share model-origin policy in-process? Currently trusted; WP-07b can wrap.
-3. Custom `numFmtId` allocation starts at 164 on the workbook; WP-09/10 should reuse this table.
+1. **Resolved:** WP-14 binds `Ctrl+Z` / `Ctrl+Y` to `edit.undo` / `edit.redo`.
+2. **Resolved:** same-user IPC remains trusted; agent origins are changeset-only
+   at the shared dispatch boundary.
+3. **Resolved:** custom `numFmtId` allocation starts at 164 and XLSX I/O shares
+   the workbook table.
 
 ## RFC (only if a frozen contract changed)
 
