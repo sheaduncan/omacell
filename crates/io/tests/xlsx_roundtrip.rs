@@ -176,6 +176,30 @@ fn new_workbook_save_bytes_reopens() {
 }
 
 #[test]
+fn shared_string_table_only_contains_live_workbook_cells() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.undo_log_mut().set_budget(1);
+    wb.set_text(sheet, 0, 0, "evicted-history-token").unwrap();
+    wb.set_text(sheet, 0, 0, "undo-only-token").unwrap();
+    wb.set_text(sheet, 0, 0, "current-cell-token").unwrap();
+
+    let bytes = save_workbook_bytes(&wb).unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut shared_strings = String::new();
+    archive
+        .by_name("xl/sharedStrings.xml")
+        .unwrap()
+        .read_to_string(&mut shared_strings)
+        .unwrap();
+
+    assert!(shared_strings.contains("current-cell-token"));
+    assert!(!shared_strings.contains("undo-only-token"));
+    assert!(!shared_strings.contains("evicted-history-token"));
+    assert!(shared_strings.contains(r#"uniqueCount="1""#));
+}
+
+#[test]
 fn split_panes_convert_pixels_to_ooxml_twips_and_back() {
     let mut wb = Workbook::new();
     let sheet = wb.active_sheet();

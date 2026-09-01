@@ -728,3 +728,59 @@ fn merge_rejects_overlap() {
     merge(&mut wb, s, range(0, 0, 0, 1)).unwrap();
     assert!(merge(&mut wb, s, range(0, 1, 0, 2)).is_err());
 }
+
+#[test]
+fn content_and_structural_edits_do_not_partially_mutate_fixed_cse_ranges() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    let cse = range(1, 1, 2, 2);
+    wb.set_array_formula_text(s, cse, "={1,2;3,4}").unwrap();
+    wb.set_number(s, 0, 3, 7.0).unwrap();
+    wb.set_number(s, 0, 4, 8.0).unwrap();
+    let source = copy_range(&wb, s, range(0, 3, 0, 4));
+
+    let err = paste_special(
+        &mut wb,
+        s,
+        cell(1, 0),
+        &source,
+        PasteSpecial::default(),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(err.code, "formula.array");
+    assert!(wb.get(s, 1, 0).unwrap().is_none());
+
+    let err = insert_rows(&mut wb, s, 0, 1).unwrap_err();
+    assert_eq!(err.code, "formula.array");
+    assert_eq!(
+        wb.sheet(s).unwrap().array_formula_at(2, 2).unwrap().range,
+        cse
+    );
+    insert_rows(&mut wb, s, 3, 1).unwrap();
+}
+
+#[test]
+fn copy_and_fill_do_not_silently_convert_fixed_cse_formulas() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let cse = range(0, 0, 0, 1);
+    wb.set_array_formula_text(sheet, cse, "={1,2}").unwrap();
+    let grid = copy_range(&wb, sheet, cse);
+
+    let paste = paste_special(
+        &mut wb,
+        sheet,
+        cell(2, 0),
+        &grid,
+        PasteSpecial::default(),
+        Some((0, 0)),
+    )
+    .unwrap_err();
+    assert_eq!(paste.code, "formula.array");
+    assert!(wb.get(sheet, 2, 0).unwrap().is_none());
+
+    let fill = fill_range(&mut wb, sheet, cse, range(0, 0, 1, 1), FillMode::Copy).unwrap_err();
+    assert_eq!(fill.code, "formula.array");
+    assert!(wb.get(sheet, 1, 0).unwrap().is_none());
+}

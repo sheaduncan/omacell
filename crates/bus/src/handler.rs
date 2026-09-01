@@ -95,11 +95,21 @@ impl<'a> CommandContext<'a> {
 
     /// Rebuild and recalculate a staged workbook before atomically installing it.
     pub fn recalc_staged(&mut self, workbook: &mut Workbook) -> RecalcResult {
-        self.engine.recalc_rebuild_with_ctl(
+        let live_context = self.engine.session_context();
+        self.engine.reset_session_context();
+        let result = self.engine.recalc_rebuild_with_ctl(
             workbook,
             self.task.cancel.as_deref(),
             self.task.progress.clone(),
-        )
+        );
+        self.engine.restore_session_context(live_context);
+        result
+    }
+
+    /// Install a successfully recalculated staged workbook as a fresh session.
+    pub fn install_staged_workbook(&mut self, workbook: Workbook) {
+        *self.workbook = workbook;
+        self.engine.reset_session_context();
     }
 
     /// Incremental recalculation of the dirty set.

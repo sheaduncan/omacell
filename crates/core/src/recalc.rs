@@ -6,11 +6,12 @@ use std::time::Instant;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::addr::RangeRef;
 use crate::coerce::Scalar;
 use crate::error::ErrorKind;
 use crate::eval::{
     ArgVal, AstCache, EvalCtx, EvalFlags, FnRegistry, PassEnv, Reference, RuntimeValue, eval_expr,
-    eval_formula_in, format_runtime,
+    eval_formula_in_session, format_runtime,
 };
 use crate::graph::{CellCoord, DepGraph};
 use crate::intern::ArrayPayload;
@@ -264,6 +265,12 @@ struct RecalcAccum {
     spill_follow: FxHashSet<CellCoord>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum CseTarget {
+    Single,
+    Range(crate::addr::RangeRef),
+}
+
 /// Recalculation engine: graph, AST cache, registry, spill table, thread pool.
 ///
 /// ```
@@ -291,14 +298,27 @@ pub struct RecalcEngine {
     locale: LocaleId,
     pass_env: PassEnv,
     async_provider: Option<Arc<dyn AsyncNodeProvider>>,
+    last_changed_cell: Option<CellCoord>,
     /// Last dynamic-resolved refs per cell.
     dynamic_edges: FxHashMap<CellCoord, Vec<Reference>>,
     orphaned_spills: FxHashSet<CellCoord>,
+    cse_ranges: FxHashMap<CellCoord, RangeRef>,
+    orphaned_cse_ranges: FxHashMap<CellCoord, RangeRef>,
+}
+
+/// Ephemeral calculation context that belongs to a live workbook session.
+///
+/// The bus checkpoints this alongside workbook transactions so failed commands
+/// cannot leak session state into later calculations.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RecalcSessionContext {
+    last_changed_cell: Option<CellCoord>,
 }
 
 #[derive(Clone)]
 struct RecalcState {
     spill: SpillTable,
+    cse_ranges: FxHashMap<CellCoord, RangeRef>,
     pass: u32,
     pass_env: PassEnv,
 }
@@ -307,6 +327,7 @@ impl RecalcEngine {
     fn state(&self) -> RecalcState {
         RecalcState {
             spill: self.spill.clone(),
+            cse_ranges: self.cse_ranges.clone(),
             pass: self.pass,
             pass_env: self.pass_env,
         }
@@ -314,9 +335,11 @@ impl RecalcEngine {
 
     fn restore_state(&mut self, state: &RecalcState, workbook: &Workbook) {
         self.spill = state.spill.clone();
+        self.cse_ranges = state.cse_ranges.clone();
         self.pass = state.pass;
         self.pass_env = state.pass_env;
         self.orphaned_spills.clear();
+        self.orphaned_cse_ranges.clear();
         self.rebuild(workbook);
     }
 
@@ -337,8 +360,11 @@ impl RecalcEngine {
             locale: LocaleId::EN_US,
             pass_env: PassEnv::default(),
             async_provider: None,
+            last_changed_cell: None,
             dynamic_edges: FxHashMap::default(),
             orphaned_spills: FxHashSet::default(),
+            cse_ranges: FxHashMap::default(),
+            orphaned_cse_ranges: FxHashMap::default(),
         }
     }
 
@@ -398,8 +424,27 @@ impl RecalcEngine {
         self.threads
     }
 
+    /// Snapshot the ephemeral context associated with the current workbook.
+    #[must_use]
+    pub fn session_context(&self) -> RecalcSessionContext {
+        RecalcSessionContext {
+            last_changed_cell: self.last_changed_cell,
+        }
+    }
+
+    /// Restore a previously captured workbook-session context.
+    pub fn restore_session_context(&mut self, context: RecalcSessionContext) {
+        self.last_changed_cell = context.last_changed_cell;
+    }
+
+    /// Clear context that must not cross a workbook-new/open boundary.
+    pub fn reset_session_context(&mut self) {
+        self.last_changed_cell = None;
+    }
+
     /// Rebuild the graph from `wb` and dirty every formula cell.
     pub fn rebuild(&mut self, wb: &Workbook) {
+        self.refresh_cse_ranges(wb);
         self.graph.rebuild(wb, &mut self.asts);
         self.refresh_registry_volatility(wb);
         self.dirty.clear();
@@ -417,11 +462,34 @@ impl RecalcEngine {
     /// Rebuild dependency state after an outer workbook transaction rolls back.
     pub fn rebuild_after_rollback(&mut self, wb: &Workbook) {
         self.orphaned_spills.clear();
+        self.orphaned_cse_ranges.clear();
         self.rebuild(wb);
+    }
+
+    fn refresh_cse_ranges(&mut self, wb: &Workbook) {
+        let current: FxHashMap<CellCoord, RangeRef> = wb
+            .sheets()
+            .flat_map(|sheet| {
+                sheet.array_formulas().map(|formula| {
+                    (
+                        CellCoord::new(sheet.id, formula.anchor.row, formula.anchor.col),
+                        formula.range,
+                    )
+                })
+            })
+            .collect();
+        for (&origin, &range) in &self.cse_ranges {
+            if current.get(&origin) != Some(&range) {
+                self.orphaned_cse_ranges.insert(origin, range);
+            }
+        }
+        self.cse_ranges = current;
     }
 
     /// Record that `coord` changed (value or formula).
     pub fn notify_edit(&mut self, wb: &Workbook, coord: CellCoord) {
+        self.last_changed_cell = Some(coord);
+        self.refresh_cse_ranges(wb);
         if let Some(region) = self.spill.region_at(coord.sheet, coord.row, coord.col) {
             if region.origin == coord {
                 let origin_still_has_formula = wb
@@ -597,6 +665,9 @@ impl RecalcEngine {
             self.spill.clear_ghosts(wb, origin);
             self.spill.remove(origin);
         }
+        for (origin, range) in std::mem::take(&mut self.orphaned_cse_ranges) {
+            clear_orphaned_cse_range(wb, origin, range);
+        }
         wb.undo_log_mut().set_enabled(undo);
         let mut dirty: Vec<CellCoord> = if full {
             self.graph.formula_cells()
@@ -747,13 +818,14 @@ impl RecalcEngine {
         if generation.is_empty() {
             return (0, false);
         }
-        let mut results: Vec<(CellCoord, RuntimeValue, EvalFlags, bool)> = {
+        let mut results: Vec<(CellCoord, RuntimeValue, EvalFlags, Option<CseTarget>)> = {
             let wb_ref: &Workbook = wb;
             let registry = &self.registry;
             let spill = &self.spill;
             let asts = &self.asts;
             let pass = self.pass;
             let env = self.pass_env;
+            let last_changed_cell = self.last_changed_cell;
             let provider = self.async_provider.clone();
             let eval_one = |cell: CellCoord| {
                 if cancelled(cancel) {
@@ -766,6 +838,7 @@ impl RecalcEngine {
                     asts,
                     pass,
                     env,
+                    last_changed_cell,
                     provider.as_deref(),
                     cell,
                 )
@@ -861,7 +934,7 @@ impl RecalcEngine {
                 let Ok(formula) = self.asts.get_or_parse(&src) else {
                     continue;
                 };
-                let (value, _) = eval_formula_in(
+                let (value, _) = eval_formula_in_session(
                     wb,
                     &self.registry,
                     &self.spill,
@@ -869,12 +942,14 @@ impl RecalcEngine {
                     &formula.ast,
                     self.pass,
                     self.pass_env,
+                    self.last_changed_cell,
                 );
+                let cse = cse_target(wb, cell);
                 let after = match &value {
                     RuntimeValue::Scalar(Scalar::Number(v)) => *v,
                     _ => 0.0,
                 };
-                commit_runtime(wb, cell, &value, false, false);
+                commit_runtime(wb, cell, &value, cse, false);
                 max_delta = max_delta.max((after - before).abs());
                 n += 1;
             }
@@ -917,16 +992,18 @@ fn eval_one_cell(
     asts: &AstCache,
     pass: u32,
     env: PassEnv,
+    last_changed_cell: Option<CellCoord>,
     provider: Option<&dyn AsyncNodeProvider>,
     cell: CellCoord,
-) -> Option<(CellCoord, RuntimeValue, EvalFlags, bool)> {
+) -> Option<(CellCoord, RuntimeValue, EvalFlags, Option<CseTarget>)> {
     let slot = wb.get(cell.sheet, cell.row, cell.col).ok()??;
     let fid = slot.formula?;
     let src = wb.intern().formulas.get(fid)?;
-    let cse = slot.flags.array();
+    let cse = cse_target(wb, cell);
     let formula = asts.peek(src)?;
     let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass)
         .with_pass_env(env)
+        .with_last_changed_cell(last_changed_cell)
         .with_async_provider(provider);
     let raw = eval_expr(&mut ctx, &formula.ast);
     let (pending, is_stale, hint, dynamic) = ctx.take_flags();
@@ -998,40 +1075,174 @@ fn extend_spill_dependents(graph: &DepGraph, region: SpillRegion, out: &mut FxHa
     }
 }
 
+fn clear_orphaned_cse_range(wb: &mut Workbook, origin: CellCoord, range: RangeRef) {
+    for row in range.start.row..=range.end.row {
+        for col in range.start.col..=range.end.col {
+            if row == origin.row && col == origin.col {
+                continue;
+            }
+            let covered_now = wb
+                .sheet(origin.sheet)
+                .and_then(|sheet| sheet.array_formula_at(row, col))
+                .is_some();
+            if covered_now {
+                continue;
+            }
+            let Ok(Some(slot)) = wb.get(origin.sheet, row, col) else {
+                continue;
+            };
+            let slot = *slot;
+            if !slot.flags.array() || slot.formula.is_some() {
+                continue;
+            }
+            let mut cleared = slot;
+            cleared.value = Value::Empty;
+            cleared.flags = cleared
+                .flags
+                .with(CellFlags::DIRTY, false)
+                .with(CellFlags::SPILL, false)
+                .with(CellFlags::ARRAY, false)
+                .with(CellFlags::STALE, false);
+            if cleared == CellSlot::empty() {
+                let _ = wb.clear_cell(origin.sheet, row, col);
+            } else {
+                let _ = wb.set_slot(origin.sheet, row, col, cleared);
+            }
+        }
+    }
+}
+
 fn commit_value(
     wb: &mut Workbook,
     spill: &mut SpillTable,
     cell: CellCoord,
     value: RuntimeValue,
-    cse: bool,
+    cse: Option<CseTarget>,
     stale: bool,
 ) -> Option<CellCoord> {
     spill.clear_ghosts(wb, cell);
     spill.remove(cell);
     match value {
         RuntimeValue::Lambda(_) => {
-            commit_scalar(wb, cell, Scalar::Error(ErrorKind::Calc), flags(stale));
+            commit_cse_or_scalar(wb, cell, Scalar::Error(ErrorKind::Calc), cse, stale);
             None
         }
         RuntimeValue::Scalar(s) => {
-            commit_scalar(wb, cell, s, flags(stale));
+            commit_cse_or_scalar(wb, cell, s, cse, stale);
             None
         }
         RuntimeValue::Array(a) => match a.validate() {
             Err(error) => {
-                commit_scalar(wb, cell, Scalar::Error(error), flags(stale));
+                commit_cse_or_scalar(wb, cell, Scalar::Error(error), cse, stale);
                 None
             }
-            Ok(_) if cse || (a.rows == 1 && a.cols == 1) => {
+            Ok(_) if matches!(cse, Some(CseTarget::Range(_))) => {
+                let Some(CseTarget::Range(range)) = cse else {
+                    return None;
+                };
+                commit_fixed_cse(wb, cell, range, RuntimeValue::Array(a), stale);
+                None
+            }
+            Ok(_) if cse.is_some() || (a.rows == 1 && a.cols == 1) => {
                 let s = a.values.first().cloned().unwrap_or(Scalar::Empty);
-                commit_scalar(wb, cell, s, flags(stale).with(CellFlags::ARRAY, cse));
+                commit_scalar(
+                    wb,
+                    cell,
+                    s,
+                    flags(stale).with(CellFlags::ARRAY, cse.is_some()),
+                );
                 None
             }
             Ok(_) => spill_array(wb, spill, cell, &a, stale),
         },
         RuntimeValue::Ref(_) => {
-            commit_scalar(wb, cell, Scalar::Error(ErrorKind::Value), flags(stale));
+            commit_cse_or_scalar(wb, cell, Scalar::Error(ErrorKind::Value), cse, stale);
             None
+        }
+    }
+}
+
+fn cse_target(wb: &Workbook, cell: CellCoord) -> Option<CseTarget> {
+    let slot = wb.get(cell.sheet, cell.row, cell.col).ok().flatten()?;
+    if !slot.flags.array() {
+        return None;
+    }
+    let range = wb
+        .sheet(cell.sheet)
+        .and_then(|sheet| sheet.array_formula_at(cell.row, cell.col))
+        .filter(|formula| formula.anchor.row == cell.row && formula.anchor.col == cell.col)
+        .map(|formula| formula.range);
+    Some(range.map_or(CseTarget::Single, CseTarget::Range))
+}
+
+fn commit_cse_or_scalar(
+    wb: &mut Workbook,
+    cell: CellCoord,
+    scalar: Scalar,
+    cse: Option<CseTarget>,
+    stale: bool,
+) {
+    match cse {
+        Some(CseTarget::Range(range)) => {
+            commit_fixed_cse(wb, cell, range, RuntimeValue::Scalar(scalar), stale);
+        }
+        Some(CseTarget::Single) => {
+            commit_scalar(wb, cell, scalar, flags(stale).with(CellFlags::ARRAY, true));
+        }
+        None => commit_scalar(wb, cell, scalar, flags(stale)),
+    }
+}
+
+fn commit_fixed_cse(
+    wb: &mut Workbook,
+    origin: CellCoord,
+    range: crate::addr::RangeRef,
+    value: RuntimeValue,
+    stale: bool,
+) {
+    let array = match value {
+        RuntimeValue::Array(array) => Some(array),
+        RuntimeValue::Scalar(scalar) => Some(Arc::new(crate::eval::RuntimeArray {
+            rows: 1,
+            cols: 1,
+            values: vec![scalar].into(),
+        })),
+        RuntimeValue::Lambda(_) => None,
+        RuntimeValue::Ref(_) => None,
+    };
+    for row in range.start.row..=range.end.row {
+        for col in range.start.col..=range.end.col {
+            let dr = row - range.start.row;
+            let dc = u32::from(col - range.start.col);
+            let scalar = array
+                .as_ref()
+                .filter(|array| dr < array.rows && dc < array.cols)
+                .and_then(|array| {
+                    let index = (dr as usize)
+                        .saturating_mul(array.cols as usize)
+                        .saturating_add(dc as usize);
+                    array.values.get(index).cloned()
+                })
+                .unwrap_or(Scalar::Error(ErrorKind::Na));
+            let value = intern_scalar(wb, scalar);
+            let mut slot = wb
+                .get(origin.sheet, row, col)
+                .ok()
+                .flatten()
+                .copied()
+                .unwrap_or_else(CellSlot::empty);
+            slot.value = value;
+            if row != origin.row || col != origin.col {
+                slot.formula = None;
+            }
+            slot.flags = slot
+                .flags
+                .with(CellFlags::DIRTY, false)
+                .with(CellFlags::SPILL, false)
+                .with(CellFlags::ARRAY, true)
+                .with(CellFlags::STALE, stale);
+            let _ = wb.set_slot(origin.sheet, row, col, slot);
+            release_intern_extra(wb, value);
         }
     }
 }
@@ -1136,25 +1347,30 @@ fn commit_runtime(
     wb: &mut Workbook,
     cell: CellCoord,
     value: &RuntimeValue,
-    cse: bool,
+    cse: Option<CseTarget>,
     stale: bool,
 ) {
     match value {
-        RuntimeValue::Scalar(s) => commit_scalar(
-            wb,
-            cell,
-            s.clone(),
-            flags(stale).with(CellFlags::ARRAY, cse),
-        ),
-        RuntimeValue::Array(a) => {
-            let s = a.values.first().cloned().unwrap_or(Scalar::Empty);
-            commit_scalar(wb, cell, s, flags(stale).with(CellFlags::ARRAY, cse));
-        }
+        RuntimeValue::Scalar(s) => commit_cse_or_scalar(wb, cell, s.clone(), cse, stale),
+        RuntimeValue::Array(a) => match cse {
+            Some(CseTarget::Range(range)) => {
+                commit_fixed_cse(wb, cell, range, RuntimeValue::Array(a.clone()), stale);
+            }
+            _ => {
+                let s = a.values.first().cloned().unwrap_or(Scalar::Empty);
+                commit_scalar(
+                    wb,
+                    cell,
+                    s,
+                    flags(stale).with(CellFlags::ARRAY, cse.is_some()),
+                );
+            }
+        },
         RuntimeValue::Lambda(_) => {
-            commit_scalar(wb, cell, Scalar::Error(ErrorKind::Calc), flags(stale));
+            commit_cse_or_scalar(wb, cell, Scalar::Error(ErrorKind::Calc), cse, stale);
         }
         RuntimeValue::Ref(_) => {
-            commit_scalar(wb, cell, Scalar::Error(ErrorKind::Value), flags(stale));
+            commit_cse_or_scalar(wb, cell, Scalar::Error(ErrorKind::Value), cse, stale);
         }
     }
 }

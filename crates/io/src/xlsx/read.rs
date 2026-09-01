@@ -1503,7 +1503,22 @@ fn commit_cell(
     if let Some(src) = formula_src.as_ref() {
         match parse(src) {
             Ok(_) => {
-                wb.set_formula_text(sheet, cell.row, cell.col, src)?;
+                if f_t == "array" {
+                    let range = match parse_array_formula_ref(f_ref, cell) {
+                        Ok(range) => range,
+                        Err(message) => {
+                            warnings.push(
+                                "xlsx.formula",
+                                format!("invalid array formula range at {r}: {message}"),
+                                Some(part.into()),
+                            );
+                            RangeRef::from_corners(cell, cell)
+                        }
+                    };
+                    wb.set_array_formula_text(sheet, range, src)?;
+                } else {
+                    wb.set_formula_text(sheet, cell.row, cell.col, src)?;
+                }
             }
             Err(e) => {
                 warnings.push(
@@ -1591,6 +1606,27 @@ fn commit_cell(
     }
     apply_style(wb, sheet, cell, style_idx, styles)?;
     Ok(())
+}
+
+fn parse_array_formula_ref(raw: &str, anchor: CellRef) -> Result<RangeRef, String> {
+    if raw.is_empty() {
+        return Ok(RangeRef::from_corners(anchor, anchor));
+    }
+    let parsed = parse_a1(raw).map_err(|error| error.to_string())?;
+    if parsed.sheet.is_some() {
+        return Err("array formula ref must be local to its worksheet".into());
+    }
+    let range = match parsed.kind {
+        RefKind::Cell(cell) => RangeRef::from_corners(cell, cell),
+        RefKind::Range(range) if !range.whole_col && !range.whole_row && !range.is_3d() => range,
+        RefKind::Range(_) => return Err("array formula ref must be a bounded rectangle".into()),
+    };
+    let min_row = range.start.row.min(range.end.row);
+    let min_col = range.start.col.min(range.end.col);
+    if anchor.row != min_row || anchor.col != min_col {
+        return Err("array formula anchor is not the top-left cell of ref".into());
+    }
+    Ok(range)
 }
 
 #[allow(clippy::too_many_arguments)]

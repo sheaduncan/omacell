@@ -721,14 +721,18 @@ fn cell_text(
     col: u16,
     formulas: bool,
 ) -> (String, Align, bool, bool) {
+    if formulas && let Some(source) = wb.formula_text_at(sheet, row, col) {
+        let stale = wb
+            .get(sheet, row, col)
+            .ok()
+            .flatten()
+            .is_some_and(|slot| slot.flags.stale());
+        return (source, Align::Left, false, stale);
+    }
     let Ok(Some(slot)) = wb.get(sheet, row, col) else {
         return (String::new(), Align::Left, false, false);
     };
     let stale = slot.flags.stale();
-    if formulas && let Some(fid) = slot.formula {
-        let src = wb.intern().formulas.get(fid).unwrap_or("");
-        return (src.to_string(), Align::Left, false, stale);
-    }
     let (text, align, err) = match slot.value {
         Value::Empty => (String::new(), Align::Left, false),
         Value::Number(n) => {
@@ -780,12 +784,12 @@ pub fn formula_text(wb: &Workbook, session: &UiSession) -> String {
         return edit.buffer.clone();
     }
     let sel = session.selection();
-    let Ok(Some(slot)) = wb.get(sel.sheet, sel.cursor.row, sel.cursor.col) else {
+    if let Some(source) = wb.formula_text_at(sel.sheet, sel.cursor.row, sel.cursor.col) {
+        return source;
+    }
+    let Ok(Some(_slot)) = wb.get(sel.sheet, sel.cursor.row, sel.cursor.col) else {
         return String::new();
     };
-    if let Some(fid) = slot.formula {
-        return wb.intern().formulas.get(fid).unwrap_or("").to_string();
-    }
     cell_text(wb, sel.sheet, sel.cursor.row, sel.cursor.col, false).0
 }
 

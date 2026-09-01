@@ -40,10 +40,10 @@
   - **Random:** `ctx.random_unit("RAND"|"RANDBETWEEN", index)` only; no thread-local RNG.
   - **Math set (~60):** explicit WP list plus the remaining Excel math/trig names needed to reach Appendix D (~60), including hyperbolic/reciprocal trig, legacy `CEILING`/`FLOOR`, `CEILING.PRECISE`/`FLOOR.PRECISE`/`ISO.CEILING`, `FACTDOUBLE`, `SQRTPI`. Not owned: `RANDARRAY`/`SEQUENCE` (05c), `NOW` (05b probe).
   - **Stat set (~45 unique + compat aliases):** WP list. `AVERAGEIF(S)` live in `aggregate`. Compatibility names are aliases.
-  - **CELL subset:** `address`, `col`, `row`, `contents`, `type`, `format` only. Omitted reference = the formula cell (Excel’s “last changed cell” is not modeled).
+  - **CELL subset:** `address`, `col`, `row`, `contents`, `type`, `format` only. Omitted reference uses the last changed cell retained by `RecalcEngine`; direct evaluation without a live session falls back to the formula cell.
   - **Criteria:** comparison prefixes, `* ? ~` wildcards, numeric/text/bool/blank matching per Excel; `*IFS` ranges must be the same height/width.
 - Open questions at planning time:
-  1. Excel desktop `CELL` without a reference tracks the last edited cell; we use the formula cell. Confirm for later UI packages.
+  1. Excel desktop `CELL` without a reference tracks the last edited cell; live recalculation now does the same, while direct evaluation without a session falls back to the formula cell.
   2. Legacy `CEILING`/`FLOOR` sign rules differ across Excel versions; corpus cites 365-style and LibreOffice disagreements go to known-differences.
   3. `MODE.MULT` / `FREQUENCY` spill arrays; 1×1 collapse follows WP-05F `RuntimeValue::array`.
 
@@ -85,7 +85,7 @@ Frozen WP-01 types unchanged.
 ## Deviations from the spec or the package (with reasons)
 
 - **`PEARSON`** is a full catalog spec sharing `CORREL`'s body (not only an alias), so `functions.json` documents it independently.
-- **`CELL` omitted reference** uses the formula cell, not Excel desktop's last-edited cell.
+- **`CELL` direct-evaluation fallback.** A live `RecalcEngine` uses the last changed cell; formula-corpus and other direct evaluation without a session use the formula cell.
 - **`PERMUTATIONA(0,0)`** returns `1` (empty product); Excel `#NUM!`.
 - **`*IF` range arguments are references, not arrays.** Array constants now
   return `#VALUE!`; sheet-range integration tests retain the criteria, wildcard,
@@ -114,9 +114,9 @@ Host: rustc 1.98.0, Linux.
 
 ## Open questions / decisions needed
 
-1. **Pre-WP-28 integration:** `CELL` without a reference must use the last changed
-   cell retained by the live session; the current formula-cell behavior remains
-   an explicit known difference until connected.
+1. **Resolved 2026-09-01:** `CELL` without a reference uses the last changed cell
+   retained by the live `RecalcEngine`; direct evaluation without a session
+   deliberately falls back to the formula cell.
 2. **Resolved 2026-08-31:** Excel 2010+ asymmetric sign handling
    (`CEILING(-2.5,2)=-2`, `FLOOR(-2.5,2)=-4`; a positive number with negative
    significance is `#NUM!`).

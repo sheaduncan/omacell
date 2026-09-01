@@ -472,6 +472,7 @@ impl Bus {
             }
             return Ok(preflight);
         }
+        let engine_context = self.engine.session_context();
         let live = {
             let Bus {
                 workbook,
@@ -497,6 +498,7 @@ impl Bus {
         let (live_effect, extra) = match live {
             Ok(committed) => committed,
             Err(err) => {
+                self.engine.restore_session_context(engine_context);
                 self.engine.rebuild_after_rollback(&self.workbook);
                 return Err(err);
             }
@@ -627,6 +629,7 @@ fn clone_engine(engine: &RecalcEngine) -> RecalcEngine {
     }
     let mut cloned = RecalcEngine::new(registry);
     cloned.set_threads(engine.threads());
+    cloned.restore_session_context(engine.session_context());
     cloned
 }
 

@@ -467,7 +467,8 @@ fn fill_round_trip_custom_part_and_xlsx() {
             .unwrap();
         assert!(
             output.status.success(),
-            "LibreOffice could not reopen fill.xlsx: stdout={} stderr={}",
+            "LibreOffice could not reopen fill.xlsx: status={:?} stdout={} stderr={}",
+            output.status.code(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -496,6 +497,25 @@ fn strip_ai_formulas_keeps_values() {
     strip_ai_formulas(&mut wb).unwrap();
     let slot = wb.get(sheet, 0, 0).unwrap().unwrap();
     assert!(slot.formula.is_none());
+}
+
+#[test]
+fn strip_ai_formulas_detaches_fixed_array_metadata() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let range = omacell_core::addr::RangeRef::from_corners(
+        omacell_core::addr::CellRef::new(0, 0).unwrap(),
+        omacell_core::addr::CellRef::new(0, 1).unwrap(),
+    );
+    wb.set_array_formula_text(sheet, range, r#"=AI("x")"#)
+        .unwrap();
+
+    strip_ai_formulas(&mut wb).unwrap();
+
+    assert!(wb.sheet(sheet).unwrap().array_formula_at(0, 0).is_none());
+    let anchor = wb.get(sheet, 0, 0).unwrap().unwrap();
+    assert!(anchor.formula.is_none());
+    assert!(!anchor.flags.array());
 }
 
 #[test]

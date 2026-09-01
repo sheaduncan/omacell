@@ -26,8 +26,8 @@ use crate::pivot::{
 };
 use crate::print::PageSetup;
 use crate::sheet::{
-    Comment, Hyperlink, Note, ProtectionState, Sheet, SheetEditState, SheetVisibility, ViewState,
-    validate_sheet_name,
+    ArrayFormula, Comment, Hyperlink, Note, ProtectionState, Sheet, SheetEditState,
+    SheetVisibility, ViewState, validate_sheet_name,
 };
 use crate::storage::{CellFlags, CellSlot, UsedRange};
 use crate::style::{Color, NumFmtId, Style, StyleId};
@@ -287,6 +287,7 @@ impl Workbook {
                 filter_hidden_rows: std::collections::BTreeSet::new(),
                 validations: Vec::new(),
                 cond_formats: Vec::new(),
+                array_formulas: Vec::new(),
             },
         };
         let mut sheets = IndexMap::new();
@@ -657,6 +658,27 @@ impl Workbook {
         sheet.store.get(row, col)
     }
 
+    /// Formula-bar text for a cell, including legacy `{=…}` CSE notation.
+    #[must_use]
+    pub fn formula_text_at(&self, id: SheetId, row: u32, col: u16) -> Option<String> {
+        let sheet = self.sheet(id)?;
+        if let Some(array_formula) = sheet.array_formula_at(row, col) {
+            let anchor = sheet
+                .store
+                .get(array_formula.anchor.row, array_formula.anchor.col)
+                .ok()
+                .flatten()?;
+            let source = anchor
+                .formula
+                .and_then(|formula| self.intern().formulas.get(formula))?;
+            return Some(format!("{{{source}}}"));
+        }
+        let slot = sheet.store.get(row, col).ok().flatten()?;
+        slot.formula
+            .and_then(|formula| self.intern().formulas.get(formula))
+            .map(str::to_owned)
+    }
+
     fn hold_slot(&mut self, slot: &CellSlot) {
         let intern = self.intern_mut();
         if let Value::Text(id) = slot.value {
@@ -687,6 +709,41 @@ impl Workbook {
 
     fn ensure_not_pivot_output(&self, id: SheetId, row: u32, col: u16) -> Result<(), CoreError> {
         self.ensure_range_not_pivot_output(id, row, col, row, col)
+    }
+
+    fn ensure_not_array_formula_output(
+        &self,
+        id: SheetId,
+        row: u32,
+        col: u16,
+    ) -> Result<(), CoreError> {
+        self.ensure_range_not_array_formula_output(id, row, col, row, col)
+    }
+
+    pub(crate) fn ensure_range_not_array_formula_output(
+        &self,
+        id: SheetId,
+        min_row: u32,
+        min_col: u16,
+        max_row: u32,
+        max_col: u16,
+    ) -> Result<(), CoreError> {
+        let sheet = self
+            .sheet(id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?;
+        if sheet.array_formulas().any(|formula| {
+            formula.range.start.row <= max_row
+                && min_row <= formula.range.end.row
+                && formula.range.start.col <= max_col
+                && min_col <= formula.range.end.col
+        }) {
+            return Err(CoreError::new(
+                "formula.array",
+                "cannot change part of a legacy array-formula range",
+            )
+            .with_hint("replace the entire fixed array-formula range"));
+        }
+        Ok(())
     }
 
     pub(crate) fn ensure_range_not_pivot_output(
@@ -803,6 +860,7 @@ impl Workbook {
         n: f64,
     ) -> Result<Option<CellSlot>, CoreError> {
         self.ensure_not_pivot_output(id, row, col)?;
+        self.ensure_not_array_formula_output(id, row, col)?;
         let old = self.replace_slot(id, row, col, Some(CellSlot::number(n)))?;
         self.expand_tables_at(id, row, col);
         Ok(old)
@@ -818,6 +876,7 @@ impl Workbook {
         runs: Vec<RichTextRun>,
     ) -> Result<StrId, CoreError> {
         self.ensure_not_pivot_output(id, row, col)?;
+        self.ensure_not_array_formula_output(id, row, col)?;
         let sid = self.intern_mut().strings.intern_rich(text, runs);
         let slot = CellSlot {
             value: Value::Text(sid),
@@ -840,6 +899,7 @@ impl Workbook {
         text: &str,
     ) -> Result<StrId, CoreError> {
         self.ensure_not_pivot_output(id, row, col)?;
+        self.ensure_not_array_formula_output(id, row, col)?;
         let sid = self.intern_mut().strings.intern(text);
         let slot = CellSlot {
             value: Value::Text(sid),
@@ -862,6 +922,7 @@ impl Workbook {
         source: &str,
     ) -> Result<FormulaId, CoreError> {
         self.ensure_not_pivot_output(id, row, col)?;
+        self.ensure_not_array_formula_output(id, row, col)?;
         let fid = self.intern_mut().formulas.intern(source)?;
         let slot = CellSlot {
             value: Value::Empty,
@@ -874,6 +935,154 @@ impl Workbook {
         Ok(fid)
     }
 
+    /// Attach a legacy Ctrl+Shift+Enter formula to a fixed output range.
+    ///
+    /// The normalized top-left cell owns the formula source. Recalculation
+    /// writes cached values across the range without creating spill ghosts.
+    pub fn set_array_formula_text(
+        &mut self,
+        id: SheetId,
+        range: crate::addr::RangeRef,
+        source: &str,
+    ) -> Result<FormulaId, CoreError> {
+        const MAX_CSE_CELLS: u64 = 1_000_000;
+        let range = normalize_array_formula_range(id, range, MAX_CSE_CELLS)?;
+        self.ensure_range_not_pivot_output(
+            id,
+            range.start.row,
+            range.start.col,
+            range.end.row,
+            range.end.col,
+        )?;
+        let formula = ArrayFormula {
+            anchor: range.start,
+            range,
+        };
+        self.transact_try(|workbook| {
+            let overlap = workbook.sheet(id).is_some_and(|sheet| {
+                sheet.array_formulas().any(|existing| {
+                    existing.anchor != formula.anchor
+                        && local_ranges_overlap(existing.range, formula.range)
+                })
+            });
+            if overlap {
+                return Err(CoreError::new(
+                    crate::error::codes::ARRAY_SHAPE,
+                    "legacy array-formula ranges cannot overlap",
+                ));
+            }
+            let fid = workbook.intern_mut().formulas.intern(source)?;
+            let anchor = CellSlot {
+                value: Value::Empty,
+                formula: Some(fid),
+                style: StyleId::DEFAULT,
+                flags: CellFlags::DEFAULT.with(CellFlags::ARRAY, true),
+            };
+            workbook.replace_slot(id, formula.anchor.row, formula.anchor.col, Some(anchor))?;
+            workbook.intern_mut().formulas.release(fid);
+            workbook.mutate_sheet_edit(id, |sheet| {
+                sheet.replace_array_formula(formula);
+                Ok(())
+            })?;
+            Ok(fid)
+        })
+    }
+
+    /// Mark an existing top-left formula as a legacy fixed-range array formula.
+    ///
+    /// This is the loader-oriented companion to [`Self::set_array_formula_text`];
+    /// it preserves an already imported cached value and style.
+    pub fn set_array_formula_range(
+        &mut self,
+        id: SheetId,
+        range: crate::addr::RangeRef,
+    ) -> Result<(), CoreError> {
+        const MAX_CSE_CELLS: u64 = 1_000_000;
+        let range = normalize_array_formula_range(id, range, MAX_CSE_CELLS)?;
+        self.ensure_range_not_pivot_output(
+            id,
+            range.start.row,
+            range.start.col,
+            range.end.row,
+            range.end.col,
+        )?;
+        let formula = ArrayFormula {
+            anchor: range.start,
+            range,
+        };
+        self.transact_try(|workbook| {
+            let overlap = workbook.sheet(id).is_some_and(|sheet| {
+                sheet.array_formulas().any(|existing| {
+                    existing.anchor != formula.anchor
+                        && local_ranges_overlap(existing.range, formula.range)
+                })
+            });
+            if overlap {
+                return Err(CoreError::new(
+                    crate::error::codes::ARRAY_SHAPE,
+                    "legacy array-formula ranges cannot overlap",
+                ));
+            }
+            let mut anchor = workbook
+                .get(id, formula.anchor.row, formula.anchor.col)?
+                .copied()
+                .filter(|slot| slot.formula.is_some())
+                .ok_or_else(|| {
+                    CoreError::new(
+                        crate::error::codes::ARRAY_SHAPE,
+                        "legacy array-formula anchor must own a formula",
+                    )
+                })?;
+            anchor.flags = anchor.flags.with(CellFlags::ARRAY, true);
+            workbook.set_slot(id, formula.anchor.row, formula.anchor.col, anchor)?;
+            workbook.mutate_sheet_edit(id, |sheet| {
+                sheet.replace_array_formula(formula);
+                Ok(())
+            })
+        })
+    }
+
+    /// Convert the fixed array formula containing a cell to its cached values.
+    ///
+    /// The anchor formula and fixed-range metadata are removed together, while
+    /// cached values, styles, and protection flags remain in place.
+    pub fn detach_array_formula(
+        &mut self,
+        id: SheetId,
+        row: u32,
+        col: u16,
+    ) -> Result<Option<crate::addr::RangeRef>, CoreError> {
+        let Some(formula) = self
+            .sheet(id)
+            .and_then(|sheet| sheet.array_formula_at(row, col))
+            .copied()
+        else {
+            return Ok(None);
+        };
+        self.transact_try(|workbook| {
+            workbook.mutate_sheet_edit(id, |sheet| {
+                sheet.remove_array_formula(formula.anchor);
+                Ok(())
+            })?;
+            for row in formula.range.start.row..=formula.range.end.row {
+                for col in formula.range.start.col..=formula.range.end.col {
+                    let Some(mut slot) = workbook.get(id, row, col)?.copied() else {
+                        continue;
+                    };
+                    slot.formula = None;
+                    slot.flags = slot
+                        .flags
+                        .with(CellFlags::DIRTY, false)
+                        .with(CellFlags::SPILL, false)
+                        .with(CellFlags::ARRAY, false)
+                        .with(CellFlags::STALE, false);
+                    workbook.write_slot(id, row, col, Some(slot))?;
+                }
+            }
+            Ok(Some(formula.range))
+        })
+    }
+
     /// Clear a cell.
     pub fn clear_cell(
         &mut self,
@@ -882,6 +1091,7 @@ impl Workbook {
         col: u16,
     ) -> Result<Option<CellSlot>, CoreError> {
         self.ensure_not_pivot_output(id, row, col)?;
+        self.ensure_not_array_formula_output(id, row, col)?;
         self.replace_slot(id, row, col, None)
     }
 
@@ -2809,6 +3019,7 @@ impl Workbook {
         input: &str,
     ) -> Result<Option<CellSlot>, CoreError> {
         self.ensure_not_pivot_output(id, row, col)?;
+        self.ensure_not_array_formula_output(id, row, col)?;
         let prev = self.get(id, row, col)?.copied();
         let style = prev.map(|slot| slot.style).unwrap_or(StyleId::DEFAULT);
         let flags = content_flags(prev);
@@ -2899,6 +3110,53 @@ fn sheet_ref_error_count(sheet: &Sheet) -> u64 {
         .iter()
         .filter(|(_, _, slot)| matches!(slot.value, Value::Error(crate::error::ErrorKind::Ref)))
         .count() as u64
+}
+
+fn normalize_array_formula_range(
+    sheet: SheetId,
+    range: crate::addr::RangeRef,
+    max_cells: u64,
+) -> Result<crate::addr::RangeRef, CoreError> {
+    range.start.validate()?;
+    range.end.validate()?;
+    if range.whole_row || range.whole_col || range.sheet_end.is_some() {
+        return Err(CoreError::new(
+            crate::error::codes::ARRAY_SHAPE,
+            "legacy array formula requires one bounded rectangular range",
+        ));
+    }
+    for owner in [range.start.sheet, range.end.sheet].into_iter().flatten() {
+        if owner != sheet {
+            return Err(CoreError::new(
+                crate::error::codes::ARRAY_SHAPE,
+                "legacy array formula range belongs to another sheet",
+            ));
+        }
+    }
+    let min_row = range.start.row.min(range.end.row);
+    let max_row = range.start.row.max(range.end.row);
+    let min_col = range.start.col.min(range.end.col);
+    let max_col = range.start.col.max(range.end.col);
+    let rows = u64::from(max_row - min_row) + 1;
+    let cols = u64::from(max_col - min_col) + 1;
+    let cells = rows.saturating_mul(cols);
+    if cells > max_cells {
+        return Err(CoreError::new(
+            crate::error::codes::ARRAY_SHAPE,
+            format!("legacy array formula has {cells} cells; maximum is {max_cells}"),
+        ));
+    }
+    Ok(crate::addr::RangeRef::from_corners(
+        CellRef::new(min_row, min_col)?,
+        CellRef::new(max_row, max_col)?,
+    ))
+}
+
+fn local_ranges_overlap(a: crate::addr::RangeRef, b: crate::addr::RangeRef) -> bool {
+    a.start.row <= b.end.row
+        && b.start.row <= a.end.row
+        && a.start.col <= b.end.col
+        && b.start.col <= a.end.col
 }
 
 fn content_flags(prev: Option<CellSlot>) -> CellFlags {

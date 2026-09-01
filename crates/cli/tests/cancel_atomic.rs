@@ -8,8 +8,19 @@ use omacell_cli::{FileSession, register_file_commands};
 use omacell_core::command::Origin;
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
+use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
+
+fn cell_text(workbook: &Workbook, row: u32, col: u16) -> String {
+    let sheet = workbook.active_sheet();
+    let slot = workbook.get(sheet, row, col).unwrap().unwrap();
+    let Value::Text(id) = slot.value else {
+        panic!("expected text, got {:?}", slot.value);
+    };
+    workbook.intern().strings.get(id).unwrap().to_owned()
+}
+
 #[test]
 fn cancelled_csv_load_does_not_replace_live_workbook() {
     let mut functions = FnRegistry::new();
@@ -133,4 +144,48 @@ fn cancelled_automatic_recalc_rolls_back_edit_and_engine_state() {
         bus.workbook().get(sheet, 0, 2).unwrap().unwrap().value,
         omacell_core::value::Value::Number(value) if value == 4.0
     ));
+}
+
+#[test]
+fn cancelled_edit_restores_last_changed_cell_context() {
+    let mut functions = FnRegistry::new();
+    register_all(&mut functions);
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .set_formula_text(sheet, 0, 1, "=CELL(\"address\")")
+        .unwrap();
+    let mut bus = Bus::new(workbook, RecalcEngine::new(functions)).unwrap();
+
+    let baseline = bus.execute(
+        Origin::User,
+        "cell.set",
+        serde_json::json!({"ref": "D4", "input": "1"}),
+    );
+    assert!(baseline.ok, "{:?}", baseline.error);
+    assert_eq!(cell_text(bus.workbook(), 0, 1), "$D$4");
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let progress_cancel = Arc::clone(&cancel);
+    let cancelled = bus.execute_with_task(
+        Origin::User,
+        "cell.set",
+        serde_json::json!({"ref": "C3", "input": "2"}),
+        TaskCtl {
+            cancel: Some(Arc::clone(&cancel)),
+            progress: Some(Arc::new(move |_, _, _| {
+                progress_cancel.store(true, Ordering::SeqCst);
+            })),
+        },
+    );
+    assert!(!cancelled.ok);
+    assert_eq!(cancelled.error.unwrap().code, "task.cancelled");
+
+    let recalc = bus.execute(
+        Origin::User,
+        "calc.recalc",
+        serde_json::json!({"mode": "full"}),
+    );
+    assert!(recalc.ok, "{:?}", recalc.error);
+    assert_eq!(cell_text(bus.workbook(), 0, 1), "$D$4");
 }

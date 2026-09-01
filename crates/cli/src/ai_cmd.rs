@@ -285,6 +285,24 @@ fn freeze_ai(
         if !is_ai_formula(&src) {
             continue;
         }
+        let fixed_array = ctx
+            .workbook_ref()
+            .sheet(coord.sheet)
+            .and_then(|sheet| sheet.array_formula_at(coord.row, coord.col))
+            .is_some();
+        if fixed_array {
+            ctx.workbook()
+                .detach_array_formula(coord.sheet, coord.row, coord.col)?;
+            effect.events.push(Event::CellChanged {
+                sheet: coord.sheet,
+                row: coord.row,
+                col: coord.col,
+            });
+            effect.dirty.push(coord);
+            effect.summary.cells += 1;
+            effect.auto_recalc = true;
+            continue;
+        }
         let mut frozen = *slot;
         frozen.formula = None;
         frozen.flags = frozen

@@ -354,6 +354,7 @@ pub struct EvalCtx<'a> {
     async_hint: Option<String>,
     resolved_dynamic: Vec<Reference>,
     async_provider: Option<&'a dyn crate::recalc::AsyncNodeProvider>,
+    last_changed_cell: Option<CellCoord>,
 }
 
 impl<'a> EvalCtx<'a> {
@@ -380,7 +381,25 @@ impl<'a> EvalCtx<'a> {
             async_hint: None,
             resolved_dynamic: Vec::new(),
             async_provider: None,
+            last_changed_cell: None,
         }
+    }
+
+    /// Attach the last cell changed in the live session.
+    #[must_use]
+    pub fn with_last_changed_cell(mut self, cell: Option<CellCoord>) -> Self {
+        self.last_changed_cell = cell;
+        self
+    }
+
+    /// Default reference for context-sensitive functions such as `CELL`.
+    ///
+    /// A direct evaluation has no session and falls back to the formula cell.
+    #[must_use]
+    pub fn default_reference_cell(&self) -> CellCoord {
+        self.last_changed_cell
+            .filter(|cell| self.wb.sheet(cell.sheet).is_some())
+            .unwrap_or(self.cell)
     }
 
     /// Attach the provider used by async function calls during this evaluation.
@@ -1637,7 +1656,23 @@ pub fn eval_formula_in(
     pass: u32,
     env: PassEnv,
 ) -> (RuntimeValue, EvalFlags) {
-    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass).with_pass_env(env);
+    eval_formula_in_session(wb, registry, spill, cell, ast, pass, env, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn eval_formula_in_session(
+    wb: &Workbook,
+    registry: &FnRegistry,
+    spill: &SpillTable,
+    cell: CellCoord,
+    ast: &Expr,
+    pass: u32,
+    env: PassEnv,
+    last_changed_cell: Option<CellCoord>,
+) -> (RuntimeValue, EvalFlags) {
+    let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass)
+        .with_pass_env(env)
+        .with_last_changed_cell(last_changed_cell);
     let raw = eval_expr(&mut ctx, ast);
     let value = prepare_result(&ctx, raw);
     let (pending, stale, hint, dynamic) = ctx.take_flags();

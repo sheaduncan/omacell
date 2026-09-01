@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::changeset::{
     ChangeSummary, Changeset, ChangesetId, ChangesetStatus, CommandCall,
 };
@@ -56,6 +57,42 @@ fn appendix_e_sketch_parses() {
     let doc = open_str(&text).unwrap();
     assert!(doc.workbook.resolve_sheet_name("Inputs").is_ok());
     assert!(doc.workbook.resolve_sheet_name("Model").is_ok());
+}
+
+#[test]
+fn omc_only_contains_live_workbook_cells() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.undo_log_mut().set_budget(1);
+    wb.set_text(sheet, 0, 0, "evicted-history-token").unwrap();
+    wb.set_text(sheet, 0, 0, "undo-only-token").unwrap();
+    wb.set_text(sheet, 0, 0, "current-cell-token").unwrap();
+
+    let text = to_string(&OmcDocument::from_workbook(wb)).unwrap();
+
+    assert!(text.contains("current-cell-token"));
+    assert!(!text.contains("undo-only-token"));
+    assert!(!text.contains("evicted-history-token"));
+}
+
+#[test]
+fn omc_preserves_fixed_array_formula_range() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(1, 1).unwrap());
+    wb.set_array_formula_text(sheet, range, "={1,2,3}").unwrap();
+
+    let text = to_string(&OmcDocument::from_workbook(wb)).unwrap();
+    assert!(text.contains("cse_ref=A1:B2"), "{text}");
+
+    let reopened = open_str(&text).unwrap();
+    let cse = reopened
+        .workbook
+        .sheet(reopened.workbook.active_sheet())
+        .unwrap()
+        .array_formula_at(1, 1)
+        .unwrap();
+    assert_eq!(cse.range, range);
 }
 
 #[test]

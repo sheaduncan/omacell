@@ -349,27 +349,114 @@ fn html_text(s: &str) -> String {
 }
 
 fn split_entity(rest: &str) -> Option<(String, &str)> {
-    let end = rest.find(';')?;
+    const MAX_HTML_ENTITY_NAME_BYTES: usize = 64;
+    let end = rest
+        .as_bytes()
+        .iter()
+        .take(MAX_HTML_ENTITY_NAME_BYTES)
+        .position(|byte| *byte == b';')?;
     let body = &rest[..end];
     let tail = &rest[end + 1..];
-    let ch = if let Some(hex) = body.strip_prefix("#x").or_else(|| body.strip_prefix("#X")) {
+    let decoded = if let Some(hex) = body.strip_prefix("#x").or_else(|| body.strip_prefix("#X")) {
         let n = u32::from_str_radix(hex, 16).ok()?;
-        char::from_u32(n)?
+        char::from_u32(n)?.to_string()
     } else if let Some(dec) = body.strip_prefix('#') {
         let n: u32 = dec.parse().ok()?;
-        char::from_u32(n)?
+        char::from_u32(n)?.to_string()
     } else {
-        match body {
-            "amp" => '&',
-            "lt" => '<',
-            "gt" => '>',
-            "quot" => '"',
-            "apos" => '\'',
-            "nbsp" => ' ',
-            _ => return None,
-        }
+        quick_xml::escape::resolve_html5_entity(body)
+            .or_else(|| resolve_html5_supplemental_entity(body))?
+            .to_owned()
     };
-    Some((ch.to_string(), tail))
+    Some((decoded, tail))
+}
+
+// quick-xml 0.41's `escape-html` table contains all single-code-point HTML5
+// names except these two, but omits the standard's multi-code-point entries.
+// This supplement completes the 2,125 semicolon-terminated named references.
+fn resolve_html5_supplemental_entity(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "NotEqualTilde" => "\u{2242}\u{338}",
+        "NotGreaterFullEqual" => "\u{2267}\u{338}",
+        "NotGreaterGreater" => "\u{226B}\u{338}",
+        "NotGreaterSlantEqual" => "\u{2A7E}\u{338}",
+        "NotHumpDownHump" => "\u{224E}\u{338}",
+        "NotHumpEqual" => "\u{224F}\u{338}",
+        "NotLeftTriangleBar" => "\u{29CF}\u{338}",
+        "NotLessLess" => "\u{226A}\u{338}",
+        "NotLessSlantEqual" => "\u{2A7D}\u{338}",
+        "NotNestedGreaterGreater" => "\u{2AA2}\u{338}",
+        "NotNestedLessLess" => "\u{2AA1}\u{338}",
+        "NotPrecedesEqual" => "\u{2AAF}\u{338}",
+        "NotRightTriangleBar" => "\u{29D0}\u{338}",
+        "NotSquareSubset" => "\u{228F}\u{338}",
+        "NotSquareSuperset" => "\u{2290}\u{338}",
+        "NotSubset" => "\u{2282}\u{20D2}",
+        "NotSucceedsEqual" => "\u{2AB0}\u{338}",
+        "NotSucceedsTilde" => "\u{227F}\u{338}",
+        "NotSuperset" => "\u{2283}\u{20D2}",
+        "ThickSpace" => "\u{205F}\u{200A}",
+        "acE" => "\u{223E}\u{333}",
+        "bne" => "=\u{20E5}",
+        "bnequiv" => "\u{2261}\u{20E5}",
+        "bsolhsub" => "\u{27C8}",
+        "caps" => "\u{2229}\u{FE00}",
+        "cups" => "\u{222A}\u{FE00}",
+        "fjlig" => "fj",
+        "gesl" => "\u{22DB}\u{FE00}",
+        "gvertneqq" | "gvnE" => "\u{2269}\u{FE00}",
+        "lates" => "\u{2AAD}\u{FE00}",
+        "lesg" => "\u{22DA}\u{FE00}",
+        "lvertneqq" | "lvnE" => "\u{2268}\u{FE00}",
+        "nGg" => "\u{22D9}\u{338}",
+        "nGt" => "\u{226B}\u{20D2}",
+        "nGtv" => "\u{226B}\u{338}",
+        "nLl" => "\u{22D8}\u{338}",
+        "nLt" => "\u{226A}\u{20D2}",
+        "nLtv" => "\u{226A}\u{338}",
+        "nang" => "\u{2220}\u{20D2}",
+        "napE" => "\u{2A70}\u{338}",
+        "napid" => "\u{224B}\u{338}",
+        "nbump" => "\u{224E}\u{338}",
+        "nbumpe" => "\u{224F}\u{338}",
+        "ncongdot" => "\u{2A6D}\u{338}",
+        "nedot" => "\u{2250}\u{338}",
+        "nesim" => "\u{2242}\u{338}",
+        "ngE" | "ngeqq" => "\u{2267}\u{338}",
+        "ngeqslant" | "nges" => "\u{2A7E}\u{338}",
+        "nlE" | "nleqq" => "\u{2266}\u{338}",
+        "nleqslant" | "nles" => "\u{2A7D}\u{338}",
+        "notinE" => "\u{22F9}\u{338}",
+        "notindot" => "\u{22F5}\u{338}",
+        "nparsl" => "\u{2AFD}\u{20E5}",
+        "npart" => "\u{2202}\u{338}",
+        "npre" | "npreceq" => "\u{2AAF}\u{338}",
+        "nrarrc" => "\u{2933}\u{338}",
+        "nrarrw" => "\u{219D}\u{338}",
+        "nsce" => "\u{2AB0}\u{338}",
+        "nsubE" | "nsubseteqq" => "\u{2AC5}\u{338}",
+        "nsubset" | "vnsub" => "\u{2282}\u{20D2}",
+        "nsucceq" => "\u{2AB0}\u{338}",
+        "nsupE" | "nsupseteqq" => "\u{2AC6}\u{338}",
+        "nsupset" | "vnsup" => "\u{2283}\u{20D2}",
+        "nvap" => "\u{224D}\u{20D2}",
+        "nvge" => "\u{2265}\u{20D2}",
+        "nvgt" => ">\u{20D2}",
+        "nvle" => "\u{2264}\u{20D2}",
+        "nvlt" => "<\u{20D2}",
+        "nvltrie" => "\u{22B4}\u{20D2}",
+        "nvrtrie" => "\u{22B5}\u{20D2}",
+        "nvsim" => "\u{223C}\u{20D2}",
+        "smtes" => "\u{2AAC}\u{FE00}",
+        "sqcaps" => "\u{2293}\u{FE00}",
+        "sqcups" => "\u{2294}\u{FE00}",
+        "suphsol" => "\u{27C9}",
+        "varsubsetneq" | "vsubne" => "\u{228A}\u{FE00}",
+        "varsubsetneqq" | "vsubnE" => "\u{2ACB}\u{FE00}",
+        "varsupsetneq" | "vsupne" => "\u{228B}\u{FE00}",
+        "varsupsetneqq" | "vsupnE" => "\u{2ACC}\u{FE00}",
+        _ => return None,
+    })
 }
 
 fn collapse_ws(s: &str) -> String {

@@ -544,6 +544,31 @@ fn goal_seek_is_one_undo_unit_and_honors_iteration_cap() {
 }
 
 #[test]
+fn goal_seek_rejects_a_fixed_array_formula_follower_as_input() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_array_formula_text(sheet, range(0, 0, 0, 1), "={1,2}")
+        .unwrap();
+    wb.set_cell_contents(sheet, 1, 0, "=B1*2").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+
+    let error = goal_seek(
+        &mut wb,
+        &mut engine,
+        CellCoord::new(sheet, 1, 0),
+        10.0,
+        CellCoord::new(sheet, 0, 1),
+        DEFAULT_MAX_ITER,
+        DEFAULT_TOL,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, "formula.array");
+    assert_eq!(cell_num(&wb, sheet, 0, 1), Some(2.0));
+}
+
+#[test]
 fn stats_describe_known_range() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

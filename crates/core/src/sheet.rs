@@ -259,6 +259,29 @@ pub struct Hyperlink {
     pub display: Option<String>,
 }
 
+/// One legacy Ctrl+Shift+Enter formula anchored to a fixed output range.
+///
+/// The formula source is stored only on [`Self::anchor`]'s cell slot. Every
+/// cell in [`Self::range`] owns a cached result and carries `CellFlags::ARRAY`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ArrayFormula {
+    /// Top-left cell that owns the formula source.
+    pub anchor: CellRef,
+    /// Fixed output rectangle, local to this sheet.
+    pub range: RangeRef,
+}
+
+impl ArrayFormula {
+    /// Whether the fixed output contains `row`, `col`.
+    #[must_use]
+    pub fn contains(self, row: u32, col: u16) -> bool {
+        row >= self.range.start.row
+            && row <= self.range.end.row
+            && col >= self.range.start.col
+            && col <= self.range.end.col
+    }
+}
+
 /// Forbidden characters in a sheet name (F-1.1).
 const FORBIDDEN: &[char] = &['[', ']', ':', '*', '?', '/', '\\'];
 
@@ -333,6 +356,7 @@ pub struct Sheet {
     pub validations: Vec<crate::validation::DataValidation>,
     /// Conditional format rules, low priority number wins (WP-18).
     pub cond_formats: Vec<crate::condfmt::CondFormat>,
+    pub(crate) array_formulas: Vec<ArrayFormula>,
 }
 
 /// Undo snapshot of the WP-17/WP-18 sheet metadata that lives outside the cell store.
@@ -356,6 +380,8 @@ pub struct SheetEditState {
     validations: Vec<crate::validation::DataValidation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     cond_formats: Vec<crate::condfmt::CondFormat>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    array_formulas: Vec<ArrayFormula>,
 }
 
 /// Portable sparse state for one row or column axis.
@@ -381,6 +407,7 @@ impl SheetEditState {
             filter_hidden_rows: sheet.filter_hidden_rows.iter().copied().collect(),
             validations: sheet.validations.clone(),
             cond_formats: sheet.cond_formats.clone(),
+            array_formulas: sheet.array_formulas.clone(),
         }
     }
 
@@ -408,6 +435,7 @@ impl SheetEditState {
         sheet.filter_hidden_rows = self.filter_hidden_rows.into_iter().collect();
         sheet.validations = self.validations;
         sheet.cond_formats = self.cond_formats;
+        sheet.array_formulas = self.array_formulas;
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {
@@ -446,6 +474,7 @@ impl SheetEditState {
             + hyperlink_bytes
             + self.validations.len() * 64
             + self.cond_formats.len() * 64
+            + self.array_formulas.len() * std::mem::size_of::<ArrayFormula>()
             + usize::from(self.autofilter.is_some()) * 64
             + self.filter_hidden_rows.len() * std::mem::size_of::<u32>()
     }
@@ -521,6 +550,7 @@ impl Sheet {
             filter_hidden_rows: std::collections::BTreeSet::new(),
             validations: Vec::new(),
             cond_formats: Vec::new(),
+            array_formulas: Vec::new(),
         })
     }
 
@@ -551,6 +581,32 @@ impl Sheet {
         let mut v: Vec<_> = self.notes.iter().map(|(k, n)| (*k, n)).collect();
         v.sort_by_key(|(k, _)| *k);
         v
+    }
+
+    /// Legacy fixed-range array formulas, sorted by anchor.
+    pub fn array_formulas(&self) -> impl Iterator<Item = &ArrayFormula> {
+        self.array_formulas.iter()
+    }
+
+    /// Legacy array formula containing a cell, if any.
+    #[must_use]
+    pub fn array_formula_at(&self, row: u32, col: u16) -> Option<&ArrayFormula> {
+        self.array_formulas
+            .iter()
+            .find(|formula| formula.contains(row, col))
+    }
+
+    pub(crate) fn replace_array_formula(&mut self, formula: ArrayFormula) {
+        self.array_formulas
+            .retain(|existing| existing.anchor != formula.anchor);
+        self.array_formulas.push(formula);
+        self.array_formulas
+            .sort_by_key(|formula| (formula.anchor.row, formula.anchor.col));
+    }
+
+    pub(crate) fn remove_array_formula(&mut self, anchor: CellRef) {
+        self.array_formulas
+            .retain(|formula| formula.anchor != anchor);
     }
 }
 

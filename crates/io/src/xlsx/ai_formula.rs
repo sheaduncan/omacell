@@ -46,6 +46,11 @@ pub(crate) fn encode(
                 continue;
             };
             if is_ai_formula(source) {
+                if sheet.array_formula_at(row, col).is_some() {
+                    return Err(error::xlsx_write(
+                        "fixed array formulas containing AI functions must be exported as values",
+                    ));
+                }
                 if formulas.len() >= MAX_FORMULAS {
                     return Err(error::xlsx_write(format!(
                         "AI formula bridge exceeds {MAX_FORMULAS} cells"
@@ -125,32 +130,40 @@ pub(crate) fn restore(workbook: &mut Workbook, warnings: &mut FileWarnings) {
             );
             continue;
         }
-        let mut slot = match workbook.get(sheet, record.row, record.col) {
-            Ok(Some(slot)) => *slot,
-            Ok(None) => CellSlot::empty(),
-            Err(err) => {
-                warnings.push("xlsx.ai_formula", err.message, Some(PART.into()));
-                continue;
-            }
-        };
-        let formula = match workbook.intern_formula(&record.formula) {
-            Ok(formula) => formula,
-            Err(err) => {
-                warnings.push("xlsx.ai_formula", err.message, Some(PART.into()));
-                continue;
-            }
-        };
-        slot.formula = Some(formula);
-        if let Err(err) = workbook.set_slot(sheet, record.row, record.col, slot) {
+        if workbook
+            .sheet(sheet)
+            .and_then(|sheet| sheet.array_formula_at(record.row, record.col))
+            .is_some()
+        {
+            warnings.push(
+                "xlsx.ai_formula",
+                "AI formula bridge overlaps an existing fixed array formula",
+                Some(PART.into()),
+            );
+            continue;
+        }
+        let result = workbook.transact_try(|workbook| {
+            let mut slot = workbook
+                .get(sheet, record.row, record.col)?
+                .copied()
+                .unwrap_or_else(CellSlot::empty);
+            let formula = workbook.intern_formula(&record.formula)?;
+            slot.formula = Some(formula);
+            let installed = workbook.set_slot(sheet, record.row, record.col, slot);
+            workbook.release_formula(formula);
+            installed?;
+            Ok(())
+        });
+        if let Err(err) = result {
             warnings.push("xlsx.ai_formula", err.message, Some(PART.into()));
         }
-        workbook.release_formula(formula);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use omacell_core::addr::{CellRef, RangeRef};
 
     #[test]
     fn oversized_bridge_is_rejected_before_json_parsing() {
@@ -164,5 +177,19 @@ mod tests {
 
         assert_eq!(warnings.items.len(), 1);
         assert!(warnings.items[0].message.contains("larger than"));
+    }
+
+    #[test]
+    fn bridge_rejects_fixed_array_formulas_without_changing_its_frozen_schema() {
+        let mut source = Workbook::new();
+        let sheet = source.active_sheet();
+        let range =
+            RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(0, 1).unwrap());
+        source
+            .set_array_formula_text(sheet, range, r#"=AI("x")"#)
+            .unwrap();
+        let error = encode(&source).unwrap_err();
+
+        assert!(error.message.contains("exported as values"), "{error:?}");
     }
 }

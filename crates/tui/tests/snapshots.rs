@@ -25,6 +25,7 @@ fn frame_snapshots_across_sizes_and_themes() {
 }
 
 #[test]
+#[ignore = "nightly wall-clock performance gate"]
 fn first_frame_completes() {
     let start = std::time::Instant::now();
     let mut h = harness_theme("nord");

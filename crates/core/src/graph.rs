@@ -643,11 +643,17 @@ fn resolve_deps(wb: &Workbook, default_sheet: SheetId, deps: &Deps) -> Vec<Prece
                         whole_row,
                     });
                 }
+                push_cse_anchors(wb, sheet, *range, &mut out);
             }
-            SheetResolve::Span(sheets) => out.push(Precedent::ThreeD {
-                sheets,
-                range: *range,
-            }),
+            SheetResolve::Span(sheets) => {
+                for sheet in &sheets {
+                    push_cse_anchors(wb, *sheet, *range, &mut out);
+                }
+                out.push(Precedent::ThreeD {
+                    sheets,
+                    range: *range,
+                });
+            }
             SheetResolve::Missing => {}
         }
     }
@@ -666,6 +672,7 @@ fn resolve_deps(wb: &Workbook, default_sheet: SheetId, deps: &Deps) -> Vec<Prece
                         whole_col: r.whole_col,
                         whole_row: r.whole_row,
                     });
+                    push_cse_anchors(wb, sh, *r, &mut out);
                 }
                 crate::names::NameReferent::Formula(src) => {
                     if let Ok(f) = crate::formula::parse(src) {
@@ -699,9 +706,40 @@ fn resolve_deps(wb: &Workbook, default_sheet: SheetId, deps: &Deps) -> Vec<Prece
                 whole_col: false,
                 whole_row: false,
             });
+            push_cse_anchors(wb, t.sheet, RangeRef::from_corners(start, end), &mut out);
         }
     }
     out
+}
+
+fn push_cse_anchors(wb: &Workbook, sheet: SheetId, referenced: RangeRef, out: &mut Vec<Precedent>) {
+    let Some(sheet_ref) = wb.sheet(sheet) else {
+        return;
+    };
+    for formula in sheet_ref
+        .array_formulas()
+        .filter(|formula| ranges_intersect(formula.range, referenced))
+    {
+        let anchor = CellCoord::new(sheet, formula.anchor.row, formula.anchor.col);
+        if !out
+            .iter()
+            .any(|precedent| matches!(precedent, Precedent::Cell(cell) if *cell == anchor))
+        {
+            out.push(Precedent::Cell(anchor));
+        }
+    }
+}
+
+fn ranges_intersect(a: RangeRef, b: RangeRef) -> bool {
+    let a_r0 = a.start.row.min(a.end.row);
+    let a_r1 = a.start.row.max(a.end.row);
+    let a_c0 = a.start.col.min(a.end.col);
+    let a_c1 = a.start.col.max(a.end.col);
+    let b_r0 = b.start.row.min(b.end.row);
+    let b_r1 = b.start.row.max(b.end.row);
+    let b_c0 = b.start.col.min(b.end.col);
+    let b_c1 = b.start.col.max(b.end.col);
+    a_r0 <= b_r1 && b_r0 <= a_r1 && a_c0 <= b_c1 && b_c0 <= a_c1
 }
 
 enum SheetResolve {

@@ -111,6 +111,17 @@ pub fn validate_goal_seek(
         ));
     }
     if wb
+        .sheet(input.sheet)
+        .and_then(|sheet| sheet.array_formula_at(input.row, input.col))
+        .is_some()
+    {
+        return Err(CoreError::new(
+            "formula.array",
+            "goal seek input cannot be part of a legacy array-formula range",
+        )
+        .with_hint("choose an input cell outside the fixed array-formula range"));
+    }
+    if wb
         .pivots()
         .iter()
         .any(|pivot| pivot.contains(input.sheet, input.row, input.col))

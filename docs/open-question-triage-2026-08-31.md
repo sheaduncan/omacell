@@ -70,7 +70,7 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 `AGENT` · **Decision: current rule is right; widen slightly.** Excel rejects any name that parses as a cell reference — `Q1`, `A1`, `XFD1`, `R1C1` — and the bare `R` and `C`. It accepts `\` as a first character and `.`/`?` after the first, up to 255 chars, case-insensitive, no spaces, and rejects `TRUE`/`FALSE`. Add the accept/reject rows to the names corpus. **H**
 
 ### WP-02.3 Undo intern-refcount leak on eviction
-`AGENT` · **Decision: accept for session lifetime; compact on save.** Add `Workbook::compact_interners()` called from the `.xlsx`/`.omc` writers so the shared-string table skips zero-logical-user entries. **L**
+`AGENT` · **Decision: accept for session lifetime; serialize only live workbook structures.** The XLSX writer already builds its shared-string table by walking live cells, while OMC writes live cells and metadata directly. Regression tests now prove undo-only and evicted-history strings are absent, so a mutating `Workbook::compact_interners()` pass is unnecessary. **L**
 
 ### WP-02.4 Row-height / column-width units
 `AGENT` · **Decision: `core` stays in pixels; `io` converts at the file boundary; `gui` applies DPI separately.** Excel serialises `ht` in points and `width` in character units of the workbook default font's maximum digit width (MDW): `width = TRUNC((chars·MDW + 5)/MDW·256)/256`, `px = TRUNC(((256·width + TRUNC(128/MDW))/256)·MDW)`. MDW is 7 px for Calibri 11 at 96 DPI. Two rules for G2: (a) keep the original `width`/`ht`/`defaultRowHeight`/`baseColWidth` attributes as L3 extras and re-emit them when the row/column is not dirty, otherwise the round-trip diff will never be empty; (b) depend on `ttf-carlito` (metric-compatible Calibri) so MDW is right on Omarchy — see WP-26.3. **H**
@@ -97,7 +97,7 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 `AGENT` · **Decision: What-If data tables (`TABLE()`), as implemented.** Excel's "Automatic except for data tables" has never referred to ListObjects. **H**
 
 ### WP-04.3 Legacy multi-cell CSE arrays on import
-`AGENT` · **Decision: model them, don't convert them.** Import `<f t="array" ref="A1:B2">` as a per-anchor `ArrayFormula { ref }`: fixed size, formula-bar display `{=…}`, result padded with `#N/A` when smaller and truncated when larger, written back as `t="array"`. Silently converting to dynamic arrays changes semantics and breaks round-trip. Extend the per-cell flag to carry `ref`. **H**
+`AGENT` · **Decision: model them, don't convert them. Implemented 2026-09-01.** Import `<f t="array" ref="A1:B2">` as a per-anchor `ArrayFormula { ref }`: fixed size, formula-bar display `{=…}`, result padded with `#N/A` when smaller and truncated when larger, written back as `t="array"`. Silently converting to dynamic arrays changes semantics and breaks round-trip. The fixed range now lives beside the per-cell flag and is also preserved by OMC. **H**
 
 ### WP-04.4 `[[#This Row],[Col]]`
 `AGENT` · **Decision: yes — parse as item + column.** It is the long form of `Table1[@Col]`; a column *span* is `[[A]:[B]]`. WP-03 corpus row. **H**
@@ -182,7 +182,7 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 `AGENT` · **Decision: `convert` recalculates first unless `calc.mode` is manual or `--no-recalc` is passed.** **H**
 
 ### WP-08.3 HTML clipboard entity coverage
-`AGENT` · **Decision: full HTML5 named-character table.** Browsers emit `&eacute;`, `&euro;`, `&mdash;` routinely. A small MIT crate (`html-escape` or equivalent) or a generated table; one justification line per AGENTS.md. **H**
+`AGENT` · **Decision: full HTML5 named-character table.** Implemented with the existing `quick-xml` HTML entity resolver plus its 94-entry standards supplement (the 92 multi-code-point names and two omitted single-code-point names), with a 64-byte entity-name scan cap. **H**
 
 ### WP-09.1 / WP-10.1 Regenerate vs copy worksheet parts
 `CLOSED` — decided in WP-10: regenerate modelled parts, copy the rest, inject extras. Record as ADR-007 or in `docs/formats/`.

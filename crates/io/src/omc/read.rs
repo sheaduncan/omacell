@@ -697,6 +697,9 @@ fn load_cell(
     if kv.contains_key("v_rich") && !kv.contains_key("v_text") {
         return Err(error::omc_parse("v_rich requires v_text"));
     }
+    if !is_formula && kv.contains_key("cse_ref") {
+        return Err(error::omc_parse("cse_ref requires a formula cell"));
+    }
     if is_formula {
         if kv.contains_key("array") || kv.contains_key("rich") {
             return Err(error::omc_parse(
@@ -723,6 +726,22 @@ fn load_cell(
         wb.release_formula(fid);
         if release_value {
             release_direct_value(wb, slot.value);
+        }
+        if let Some(raw) = kv.get("cse_ref") {
+            let parsed = parse_a1(raw).map_err(|error| error::omc_parse(error.to_string()))?;
+            if parsed.sheet.is_some() {
+                return Err(error::omc_parse("cse_ref must be local to its sheet"));
+            }
+            let range = match parsed.kind {
+                RefKind::Cell(cell) => omacell_core::addr::RangeRef::from_corners(cell, cell),
+                RefKind::Range(range) if !range.whole_col && !range.whole_row && !range.is_3d() => {
+                    range
+                }
+                RefKind::Range(_) => {
+                    return Err(error::omc_parse("cse_ref must be a bounded rectangle"));
+                }
+            };
+            wb.set_array_formula_range(id, range)?;
         }
     } else if let Some(value) = kv.get("array") {
         if !literal.is_empty()

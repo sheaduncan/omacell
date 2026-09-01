@@ -26,12 +26,11 @@ fn markdown_table() {
 
 #[test]
 fn html_table() {
-    let html =
-        "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>caf&eacute;</td></tr></table>";
+    let html = "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>caf&eacute; &NotEqualTilde;</td></tr></table>";
     let table = parse_clipboard(html, ClipboardFormat::Html).unwrap();
     assert_eq!(table.header.as_ref().unwrap()[0], "A");
     assert_eq!(table.rows[0][0], "1");
-    // unknown entity &eacute; is left as text unless decoded; amp/lt/nbsp are.
+    assert_eq!(table.rows[0][1], "café ≂̸");
 }
 
 #[test]

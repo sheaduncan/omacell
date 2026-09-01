@@ -11,7 +11,7 @@ use omacell_core::geometry::DEFAULT_COL_PX;
 use omacell_core::intern::{Interners, RichTextRun};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::pivot::PivotTable;
-use omacell_core::sheet::{Sheet, SheetVisibility};
+use omacell_core::sheet::{ArrayFormula, Sheet, SheetVisibility};
 use omacell_core::storage::CellSlot;
 use omacell_core::style::{
     BorderStyle, Color, Fill, Font, GradientKind, PatternType, Style, StyleId, Underline,
@@ -1392,7 +1392,18 @@ fn worksheet_xml(
         }
         s.push_str(&format!("<row{attrs}>"));
         for (col, slot) in cells {
-            s.push_str(&cell_xml(row, *col, slot, sst, xf_index, intern)?);
+            let array_formula = sheet
+                .array_formula_at(row, *col)
+                .filter(|formula| formula.anchor.row == row && formula.anchor.col == *col);
+            s.push_str(&cell_xml(
+                row,
+                *col,
+                slot,
+                array_formula,
+                sst,
+                xf_index,
+                intern,
+            )?);
         }
         s.push_str("</row>");
     }
@@ -1914,6 +1925,7 @@ fn cell_xml(
     row: u32,
     col: u16,
     slot: &CellSlot,
+    array_formula: Option<&ArrayFormula>,
     sst: &IndexMap<StrId, u32>,
     xf_index: &HashMap<Style, usize>,
     intern: &omacell_core::intern::Interners,
@@ -1938,7 +1950,15 @@ fn cell_xml(
         .filter(|source| !super::ai_formula::is_ai_formula(source));
     if let Some(src) = formula {
         let body = src.strip_prefix('=').unwrap_or(src);
-        inner.push_str(&format!("<f>{}</f>", xml::escape(body)));
+        if let Some(array_formula) = array_formula {
+            inner.push_str(&format!(
+                r#"<f t="array" ref="{}">{}</f>"#,
+                array_formula.range.to_a1(),
+                xml::escape(body)
+            ));
+        } else {
+            inner.push_str(&format!("<f>{}</f>", xml::escape(body)));
+        }
     }
     match slot.value {
         Value::Number(n) => {
