@@ -46,6 +46,7 @@ fn setup() -> Harness<'static, Gui> {
         ui,
         roots,
         long_ops: LongOps::production(),
+        ai: None,
         file: None,
         use_shell_font: false,
     };

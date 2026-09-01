@@ -1,8 +1,10 @@
 //! WP-23 evals: plans, injection, async cells, budget, formula scratch eval.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use omacell_ai::agent::validate_tool;
 use omacell_ai::formula::parse_and_eval;
@@ -12,9 +14,12 @@ use omacell_ai::import_assist::parse_plan_overlay;
 use omacell_ai::plan::{forbidden, parse_plan, to_calls};
 use omacell_ai::prompts::PromptSet;
 use omacell_ai::runtime::AiRuntime;
-use omacell_ai::{PolicySnapshot, SendLevel, Slot};
+use omacell_ai::{
+    AiHookRequest, AiHookResponse, AiHooks, AiTaskSpec, PolicySnapshot, SendLevel, Slot, ToolSpec,
+};
 use omacell_conf::schema::package_defaults;
-use omacell_core::eval::FnRegistry;
+use omacell_core::error::ErrorKind;
+use omacell_core::eval::{ArgVal, ArrayLift, DynamicFn, DynamicFnBody, FnRegistry, RuntimeValue};
 use omacell_core::graph::CellCoord;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::value::Value as CellValue;
@@ -26,16 +31,44 @@ use serde_json::{Value, json};
 struct CountingTransport {
     hits: AtomicU32,
     body: Value,
+    requests: Mutex<Vec<HttpRequest>>,
 }
 
 #[async_trait::async_trait]
 impl Transport for CountingTransport {
-    async fn send(&self, _req: HttpRequest) -> Result<HttpResponse, omacell_ai::AiError> {
+    async fn send(&self, req: HttpRequest) -> Result<HttpResponse, omacell_ai::AiError> {
         self.hits.fetch_add(1, Ordering::SeqCst);
+        self.requests.lock().unwrap().push(req);
         Ok(HttpResponse {
             status: 200,
             body: json!({
                 "choices": [{"message": {"content": serde_json::to_string(&self.body).unwrap()}}]
+            }),
+            chunks: Vec::new(),
+        })
+    }
+}
+
+struct BlockingTransport {
+    hits: AtomicU32,
+    started: SyncSender<()>,
+    release: Mutex<Receiver<()>>,
+}
+
+#[async_trait::async_trait]
+impl Transport for BlockingTransport {
+    async fn send(&self, _request: HttpRequest) -> Result<HttpResponse, omacell_ai::AiError> {
+        self.hits.fetch_add(1, Ordering::SeqCst);
+        self.started.send(()).unwrap();
+        self.release.lock().unwrap().recv().unwrap();
+        Ok(HttpResponse {
+            status: 200,
+            body: json!({
+                "choices": [{
+                    "message": {
+                        "content": r#"{"results":[{"i":0,"value":"stale result"}]}"#
+                    }
+                }]
             }),
             chunks: Vec::new(),
         })
@@ -94,6 +127,7 @@ fn runtime(
     let transport = Arc::new(CountingTransport {
         hits: AtomicU32::new(0),
         body,
+        requests: Mutex::new(Vec::new()),
     });
     let shared: SharedTransport = transport.clone();
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -112,6 +146,235 @@ fn runtime(
         omacell_ai::cache::AiCache::default(),
     );
     (ai, transport, rt, tmp)
+}
+
+struct RewritingHooks;
+
+impl AiHooks for RewritingHooks {
+    fn cache_version(&self) -> String {
+        "rewrite-v1".into()
+    }
+
+    fn on_request(&self, mut request: AiHookRequest) -> Result<AiHookRequest, omacell_ai::AiError> {
+        request
+            .messages
+            .last_mut()
+            .unwrap()
+            .content
+            .push_str("\nhooked request");
+        request.provider = "gateway".into();
+        request.model = "corporate-model".into();
+        Ok(request)
+    }
+
+    fn on_response(
+        &self,
+        mut response: AiHookResponse,
+    ) -> Result<AiHookResponse, omacell_ai::AiError> {
+        response.response.text = r#"{"hooked":true}"#.into();
+        Ok(response)
+    }
+}
+
+#[test]
+fn custom_tasks_and_hooks_are_applied_inside_the_ai_runtime() {
+    let mut config = enabled_config();
+    config.ai.providers.insert(
+        "gateway".into(),
+        omacell_conf::schema::AiProvider {
+            kind: "openai_compatible".into(),
+            endpoint: "http://127.0.0.1:8/v1".into(),
+            local: true,
+            secret_env: None,
+            secret_cmd: None,
+            timeout: 0,
+            headers: Default::default(),
+        },
+    );
+    let (ai, transport, _rt, _tmp) = runtime(config, json!({"raw": true}));
+    ai.replace_extensions(
+        vec![AiTaskSpec {
+            name: "summarize".into(),
+            prompt: "CUSTOM TASK PROMPT".into(),
+            schema: Some(json!({"type": "object"})),
+            tools: vec![ToolSpec {
+                name: "lookup".into(),
+                description: "Look up a local value".into(),
+                parameters: json!({"type": "object"}),
+            }],
+        }],
+        Some(Arc::new(RewritingHooks)),
+    )
+    .unwrap();
+
+    let response = ai
+        .chat_task(Slot::Default, "summarize", "payload".into(), None, vec![])
+        .unwrap();
+    assert_eq!(response.text, r#"{"hooked":true}"#);
+    let requests = transport.requests.lock().unwrap();
+    let body = &requests[0].body;
+    assert!(requests[0].url.starts_with("http://127.0.0.1:8/"));
+    assert_eq!(body["model"], "corporate-model");
+    assert!(body.to_string().contains("CUSTOM TASK PROMPT"));
+    assert!(body.to_string().contains("hooked request"));
+    assert!(body.to_string().contains("lookup"));
+    assert_eq!(
+        body["response_format"]["json_schema"]["schema"]["type"],
+        "object"
+    );
+}
+
+struct AsyncStub;
+
+impl DynamicFnBody for AsyncStub {
+    fn async_node(&self) -> bool {
+        true
+    }
+
+    fn eval(&self, _args: &[ArgVal]) -> RuntimeValue {
+        RuntimeValue::error(ErrorKind::Na)
+    }
+}
+
+#[test]
+fn custom_async_function_settles_and_reuses_its_cache() {
+    let config = enabled_config();
+    let (ai, transport, _rt, _tmp) = runtime(
+        config.clone(),
+        json!({"results":[{"i":0,"value":"custom result"}]}),
+    );
+    ai.replace_extensions(
+        vec![AiTaskSpec {
+            name: "MY.AI".into(),
+            prompt: "Use the custom worksheet task.".into(),
+            schema: Some(json!({"type": "string"})),
+            tools: Vec::new(),
+        }],
+        None,
+    )
+    .unwrap();
+    let mut registry = FnRegistry::new();
+    registry.register_dynamic(DynamicFn {
+        name: "MY.AI".into(),
+        min_args: 1,
+        max_args: 1,
+        volatile: false,
+        array_lift: ArrayLift::None,
+        body: Arc::new(AsyncStub),
+    });
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .set_cell_contents(sheet, 0, 0, r#"=MY.AI("input")"#)
+        .unwrap();
+
+    let first = engine.recalc_rebuild(&mut workbook);
+    assert_eq!(first.pending_async, vec![CellCoord::new(sheet, 0, 0)]);
+    let policy = PolicySnapshot::capture(&config, Some(&workbook), true);
+    assert_eq!(ai.settle(&policy).unwrap(), 1);
+    let second = engine.recalc_rebuild(&mut workbook);
+    assert!(second.pending_async.is_empty());
+    let value = workbook.get(sheet, 0, 0).unwrap().unwrap().value;
+    let CellValue::Text(text) = value else {
+        panic!("expected custom text result, got {value:?}");
+    };
+    assert_eq!(workbook.intern().strings.get(text), Some("custom result"));
+    assert_eq!(ai.settle(&policy).unwrap(), 0);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        transport.requests.lock().unwrap()[0].body.pointer(
+            "/response_format/json_schema/schema/properties/results/items/properties/value/type"
+        ),
+        Some(&json!("string"))
+    );
+}
+
+#[test]
+fn extension_reload_discards_an_in_flight_response() {
+    let config = enabled_config();
+    let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let transport = Arc::new(BlockingTransport {
+        hits: AtomicU32::new(0),
+        started: started_tx,
+        release: Mutex::new(release_rx),
+    });
+    let tokio = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let shared: SharedTransport = transport.clone();
+    let ai = AiRuntime::new(
+        tokio.handle().clone(),
+        config.clone(),
+        shared,
+        PromptSet::builtin(),
+        tmp.path().join("cache"),
+        tmp.path().join("state"),
+        Default::default(),
+    );
+    ai.replace_extensions(
+        vec![AiTaskSpec {
+            name: "MY.AI".into(),
+            prompt: "old prompt".into(),
+            schema: None,
+            tools: Vec::new(),
+        }],
+        None,
+    )
+    .unwrap();
+    let mut registry = FnRegistry::new();
+    registry.register_dynamic(DynamicFn {
+        name: "MY.AI".into(),
+        min_args: 1,
+        max_args: 1,
+        volatile: false,
+        array_lift: ArrayLift::None,
+        body: Arc::new(AsyncStub),
+    });
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    let cell = CellCoord::new(sheet, 0, 0);
+    workbook
+        .set_cell_contents(sheet, 0, 0, r#"=MY.AI("input")"#)
+        .unwrap();
+    assert_eq!(
+        engine.recalc_rebuild(&mut workbook).pending_async,
+        vec![cell]
+    );
+
+    let policy = ai.policy(Some(&workbook));
+    let settling = {
+        let ai = ai.clone();
+        std::thread::spawn(move || ai.settle(&policy))
+    };
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    ai.replace_extensions(
+        vec![AiTaskSpec {
+            name: "MY.AI".into(),
+            prompt: "new prompt".into(),
+            schema: None,
+            tools: Vec::new(),
+        }],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        engine.recalc_rebuild(&mut workbook).pending_async,
+        vec![cell]
+    );
+    release_tx.send(()).unwrap();
+
+    assert_eq!(settling.join().unwrap().unwrap(), 0);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 1);
+    assert!(ai.provenance(cell).is_none());
+    assert!(ai.pending_generation().is_some());
 }
 
 #[test]
@@ -272,7 +535,7 @@ fn privacy_policy_follows_the_routed_provider_slot() {
     config.ai.privacy.send = "schema".into();
     config.ai.privacy.local_full = true;
     config.ai.providers.insert(
-        "cloud".into(),
+        "gateway".into(),
         omacell_conf::schema::AiProvider {
             kind: "openai_compatible".into(),
             endpoint: "https://example.invalid/v1".into(),
@@ -283,10 +546,17 @@ fn privacy_policy_follows_the_routed_provider_slot() {
             headers: Default::default(),
         },
     );
-    config.ai.models.fast = "cloud:fast".into();
+    config.ai.models.fast = "gateway:fast".into();
     let (ai, _transport, _rt, _tmp) = runtime(config, json!({}));
     assert_eq!(ai.policy_for(Slot::Default, None).send, SendLevel::Full);
     assert_eq!(ai.policy_for(Slot::Fast, None).send, SendLevel::Schema);
+    ai.replace_extensions(Vec::new(), Some(Arc::new(RewritingHooks)))
+        .unwrap();
+    let error = ai
+        .chat_task(Slot::Default, "plan", "payload".into(), None, vec![])
+        .unwrap_err();
+    assert_eq!(error.code, "ai.payload");
+    assert!(error.message.contains("local-provider payload"));
 }
 
 #[test]

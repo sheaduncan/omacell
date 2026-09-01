@@ -236,6 +236,7 @@ fn cmd_gui(cli: &Cli) -> Result<(), CliError> {
         ui,
         roots,
         long_ops: omacell_bus::LongOps::production(),
+        ai: app.ai.clone(),
         file: book.map(Path::to_path_buf),
         use_shell_font: true,
     };
@@ -284,6 +285,7 @@ fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
         ui,
         roots,
         long_ops: omacell_bus::LongOps::production(),
+        ai: app.ai.clone(),
         file: book.map(Path::to_path_buf),
     };
     omacell_tui::run(launch)?;
@@ -963,12 +965,7 @@ fn cmd_recalc(
         && outcome.ok
         && let Some(ai) = app.ai.clone()
     {
-        let config = app.loaded().config;
-        let local = {
-            let (name, _) = omacell_ai::route_slot(&config, omacell_ai::Slot::Default);
-            omacell_ai::policy::provider_is_local(&config, &name)
-        };
-        let policy = omacell_ai::PolicySnapshot::capture(&config, Some(app.bus.workbook()), local);
+        let policy = ai.policy(Some(app.bus.workbook()));
         ai.settle(&policy)?;
         outcome = app.execute("calc.recalc", args);
     }

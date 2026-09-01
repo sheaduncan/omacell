@@ -6,7 +6,10 @@ use std::sync::Arc;
 use omacell_core::addr::{RangeRef, SheetId, parse_a1, parse_a1_cell};
 use omacell_core::coerce::{self, Scalar};
 use omacell_core::error::ErrorKind;
-use omacell_core::eval::{ArgVal, EvalCtx, FnDef, FnRegistry, RuntimeValue, format_runtime};
+use omacell_core::eval::{
+    ArgVal, ArrayLift, DynamicFn, DynamicFnBody, EvalCtx, FnDef, FnRegistry, RuntimeValue,
+    format_runtime,
+};
 use omacell_core::graph::CellCoord;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::recalc::{AsyncNodeProvider, RecalcEngine, RecalcResult, format_cell};
@@ -785,6 +788,46 @@ fn async_mock_second_wave() {
     assert_eq!(display(&wb, s, 0, 0), "42");
     assert_eq!(display(&wb, s, 1, 0), "43");
     let _ = r2;
+}
+
+struct DynamicAsyncStub;
+
+impl DynamicFnBody for DynamicAsyncStub {
+    fn async_node(&self) -> bool {
+        true
+    }
+
+    fn eval(&self, _args: &[ArgVal]) -> RuntimeValue {
+        RuntimeValue::error(ErrorKind::Na)
+    }
+}
+
+#[test]
+fn dynamic_async_function_uses_the_async_provider() {
+    let mut registry = FnRegistry::new();
+    registry.register_dynamic(DynamicFn {
+        name: "USER.ASYNC".into(),
+        min_args: 1,
+        max_args: 1,
+        volatile: false,
+        array_lift: ArrayLift::None,
+        body: Arc::new(DynamicAsyncStub),
+    });
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .set_formula_text(sheet, 0, 0, "=USER.ASYNC(7)")
+        .unwrap();
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(Arc::new(CountingProvider::new()));
+
+    let first = engine.recalc_full(&mut workbook);
+    assert_eq!(first.pending_async, vec![CellCoord::new(sheet, 0, 0)]);
+    assert_eq!(display(&workbook, sheet, 0, 0), "#GETTING_DATA");
+
+    let second = engine.recalc_full(&mut workbook);
+    assert!(second.pending_async.is_empty());
+    assert_eq!(display(&workbook, sheet, 0, 0), "42");
 }
 
 #[test]

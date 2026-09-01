@@ -47,5 +47,5 @@ pub use provider::{
     Usage, endpoint_is_loopback, provider_from_config, provider_timeout, route_slot,
 };
 pub use redact::{Kind, Suggestion, redact_json, redact_text};
-pub use runtime::AiRuntime;
+pub use runtime::{AiHookRequest, AiHookResponse, AiHooks, AiRuntime, AiTaskSpec};
 pub use setup::{DetectedProvider, SetupPatch, apply_setup_patch, detect_local};

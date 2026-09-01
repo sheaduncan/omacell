@@ -1,17 +1,21 @@
 //! Lua 5.4 runtime, sandbox profiles, and the `omacell` API.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use mlua::{HookTriggers, Lua, Table, Value as LuaValue, Variadic, VmState};
+use omacell_ai::{AiError, AiHookRequest, AiHookResponse, AiHooks, AiTaskSpec, ToolSpec};
 use omacell_core::addr::{RefKind, parse_a1, quote_sheet_name};
 use omacell_core::coerce::Scalar;
 use omacell_core::error::{CoreError, ErrorKind};
 use omacell_core::eval::{ArgVal, ArrayLift, DynamicFn, DynamicFnBody, RuntimeValue};
 use omacell_core::value::Value;
+use serde::Deserialize;
 use serde_json::Value as Json;
+use sha2::{Digest, Sha256};
 use std::sync::{Mutex, TryLockError};
 
 use crate::host::ScriptHost;
@@ -25,6 +29,7 @@ pub const EMBEDDED_MEMORY_LIMIT: usize = 8 * 1024 * 1024;
 pub const MAX_USER_SCRIPT_BYTES: u64 = 1024 * 1024;
 /// Custom-part path for a workbook-embedded script.
 pub const EMBEDDED_PART: &str = "xl/omacell/scripts/main.lua";
+const JSON_ARRAY_MARKER: &str = "__omacell_json_array";
 
 /// Sandbox profile (F-10.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,6 +135,9 @@ pub struct Runtime {
     profile: Profile,
     instruction_counter: Option<Arc<AtomicU32>>,
     script_depth: Arc<AtomicU32>,
+    function_depth: Arc<AtomicU32>,
+    script_digest: Arc<Mutex<Sha256>>,
+    ai_tasks: Arc<Mutex<BTreeMap<String, AiTaskSpec>>>,
 }
 
 impl Runtime {
@@ -146,6 +154,8 @@ impl Runtime {
         let lua = Arc::new(Mutex::new(lua));
         let function_depth = Arc::new(AtomicU32::new(0));
         let script_depth = Arc::new(AtomicU32::new(0));
+        let script_digest = Arc::new(Mutex::new(Sha256::new()));
+        let ai_tasks = Arc::new(Mutex::new(BTreeMap::new()));
         install_api(
             &lock_mutex(&lua),
             &lua,
@@ -153,6 +163,7 @@ impl Runtime {
             profile,
             &function_depth,
             &script_depth,
+            &ai_tasks,
         )?;
         Ok(Self {
             lua,
@@ -160,6 +171,9 @@ impl Runtime {
             profile,
             instruction_counter,
             script_depth,
+            function_depth,
+            script_digest,
+            ai_tasks,
         })
     }
 
@@ -167,6 +181,26 @@ impl Runtime {
     #[must_use]
     pub fn profile(&self) -> Profile {
         self.profile
+    }
+
+    /// Snapshot validated user-profile AI task registrations.
+    #[must_use]
+    pub fn ai_tasks(&self) -> Vec<AiTaskSpec> {
+        lock_mutex(&self.ai_tasks).values().cloned().collect()
+    }
+
+    /// Snapshot operational user-profile AI request/response hooks, if any.
+    #[must_use]
+    pub fn ai_hooks(&self) -> Option<Arc<dyn AiHooks>> {
+        if self.profile != Profile::User || !has_ai_hooks(&lock_mutex(&self.lua)) {
+            return None;
+        }
+        Some(Arc::new(LuaAiHooks {
+            lua: Arc::clone(&self.lua),
+            script_depth: Arc::clone(&self.script_depth),
+            function_depth: Arc::clone(&self.function_depth),
+            script_digest: Arc::clone(&self.script_digest),
+        }))
     }
 
     /// Run a host command (e.g. `file.save` after a script).
@@ -194,7 +228,13 @@ impl Runtime {
         lua.load(source)
             .set_name(name)
             .exec()
-            .map_err(|e| lua_error(e, name))
+            .map_err(|e| lua_error(e, name))?;
+        let mut digest = lock_mutex(&self.script_digest);
+        digest.update(name.as_bytes());
+        digest.update([0]);
+        digest.update(source.as_bytes());
+        digest.update([0]);
+        Ok(())
     }
 
     /// Fire a named hook (`on_open`, …). Missing hooks are no-ops.
@@ -289,6 +329,7 @@ fn install_api(
     profile: Profile,
     function_depth: &Arc<AtomicU32>,
     script_depth: &Arc<AtomicU32>,
+    ai_tasks: &Arc<Mutex<BTreeMap<String, AiTaskSpec>>>,
 ) -> Result<(), CoreError> {
     install_print(lua, host, function_depth)?;
     let omacell = lua
@@ -343,7 +384,7 @@ fn install_api(
     install_ui(lua, &omacell, host, profile, function_depth)?;
     install_events(lua, &omacell, profile)?;
     install_keymap(lua, &omacell, host, profile, function_depth)?;
-    install_ai(lua, &omacell, host, profile, function_depth)?;
+    install_ai(lua, &omacell, host, profile, function_depth, ai_tasks)?;
     install_book(lua, &omacell, host, function_depth)?;
 
     lua.globals()
@@ -515,6 +556,98 @@ fn dispatch_hook(lua: &Lua, name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+fn has_ai_hooks(lua: &Lua) -> bool {
+    let Ok(omacell) = lua.globals().get::<Table>("omacell") else {
+        return false;
+    };
+    let Ok(hooks) = omacell.get::<Table>("_hooks") else {
+        return false;
+    };
+    ["on_ai_request", "on_ai_response"].into_iter().any(|name| {
+        hooks
+            .get::<Table>(name)
+            .is_ok_and(|registered| registered.raw_len() > 0)
+    })
+}
+
+struct LuaAiHooks {
+    lua: Arc<Mutex<Lua>>,
+    script_depth: Arc<AtomicU32>,
+    function_depth: Arc<AtomicU32>,
+    script_digest: Arc<Mutex<Sha256>>,
+}
+
+impl LuaAiHooks {
+    fn transform(&self, name: &str, value: Json) -> Result<Json, AiError> {
+        let lua = match self.lua.try_lock() {
+            Ok(lua) => lua,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                return Err(AiError::new(
+                    omacell_ai::error::codes::PAYLOAD,
+                    format!("Lua {name} hook cannot re-enter a running script"),
+                ));
+            }
+        };
+        let _script = FunctionEvaluation::enter(&self.script_depth);
+        let _host_api_guard = FunctionEvaluation::enter(&self.function_depth);
+        let omacell: Table = lua
+            .globals()
+            .get("omacell")
+            .map_err(|error| ai_hook_error(name, error))?;
+        let hooks: Table = omacell
+            .get("_hooks")
+            .map_err(|error| ai_hook_error(name, error))?;
+        let registered: Table = hooks
+            .get(name)
+            .map_err(|error| ai_hook_error(name, error))?;
+        let mut current = value;
+        for hook in registered.sequence_values::<mlua::Function>() {
+            let hook = hook.map_err(|error| ai_hook_error(name, error))?;
+            let input = json_to_lua(&lua, &current).map_err(|error| ai_hook_error(name, error))?;
+            let fallback = input.clone();
+            let output = hook
+                .call::<LuaValue>(input)
+                .map_err(|error| ai_hook_error(name, error))?;
+            let output = if matches!(output, LuaValue::Nil) {
+                fallback
+            } else {
+                output
+            };
+            current = lua_to_json(&output).map_err(|error| ai_hook_error(name, error))?;
+        }
+        Ok(current)
+    }
+}
+
+impl AiHooks for LuaAiHooks {
+    fn cache_version(&self) -> String {
+        let digest = lock_mutex(&self.script_digest).clone().finalize();
+        format!("lua:{}", sha256_hex(&digest))
+    }
+
+    fn on_request(&self, request: AiHookRequest) -> Result<AiHookRequest, AiError> {
+        let value =
+            serde_json::to_value(request).map_err(|error| ai_hook_error("on_ai_request", error))?;
+        serde_json::from_value(self.transform("on_ai_request", value)?)
+            .map_err(|error| ai_hook_error("on_ai_request", error))
+    }
+
+    fn on_response(&self, response: AiHookResponse) -> Result<AiHookResponse, AiError> {
+        let value = serde_json::to_value(response)
+            .map_err(|error| ai_hook_error("on_ai_response", error))?;
+        serde_json::from_value(self.transform("on_ai_response", value)?)
+            .map_err(|error| ai_hook_error("on_ai_response", error))
+    }
+}
+
+fn ai_hook_error(name: &str, error: impl std::fmt::Display) -> AiError {
+    AiError::new(
+        omacell_ai::error::codes::PAYLOAD,
+        format!("Lua {name} hook failed: {error}"),
+    )
+}
+
 fn install_keymap(
     lua: &Lua,
     omacell: &Table,
@@ -553,6 +686,7 @@ fn install_ai(
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
     profile: Profile,
     function_depth: &Arc<AtomicU32>,
+    tasks: &Arc<Mutex<BTreeMap<String, AiTaskSpec>>>,
 ) -> Result<(), CoreError> {
     if profile == Profile::Embedded {
         return Ok(());
@@ -560,34 +694,51 @@ fn install_ai(
     let ai = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
+    let task_depth = Arc::clone(function_depth);
+    let task_registrations = Arc::clone(tasks);
     let task = lua
         .create_function(
-            |lua, (name, spec): (String, LuaValue)| -> mlua::Result<()> {
-                let g = lua.globals();
-                let omacell: Table = g.get("omacell")?;
-                let tasks: Table = match omacell.get("_ai_tasks") {
-                    Ok(t) => t,
-                    Err(_) => {
-                        let t = lua.create_table()?;
-                        omacell.set("_ai_tasks", t.clone())?;
-                        t
-                    }
-                };
-                tasks.set(name, spec)?;
+            move |_, (name, spec): (String, LuaValue)| -> mlua::Result<()> {
+                host_api_available(&task_depth)?;
+                let (task, arity) = parse_ai_spec(name, &spec).map_err(mlua::Error::external)?;
+                if arity.0.is_some() || arity.1.is_some() {
+                    return Err(mlua::Error::external(CoreError::new(
+                        "lua.ai",
+                        "omacell.ai.task does not accept min or max",
+                    )));
+                }
+                lock_mutex(&task_registrations).insert(task.name.to_ascii_lowercase(), task);
                 Ok(())
             },
         )
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     let host_fn = Arc::clone(host);
     let depth = Arc::clone(function_depth);
+    let function_tasks = Arc::clone(tasks);
     let func = lua
         .create_function(
-            move |_, (name, _spec): (String, LuaValue)| -> mlua::Result<()> {
+            move |_, (name, spec): (String, LuaValue)| -> mlua::Result<()> {
                 host_api_available(&depth)?;
+                if !valid_custom_function_name(&name) {
+                    return Err(mlua::Error::external(CoreError::new(
+                        "lua.ai",
+                        "AI functions must use a valid namespace (MY.NAME)",
+                    )));
+                }
+                let (task, (min, max)) =
+                    parse_ai_spec(name.clone(), &spec).map_err(mlua::Error::external)?;
+                let min_args = min.unwrap_or(1);
+                let max_args = max.unwrap_or(8);
+                if min_args > max_args {
+                    return Err(mlua::Error::external(CoreError::new(
+                        "lua.ai",
+                        "AI function min argument count exceeds max",
+                    )));
+                }
                 let def = DynamicFn {
                     name,
-                    min_args: 1,
-                    max_args: 8,
+                    min_args,
+                    max_args,
                     volatile: false,
                     array_lift: ArrayLift::None,
                     body: Arc::new(AiFnStub),
@@ -595,6 +746,7 @@ fn install_ai(
                 lock_mutex(&host_fn)
                     .register_function(def)
                     .map_err(mlua::Error::external)?;
+                lock_mutex(&function_tasks).insert(task.name.to_ascii_lowercase(), task);
                 Ok(())
             },
         )
@@ -608,9 +760,43 @@ fn install_ai(
         .map_err(|e| CoreError::new("lua.api", e.to_string()))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LuaAiSpec {
+    prompt: String,
+    #[serde(default)]
+    schema: Option<Json>,
+    #[serde(default)]
+    tools: Vec<ToolSpec>,
+    #[serde(default)]
+    min: Option<u8>,
+    #[serde(default)]
+    max: Option<u8>,
+}
+
+type AiArity = (Option<u8>, Option<u8>);
+
+fn parse_ai_spec(name: String, value: &LuaValue) -> Result<(AiTaskSpec, AiArity), CoreError> {
+    let json = lua_to_json(value)?;
+    let spec: LuaAiSpec = serde_json::from_value(json)
+        .map_err(|error| CoreError::new("lua.ai", format!("invalid AI task spec: {error}")))?;
+    let task = AiTaskSpec {
+        name,
+        prompt: spec.prompt,
+        schema: spec.schema,
+        tools: spec.tools,
+    };
+    task.validate().map_err(CoreError::from)?;
+    Ok((task, (spec.min, spec.max)))
+}
+
 struct AiFnStub;
 
 impl DynamicFnBody for AiFnStub {
+    fn async_node(&self) -> bool {
+        true
+    }
+
     fn eval(&self, _args: &[ArgVal]) -> RuntimeValue {
         RuntimeValue::error(ErrorKind::Na)
     }
@@ -1382,12 +1568,16 @@ fn lua_to_json_inner(value: &LuaValue, depth: u8) -> Result<Json, CoreError> {
                 .to_string(),
         )),
         LuaValue::Table(t) => {
+            let marked_array = t
+                .metatable()
+                .and_then(|metatable| metatable.raw_get::<bool>(JSON_ARRAY_MARKER).ok())
+                .unwrap_or(false);
             let mut object = serde_json::Map::new();
             let mut sequence = Vec::<(usize, Json)>::new();
             t.for_each(|key: LuaValue, value: LuaValue| {
                 let json = lua_to_json_inner(&value, depth + 1).map_err(mlua::Error::external)?;
                 match key {
-                    LuaValue::String(key) if sequence.is_empty() => {
+                    LuaValue::String(key) if !marked_array && sequence.is_empty() => {
                         let key = key.to_str().map_err(mlua::Error::external)?.to_string();
                         object.insert(key, json);
                     }
@@ -1405,7 +1595,11 @@ fn lua_to_json_inner(value: &LuaValue, depth: u8) -> Result<Json, CoreError> {
             })
             .map_err(|e| CoreError::new("lua.args", e.to_string()))?;
             if sequence.is_empty() {
-                return Ok(Json::Object(object));
+                return Ok(if marked_array {
+                    Json::Array(Vec::new())
+                } else {
+                    Json::Object(object)
+                });
             }
             sequence.sort_by_key(|(index, _)| *index);
             if sequence
@@ -1445,6 +1639,10 @@ pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<LuaValue> {
         Json::String(value) => Ok(LuaValue::String(lua.create_string(value)?)),
         Json::Array(values) => {
             let table = lua.create_table_with_capacity(values.len(), 0)?;
+            let metatable = lua.create_table_with_capacity(0, 2)?;
+            metatable.raw_set(JSON_ARRAY_MARKER, true)?;
+            metatable.raw_set("__metatable", false)?;
+            table.set_metatable(Some(metatable));
             for (index, value) in values.iter().enumerate() {
                 table.set(index + 1, json_to_lua(lua, value)?)?;
             }

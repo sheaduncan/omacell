@@ -84,9 +84,11 @@ All P1 engine/file-fidelity items from this audit are complete.
 
 ### P3 — AI extension integration
 
-1. Connect user-profile Lua `omacell.ai.task` plus request/response hooks to
-   `AiRuntime`. Decide whether `omacell.ai.fn` gains an async-node adapter or
-   remains an explicitly documented cache-only limitation.
+1. **Complete:** user-profile Lua tasks and request/response hooks are installed
+   atomically in `AiRuntime`; `omacell.ai.fn` opts into the async graph through
+   the source-compatible `DynamicFnBody::async_node()` default method. GUI/TUI
+   settle new pending generations off-thread and queue the normal full recalc on
+   the single writer. Embedded scripts retain no AI extension capability.
 2. Feed `ai.import.assist` output into the retained import-plan review UI; keep
    application explicit and reviewable.
 3. Wire `[ai.functions] refresh_on_full_recalc` and AI-function `auto` through
@@ -152,9 +154,9 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-16` | Clipboard and conditional formatting are integrated; remaining GUI completion and hardware decisions are WP-28/HUMAN. |
 | `WP-17` / `WP-18` | Contracts were approved by merge; frontend clipboard/fill/drag and conditional-format consumers are integrated. |
 | `WP-19` | WP-22 completed diagnostic redaction; search/error frontends are integrated. |
-| `WP-20` | Retained Lua startup/events/keymaps/source integration is complete; AI-specific hooks are P3. |
+| `WP-20` | Retained Lua startup/events/keymaps/source integration and user-profile AI extensions are complete. |
 | `WP-21` / `WP-22` | Agent/MCP and provider/privacy work is complete; WP-22 approval marker was reconciled. |
-| `WP-23` | Acceptance work is complete; remaining Lua/import/refresh connections are P3 and `COPILOT()` is HUMAN. |
+| `WP-23` | Acceptance work and Lua AI integration are complete; remaining import/refresh connections are P3 and `COPILOT()` is HUMAN. |
 | `WP-24` / `WP-24a` | Pivot fidelity follow-up is complete; package-excluded Data Tables/Scenario Manager remain explicit post-1.0 scope. |
 | `WP-25` | Chart export and terminal graphics are integrated; minimal release editing is WP-28 and exotic modeling is post-1.0. |
 | `WP-26` | Print gaps are explicitly owned by WP-28. |

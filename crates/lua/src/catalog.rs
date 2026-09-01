@@ -131,22 +131,22 @@ pub const API: &[ApiEntry] = &[
     ApiEntry {
         name: "omacell.ai.task",
         signature: "omacell.ai.task(name, spec)",
-        doc: "Reserve named AI-task metadata in this user-script runtime; dispatch is not implemented.",
+        doc: "Register a named AI prompt, optional JSON schema, and tools in the retained AI runtime.",
     },
     ApiEntry {
         name: "omacell.ai.fn",
         signature: "omacell.ai.fn(name, spec)",
-        doc: "Reserve an AI worksheet-function name; calls currently return `#N/A`.",
+        doc: "Register a namespaced asynchronous AI worksheet function in the retained AI runtime.",
     },
     ApiEntry {
         name: "omacell.on_ai_request",
         signature: "omacell.on_ai_request(fn)",
-        doc: "Reserve a pre-request hook; AI dispatch does not invoke it yet.",
+        doc: "Transform a privacy-filtered AI request before provider dispatch; host APIs are unavailable in the hook.",
     },
     ApiEntry {
         name: "omacell.on_ai_response",
         signature: "omacell.on_ai_response(fn)",
-        doc: "Reserve a post-response hook; AI dispatch does not invoke it yet.",
+        doc: "Transform a validated provider response before caching; host APIs are unavailable in the hook.",
     },
 ];
 
@@ -157,7 +157,7 @@ pub fn render_markdown() -> String {
     out.push_str("Generated from `omacell_lua::catalog::API`. Do not edit by hand.\n\n");
     out.push_str(
         "## Runtime profiles\n\n\
-User-profile scripts have the documented API and Lua standard library. GUI/TUI load trusted `init.lua` and sorted plugin entry points once at startup; only the explicit `script.source` command reloads them, replacing hooks, script keymaps, and custom functions. Filesystem notifications never execute scripts, and workbook-embedded scripts never run on open. Interactive worksheet callbacks preserve their Lua closure during normal calculation; calculation that overlaps a running hook uses an isolated fallback, so callbacks used on that path must be self-contained. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt, change keymaps, register AI extensions or AI payload hooks, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.\n\n",
+User-profile scripts have the documented API and Lua standard library. GUI/TUI load trusted `init.lua` and sorted plugin entry points once at startup; only the explicit `script.source` command reloads them, replacing event/AI hooks, AI tasks, script keymaps, and custom functions. AI hooks must be deterministic except for transforming their supplied table; they cannot invoke host APIs, and request hooks cannot route a local-provider payload to a cloud provider. Filesystem notifications never execute scripts, and workbook-embedded scripts never run on open. Interactive worksheet callbacks preserve their Lua closure during normal calculation; calculation that overlaps a running hook uses an isolated fallback, so callbacks used on that path must be self-contained. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt, change keymaps, register AI extensions or AI payload hooks, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.\n\n",
     );
     for entry in API {
         out.push_str(&format!(

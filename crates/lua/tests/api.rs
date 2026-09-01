@@ -1,5 +1,6 @@
 //! API tests for every documented Lua function.
 
+use omacell_ai::{AiHookRequest, AiHookResponse, ChatMessage, ChatResponse, Role, Usage};
 use omacell_bus::Bus;
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
@@ -211,10 +212,93 @@ fn sheet_objects_resolve_names_and_range_iteration_is_bounded() {
 fn ai_hooks_register() {
     let host = BusHost::new(bus());
     let rt = Runtime::new(Profile::User, Box::new(host)).unwrap();
-    rt.exec("omacell.ai.task('summarize', {prompt = 'x'})", "ai.lua")
+    rt.exec(
+        r##"
+        omacell.ai.task("summarize", {
+            prompt = "x",
+            schema = {type = "object"},
+            tools = {{
+                name = "lookup",
+                description = "local lookup",
+                parameters = {type = "object"},
+            }},
+        })
+        omacell.ai.fn("MY.AI", {prompt = "y", min = 2, max = 2})
+        omacell.on_ai_request(function(request)
+            request.provider = "gateway"
+            request.model = "corporate-model"
+            request.messages[#request.messages].content =
+                request.messages[#request.messages].content .. ":request-hook"
+            return request
+        end)
+        omacell.on_ai_response(function(response)
+            response.response.text = response.response.text .. ":response-hook"
+        end)
+        omacell.cmd("cell.set", {ref = "A1", input = "=MY.AI(1)"})
+        assert(omacell.book():sheet():cell("A1").value == "#VALUE!")
+        "##,
+        "ai.lua",
+    )
+    .unwrap();
+    let tasks = rt.ai_tasks();
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0].name, "MY.AI");
+    assert_eq!(tasks[1].name, "summarize");
+    assert_eq!(tasks[1].tools[0].name, "lookup");
+    assert_eq!(tasks[1].schema.as_ref().unwrap()["type"], "object");
+    let hooks = rt.ai_hooks().expect("registered Lua AI hooks");
+    let version = hooks.cache_version();
+    let request = hooks
+        .on_request(AiHookRequest {
+            task: "summarize".into(),
+            provider: "local".into(),
+            model: "small".into(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: "payload".into(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+            }],
+            schema: None,
+            tools: Vec::new(),
+            max_output_tokens: 128,
+        })
         .unwrap();
-    rt.exec("omacell.ai.fn('MY.AI', {prompt = 'y'})", "ai.lua")
+    assert_eq!(request.provider, "gateway");
+    assert_eq!(request.model, "corporate-model");
+    assert_eq!(request.messages[0].content, "payload:request-hook");
+    let response = hooks
+        .on_response(AiHookResponse {
+            task: "summarize".into(),
+            provider: "gateway".into(),
+            model: "corporate-model".into(),
+            response: ChatResponse {
+                text: "answer".into(),
+                tool_calls: Vec::new(),
+                usage: Usage::default(),
+                streamed: false,
+            },
+        })
         .unwrap();
+    assert_eq!(response.response.text, "answer:response-hook");
+    rt.exec("local hook_version_changed = true", "changed.lua")
+        .unwrap();
+    assert_ne!(hooks.cache_version(), version);
+}
+
+#[test]
+fn ai_specs_fail_closed() {
+    let host = BusHost::new(bus());
+    let rt = Runtime::new(Profile::User, Box::new(host)).unwrap();
+    for source in [
+        r#"omacell.ai.task("x", {})"#,
+        r#"omacell.ai.task("x", {prompt = "p", surprise = true})"#,
+        r#"omacell.ai.task("x", {prompt = "p", min = 1})"#,
+        r#"omacell.ai.fn("BAD", {prompt = "p"})"#,
+        r#"omacell.ai.fn("MY.BAD", {prompt = "p", min = 2, max = 1})"#,
+    ] {
+        assert!(rt.exec(source, "bad-ai.lua").is_err(), "{source}");
+    }
 }
 
 #[test]

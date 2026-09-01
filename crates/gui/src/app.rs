@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use omacell_ai::{AutopilotPolicy, AutopilotScope, Plan, to_calls};
+use omacell_ai::{AiRuntime, AutopilotPolicy, AutopilotScope, Plan, to_calls};
 use omacell_bus::ipc::{IpcHandle, IpcLimits, default_runtime_dir, serve_runner_with_limits};
 use omacell_bus::{
     Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskId, TaskRunner,
@@ -47,6 +47,8 @@ pub struct Launch {
     pub roots: KeymapRoots,
     /// Long-operation classifier.
     pub long_ops: LongOps,
+    /// Process-wide AI runtime retained by the CLI composition root.
+    pub ai: Option<Arc<AiRuntime>>,
     /// Workbook path from `omacell [file]`, if any.
     pub file: Option<PathBuf>,
     /// Load `LoadedConfig.shell.ui_font_path` into egui. Tests keep bundled fonts.
@@ -129,11 +131,12 @@ impl Gui {
             ui: launch.ui.clone(),
             known: runner.handle().command_ids().clone(),
         });
-        let scripts = InteractiveRuntime::new(
+        let scripts = InteractiveRuntime::new_with_ai(
             runner.handle(),
             script_ui,
             launch.paths.user_config.clone(),
             &loaded,
+            launch.ai,
         )?;
         let startup_message = scripts.take_messages().into_iter().last();
         let script_status = startup_message.clone();
@@ -503,6 +506,9 @@ impl Gui {
             }
         }
         if let Err(error) = self.scripts.poll_events() {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+        }
+        if let Err(error) = self.scripts.poll_ai() {
             self.message = Some(format!("{}: {}", error.code, error.message));
         }
         if let Some(message) = self.scripts.take_messages().into_iter().last() {

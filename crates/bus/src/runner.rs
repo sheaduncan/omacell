@@ -550,6 +550,14 @@ impl TaskRunnerHandle {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(wake));
     }
 
+    /// Wake the registered frontend after out-of-band composition work.
+    ///
+    /// AI settlement uses this when a background provider request fails before
+    /// it can enqueue the ordinary second-wave recalculation task.
+    pub fn wake_frontend(&self) {
+        wake_event_consumer(&self.shared);
+    }
+
     /// Queue a command. Does not wait. Long TUI work uses this.
     pub fn submit(
         &self,
