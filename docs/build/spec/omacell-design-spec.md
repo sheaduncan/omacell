@@ -41,7 +41,7 @@ The document is organized as follows: goals and non-goals (§2), the two bodies 
 - Executing VBA. Files containing VBA are opened with the macro payload preserved but inert.
 - Parity with Power Query, Power Pivot, or the data-model engine.
 - Full parity with Excel's charting engine. Core chart types round-trip; exotic ones are preserved-but-not-rendered.
-- Legacy binary `.xls` write support (read is delegated; see §6.9).
+- Legacy binary `.xls` write support (read is native; see §6.9).
 - A ribbon, an in-app theme editor, or a settings GUI. Configuration is text.
 - Bundling a model, a vendor account, or a default AI provider. AI features stay off until the user configures a provider or picks an Omarchy default agent.
 - AI that acts unprompted: background analysis, suggestions on open, or "smart" silent conversions.
@@ -80,7 +80,7 @@ Omarchy is DHH's opinionated Arch Linux distribution: Hyprland as compositor, an
 | **Monospace everywhere.** JetBrainsMono Nerd Font is the default terminal *and* system font; *Style > Font* changes it everywhere; a display text-size knob (9–20 px) moves shell font, GTK text scaling, and terminal point size together. | The UI chrome follows the system monospace font and text size; cell fonts default to it and honor per-cell fonts from files. |
 | **Terminal-heavy, TUI-delighted.** Foot is the default terminal; Neovim the default editor; the manual has a page for TUIs. | A terminal front-end is a launch requirement, not a stretch goal. |
 | **Shell is themeable and scriptable.** `shell.toml` carries surface roles, control states, spacing, typography, corner radius; `~/.config/omarchy/shell.toml` is a machine-level override; the shell has a plugin system and is IPC-scriptable. | Omacell reads the same spacing/typography/corner tokens so it looks like part of the shell, not a guest. |
-| **Ships LibreOffice.** Calc is already on every Omarchy machine. | Omacell does not need to out-feature Calc; it needs to out-*fit* it. Calc is also used as a headless conversion fallback for legacy formats. |
+| **Calc coexistence.** LibreOffice may be installed as a second spreadsheet. | Omacell does not need to out-feature Calc; it needs to out-*fit* it. Omacell does not require Calc to open supported formats. |
 | **Everything is a package.** Omarchy itself ships as Arch packages; `omarchy-pkg-add` installs from the repos/AUR. | Distribute as an Arch package (AUR first), never by curl-piping or by writing into Omarchy's directories. |
 | **AI agents are first-class, but no favorite is picked.** Ten coding-agent CLIs (`claude`, `codex`, `opencode`, `pi`, …) ship as lazy launchers; the user chooses a default agent (`omarchy default agent`) or doesn't, and agentic features stay off until they do. A shipped skill teaches agents to tailor the system; crash diagnosis hands core dumps to the default agent; LM Studio and Ollama are the recommended local-LLM paths; `omarchy-notification-send` is the notification convention. | Omacell's AI layer is off by default, vendor-neutral, works with the user's default agent through a skill and an MCP server, treats local models as the primary path, and hands hard problems (`#REF!` cascades, circular references) to the agent the way Omarchy hands off crashes (§8). |
 
@@ -245,7 +245,7 @@ Functions are named and behave as in Excel; English canonical names are always a
 - **F-9.2 Fidelity levels for `.xlsx`.** L1 — cell values, formulas, and number formats round-trip losslessly. L2 — styles, merged cells, defined names, tables, validation, conditional formatting, comments, hyperlinks, freeze/split, print settings, pivot definitions, core charts. L3 — unknown parts (VBA, custom XML, exotic drawings, form controls, embedded objects) are preserved byte-for-byte and re-emitted. The test corpus measures each level (§14).
 - **F-9.3 Text workbook (`.omc`).** A documented, line-oriented plain-text format (Appendix E) for git-friendly diffs, hand editing, and generation by scripts. It carries everything `.xlsx` L1–L2 carries except binary parts.
 - **F-9.4 CSV/TSV.** Import with an interactive preview: delimiter, quoting, encoding (UTF-8 with BOM detection, Latin-1, UTF-16), decimal and thousands separators, header row, per-column type (auto/number/text/date with format/boolean), and "keep as text" for ambiguous columns. No silent conversion; the preview shows what would change. Export with the same controls plus line endings. Files over the in-memory threshold load progressively with a visible row count.
-- **F-9.5 Other formats.** ODS read (v1) and write (v1.x); JSON (array-of-objects ↔ table, nested flattening rules); Parquet/Arrow read (v1.x); HTML and Markdown tables via clipboard and import; legacy `.xls` read by delegating to `soffice --headless --convert-to xlsx` when LibreOffice is present (it is, on Omarchy), otherwise refused with a clear message.
+- **F-9.5 Other formats.** ODS read (v1) and write (v1.x); JSON (array-of-objects ↔ table, nested flattening rules); Parquet/Arrow read (v1.x); HTML and Markdown tables via clipboard and import; legacy `.xls` read in-process with a bounded BIFF parser. `.xls` write is never supported.
 - **F-9.6 Safety.** Zip and XML readers enforce size and expansion limits, disable external entities, and are fuzzed. Files never execute embedded scripts on open (§12.3).
 - **F-9.7 Locking and autosave.** Cooperative lock files compatible with LibreOffice's `.~lock.<name>#` convention so Calc and Omacell warn each other. Autosave to `~/.local/state/omacell/autosave/` on an interval, with crash recovery on next launch. Optional versioned backups (`keep_backups = N`).
 
@@ -385,7 +385,7 @@ This section is the contract between Omacell and the Omarchy 4.x host. Everythin
 
 ### 7.6 Shell and desktop integration
 
-- `.desktop` entry with MIME associations for `.xlsx`, `.xlsm` (opened with macros inert), `.csv`, `.tsv`, `.ods`, `.omc`; `xdg-open file.xlsx` launches Omacell when the user sets it as default (the installer prints the `xdg-mime` line; it never changes defaults silently).
+- `.desktop` entry with MIME associations for `.xlsx`, `.xlsm` (opened with macros inert), read-only `.xls`, `.csv`, `.tsv`, `.ods`, `.omc`; `xdg-open file.xlsx` launches Omacell when the user sets it as default (the installer prints the `xdg-mime` line; it never changes defaults silently).
 - Omarchy menu entry: `omacell setup omarchy` offers to add `~/.config/omarchy/extensions/omarchy-menu.jsonc` rows (e.g. a *Spreadsheet* row and a *New from clipboard* row that pastes the clipboard table into a fresh workbook). The user confirms before the file is written.
 - Notifications through `omarchy-notification-send` when present (Omarchy's own convention; it renders through the shell), otherwise the standard freedesktop D-Bus interface: long recalc finished, autosave recovered, export complete, changeset proposed by an external agent. Off by default except recovery and agent proposals.
 - Clipboard through `wl-clipboard`-compatible protocols; Omarchy's unified clipboard history sees the `text/plain` representation.
@@ -507,7 +507,7 @@ Consistent with §9, the AI layer is text all the way down:
 | Files | `config.toml [files]` | `default_format` (`xlsx|omc`), `autosave_interval`, `keep_backups`, `follow_external_links`, `csv.*` defaults (delimiter, encoding, type inference), `xlsx.preserve_unknown_parts` | global | yes |
 | Session | `config.toml [session]` | `restore`, `recent_files`, `workspace_binding` | global | on next launch |
 | Panels & layout | `config.toml [layout]` | `panel_side`, `panel_width`, `formula_bar_lines`, `compact_below_width`, `status_line = ["mode","cell","stats","calc","theme"]` | global, per-window | yes |
-| Integrations | `config.toml [integrations]` | `omarchy` (`auto|on|off`), `notifications`, `menu_entries`, `libreoffice_fallback`, `ocr_paste` | global | on next launch |
+| Integrations | `config.toml [integrations]` | `omarchy` (`auto|on|off`), `notifications`, `menu_entries`, `ocr_paste`; deprecated `libreoffice_fallback` is accepted but ignored | global | on next launch |
 | Network | `config.toml [network]` | `enabled` (default `false`), `allow_functions = []`, `proxy` | global; per workbook allowlist | yes |
 | Scripting | `init.lua`, `plugins/`, `config.toml [scripting]` | `enabled`, `trusted_dirs`, `embedded_scripts` (`sandbox|ask|deny`) | global; per-file trust | plugins on next launch; `init.lua` via `:source` |
 | AI | `config.toml [ai]`, `[ai.providers.*]`, `[ai.models]`, `[ai.privacy]`, `[ai.functions]`, `[ai.completion]`, `[ai.agent]` | `enabled`, provider blocks, slot routing (`fast|default|strong|agent|vision`), `send` level, redaction, budgets, `completion.mode`, `review`, `autopilot_scope`, `diagnose_offers` | global; privacy level and budgets per workbook | yes (provider changes apply to the next request) |
@@ -734,7 +734,7 @@ Runs on any Linux with Wayland (X11 through XWayland, best effort). Omarchy-spec
 | Power Query / data model | | | never (CSV/JSON/Parquet import + Lua instead) |
 | Co-authoring | | | never (v1 scope) |
 | `.xlsx`/`.xlsm` read/write | L1–L2 + L3 preserve | | |
-| `.xls` | read via LibreOffice bridge | | write never |
+| `.xls` | native BIFF read | | write never |
 | `.ods` | read | write | |
 | AI functions (`AI`, `AI.EXTRACT`, …) | Omacell extension; cached values written to `.xlsx` | | Excel's `COPILOT()` imported inert (mapping to `AI()` open) |
 | Copilot-style assistance | palette plans, formula assist, import assist, audit | in-app agent panel | — |
@@ -763,7 +763,7 @@ Runs on any Linux with Wayland (X11 through XWayland, best effort). Omarchy-spec
 | **M1 — Grid and formulas** (v0.1) | Core model, parser, ~150 Tier-0 functions, classic keymap, `.xlsx` L1 read/write, CSV in/out with preview, GUI + TUI basics, theming, config layering, `convert`/`eval`/`query` CLI, MCP server, shipped skill, `omacell agent` hand-off | Use cases 1 and 4 (§5.2) work end to end; the default Omarchy agent can query and edit a workbook through the skill |
 | **M2 — Daily driver** (v0.2) | `.xlsx` L2, styles/number formats complete, sort/filter/tables/validation/conditional formatting, find/replace/goto, freeze/split, undo panel, autosave/recovery, modal keymap, `init.lua` + custom functions, IPC, `omacell setup omarchy`, provider abstraction, workbook card, changeset review, natural-language palette, formula explain/generate | A week of real work without opening Calc; use case 6 works |
 | **M3 — Analysis** (v0.3) | Pivot tables, core charts, Goal Seek, comments, protection, print/PDF, ODS read, Tier 1 functions begun, AI functions with cache and batching, import assistant, AI audit, inline completion | Use cases 2 and 3 work end to end; an `AI.FILL` column survives save, reopen, and Excel |
-| **M4 — Ecosystem** (v0.4) | Plugins, macro recorder, Parquet, `.xls` bridge, menu/hook/OCR integrations, Python bridge, localization, in-app agent panel and skills, diagnosis hand-off, redaction detectors, usage reporting, vision `render` tool | Third-party plugin published; use case 7 works: an agent audits a seeded workbook and its changeset is reviewed in the GUI |
+| **M4 — Ecosystem** (v0.4) | Plugins, macro recorder, Parquet, native `.xls` reader, menu/hook/OCR integrations, Python bridge, localization, in-app agent panel and skills, diagnosis hand-off, redaction detectors, usage reporting, vision `render` tool | Third-party plugin published; use case 7 works: an agent audits a seeded workbook and its changeset is reviewed in the GUI |
 | **1.0** | Performance gates met, Omarchy channel CI green, manual complete, AUR stable | Public release |
 
 ## 16. Risks and open decisions
@@ -943,7 +943,7 @@ menu_bar            = false
 omarchy              = "auto"    # auto | on | off
 notifications        = "recovery_only"  # all | recovery_only | off
 menu_entries         = true      # offered by `omacell setup omarchy`
-libreoffice_fallback = true      # .xls conversion via soffice --headless
+libreoffice_fallback = false     # deprecated compatibility key; .xls import is native
 ocr_paste            = true
 
 [network]

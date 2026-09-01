@@ -303,7 +303,7 @@ pub struct Integrations {
     pub notifications: String,
     /// Offer menu rows.
     pub menu_entries: bool,
-    /// soffice `.xls` bridge.
+    /// Deprecated compatibility key; `.xls` import is native.
     pub libreoffice_fallback: bool,
     /// OCR paste.
     pub ocr_paste: bool,

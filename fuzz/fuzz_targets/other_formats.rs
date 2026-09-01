@@ -13,4 +13,5 @@ fuzz_target!(|data: &[u8]| {
     let _ = omacell_io::html::open_bytes(data, ClipboardFormat::Html);
     let _ = omacell_io::html::open_bytes(data, ClipboardFormat::Markdown);
     let _ = omacell_io::parquet::open_bytes(data);
+    let _ = omacell_io::bridge::open_xls_bytes(data);
 });

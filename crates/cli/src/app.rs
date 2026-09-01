@@ -10,8 +10,7 @@ use omacell_ai::{PromptSet, register_ai_functions};
 use omacell_bus::Bus;
 use omacell_conf::layer::LoadOptions;
 use omacell_conf::{
-    ConfigStore, LoadedConfig, Paths, ReloadHandle, load_with_options, merge_overlays,
-    workbook_settings_overlay,
+    ConfigStore, LoadedConfig, Paths, ReloadHandle, merge_overlays, workbook_settings_overlay,
 };
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
@@ -50,9 +49,8 @@ impl App {
     pub fn bootstrap(cli: &Cli) -> Result<Self, CoreError> {
         let paths = Paths::from_env()?;
         let mut options = load_options(cli);
-        let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
         if let Some(path) = &cli.from_workbook {
-            let opened = files::open_any(path, libreoffice_fallback)?;
+            let opened = files::open_any(path)?;
             options.workbook = Some(workbook_overlay(&opened.workbook));
         }
         Self::from_parts(paths, options, Workbook::new(), FileSession::new(), false)
@@ -66,8 +64,7 @@ impl App {
     ) -> Result<Self, CoreError> {
         let paths = Paths::from_env()?;
         let mut options = load_options(cli);
-        let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
-        let opened = files::open_any_with_pointer(book, pointer, libreoffice_fallback)?;
+        let opened = files::open_any_with_pointer(book, pointer)?;
         options.workbook = Some(workbook_overlay(&opened.workbook));
         let file_session = FileSession::new();
         file_session.attach(book, &opened);
@@ -82,8 +79,7 @@ impl App {
     ) -> Result<Self, CoreError> {
         let paths = Paths::from_env()?;
         let mut options = load_options(cli);
-        let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
-        let opened = files::open_any_with_plan(book, plan, libreoffice_fallback)?;
+        let opened = files::open_any_with_plan(book, plan)?;
         options.workbook = Some(workbook_overlay(&opened.workbook));
         let file_session = FileSession::new();
         file_session.attach(book, &opened);
@@ -115,10 +111,9 @@ impl App {
             Some(path) => {
                 let paths = Paths::from_env()?;
                 let mut options = load_options(cli);
-                let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
-                let opened = files::open_any(path, libreoffice_fallback)?;
+                let opened = files::open_any(path)?;
                 options.workbook = if let Some(settings_path) = &cli.from_workbook {
-                    let settings_book = files::open_any(settings_path, libreoffice_fallback)?;
+                    let settings_book = files::open_any(settings_path)?;
                     Some(workbook_ai_overlay(
                         workbook_settings_overlay(settings_book.workbook.settings()),
                         &opened.workbook,
@@ -133,9 +128,8 @@ impl App {
             None => {
                 let paths = Paths::from_env()?;
                 let mut options = load_options(cli);
-                let libreoffice_fallback = configured_libreoffice_fallback(&paths, &options)?;
                 if let Some(settings_path) = &cli.from_workbook {
-                    let settings_book = files::open_any(settings_path, libreoffice_fallback)?;
+                    let settings_book = files::open_any(settings_path)?;
                     options.workbook = Some(workbook_overlay(&settings_book.workbook));
                 }
                 Self::from_parts(paths, options, Workbook::new(), FileSession::new(), true)
@@ -324,16 +318,6 @@ fn load_options(cli: &Cli) -> LoadOptions {
     options.theme_override = cli.theme.clone();
     options.cli_sets = cli.sets.clone();
     options
-}
-
-fn configured_libreoffice_fallback(
-    paths: &Paths,
-    options: &LoadOptions,
-) -> Result<bool, CoreError> {
-    Ok(load_with_options(paths, options)?
-        .config
-        .integrations
-        .libreoffice_fallback)
 }
 
 fn workbook_overlay(workbook: &Workbook) -> TomlValue {

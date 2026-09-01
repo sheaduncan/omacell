@@ -81,7 +81,7 @@ menu_bar            = false
 omarchy              = "auto"    # auto | on | off
 notifications        = "recovery_only"  # all | recovery_only | off
 menu_entries         = true      # offered by `omacell setup omarchy`
-libreoffice_fallback = true      # .xls conversion via soffice --headless
+libreoffice_fallback = false     # deprecated compatibility key; .xls import is native
 ocr_paste            = true
 
 [network]

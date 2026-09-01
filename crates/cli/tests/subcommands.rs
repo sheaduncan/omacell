@@ -22,6 +22,10 @@ fn corpus_xlsx() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/xlsx/l1_values.xlsx")
 }
 
+fn corpus_xls() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/xls/l1_values.xls")
+}
+
 #[test]
 fn version_and_usage() {
     bin()
@@ -104,6 +108,17 @@ fn json_error_shape() {
         .code(1)
         .stderr(predicate::str::contains("\"code\""))
         .stderr(predicate::str::contains("\"message\""));
+}
+
+#[test]
+fn query_xls_without_external_tools() {
+    let (dir, mut cmd) = home();
+    cmd.env("PATH", dir.path())
+        .args(["--json", "query", corpus_xls().to_str().unwrap(), "A1:C1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1.5"))
+        .stdout(predicate::str::contains("hello"));
 }
 
 #[test]
