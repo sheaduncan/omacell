@@ -488,6 +488,7 @@ fn load_inner(config: &LoadedConfig, roots: &KeymapRoots) -> Result<UiInner, Cor
         palette: Palette::default(),
         panel: PanelState {
             visible: None,
+            body: None,
             side: config.config.layout.panel_side.clone(),
             width: config.config.layout.panel_width,
             grid_focused: true,

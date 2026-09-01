@@ -20,14 +20,6 @@ pub const COMPOSITION_COMMANDS: &[&str] = &["file.open", "file.save", "file.prin
 /// Tested deferred-command table. Empty only at the final integration gate.
 pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
     DeferredCommand {
-        id: "edit.searchnext",
-        wp: "WP-19",
-    },
-    DeferredCommand {
-        id: "edit.searchprev",
-        wp: "WP-19",
-    },
-    DeferredCommand {
         id: "file.new",
         wp: "WP-16",
     },
@@ -50,10 +42,6 @@ pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
     DeferredCommand {
         id: "name.createfrom",
         wp: "WP-18",
-    },
-    DeferredCommand {
-        id: "edit.explainerror",
-        wp: "WP-19",
     },
     DeferredCommand {
         id: "ai.assist",

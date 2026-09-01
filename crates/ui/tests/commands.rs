@@ -8,7 +8,8 @@ use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
 use omacell_ui::{
-    EditSurface, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, Mode, UiSession, register_ui_commands,
+    EditSurface, FindScope, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, Mode, UiSession,
+    register_ui_commands,
 };
 use serde_json::json;
 
@@ -250,4 +251,86 @@ fn editing_tab_commits_and_ctrl_enter_keeps_its_fill_binding() {
         KeyOutcome::Command { cmd, .. } if cmd == "edit.fillselection"
     ));
     assert!(!session.edit().is_idle());
+}
+
+#[test]
+fn search_commands_advance_wrap_and_follow_workbook_scope() {
+    let (_dir, session, mut bus) = harness();
+    for cell in ["A1", "C1"] {
+        assert!(
+            bus.execute(
+                Origin::User,
+                "cell.set",
+                json!({"ref": cell, "input": "needle"}),
+            )
+            .ok
+        );
+    }
+    assert!(
+        bus.execute(Origin::User, "sheet.add", json!({"name": "Other"}))
+            .ok
+    );
+    assert!(
+        bus.execute(
+            Origin::User,
+            "cell.set",
+            json!({"ref": "Other!B1", "input": "needle"}),
+        )
+        .ok
+    );
+    let mut find = session.find_replace();
+    find.find = "needle".into();
+    find.scope = FindScope::Workbook;
+    session.set_find_replace(find);
+
+    assert!(
+        bus.execute(Origin::User, "view.select", json!({"range": "A1"}))
+            .ok
+    );
+    assert!(bus.execute(Origin::User, "edit.searchnext", json!({})).ok);
+    assert_eq!(session.selection().cursor.col, 2);
+
+    assert!(bus.execute(Origin::User, "edit.searchnext", json!({})).ok);
+    assert_eq!(session.selection().sheet.index(), 1);
+    assert_eq!(session.selection().cursor.col, 1);
+    assert_eq!(bus.workbook().active_sheet().index(), 1);
+
+    assert!(bus.execute(Origin::User, "edit.searchnext", json!({})).ok);
+    assert_eq!(session.selection().sheet.index(), 0);
+    assert_eq!(session.selection().cursor.col, 0);
+
+    assert!(bus.execute(Origin::User, "edit.searchprev", json!({})).ok);
+    assert_eq!(session.selection().sheet.index(), 1);
+    assert_eq!(session.selection().cursor.col, 1);
+
+    assert!(
+        bus.execute(Origin::User, "edit.searchnext", json!({"count": 2}))
+            .ok
+    );
+    assert_eq!(session.selection().sheet.index(), 0);
+    assert_eq!(session.selection().cursor.col, 2);
+}
+
+#[test]
+fn explain_error_opens_a_panel_for_the_selected_cell() {
+    let (_dir, session, mut bus) = harness();
+    assert!(
+        bus.execute(
+            Origin::User,
+            "cell.set",
+            json!({"ref": "A1", "input": "=1/0"}),
+        )
+        .ok
+    );
+
+    let outcome = bus.execute(Origin::User, "edit.explainerror", json!({}));
+    assert!(outcome.ok, "{:?}", outcome.error);
+    let panel = session.panel();
+    assert_eq!(panel.visible.as_deref(), Some("explainerror"));
+    assert!(
+        panel
+            .body
+            .as_deref()
+            .is_some_and(|body| body.contains("#DIV/0!") && body.contains("divisor 0"))
+    );
 }

@@ -16,7 +16,7 @@ use omacell_core::print::paginate;
 use omacell_core::{PRODUCT_DISPLAY_NAME, PRODUCT_NAME};
 use omacell_ui::{
     Area, EditSurface, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, SessionState, UiSession,
-    apply_local_command,
+    apply_local_command, apply_search_result,
 };
 use serde_json::json;
 
@@ -295,6 +295,18 @@ impl Gui {
                         self.adopt_opened_snapshot();
                     } else if matches!(state.command.as_str(), "sheet.next" | "sheet.prev") {
                         self.adopt_snapshot();
+                    } else if matches!(
+                        state.command.as_str(),
+                        "edit.searchnext" | "edit.searchprev"
+                    ) {
+                        self.adopt_snapshot();
+                        if !outcome
+                            .result
+                            .as_ref()
+                            .is_some_and(|result| apply_search_result(&self.ui, result))
+                        {
+                            self.message = Some("no matches".into());
+                        }
                     }
                 }
                 TaskEvent::Failed { state, message, .. } => {
@@ -367,11 +379,49 @@ impl Gui {
         if self.ui.palette().open {
             return self.step_palette(event);
         }
+        if self.ui.panel().visible.as_deref() == Some("find") {
+            return self.step_find_panel(event);
+        }
         let outcome = self.ui.handle_key(event);
         if let KeyOutcome::Command { cmd, args, .. } = outcome.clone() {
             self.execute_cmd(&cmd, args)?;
         }
         Ok(outcome)
+    }
+
+    fn step_find_panel(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
+        match (event.code, event.ctrl, event.alt) {
+            (KeyCode::Esc, false, false) => {
+                let mut panel = self.ui.panel();
+                panel.dismiss();
+                self.ui.set_panel(panel);
+            }
+            (KeyCode::Backspace, false, false) => {
+                let mut find = self.ui.find_replace();
+                find.find.pop();
+                self.ui.set_find_replace(find);
+            }
+            (KeyCode::Char(c), false, false) => {
+                let mut find = self.ui.find_replace();
+                find.find.push(c);
+                self.ui.set_find_replace(find);
+            }
+            (KeyCode::Space, false, false) => {
+                let mut find = self.ui.find_replace();
+                find.find.push(' ');
+                self.ui.set_find_replace(find);
+            }
+            (KeyCode::Enter, false, false) if !self.ui.find_replace().find.is_empty() => {
+                let outcome = self.execute_cmd("edit.searchnext", json!({}))?;
+                if outcome.ok {
+                    let mut panel = self.ui.panel();
+                    panel.dismiss();
+                    self.ui.set_panel(panel);
+                }
+            }
+            _ => {}
+        }
+        Ok(KeyOutcome::Pending)
     }
 
     /// Run a registry command as the interactive user.
@@ -638,14 +688,22 @@ impl Gui {
         let cfg = self.ui.config();
         let compact = ctx.screen_rect().width() < cfg.layout.compact_below_width as f32;
         let edit = self.ui.edit();
+        let find_panel_open = self.ui.panel().visible.as_deref() == Some("find");
         let input = ctx.input(|i| i.clone());
         for key in input::pressed_keys(&input.events) {
-            if toolkit_owns_key(&edit, &key) {
+            if toolkit_owns_key(&edit, &key)
+                || find_panel_open
+                    && !key.ctrl
+                    && !key.alt
+                    && matches!(key.code, KeyCode::Char(_) | KeyCode::Space)
+            {
                 continue;
             }
             let _ = self.step_key(key);
         }
-        if !self.ui.edit().is_idle() && self.ui.edit().surface == EditSurface::InCell {
+        if (!self.ui.edit().is_idle() && self.ui.edit().surface == EditSurface::InCell)
+            || find_panel_open
+        {
             for text in input::text_events(&input.events) {
                 for c in text.chars() {
                     let _ = self.step_key(KeyEvent::new(KeyCode::Char(c)));
