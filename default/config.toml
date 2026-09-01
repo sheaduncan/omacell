@@ -84,6 +84,9 @@ menu_entries         = true      # offered by `omacell setup omarchy`
 libreoffice_fallback = false     # deprecated compatibility key; .xls import is native
 ocr_paste            = true
 
+[ipc]
+max_frame_bytes = 16777216       # 1 MiB..16 MiB; restart to apply
+
 [network]
 enabled         = false
 allow_functions = []             # e.g. ["WEBSERVICE"]

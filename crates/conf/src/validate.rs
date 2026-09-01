@@ -135,6 +135,12 @@ impl Config {
             &self.integrations.notifications,
             &["all", "recovery_only", "off"],
         )?;
+        if !(1_048_576..=16_777_216).contains(&self.ipc.max_frame_bytes) {
+            return invalid(
+                "ipc.max_frame_bytes",
+                "must be between 1048576 and 16777216 bytes",
+            );
+        }
         one_of(
             "scripting.embedded_scripts",
             &self.scripting.embedded_scripts,

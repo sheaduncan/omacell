@@ -13,8 +13,8 @@ use super::discover::{
     default_runtime_dir, discover_default, discover_focused, discover_newest, discovered_socket,
 };
 use super::protocol::{
-    ControlOp, FrameBuf, Mode, Reply, ServerRecord, VERSION, check_json_depth, encode_command,
-    encode_control,
+    ControlOp, FrameBuf, IpcLimits, Mode, Reply, ServerRecord, VERSION, check_json_depth,
+    encode_command_with_limits, encode_control_with_limits,
 };
 use crate::error;
 
@@ -29,11 +29,20 @@ pub struct IpcClient {
     pending_records: VecDeque<ServerRecord>,
     frames: FrameBuf,
     lines: VecDeque<Vec<u8>>,
+    limits: IpcLimits,
 }
 
 impl IpcClient {
     /// Connect to `path`.
     pub fn connect(path: impl AsRef<Path>) -> Result<Self, CoreError> {
+        Self::connect_with_limits(path, IpcLimits::default())
+    }
+
+    /// Connect to `path` with a validated runtime frame limit.
+    pub fn connect_with_limits(
+        path: impl AsRef<Path>,
+        limits: IpcLimits,
+    ) -> Result<Self, CoreError> {
         let stream = UnixStream::connect(path.as_ref()).map_err(|err| {
             error::ipc_socket(format!("connect {}: {err}", path.as_ref().display()))
         })?;
@@ -48,8 +57,9 @@ impl IpcClient {
             next_id: 1,
             timeout: DEFAULT_TIMEOUT,
             pending_records: VecDeque::new(),
-            frames: FrameBuf::new(),
+            frames: FrameBuf::with_limits(limits),
             lines: VecDeque::new(),
+            limits,
         })
     }
 
@@ -79,6 +89,11 @@ impl IpcClient {
 
     /// Connect to the focused instance, or newest live instance as a fallback.
     pub fn connect_default() -> Result<Self, CoreError> {
+        Self::connect_default_with_limits(IpcLimits::default())
+    }
+
+    /// Connect to the default instance with a validated runtime frame limit.
+    pub fn connect_default_with_limits(limits: IpcLimits) -> Result<Self, CoreError> {
         let dir = default_runtime_dir();
         let Some(record) = discover_default(&dir)? else {
             return Err(error::ipc_socket(format!(
@@ -86,7 +101,7 @@ impl IpcClient {
                 dir.display()
             )));
         };
-        Self::connect(discovered_socket(&dir, &record))
+        Self::connect_with_limits(discovered_socket(&dir, &record), limits)
     }
 
     /// Override the request timeout.
@@ -116,7 +131,7 @@ impl IpcClient {
         mode: Option<Mode>,
     ) -> Result<Reply, CoreError> {
         let id = self.next();
-        let line = encode_command(id, cmd, &args, mode)?;
+        let line = encode_command_with_limits(id, cmd, &args, mode, self.limits)?;
         self.write_all(line.as_bytes())?;
         self.read_reply(id)
     }
@@ -129,7 +144,7 @@ impl IpcClient {
         changeset: Option<&str>,
     ) -> Result<Reply, CoreError> {
         let id = self.next();
-        let line = encode_control(id, op, events, changeset)?;
+        let line = encode_control_with_limits(id, op, events, changeset, self.limits)?;
         self.write_all(line.as_bytes())?;
         self.read_reply(id)
     }

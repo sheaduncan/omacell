@@ -12,8 +12,9 @@ use std::thread;
 use std::time::Duration;
 
 use omacell_bus::ipc::{
-    ControlOp, IpcClient, MAX_EVENT_QUEUE, Mode, default_runtime_dir, discover_default,
-    discover_focused, discover_newest, discovered_socket, serve, serve_runner, serve_shared,
+    ControlOp, IpcClient, IpcLimits, MAX_EVENT_QUEUE, Mode, Reply, default_runtime_dir,
+    discover_default, discover_focused, discover_newest, discovered_socket, serve, serve_runner,
+    serve_shared, serve_with_limits,
 };
 use omacell_bus::{Bus, LongOps, TaskRunner};
 use omacell_core::changeset::CommandCall;
@@ -122,6 +123,68 @@ fn mutating_execute_is_rejected_internal_ids_are_rejected() {
         err.error.as_ref().unwrap().code,
         omacell_bus::codes::COMMAND_INTERNAL
     );
+}
+
+#[test]
+fn server_enforces_the_configured_frame_limit() {
+    let dir = runtime_dir();
+    let limits = IpcLimits::new(1_024).unwrap();
+    let handle = serve_with_limits(dir, bus(), limits).unwrap();
+    let mut stream = UnixStream::connect(handle.socket_path()).unwrap();
+    let request = serde_json::json!({
+        "v": 1,
+        "id": 7,
+        "cmd": "cell.set",
+        "args": {"ref": "A1", "input": "x".repeat(1_024)},
+        "mode": "propose"
+    });
+    let mut line = serde_json::to_vec(&request).unwrap();
+    line.push(b'\n');
+    stream.write_all(&line).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let reply: Reply = serde_json::from_str(response.trim()).unwrap();
+    assert_eq!(reply.id, 0);
+    assert_eq!(reply.error.unwrap().code, omacell_bus::codes::IPC_FRAME);
+
+    let (default_handle, _runtime) = start();
+    let mut client = IpcClient::connect_with_limits(default_handle.socket_path(), limits).unwrap();
+    let err = client
+        .command(
+            "cell.set",
+            serde_json::json!({"ref": "A1", "input": "x".repeat(1_024)}),
+            Some(Mode::Propose),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::IPC_FRAME);
+
+    let mut large_reply_bus = bus();
+    large_reply_bus
+        .registry_mut()
+        .register::<omacell_bus::args::EmptyArgs, _>(
+            omacell_bus::CommandSpec {
+                id: "test.large",
+                doc: "Return a test payload larger than the active frame limit",
+                kind: omacell_bus::CommandKind::Query,
+                changeset_eligible: false,
+                exposure: omacell_bus::Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, _args| {
+                Ok(omacell_bus::Effect::query(serde_json::json!({
+                    "payload": "x".repeat(1_024)
+                })))
+            },
+        )
+        .unwrap();
+    let large_reply_handle = serve_with_limits(runtime_dir(), large_reply_bus, limits).unwrap();
+    let mut client =
+        IpcClient::connect_with_limits(large_reply_handle.socket_path(), limits).unwrap();
+    let reply = client
+        .command("test.large", serde_json::json!({}), None)
+        .unwrap();
+    assert!(!reply.ok);
+    assert_eq!(reply.error.unwrap().code, omacell_bus::codes::IPC_FRAME);
 }
 
 #[test]

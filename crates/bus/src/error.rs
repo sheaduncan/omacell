@@ -119,7 +119,7 @@ pub(crate) fn ipc_version(message: impl Into<String>) -> CoreError {
 
 pub(crate) fn ipc_frame(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::IPC_FRAME, message)
-        .with_hint("send one UTF-8 JSON object per line, at most 1 MiB")
+        .with_hint("send one UTF-8 JSON object per line; split large ranges into multiple commands")
 }
 
 pub(crate) fn ipc_protocol(message: impl Into<String>) -> CoreError {

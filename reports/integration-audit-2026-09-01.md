@@ -18,7 +18,7 @@ The audit:
   current production/test sources;
 - checked the live GitHub `main` ruleset (pull request plus strict required
   `check` status); and
-- used the full green `just check` result from the retained-view integration
+- used the full green `just check` result from the IPC frame-limit integration
   stack and the prior green `cargo deny check` as the repository gate.
 
 An unchecked box is not silently treated as complete. After this cleanup, the
@@ -66,9 +66,12 @@ All P1 engine/file-fidelity items from this audit are complete.
    unsubscribe controls through independent count/byte-bounded filtered queues.
    Fan-out does not consume the retained GUI/TUI/Lua event queue, and overflow
    remains isolated to the stalled connection.
-3. Resolve the triaged IPC frame-limit decision through a frozen-contract RFC:
-   raise the 1 MiB cap to a configurable 16 MiB as recommended, or document and
-   test a chunking contract that covers 100k-cell operations.
+3. **Complete:** the frozen-contract RFC raises the hard/default IPC frame cap
+   to 16 MiB and adds startup-only `[ipc].max_frame_bytes` tuning from 1–16 MiB.
+   Server decode/encode, CLI clients, MCP, and the Python bridge enforce the
+   same process limit; oversized records retain `ipc.frame` and direct callers
+   to chunk large ranges. The connection cap remains 32 and IPC v1 envelopes
+   are unchanged.
 4. Complete `[tui] graphics = auto` detection and the sixel/kitty chart path.
    The current function only returns explicit `sixel`/`kitty`; `auto` is a
    named hook with no rendered chart consumer.
@@ -132,7 +135,7 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-05c` | Duplicate metadata is closed; Excel-only oracle rows and fixed-host lookup baselines remain HUMAN/WP-28. |
 | `WP-06` | Release behavior is resolved; rare calendar renderers are explicitly post-1.0. |
 | `WP-07a` | Command ids, IPC origin policy, and number-format allocation are resolved. |
-| `WP-07b` | Undo origin policy is resolved; frame-cap/chunking is P2 and requires an RFC. |
+| `WP-07b` | Undo origin policy and the configurable 16 MiB frame-cap RFC are resolved. |
 | `WP-08` | Open/recalc decisions and complete bounded HTML5 clipboard entities are covered. |
 | `WP-09` / `WP-10` | Split units, later WP-17/18/25 ownership, and fixed-range CSE preservation are covered. |
 | `WP-11` | OMC's readable/lossy-L3 policy and JSON-style writer decision are explicit. |

@@ -40,6 +40,10 @@
       "description": "Host integrations.",
       "$ref": "#/$defs/Integrations"
     },
+    "ipc": {
+      "description": "Local IPC transport.",
+      "$ref": "#/$defs/Ipc"
+    },
     "keys": {
       "description": "Keymap pointer.",
       "$ref": "#/$defs/Keys"
@@ -89,6 +93,7 @@
     "session",
     "layout",
     "integrations",
+    "ipc",
     "network",
     "scripting",
     "ai",
@@ -858,6 +863,23 @@
         "menu_entries",
         "libreoffice_fallback",
         "ocr_paste"
+      ]
+    },
+    "Ipc": {
+      "description": "`[ipc]` local transport limits.",
+      "type": "object",
+      "properties": {
+        "max_frame_bytes": {
+          "description": "Maximum JSON-line bytes including the trailing newline.",
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 16777216,
+          "minimum": 1048576
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_frame_bytes"
       ]
     },
     "Keys": {

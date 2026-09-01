@@ -132,7 +132,15 @@ existing command schema or IPC envelope changes.
 
 ## IPC v1 — `docs/schemas/ipc/` (WP-07b)
 
-Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply, event/overflow, and discovery records. Mutating changeset-eligible commands default to `propose`; internal command ids are never addressable on the socket. Limits (`MAX_FRAME_BYTES` 1 MiB, `MAX_JSON_DEPTH` 32, `MAX_CONNECTIONS` 32) are part of the freeze.
+Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply,
+event/overflow, and discovery records. Mutating changeset-eligible commands
+default to `propose`; internal command ids are never addressable on the socket.
+`MAX_FRAME_BYTES` is a 16 MiB hard ceiling and default;
+`[ipc].max_frame_bytes` may lower the active limit to 1–16 MiB and requires a process
+restart to take effect. `MAX_JSON_DEPTH` remains 32 and `MAX_CONNECTIONS`
+remains 32. Frame overflow retains the frozen `ipc.frame` classification and
+directs callers to split large ranges into multiple commands. The envelopes
+and version remain unchanged.
 
 Bus-backed and live runner-backed servers both implement the frozen
 subscribe/unsubscribe controls. Each connection gets an independent filtered
