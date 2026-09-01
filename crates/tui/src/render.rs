@@ -2,6 +2,7 @@
 
 use omacell_bus::ConditionalFormatSnapshot;
 use omacell_core::addr::{SheetId, col_to_letters};
+use omacell_core::chart::{ChartAnchor, ChartTheme, Op, Scene, layout_chart};
 use omacell_core::condfmt::{CfOverlay, CfVisual};
 use omacell_core::geometry::{AxisGeometry, DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::locale::LocaleId;
@@ -17,11 +18,14 @@ use omacell_ui::{
 };
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::canvas::{Canvas, Circle, Line as CanvasLine, Rectangle};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
+use crate::graphics::ChartGraphics;
 use crate::theme::{AnsiRoles, file_color};
 
 /// Inputs for one virtualized frame.
@@ -81,6 +85,21 @@ impl GridHitMap {
         let cols = self.columns.iter().map(|col| col.index).collect::<Vec<_>>();
         conditional_format_ranges(&rows, &cols, viewport.freeze)
     }
+
+    pub(crate) fn chart_rect(&self, anchor: ChartAnchor) -> Option<Rect> {
+        let from_row = self.rows.iter().find(|row| row.index == anchor.from_row)?;
+        let to_row = self.rows.iter().find(|row| row.index == anchor.to_row)?;
+        let from_col = self
+            .columns
+            .iter()
+            .find(|col| col.index == anchor.from_col)?;
+        let to_col = self.columns.iter().find(|col| col.index == anchor.to_col)?;
+        let x = from_col.start;
+        let y = from_row.start;
+        let right = to_col.end;
+        let bottom = to_row.end;
+        (right > x && bottom > y).then_some(Rect::new(x, y, right - x, bottom - y))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -100,7 +119,12 @@ struct HitRow {
 }
 
 /// Draw one frame. Only the visible window is visited.
-pub fn draw(frame: &mut Frame<'_>, input: FrameInput<'_>) -> GridHitMap {
+pub(crate) fn draw(
+    frame: &mut Frame<'_>,
+    input: FrameInput<'_>,
+    chart_theme: &ChartTheme,
+    graphics: Option<&ChartGraphics>,
+) -> GridHitMap {
     let FrameInput {
         wb,
         spill,
@@ -172,6 +196,15 @@ pub fn draw(frame: &mut Frame<'_>, input: FrameInput<'_>) -> GridHitMap {
         col_chars,
         truecolor,
     );
+    draw_charts(
+        frame,
+        wb,
+        ui.selection().sheet,
+        &hit_map,
+        chart_theme,
+        truecolor,
+        graphics,
+    );
     i += 1;
     if show_tabs && !tabs_top {
         draw_tabs(frame, layout[i], wb, ui.selection().sheet);
@@ -202,6 +235,205 @@ pub fn draw(frame: &mut Frame<'_>, input: FrameInput<'_>) -> GridHitMap {
         hit_map = GridHitMap::default();
     }
     hit_map
+}
+
+fn draw_charts(
+    frame: &mut Frame<'_>,
+    wb: &Workbook,
+    sheet: SheetId,
+    hit_map: &GridHitMap,
+    theme: &ChartTheme,
+    truecolor: bool,
+    graphics: Option<&ChartGraphics>,
+) {
+    let Some(worksheet) = wb.sheet(sheet) else {
+        return;
+    };
+    for chart in &worksheet.charts {
+        let Some(area) = hit_map.chart_rect(chart.anchor) else {
+            continue;
+        };
+        if let Some(graphics) = graphics {
+            if graphics.render_protocol(frame, chart.id, area) {
+                continue;
+            }
+            if let Some(scene) = graphics.scene(chart.id, area) {
+                draw_unicode_chart(frame, area, scene, theme, truecolor);
+            } else {
+                draw_chart_placeholder(
+                    frame,
+                    area,
+                    chart.title.as_deref(),
+                    if graphics.failed(chart.id, area) {
+                        "chart unavailable"
+                    } else {
+                        "rendering…"
+                    },
+                );
+            }
+            continue;
+        }
+        let width = f32::from(area.width).mul_add(8.0, 0.0).max(80.0);
+        let height = f32::from(area.height).mul_add(16.0, 0.0).max(80.0);
+        if let Ok(scene) = layout_chart(wb, chart, theme, width, height) {
+            draw_unicode_chart(frame, area, &scene, theme, truecolor);
+        }
+    }
+}
+
+fn draw_chart_placeholder(frame: &mut Frame<'_>, area: Rect, title: Option<&str>, body: &str) {
+    let title = terminal_text(title.unwrap_or("Chart"));
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(body).block(Block::default().borders(Borders::ALL).title(title)),
+        area,
+    );
+}
+
+fn draw_unicode_chart(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    scene: &Scene,
+    theme: &ChartTheme,
+    truecolor: bool,
+) {
+    if area.width < 4 || area.height < 3 {
+        return;
+    }
+    frame.render_widget(Clear, area);
+    let background = scene
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            Op::FillRect { x, y, w, h, color }
+                if *x == 0.0 && *y == 0.0 && *w == scene.width && *h == scene.height =>
+            {
+                Some(terminal_chart_color(color, theme, truecolor))
+            }
+            _ => None,
+        })
+        .unwrap_or(Color::Reset);
+    let canvas = Canvas::default()
+        .marker(Marker::Braille)
+        .background_color(background)
+        .x_bounds([0.0, f64::from(scene.width)])
+        .y_bounds([0.0, f64::from(scene.height)])
+        .paint(|ctx| {
+            for op in &scene.ops {
+                paint_scene_op(ctx, op, scene.height, theme, truecolor);
+            }
+        });
+    frame.render_widget(canvas, area);
+}
+
+fn paint_scene_op(
+    ctx: &mut ratatui::widgets::canvas::Context<'_>,
+    op: &Op,
+    scene_height: f32,
+    theme: &ChartTheme,
+    truecolor: bool,
+) {
+    match op {
+        Op::FillRect { x, y, w, h, color } => {
+            if *x == 0.0 && *y == 0.0 {
+                return;
+            }
+            ctx.draw(&Rectangle {
+                x: f64::from(*x),
+                y: f64::from(scene_height - *y - *h),
+                width: f64::from(*w),
+                height: f64::from(*h),
+                color: terminal_chart_color(color, theme, truecolor),
+            });
+        }
+        Op::Polyline { points, color, .. } => {
+            for segment in points.windows(2) {
+                draw_scene_line(
+                    ctx,
+                    segment[0],
+                    segment[1],
+                    scene_height,
+                    color,
+                    theme,
+                    truecolor,
+                );
+            }
+        }
+        Op::Polygon { points, color } => {
+            for segment in points.windows(2) {
+                draw_scene_line(
+                    ctx,
+                    segment[0],
+                    segment[1],
+                    scene_height,
+                    color,
+                    theme,
+                    truecolor,
+                );
+            }
+            if let (Some(first), Some(last)) = (points.first(), points.last()) {
+                draw_scene_line(ctx, *last, *first, scene_height, color, theme, truecolor);
+            }
+        }
+        Op::Circle { x, y, r, color } => ctx.draw(&Circle {
+            x: f64::from(*x),
+            y: f64::from(scene_height - *y),
+            radius: f64::from(*r),
+            color: terminal_chart_color(color, theme, truecolor),
+        }),
+        Op::Text {
+            x, y, text, color, ..
+        } => ctx.print(
+            f64::from(*x),
+            f64::from(scene_height - *y),
+            Line::styled(
+                terminal_text(text),
+                Style::default().fg(terminal_chart_color(color, theme, truecolor)),
+            ),
+        ),
+    }
+}
+
+fn draw_scene_line(
+    ctx: &mut ratatui::widgets::canvas::Context<'_>,
+    start: (f32, f32),
+    end: (f32, f32),
+    scene_height: f32,
+    color: &str,
+    theme: &ChartTheme,
+    truecolor: bool,
+) {
+    ctx.draw(&CanvasLine {
+        x1: f64::from(start.0),
+        y1: f64::from(scene_height - start.1),
+        x2: f64::from(end.0),
+        y2: f64::from(scene_height - end.1),
+        color: terminal_chart_color(color, theme, truecolor),
+    });
+}
+
+fn terminal_chart_color(color: &str, theme: &ChartTheme, truecolor: bool) -> Color {
+    if truecolor {
+        return file_color(color, true);
+    }
+    if color.eq_ignore_ascii_case(&theme.background) {
+        return Color::Indexed(0);
+    }
+    if color.eq_ignore_ascii_case(&theme.foreground) {
+        return Color::Indexed(7);
+    }
+    if color.eq_ignore_ascii_case(&theme.axis) {
+        return Color::Indexed(8);
+    }
+    if color.eq_ignore_ascii_case(&theme.gridline) {
+        return Color::Indexed(8);
+    }
+    const SERIES: [u8; 8] = [6, 4, 5, 2, 3, 1, 14, 13];
+    theme
+        .palette
+        .iter()
+        .position(|candidate| color.eq_ignore_ascii_case(candidate))
+        .map_or(Color::Indexed(6), |index| Color::Indexed(SERIES[index]))
 }
 
 fn col_width_chars(width: f64) -> u16 {

@@ -6,6 +6,7 @@
 #![deny(missing_docs)]
 
 mod app;
+mod graphics;
 mod input;
 mod render;
 mod theme;

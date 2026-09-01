@@ -13,19 +13,21 @@ workspace = true
 
 [dependencies]
 crossterm = "0.29"
+image = { version = "0.25", default-features = false, features = ["png"] }
 omacell-ai = { path = "../ai", version = "0.0.0" }
 omacell-bus = { path = "../bus", version = "0.0.0" }
 omacell-conf = { path = "../conf", version = "0.0.0" }
 omacell-core = { path = "../core", version = "0.0.0" }
+omacell-io = { path = "../io", version = "0.0.0" }
 omacell-lua = { path = "../lua", version = "0.0.0" }
 omacell-ui = { path = "../ui", version = "0.0.0" }
 ratatui = "0.30"
+ratatui-image = { version = "11.0.6", default-features = false, features = ["crossterm"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
 omacell-bus = { path = "../bus", version = "0.0.0", features = ["test-util"] }
 omacell-fn = { path = "../fn", version = "0.0.0" }
-omacell-io = { path = "../io", version = "0.0.0" }
 criterion = { workspace = true }
 insta = "1"
 schemars = { workspace = true }

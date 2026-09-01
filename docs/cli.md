@@ -35,6 +35,14 @@ Stubs that exit 3:
 
 `omacell ipc theme.reload --all --quiet` is the Omarchy theme-set hook. It enumerates live owned instances and executes the registered `theme.reload` command. It does not add an IPC `ControlOp`.
 
+TUI charts follow `[tui] graphics = "auto"` by default. Foot is detected as
+sixel and Kitty/Ghostty use the Kitty protocol; unsupported terminals render
+the same chart scene as ANSI-colored Unicode braille. Automatic mode uses the
+Unicode fallback inside tmux or Herdr because passthrough is not guaranteed.
+Set `graphics = "sixel"` or `"kitty"` only when passthrough is configured, or
+`"off"` to always use Unicode. The setting and chart colors update on live
+configuration/theme reload.
+
 Without `--socket` or `--all`, `omacell ipc` targets the focused GUI/TUI
 instance. If no frontend has published focus yet, it falls back to the newest
 live owned instance. GUI focus comes from eframe/winit; the TUI enables and
