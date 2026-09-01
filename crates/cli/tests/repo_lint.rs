@@ -225,3 +225,67 @@ fn docs_do_not_spell_command_ids_with_underscores() {
         violations.join("\n")
     );
 }
+
+#[test]
+fn completed_reports_have_only_wp28_human_gates_unchecked() {
+    let root = workspace_root();
+    let reports = root.join("reports");
+    let mut unchecked = Vec::new();
+    for entry in fs::read_dir(&reports).expect("read reports") {
+        let path = entry.expect("report entry").path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("WP-") || path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        let text = fs::read_to_string(&path).expect("read work-package report");
+        for (line_index, line) in text.lines().enumerate() {
+            if line.contains("[ ]") {
+                unchecked.push((name.to_string(), line_index + 1, line.to_string()));
+            }
+        }
+    }
+    assert_eq!(
+        unchecked.len(),
+        4,
+        "unexpected unchecked report items: {unchecked:#?}"
+    );
+    assert!(
+        unchecked.iter().all(|(name, _, line)| {
+            matches!(name.as_str(), "WP-15.md" | "WP-S2.md") && line.contains("HUMAN / WP-28 G4")
+        }),
+        "completed reports may leave unchecked only the four owned WP-28 human gates: {unchecked:#?}"
+    );
+}
+
+#[test]
+fn merged_contract_reports_do_not_retain_pending_merge_gates() {
+    let root = workspace_root();
+    let mut paths = Vec::new();
+    walk(&root.join("reports"), &mut paths);
+    paths.push(root.join("docs/contracts.md"));
+    let pending = [
+        "must not merge until",
+        "PR must not merge",
+        "requires human approval before merge",
+        "approval pending",
+    ];
+    let mut violations = Vec::new();
+    for path in paths {
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for (line_index, line) in text.lines().enumerate() {
+            if pending.iter().any(|needle| line.contains(needle)) {
+                let rel = path.strip_prefix(&root).unwrap_or(&path);
+                violations.push(format!("{}:{}: {line}", rel.display(), line_index + 1));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "merged contracts must record their approval instead of retaining a pending gate:\n{}",
+        violations.join("\n")
+    );
+}

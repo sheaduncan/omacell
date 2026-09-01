@@ -3,9 +3,9 @@
 ## Scope and evidence
 
 This audit covers every completed report in `reports/` (`G1`, `WP-S1`,
-`WP-S2`, `WP-00` through `WP-27`, and `WP-29`) on merged `main` at `f4159d2`
-(conditional-format head `e00e7b6`). WP-28 and WP-30 have specifications but
-no completion reports yet.
+`WP-S2`, `WP-00` through `WP-27`, and `WP-29`) on merged `main` at `f7e1415`
+(through PR69), plus this final reconciliation follow-up. WP-28 and WP-30 have
+specifications but no completion reports yet.
 
 The audit:
 
@@ -18,8 +18,8 @@ The audit:
   current production/test sources;
 - checked the live GitHub `main` ruleset (pull request plus strict required
   `check` status); and
-- used the full green `just check` result from the IPC frame-limit integration
-  stack and the prior green `cargo deny check` as the repository gate.
+- reran the repository/report regression lints, focused panel/frontend tests,
+  the full `just check`, and `cargo deny check` after the final reconciliation.
 
 An unchecked box is not silently treated as complete. After this cleanup, the
 only unchecked boxes in completed reports are the WP-15 terminal matrix and
@@ -106,6 +106,40 @@ All P1 engine/file-fidelity items from this audit are complete.
 `COPILOT()` remains inert on import. The design decision is HUMAN; the current
 lean is an explicit one-key conversion, never automatic remapping.
 
+### Final report and presentation reconciliation
+
+1. **Complete:** GUI/TUI no longer carry WP-era format/comments/sort/filter
+   placeholders. `format.panel` consumes the live bus result; comments and
+   filter panels read the immutable workbook snapshot; sort shows the active
+   selection and typed command payload. The three new closed-empty panel
+   commands are palette-visible, session-only, and share one toolkit-neutral
+   implementation.
+2. **Complete:** GUI row/column drag and double-click auto-fit update the
+   viewport immediately and then submit `format.rowheight` / `format.colwidth`
+   to the single writer, so undo, dirty state, and file save retain the change.
+   A shared frontend policy ensures workbook-mutating `view.*`/`edit.*`
+   commands are no longer mistaken for session-only commands; both frontends
+   refresh committed geometry after resize, auto-fit, hide/unhide, structural
+   edits, and undo.
+3. **Complete:** unused CLI stub exit scaffolding was removed; low-level row
+   shift docs now point to the formula-aware `core::ops` path; production
+   redaction no longer uses `unwrap`/`expect` to compile built-in patterns.
+4. **Complete:** stale dependency-advisory claims, already-merged RFC gates,
+   WP-24a fidelity gaps, and historical ownership statements were reconciled
+   against current source and lockfiles. Repository lint now permits exactly
+   the four explicitly owned HUMAN / WP-28 G4 boxes and rejects pending merge
+   gates in completed reports/contracts.
+
+The pre-WP-28 product and cross-crate integration queue is empty after PR69 and
+this reconciliation merge. Work remaining below is intentionally owned by
+WP-28, WP-30, post-1.0 scope, or a named human gate.
+
+The three new panel command ids are additive changes to the frozen WP-07a
+catalog registered by the retained GUI/TUI composition roots. Their schemas are
+closed and empty, headless composition roots remain unchanged, existing
+ids/envelopes are unchanged, and merge of this reconciliation is the human
+approval record.
+
 ## WP-28 entry gates and owned release work
 
 The following items are intentionally not hidden in the integration queue:
@@ -155,17 +189,17 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-07b` | Undo origin policy and the configurable 16 MiB frame-cap RFC are resolved. |
 | `WP-08` | Open/recalc decisions and complete bounded HTML5 clipboard entities are covered. |
 | `WP-09` / `WP-10` | Split units, later WP-17/18/25 ownership, and fixed-range CSE preservation are covered. |
-| `WP-11` | OMC's readable/lossy-L3 policy and JSON-style writer decision are explicit. |
+| `WP-11` | OMC's readable/lossy-L3 policy and JSON-style writer decision are explicit; typed later-package records and CLI export are reconciled. |
 | `WP-12` / `WP-13` | Composition, signal, keymap, and IPC undo decisions are resolved. |
 | `WP-14` | Deferred table is empty; count propagation, `ViewState` save synchronization, and the docs command-id lint are integrated. |
-| `WP-15` | Runner/bootstrap and terminal-chart graphics are complete; terminal coverage is HUMAN/G4. |
+| `WP-15` | Runner/bootstrap, terminal-chart graphics, and live comments/format/sort/filter panels are complete; terminal coverage is HUMAN/G4. |
 | `WP-15a` | Worker/cancellation and runner-backed subscriptions are complete; stale-cell hatching is post-1.0. |
 | `WP-16` | Clipboard and conditional formatting are integrated; remaining GUI completion and hardware decisions are WP-28/HUMAN. |
-| `WP-17` / `WP-18` | Contracts were approved by merge; frontend clipboard/fill/drag and conditional-format consumers are integrated. |
+| `WP-17` / `WP-18` | Contracts were approved by merge; frontend clipboard/fill/drag, panel consumers, and conditional-format consumers are integrated. |
 | `WP-19` | WP-22 completed diagnostic redaction; search/error frontends are integrated. |
-| `WP-20` | Retained Lua startup/events/keymaps/source integration and user-profile AI extensions are complete. |
-| `WP-21` / `WP-22` | Agent/MCP and provider/privacy work is complete; WP-22 approval marker was reconciled. |
-| `WP-23` | Acceptance work and Lua AI integration are complete; remaining import/refresh connections are P3 and `COPILOT()` is HUMAN. |
+| `WP-20` | Retained Lua startup/events/keymaps/source integration and user-profile AI extensions are complete; merged async-node approval is reconciled. |
+| `WP-21` / `WP-22` | Agent/MCP and provider/privacy work is complete; hand-off content uses a private file and merged approval markers are reconciled. |
+| `WP-23` | Acceptance, Lua AI, import review, and AI-function refresh/lifecycle integration are complete; `COPILOT()` remains an explicit HUMAN decision. |
 | `WP-24` / `WP-24a` | Pivot fidelity follow-up is complete; package-excluded Data Tables/Scenario Manager remain explicit post-1.0 scope. |
 | `WP-25` | Chart export and terminal graphics are integrated; minimal release editing is WP-28 and exotic modeling is post-1.0. |
 | `WP-26` | Print gaps are explicitly owned by WP-28. |
