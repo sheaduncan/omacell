@@ -12,8 +12,8 @@ use std::thread;
 use std::time::Duration;
 
 use omacell_bus::ipc::{
-    IpcClient, MAX_EVENT_QUEUE, Mode, default_runtime_dir, discover_default, discover_focused,
-    discover_newest, discovered_socket, serve, serve_runner, serve_shared,
+    ControlOp, IpcClient, MAX_EVENT_QUEUE, Mode, default_runtime_dir, discover_default,
+    discover_focused, discover_newest, discovered_socket, serve, serve_runner, serve_shared,
 };
 use omacell_bus::{Bus, LongOps, TaskRunner};
 use omacell_core::changeset::CommandCall;
@@ -163,6 +163,93 @@ fn runner_backed_server_preserves_ipc_mutation_policy() {
         internal.error.unwrap().code,
         omacell_bus::codes::COMMAND_INTERNAL
     );
+}
+
+#[test]
+fn runner_backed_subscriptions_fan_out_without_stealing_retained_events() {
+    let (runner, handle) = start_runner();
+    let runner_handle = runner.handle();
+    let mut proposed_client = IpcClient::connect(handle.socket_path()).unwrap();
+    let mut applied_client = IpcClient::connect(handle.socket_path()).unwrap();
+    let subscribed = proposed_client
+        .subscribe(&["changeset_proposed".to_string()])
+        .unwrap();
+    assert!(subscribed.ok, "{:?}", subscribed.error);
+    let subscribed = applied_client
+        .subscribe(&["changeset_applied".to_string()])
+        .unwrap();
+    assert!(subscribed.ok, "{:?}", subscribed.error);
+
+    let proposed = proposed_client
+        .command(
+            "cell.set",
+            serde_json::json!({"ref":"A1","input":"1"}),
+            Some(Mode::Propose),
+        )
+        .unwrap();
+    assert!(proposed.ok, "{:?}", proposed.error);
+    let proposed_id = proposed.result.unwrap()["id"].as_str().unwrap().to_string();
+    let mut received = None;
+    for _ in 0..20 {
+        if let Some(omacell_bus::ipc::ServerRecord::Event {
+            event: omacell_core::event::Event::ChangesetProposed { id },
+            ..
+        }) = proposed_client.poll_record().unwrap()
+        {
+            received = Some(id.as_str().to_string());
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(received.as_deref(), Some(proposed_id.as_str()));
+    assert!(applied_client.poll_record().unwrap().is_none());
+
+    let applied = proposed_client.apply(&proposed_id).unwrap();
+    assert!(applied.ok, "{:?}", applied.error);
+    let mut received = None;
+    for _ in 0..20 {
+        if let Some(omacell_bus::ipc::ServerRecord::Event {
+            event: omacell_core::event::Event::ChangesetApplied { id },
+            ..
+        }) = applied_client.poll_record().unwrap()
+        {
+            received = Some(id.as_str().to_string());
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(received.as_deref(), Some(proposed_id.as_str()));
+    assert!(proposed_client.poll_record().unwrap().is_none());
+
+    let retained = runner_handle.drain_bus_events();
+    assert!(retained.iter().any(|event| {
+        matches!(
+            event,
+            omacell_core::event::Event::ChangesetProposed { id }
+                if id.as_str() == proposed_id
+        )
+    }));
+    assert!(retained.iter().any(|event| {
+        matches!(
+            event,
+            omacell_core::event::Event::ChangesetApplied { id }
+                if id.as_str() == proposed_id
+        )
+    }));
+
+    let unsubscribed = proposed_client
+        .control(ControlOp::Unsubscribe, &[], None)
+        .unwrap();
+    assert!(unsubscribed.ok, "{:?}", unsubscribed.error);
+    let second = proposed_client
+        .command(
+            "cell.set",
+            serde_json::json!({"ref":"A2","input":"2"}),
+            Some(Mode::Propose),
+        )
+        .unwrap();
+    assert!(second.ok, "{:?}", second.error);
+    assert!(proposed_client.poll_record().unwrap().is_none());
 }
 
 #[test]

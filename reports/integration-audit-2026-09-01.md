@@ -62,9 +62,10 @@ All P1 engine/file-fidelity items from this audit are complete.
    `ViewState`, preserving workbook-owned gridlines and updating the live model
    only after the atomic file write succeeds. Lifecycle and pane-mode regression
    suites plus the full repository gate pass.
-2. Add bounded subscribe/unsubscribe support to runner-backed IPC. The frozen
-   control operations and bus-backed server already support it; live GUI/TUI
-   use `serve_runner` and currently cannot expose that event stream.
+2. **Complete:** runner-backed IPC now implements the frozen subscribe and
+   unsubscribe controls through independent count/byte-bounded filtered queues.
+   Fan-out does not consume the retained GUI/TUI/Lua event queue, and overflow
+   remains isolated to the stalled connection.
 3. Resolve the triaged IPC frame-limit decision through a frozen-contract RFC:
    raise the 1 MiB cap to a configurable 16 MiB as recommended, or document and
    test a chunking contract that covers 100k-cell operations.
@@ -138,7 +139,7 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-12` / `WP-13` | Composition, signal, keymap, and IPC undo decisions are resolved. |
 | `WP-14` | Deferred table is empty, count propagation and `ViewState` save synchronization are integrated; docs command-id lint is P2. |
 | `WP-15` | Runner/bootstrap follow-ups are complete; graphics is P2 and terminal coverage is HUMAN/G4. |
-| `WP-15a` | Worker/cancellation is complete; runner-backed subscriptions are P2; stale-cell hatching is post-1.0. |
+| `WP-15a` | Worker/cancellation and runner-backed subscriptions are complete; stale-cell hatching is post-1.0. |
 | `WP-16` | Clipboard and conditional formatting are integrated; remaining GUI completion and hardware decisions are WP-28/HUMAN. |
 | `WP-17` / `WP-18` | Contracts were approved by merge; frontend clipboard/fill/drag and conditional-format consumers are integrated. |
 | `WP-19` | WP-22 completed diagnostic redaction; search/error frontends are integrated. |

@@ -17,6 +17,7 @@ use omacell_core::event::Event;
 #[cfg(feature = "test-util")]
 use crate::args::EmptyArgs;
 use crate::error;
+use crate::event::{EventBus, SubscriberId};
 use crate::handler::TaskCtl;
 use crate::preview::ChangePreview;
 #[cfg(feature = "test-util")]
@@ -130,6 +131,7 @@ struct Shared {
     cancels: Mutex<BTreeMap<TaskId, Arc<AtomicBool>>>,
     events: Mutex<VecDeque<TaskEvent>>,
     bus_events: Mutex<VecDeque<Event>>,
+    ipc_events: Mutex<EventBus>,
     event_waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     dropped: AtomicU64,
     task_slots: AtomicUsize,
@@ -192,6 +194,7 @@ impl TaskRunner {
             cancels: Mutex::new(BTreeMap::new()),
             events: Mutex::new(VecDeque::new()),
             bus_events: Mutex::new(VecDeque::new()),
+            ipc_events: Mutex::new(EventBus::new()),
             event_waker: Mutex::new(None),
             dropped: AtomicU64::new(0),
             task_slots: AtomicUsize::new(0),
@@ -503,6 +506,36 @@ impl TaskRunnerHandle {
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         q.drain(..).collect()
+    }
+
+    pub(crate) fn subscribe_ipc(
+        &self,
+        cap: usize,
+        byte_cap: usize,
+        filter: &[String],
+    ) -> SubscriberId {
+        self.shared
+            .ipc_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .subscribe_filtered(cap, byte_cap, filter)
+    }
+
+    pub(crate) fn unsubscribe_ipc(&self, id: SubscriberId) {
+        self.shared
+            .ipc_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unsubscribe(id);
+    }
+
+    pub(crate) fn drain_ipc_events(&self, id: SubscriberId) -> (u64, Vec<Event>) {
+        let mut events = self
+            .shared
+            .ipc_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (events.dropped(id), events.drain(id))
     }
 
     /// Wake a frontend whenever a task event is queued.
@@ -1250,6 +1283,15 @@ fn publish_bus_events(shared: &Shared, bus: &mut Bus, subscriber: crate::event::
     let events = bus.drain(subscriber);
     if events.is_empty() {
         return;
+    }
+    {
+        let mut ipc_events = shared
+            .ipc_events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for event in &events {
+            ipc_events.emit(event.clone());
+        }
     }
     let mut queue = shared
         .bus_events
