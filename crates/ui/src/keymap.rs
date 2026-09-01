@@ -249,10 +249,14 @@ impl Keymap {
         })
     }
 
-    /// Reject bindings that are neither registered nor assigned to a later WP.
+    /// Reject bindings that are neither registered, composition-provided, nor
+    /// assigned to a later WP.
     pub fn validate_commands(&self, registry: &CommandRegistry) -> Result<(), CoreError> {
         for (mode, chord, binding) in self.iter() {
-            if registry.get_str(&binding.cmd).is_err() && deferred::owner(&binding.cmd).is_none() {
+            if registry.get_str(&binding.cmd).is_err()
+                && deferred::owner(&binding.cmd).is_none()
+                && !deferred::is_composition_command(&binding.cmd)
+            {
                 return Err(error::keymap(format!(
                     "unowned command {} for {mode} chord {chord}",
                     binding.cmd
@@ -545,5 +549,7 @@ fn toml_to_json(v: &toml::Value) -> Result<Value, CoreError> {
 /// True when `id` is registered or listed in the deferred table.
 #[must_use]
 pub fn command_is_known(id: &str, registered: &[&str]) -> bool {
-    registered.contains(&id) || deferred::owner(id).is_some()
+    registered.contains(&id)
+        || deferred::owner(id).is_some()
+        || deferred::is_composition_command(id)
 }

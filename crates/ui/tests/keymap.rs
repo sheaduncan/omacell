@@ -1,12 +1,13 @@
 //! Keymap conformance: registered ∪ deferred; no unknown ids; no duplicate chords.
 
 use omacell_bus::{
-    CommandRegistry, register_analysis_commands, register_chart_commands, register_core,
+    CommandRegistry, register_analysis_commands, register_audit_commands, register_chart_commands,
+    register_core, register_data_commands, register_edit_commands,
 };
 use omacell_conf::{Paths, load};
 use omacell_ui::{
-    DEFERRED_COMMANDS, KeyCode, KeyEvent, KeyOutcome, Keymap, KeymapRoots, UiSession,
-    deferred_owner, register_ui_commands,
+    COMPOSITION_COMMANDS, DEFERRED_COMMANDS, KeyCode, KeyEvent, KeyOutcome, Keymap, KeymapRoots,
+    UiSession, deferred_owner, register_ui_commands,
 };
 
 fn load_session(model_file: &str) -> (tempfile::TempDir, UiSession, CommandRegistry, Keymap) {
@@ -24,6 +25,9 @@ fn load_session(model_file: &str) -> (tempfile::TempDir, UiSession, CommandRegis
     let mut registry = CommandRegistry::new();
     register_core(&mut registry).unwrap();
     register_chart_commands(&mut registry).unwrap();
+    register_edit_commands(&mut registry).unwrap();
+    register_data_commands(&mut registry).unwrap();
+    register_audit_commands(&mut registry).unwrap();
     register_analysis_commands(&mut registry).unwrap();
     omacell_lua::register_script_commands(&mut registry, omacell_lua::ScriptGate::default())
         .unwrap();
@@ -39,6 +43,7 @@ fn assert_conforms(keymap: &Keymap, registry: &CommandRegistry) {
         let key = format!("{mode}\0{chord}");
         assert!(seen.insert(key), "duplicate chord {chord} in mode {mode}");
         let known = registered.iter().any(|id| id == &binding.cmd)
+            || COMPOSITION_COMMANDS.contains(&binding.cmd.as_str())
             || deferred_owner(&binding.cmd).is_some();
         assert!(
             known,

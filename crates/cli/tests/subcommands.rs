@@ -150,6 +150,40 @@ fn commands_json_includes_file_and_theme() {
 }
 
 #[test]
+fn deferred_and_composition_commands_match_the_live_catalog() {
+    let (_home, mut cmd) = home();
+    let output = cmd.args(["--json", "commands"]).output().unwrap();
+    assert!(output.status.success());
+    let catalog: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let registered: std::collections::BTreeSet<&str> = catalog["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|command| command["id"].as_str())
+        .collect();
+
+    let stale: Vec<_> = omacell_ui::DEFERRED_COMMANDS
+        .iter()
+        .filter(|command| registered.contains(command.id))
+        .map(|command| command.id)
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "registered commands must not remain deferred: {stale:?}"
+    );
+
+    let missing_composition: Vec<_> = omacell_ui::COMPOSITION_COMMANDS
+        .iter()
+        .copied()
+        .filter(|id| !registered.contains(id))
+        .collect();
+    assert!(
+        missing_composition.is_empty(),
+        "composition commands must be present in the live catalog: {missing_composition:?}"
+    );
+}
+
+#[test]
 fn query_eval_set_recalc_convert() {
     let dir = TempDir::new().unwrap();
     let book = dir.path().join("book.xlsx");

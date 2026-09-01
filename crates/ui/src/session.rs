@@ -114,7 +114,10 @@ impl UiSession {
     ) -> Result<(), CoreError> {
         let next = load_inner(config, roots)?;
         for (_mode, chord, binding) in next.keymap.iter() {
-            if !known.contains(&binding.cmd) && crate::deferred::owner(&binding.cmd).is_none() {
+            if !known.contains(&binding.cmd)
+                && crate::deferred::owner(&binding.cmd).is_none()
+                && !crate::deferred::is_composition_command(&binding.cmd)
+            {
                 return Err(error::keymap(format!(
                     "unowned command {} for chord {chord}",
                     binding.cmd
