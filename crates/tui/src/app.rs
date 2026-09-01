@@ -30,8 +30,8 @@ use omacell_core::workbook::Workbook;
 use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
     AgentRole, Area, ChangesetReview, ClipboardPayload, ExtendMode, FormulaAssist,
-    ImportPlanReview, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_local_command,
-    apply_search_result, inject_selection_args,
+    ImportPlanReview, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_command_panel,
+    apply_local_command, apply_search_result, command_changes_workbook, inject_selection_args,
 };
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -581,6 +581,7 @@ impl Tui {
         for event in self.runner.handle().drain_events() {
             match event {
                 TaskEvent::Completed { state, outcome } => {
+                    let mut workbook_changed = false;
                     let import_apply = self.import_apply_task == Some(state.id);
                     if import_apply {
                         self.import_apply_task = None;
@@ -596,6 +597,11 @@ impl Tui {
                         continue;
                     }
                     self.message = None;
+                    if let Some(result) = outcome.result.as_ref()
+                        && let Err(error) = apply_command_panel(&self.ui, &state.command, result)
+                    {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
                     if matches!(
                         state.command.as_str(),
                         "edit.copy" | "edit.cut" | "edit.yank"
@@ -682,6 +688,7 @@ impl Tui {
                             .is_some_and(|command| command.mutating);
                         if command_changes_workbook(&state.command, &outcome, mutating) {
                             self.dirty = true;
+                            workbook_changed = true;
                         }
                     }
                     self.ui.remember_command(&state.command);
@@ -725,6 +732,15 @@ impl Tui {
                         self.message = Some(format!("{}: {}", error.code, error.message));
                     } else {
                         self.adopt_snapshot();
+                    }
+                    if workbook_changed {
+                        self.adopt_snapshot();
+                        let snapshot = self.runner.handle().snapshot();
+                        apply_sheet_geometry(
+                            &self.ui,
+                            &snapshot.workbook,
+                            snapshot.workbook.active_sheet(),
+                        );
                     }
                     if self.quit_after == Some(state.id) {
                         self.quit_after = None;
@@ -1981,43 +1997,6 @@ fn parse_command_line(input: &str) -> Result<(String, serde_json::Value), CoreEr
     Ok((command.to_string(), args))
 }
 
-fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutating: bool) -> bool {
-    if outcome
-        .result
-        .as_ref()
-        .and_then(|result| result.get("changed"))
-        .and_then(serde_json::Value::as_u64)
-        .is_some_and(|changed| changed > 0)
-    {
-        return true;
-    }
-    if matches!(command, "edit.undo" | "edit.redo") {
-        return true;
-    }
-    if !registered_mutating
-        || matches!(
-            command.split_once('.').map(|(prefix, _)| prefix),
-            Some("nav" | "sel" | "view" | "mode" | "palette" | "help" | "edit")
-        )
-        || matches!(
-            command,
-            "sheet.next"
-                | "sheet.prev"
-                | "changeset.review"
-                | "file.open"
-                | "file.save"
-                | "file.saveas"
-                | "file.new"
-                | "file.close"
-                | "file.export"
-                | "theme.reload"
-        )
-    {
-        return false;
-    }
-    true
-}
-
 fn autopilot_scope_label(scope: &AutopilotScope, workbook: &Workbook) -> String {
     match scope {
         AutopilotScope::Workbook => "workbook".into(),
@@ -2088,9 +2067,8 @@ fn apply_sheet_view(ui: &UiSession, workbook: &Workbook, id: SheetId) {
     viewport.set_zoom(sheet.view.zoom);
     viewport.freeze = sheet.view.freeze;
     viewport.split = sheet.view.split;
-    viewport.rows = sheet.geometry.rows.clone();
-    viewport.cols = sheet.geometry.cols.clone();
     ui.set_viewport(viewport);
+    apply_sheet_geometry(ui, workbook, id);
 
     let mut start = sheet.view.selection.start;
     let mut end = sheet.view.selection.end;
@@ -2101,6 +2079,16 @@ fn apply_sheet_view(ui: &UiSession, workbook: &Workbook, id: SheetId) {
     selection.replace(Area { start, end });
     ui.set_selection(selection);
     ui.set_show_formulas(sheet.view.show_formulas);
+}
+
+fn apply_sheet_geometry(ui: &UiSession, workbook: &Workbook, id: SheetId) {
+    let Some(sheet) = workbook.sheet(id) else {
+        return;
+    };
+    let mut viewport = ui.viewport();
+    viewport.rows = sheet.geometry.rows.clone();
+    viewport.cols = sheet.geometry.cols.clone();
+    ui.set_viewport(viewport);
 }
 
 /// Run the TUI on the current terminal.

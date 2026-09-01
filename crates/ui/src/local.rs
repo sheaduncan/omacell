@@ -1,5 +1,6 @@
 //! Session-local commands that can run against a reader snapshot.
 
+use omacell_core::command::Outcome;
 use omacell_core::error::CoreError;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::sheet::{FreezePanes, SplitView};
@@ -77,7 +78,64 @@ pub fn is_local_command(id: &str) -> bool {
             | "nav.goto"
             | "edit.find"
             | "changeset.review"
+            | "comments.panel"
+            | "sort.panel"
+            | "filter.panel"
     )
+}
+
+/// Whether a completed registered command changed workbook-owned state.
+///
+/// Retained frontends use this shared policy for dirty-state and reader-snapshot
+/// reconciliation. An explicit `changed` count is authoritative, including
+/// zero; otherwise successful mutating commands are presumed to change the
+/// workbook unless they are known presentation, lifecycle, or host controls.
+#[must_use]
+pub fn command_changes_workbook(
+    command: &str,
+    outcome: &Outcome,
+    registered_mutating: bool,
+) -> bool {
+    if let Some(changed) = outcome
+        .result
+        .as_ref()
+        .and_then(|result| result.get("changed"))
+        .and_then(Value::as_u64)
+    {
+        return changed > 0;
+    }
+    if matches!(command, "edit.undo" | "edit.redo") {
+        return true;
+    }
+    if !registered_mutating
+        || is_local_command(command)
+        || matches!(
+            command,
+            "edit.searchnext"
+                | "edit.searchprev"
+                | "edit.explainerror"
+                | "name.manager"
+                | "name.paste"
+                | "macro.record"
+                | "macro.stop"
+                | "macro.save"
+                | "script.source"
+                | "sheet.next"
+                | "sheet.prev"
+                | "changeset.review"
+                | "file.open"
+                | "file.save"
+                | "file.saveas"
+                | "file.new"
+                | "file.close"
+                | "file.export"
+                | "file.print"
+                | "theme.reload"
+        )
+    {
+        return false;
+    }
+    true
 }
 
 fn count(args: &Value) -> i64 {
@@ -263,6 +321,15 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
                 inner.mode = Mode::Command;
             }
             inner.panel.open(id);
+        }
+        "comments.panel" | "sort.panel" | "filter.panel" => {
+            let kind = match cmd {
+                "comments.panel" => crate::panel::WorkbookPanel::Comments,
+                "sort.panel" => crate::panel::WorkbookPanel::Sort,
+                _ => crate::panel::WorkbookPanel::Filter,
+            };
+            let selection = inner.selection.clone();
+            crate::panel::open_workbook_panel(&mut inner.panel, &selection, wb, kind);
         }
         "mode.normal" => {
             inner.mode = Mode::Normal;

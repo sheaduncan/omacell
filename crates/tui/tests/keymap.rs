@@ -146,6 +146,56 @@ fn palette_opens_on_ctrl_shift_p() {
 }
 
 #[test]
+fn workbook_panel_commands_render_live_content() {
+    let mut h = harness();
+    h.tui
+        .execute_cmd(
+            "edit.note",
+            serde_json::json!({"ref": "C2", "text": "check this", "author": "Ada"}),
+        )
+        .unwrap();
+    wait_tasks(&mut h.tui);
+    h.tui
+        .execute_cmd("comments.panel", serde_json::json!({}))
+        .unwrap();
+    let frame = draw_text(&h.tui, 100, 28);
+    assert!(frame.contains("C2  note by Ada"), "{frame}");
+
+    h.tui
+        .execute_cmd("format.panel", serde_json::json!({"range": "A1"}))
+        .unwrap();
+    wait_tasks(&mut h.tui);
+    assert_eq!(h.tui.ui().panel().visible.as_deref(), Some("format"));
+    assert!(
+        h.tui
+            .ui()
+            .panel()
+            .body
+            .as_deref()
+            .unwrap()
+            .contains("Number format: General")
+    );
+}
+
+#[test]
+fn workbook_geometry_commands_refresh_the_retained_viewport() {
+    let mut h = harness();
+    assert_eq!(h.tui.ui().viewport().row_px(0), 20);
+    h.tui
+        .execute_cmd("view.hiderows", serde_json::json!({"range": "A1"}))
+        .unwrap();
+    wait_tasks(&mut h.tui);
+    assert!(h.tui.is_dirty());
+    assert_eq!(h.tui.ui().viewport().row_px(0), 0);
+
+    h.tui
+        .execute_cmd("edit.undo", serde_json::json!({}))
+        .unwrap();
+    wait_tasks(&mut h.tui);
+    assert_eq!(h.tui.ui().viewport().row_px(0), 20);
+}
+
+#[test]
 fn modal_count_does_not_corrupt_the_frozen_undo_schema() {
     let mut h = harness_modal();
     seed_demo(&mut h.tui);
