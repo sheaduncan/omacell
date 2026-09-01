@@ -99,8 +99,34 @@ pub fn register_ai_commands(bus: &mut Bus, session: AiSession) -> Result<(), Cor
                 return Ok(ai_preflight(ctx));
             }
             let cells = ai_cells(ctx, args.cell_ref.as_deref())?;
+            if cells.is_empty() {
+                return Ok(Effect::query(json!({"refreshed": 0, "pending": 0})));
+            }
             refresh.runtime.refresh_cells(&cells);
-            Ok(Effect::query(json!({"refreshed": cells.len()})))
+            let recalc = ctx.recalc_full();
+            if recalc.cancelled {
+                return Err(CoreError::new(
+                    omacell_bus::codes::TASK_CANCELLED,
+                    "operation cancelled",
+                ));
+            }
+            ctx.report_progress(
+                recalc.cells_evaluated,
+                Some(recalc.cells_evaluated),
+                "AI refresh",
+            );
+            Ok(Effect {
+                events: vec![Event::RecalcDone {
+                    cells: recalc.cells_evaluated,
+                    elapsed_ms: recalc.elapsed_ms,
+                }],
+                result: json!({
+                    "refreshed": cells.len(),
+                    "pending": recalc.pending_async.len(),
+                }),
+                auto_recalc: false,
+                ..Effect::default()
+            })
         },
     )?;
     let pin = session.clone();
@@ -118,6 +144,9 @@ pub fn register_ai_commands(bus: &mut Bus, session: AiSession) -> Result<(), Cor
                 return Ok(ai_preflight(ctx));
             }
             let cells = ai_cells(ctx, args.cell_ref.as_deref())?;
+            if cells.is_empty() {
+                return Ok(Effect::query(json!({"pinned": 0})));
+            }
             pin.runtime.pin_cells(&cells);
             Ok(Effect::query(json!({"pinned": cells.len()})))
         },
@@ -736,7 +765,7 @@ mod tests {
     use std::sync::Arc;
 
     use omacell_ai::http::{HttpRequest, HttpResponse, SharedTransport, Transport};
-    use omacell_ai::{AiRuntime, PromptSet};
+    use omacell_ai::{AiRuntime, PromptSet, register_ai_functions};
     use omacell_bus::Bus;
     use omacell_conf::schema::package_defaults;
     use omacell_core::command::Origin;
@@ -851,6 +880,72 @@ mod tests {
         );
         assert!(live.ok, "{:?}", live.error);
         assert_eq!(runtime.session_stats().requests, 1);
+    }
+
+    #[test]
+    fn ai_refresh_schedules_auto_disabled_cells_for_settlement() {
+        let mut config = package_defaults().unwrap();
+        config.ai.enabled = true;
+        config.ai.functions.auto = false;
+        config.ai.providers.insert(
+            "test".into(),
+            omacell_conf::schema::AiProvider {
+                kind: "openai_compatible".into(),
+                endpoint: "http://127.0.0.1:9/v1".into(),
+                local: true,
+                secret_env: None,
+                secret_cmd: None,
+                timeout: 0,
+                headers: Default::default(),
+            },
+        );
+        config.ai.models.default = "test:model".into();
+        let tokio = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let transport: SharedTransport = Arc::new(PlanTransport);
+        let runtime = AiRuntime::new(
+            tokio.handle().clone(),
+            config,
+            transport,
+            PromptSet::builtin(),
+            temp.path().join("cache"),
+            temp.path().join("state"),
+            Default::default(),
+        );
+        let mut registry = FnRegistry::new();
+        register_all(&mut registry);
+        register_ai_functions(&mut registry);
+        let mut engine = RecalcEngine::new(registry);
+        engine.set_async_provider(runtime.clone());
+        let mut bus = Bus::new(Workbook::new(), engine).unwrap();
+        super::register_ai_commands(
+            &mut bus,
+            super::AiSession {
+                runtime: runtime.clone(),
+            },
+        )
+        .unwrap();
+
+        let set = bus.execute(
+            Origin::User,
+            "cell.set",
+            json!({"ref":"A1","input":"=AI(\"name\")"}),
+        );
+        assert!(set.ok, "{:?}", set.error);
+        assert!(runtime.pending_generation().is_none());
+
+        let empty = bus.execute(Origin::User, "ai.refresh", json!({"ref":"B1"}));
+        assert!(empty.ok, "{:?}", empty.error);
+        assert_eq!(empty.result.unwrap()["refreshed"], 0);
+        assert!(runtime.pending_generation().is_none());
+
+        let refresh = bus.execute(Origin::User, "ai.refresh", json!({"ref":"A1"}));
+        assert!(refresh.ok, "{:?}", refresh.error);
+        assert_eq!(refresh.result.unwrap()["pending"], 1);
+        assert!(runtime.pending_generation().is_some());
     }
 
     #[test]

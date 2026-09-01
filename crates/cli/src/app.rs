@@ -228,7 +228,13 @@ impl App {
             }
             Err(_) => (None, None),
         };
+        if let Some(runtime) = &ai {
+            runtime.begin_workbook_load();
+        }
         engine.recalc_rebuild(&mut workbook);
+        if let Some(runtime) = &ai {
+            runtime.end_workbook_load();
+        }
         let mut bus = Bus::new(workbook, engine)?;
         files::register_file_commands(&mut bus, file_session.clone())?;
         reload::register_theme_reload(&mut bus, store.handle())?;

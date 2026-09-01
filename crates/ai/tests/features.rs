@@ -476,6 +476,138 @@ fn async_cells_batch_and_cache_skips_http() {
 }
 
 #[test]
+fn auto_false_waits_for_refresh_and_keeps_the_prior_value_stale() {
+    let mut config = enabled_config();
+    config.ai.functions.auto = false;
+    let (ai, transport, _rt, _tmp) =
+        runtime(config.clone(), json!({"results":[{"i":0,"value":"Ada"}]}));
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    let cell = CellCoord::new(sheet, 0, 1);
+    workbook.set_cell_contents(sheet, 0, 0, "first").unwrap();
+    workbook.set_cell_contents(sheet, 0, 1, "=AI(A1)").unwrap();
+
+    let initial = engine.recalc_rebuild(&mut workbook);
+    assert_eq!(initial.pending_async, vec![cell]);
+    assert!(ai.pending_generation().is_none());
+    let policy = PolicySnapshot::capture(&config, Some(&workbook), true);
+    assert_eq!(ai.settle(&policy).unwrap(), 0);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 0);
+
+    ai.refresh_cells(&[cell]);
+    assert_eq!(engine.recalc_full(&mut workbook).pending_async, vec![cell]);
+    assert_eq!(ai.settle(&policy).unwrap(), 1);
+    assert!(
+        engine
+            .recalc_incremental(&mut workbook)
+            .pending_async
+            .is_empty()
+    );
+    let first_value = workbook.get(sheet, 0, 1).unwrap().unwrap().value;
+    let CellValue::Text(first_text) = first_value else {
+        panic!("expected text result, got {first_value:?}");
+    };
+    assert_eq!(workbook.intern().strings.get(first_text), Some("Ada"));
+
+    workbook.set_cell_contents(sheet, 0, 0, "second").unwrap();
+    engine.notify_edit(&workbook, CellCoord::new(sheet, 0, 0));
+    let changed = engine.recalc_incremental(&mut workbook);
+    assert_eq!(changed.pending_async, vec![cell]);
+    assert!(workbook.get(sheet, 0, 1).unwrap().unwrap().flags.stale());
+    let stale_value = workbook.get(sheet, 0, 1).unwrap().unwrap().value;
+    let CellValue::Text(stale_text) = stale_value else {
+        panic!("expected stale text result, got {stale_value:?}");
+    };
+    assert_eq!(workbook.intern().strings.get(stale_text), Some("Ada"));
+    assert_eq!(ai.settle(&policy).unwrap(), 0);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 1);
+
+    ai.refresh_cells(&[cell]);
+    let _ = engine.recalc_full(&mut workbook);
+    assert_eq!(ai.settle(&policy).unwrap(), 1);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn workbook_load_never_queues_a_cache_miss_but_a_later_input_edit_does() {
+    let config = enabled_config();
+    let (ai, transport, _rt, _tmp) =
+        runtime(config.clone(), json!({"results":[{"i":0,"value":"Ada"}]}));
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    let cell = CellCoord::new(sheet, 0, 1);
+    workbook.set_cell_contents(sheet, 0, 0, "first").unwrap();
+    workbook.set_cell_contents(sheet, 0, 1, "=AI(A1)").unwrap();
+
+    ai.begin_workbook_load();
+    let opened = engine.recalc_rebuild(&mut workbook);
+    ai.end_workbook_load();
+    assert_eq!(opened.pending_async, vec![cell]);
+    assert!(ai.pending_generation().is_none());
+    let policy = PolicySnapshot::capture(&config, Some(&workbook), true);
+    assert_eq!(ai.settle(&policy).unwrap(), 0);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 0);
+
+    workbook.set_cell_contents(sheet, 0, 0, "second").unwrap();
+    engine.notify_edit(&workbook, CellCoord::new(sheet, 0, 0));
+    assert_eq!(
+        engine.recalc_incremental(&mut workbook).pending_async,
+        vec![cell]
+    );
+    assert_eq!(ai.settle(&policy).unwrap(), 1);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn explicit_full_recalc_uses_the_live_refresh_setting() {
+    let mut config = enabled_config();
+    config.ai.functions.refresh_on_full_recalc = false;
+    let (ai, transport, _rt, _tmp) =
+        runtime(config.clone(), json!({"results":[{"i":0,"value":"Ada"}]}));
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    let cell = CellCoord::new(sheet, 0, 0);
+    workbook
+        .set_cell_contents(sheet, 0, 0, "=AI(\"name\")")
+        .unwrap();
+    let policy = PolicySnapshot::capture(&config, Some(&workbook), true);
+
+    let _ = engine.recalc_rebuild(&mut workbook);
+    assert_eq!(ai.settle(&policy).unwrap(), 1);
+    let _ = engine.recalc_incremental(&mut workbook);
+    assert!(
+        engine
+            .recalc_explicit_full(&mut workbook)
+            .pending_async
+            .is_empty()
+    );
+    assert_eq!(ai.settle(&policy).unwrap(), 0);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 1);
+
+    let mut functions = config.ai.functions.clone();
+    functions.refresh_on_full_recalc = true;
+    ai.update_function_config(functions);
+    assert_eq!(
+        engine.recalc_explicit_full(&mut workbook).pending_async,
+        vec![cell]
+    );
+    assert_eq!(ai.settle(&policy).unwrap(), 1);
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn malformed_cell_batch_is_rejected_and_requeued() {
     let config = enabled_config();
     let (ai, transport, _rt, _tmp) = runtime(config.clone(), json!({"value": "wrong shape"}));

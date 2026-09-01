@@ -196,6 +196,34 @@ fn async_pending_then_ready() {
 }
 
 #[test]
+fn pending_async_cells_remain_dirty_for_the_settlement_wave() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let mut registry = FnRegistry::new();
+    registry.register(omacell_core::eval::FnDef::eager(
+        "AI",
+        1,
+        8,
+        false,
+        true,
+        omacell_core::eval::ArrayLift::None,
+        |_, _| omacell_core::eval::RuntimeValue::error(omacell_core::error::ErrorKind::Na),
+    ));
+    wb.set_formula_text(sheet, 0, 0, "=AI(\"x\")").unwrap();
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(Arc::new(MockAsyncProvider::new(Value::Number(7.0))));
+
+    let first = engine.recalc_full(&mut wb);
+    assert_eq!(first.pending_async, vec![CellCoord::new(sheet, 0, 0)]);
+
+    // The provider settled out of band. The engine must retain the pending
+    // node as dirty so the ordinary incremental second wave observes it.
+    let second = engine.recalc_incremental(&mut wb);
+    assert!(second.pending_async.is_empty());
+    assert_eq!(display(&wb, 0, 0), "7");
+}
+
+#[test]
 fn recalc_preserves_cell_protection_flags() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

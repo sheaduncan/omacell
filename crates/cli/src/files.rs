@@ -376,6 +376,9 @@ fn file_open(
     let ai = (!ctx.is_preflight())
         .then(|| session.lock().ai.clone())
         .flatten();
+    if let Some(runtime) = &ai {
+        runtime.begin_workbook_load();
+    }
     let previous_cache = ai.as_ref().map(|runtime| {
         let cache = opened
             .workbook
@@ -387,10 +390,16 @@ fn file_open(
     });
     let recalc = ctx.recalc_staged(&mut opened.workbook);
     if recalc.cancelled || ctx.is_cancelled() {
-        if let (Some(runtime), Some(cache)) = (ai, previous_cache) {
+        if let (Some(runtime), Some(cache)) = (&ai, previous_cache) {
             runtime.replace_workbook_cache(cache);
         }
+        if let Some(runtime) = &ai {
+            runtime.end_workbook_load();
+        }
         return Err(cancelled());
+    }
+    if let Some(runtime) = &ai {
+        runtime.end_workbook_load();
     }
     if !ctx.is_preflight() {
         session.attach(&path, &opened);
@@ -1494,8 +1503,29 @@ fn list_printers() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    use omacell_ai::http::{HttpRequest, HttpResponse, SharedTransport, Transport};
+    use omacell_ai::{AiRuntime, PromptSet, register_ai_functions};
+    use omacell_conf::schema::package_defaults;
+    use omacell_core::eval::FnRegistry;
+    use omacell_core::recalc::RecalcEngine;
+    use serde_json::json;
 
     use super::*;
+
+    struct NoopTransport;
+
+    #[async_trait::async_trait]
+    impl Transport for NoopTransport {
+        async fn send(&self, _request: HttpRequest) -> Result<HttpResponse, omacell_ai::AiError> {
+            Ok(HttpResponse {
+                status: 200,
+                body: json!({"choices":[{"message":{"content":"{}"}}]}),
+                chunks: Vec::new(),
+            })
+        }
+    }
 
     #[test]
     fn printer_names_cannot_be_parsed_as_options() {
@@ -1533,5 +1563,71 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err.code, "file.format");
+    }
+
+    #[test]
+    fn file_open_records_ai_hashes_without_authorizing_a_request() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ai-formula.xlsx");
+        let mut source = Workbook::new();
+        let sheet = source.active_sheet();
+        source
+            .set_cell_contents(sheet, 0, 0, "=AI(\"name\")")
+            .unwrap();
+        xlsx::save_workbook(
+            &source,
+            &path,
+            SaveOptions {
+                lock: false,
+                ..SaveOptions::default()
+            },
+        )
+        .unwrap();
+
+        let mut config = package_defaults().unwrap();
+        config.ai.enabled = true;
+        config.ai.providers.insert(
+            "test".into(),
+            omacell_conf::schema::AiProvider {
+                kind: "openai_compatible".into(),
+                endpoint: "http://127.0.0.1:9/v1".into(),
+                local: true,
+                secret_env: None,
+                secret_cmd: None,
+                timeout: 0,
+                headers: Default::default(),
+            },
+        );
+        config.ai.models.default = "test:model".into();
+        let tokio = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let transport: SharedTransport = Arc::new(NoopTransport);
+        let runtime = AiRuntime::new(
+            tokio.handle().clone(),
+            config,
+            transport,
+            PromptSet::builtin(),
+            temp.path().join("cache"),
+            temp.path().join("state"),
+            Default::default(),
+        );
+        let session = FileSession::new();
+        session.attach_ai(runtime.clone());
+        let mut registry = FnRegistry::new();
+        register_ai_functions(&mut registry);
+        let mut engine = RecalcEngine::new(registry);
+        engine.set_async_provider(runtime.clone());
+        let mut bus = Bus::new(Workbook::new(), engine).unwrap();
+        register_file_commands(&mut bus, session).unwrap();
+
+        let opened = bus.execute(
+            omacell_core::command::Origin::User,
+            "file.open",
+            json!({"path": path.display().to_string()}),
+        );
+        assert!(opened.ok, "{:?}", opened.error);
+        assert!(runtime.pending_generation().is_none());
     }
 }

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use omacell_conf::schema::Config;
+use omacell_conf::schema::{AiFunctions, Config};
 use omacell_core::eval::RuntimeValue;
 use omacell_core::graph::CellCoord;
 use omacell_core::recalc::{
@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::runtime::Handle;
 
 use crate::audit::{AuditLog, LogRecord, SessionStats, StatusSegment, hash_json, now_ms};
-use crate::budget::{RateLimit, check_cell_budget};
+use crate::budget::{RateLimit, check_cell_budget_limit};
 use crate::cache::{self, AiCache, CacheEntry};
 use crate::card::{CardLevel, CardRequest};
 use crate::error::{AiError, codes};
@@ -151,6 +151,7 @@ struct Inner {
     pending: HashMap<ContentHash, Job>,
     results: HashMap<ContentHash, RuntimeValue>,
     cells: HashMap<CellCoord, ContentHash>,
+    cell_versions: HashMap<CellCoord, String>,
     rate: RateLimit,
     session: SessionStats,
     confirm: Option<String>,
@@ -160,6 +161,11 @@ struct Inner {
     hooks: Option<Arc<dyn AiHooks>>,
     extension_generation: u64,
     pending_generation: u64,
+    functions: AiFunctions,
+    forced_cells: HashSet<CellCoord>,
+    forced_hashes: HashSet<ContentHash>,
+    workbook_load_depth: u32,
+    explicit_full_depth: u32,
 }
 
 impl AiRuntime {
@@ -186,6 +192,7 @@ impl AiRuntime {
                 pending: HashMap::new(),
                 results: HashMap::new(),
                 cells: HashMap::new(),
+                cell_versions: HashMap::new(),
                 rate: RateLimit::from_config(&config),
                 session: SessionStats::default(),
                 confirm: None,
@@ -195,6 +202,11 @@ impl AiRuntime {
                 hooks: None,
                 extension_generation: 0,
                 pending_generation: 0,
+                functions: config.ai.functions.clone(),
+                forced_cells: HashSet::new(),
+                forced_hashes: HashSet::new(),
+                workbook_load_depth: 0,
+                explicit_full_depth: 0,
             }),
         })
     }
@@ -213,6 +225,28 @@ impl AiRuntime {
     #[must_use]
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Apply live `[ai.functions]` settings to future evaluations and batches.
+    pub fn update_function_config(&self, functions: AiFunctions) {
+        let mut inner = self.lock();
+        inner
+            .rate
+            .set_max_per_minute(functions.max_requests_per_minute);
+        inner.functions = functions;
+    }
+
+    /// Suppress automatic requests while an opened workbook establishes its
+    /// initial async-cell hashes. Cached results remain available.
+    pub fn begin_workbook_load(&self) {
+        let mut inner = self.lock();
+        inner.workbook_load_depth = inner.workbook_load_depth.saturating_add(1);
+    }
+
+    /// Finish a workbook-load scope begun by [`Self::begin_workbook_load`].
+    pub fn end_workbook_load(&self) {
+        let mut inner = self.lock();
+        inner.workbook_load_depth = inner.workbook_load_depth.saturating_sub(1);
     }
 
     /// State directory (conversation, log).
@@ -411,6 +445,10 @@ impl AiRuntime {
         g.pending.clear();
         g.results.clear();
         g.cells.clear();
+        g.cell_versions.clear();
+        g.forced_cells.clear();
+        g.forced_hashes.clear();
+        g.explicit_full_depth = 0;
         g.confirm = None;
         std::mem::replace(&mut g.cache, cache)
     }
@@ -422,24 +460,27 @@ impl AiRuntime {
             return;
         }
         g.cache.remove(hash);
-        g.results.remove(&hash);
+        g.forced_hashes.insert(hash);
     }
 
     /// Refresh every unpinned AI cell, or only `cells` when non-empty.
     pub fn refresh_cells(&self, cells: &[CellCoord]) {
-        let hashes: Vec<ContentHash> = {
-            let g = self.lock();
-            if cells.is_empty() {
-                g.cells.values().copied().collect()
-            } else {
-                cells
-                    .iter()
-                    .filter_map(|c| g.cells.get(c).copied())
-                    .collect()
-            }
+        let mut g = self.lock();
+        let targets: Vec<CellCoord> = if cells.is_empty() {
+            g.cells.keys().copied().collect()
+        } else {
+            cells.to_vec()
         };
-        for hash in hashes {
-            self.refresh_key(hash);
+        for cell in targets {
+            let hash = g.cells.get(&cell).copied();
+            if hash.is_some_and(|hash| g.cache.get(hash).is_some_and(|entry| entry.pinned)) {
+                continue;
+            }
+            g.forced_cells.insert(cell);
+            if let Some(hash) = hash {
+                g.cache.remove(hash);
+                g.forced_hashes.insert(hash);
+            }
         }
     }
 
@@ -677,16 +718,18 @@ impl AiRuntime {
 
     /// Drain pending AI cells in batches (default 50).
     pub fn settle(&self, policy: &PolicySnapshot) -> Result<usize, AiError> {
-        let batch = self.config.ai.functions.batch_size.max(1) as usize;
-        let mut jobs: Vec<Job> = {
+        let (batch, mut jobs): (usize, Vec<Job>) = {
             let mut g = self.lock();
             g.confirm = None;
             let n = g.pending.len() as u32;
-            if let Err(err) = check_cell_budget(&self.config, n) {
+            if let Err(err) = check_cell_budget_limit(g.functions.max_cells_per_recalc, n) {
                 g.confirm = Some(err.message.clone());
                 return Err(err);
             }
-            g.pending.drain().map(|(_, j)| j).collect()
+            (
+                g.functions.batch_size.max(1) as usize,
+                g.pending.drain().map(|(_, j)| j).collect(),
+            )
         };
         if jobs.is_empty() {
             return Ok(0);
@@ -917,8 +960,17 @@ impl AsyncNodeProvider for AiRuntime {
         let input_hash = hash_json(&args);
         let mut g = self.lock();
         let hooks_route = g.hooks.is_some();
-        g.cells.insert(req.cell, key);
-        if let Some(entry) = g.cache.get(key).cloned()
+        let previous = g.cells.insert(req.cell, key);
+        let previous_version = g.cell_versions.insert(req.cell, version.clone());
+        let forced_cell = g.forced_cells.remove(&req.cell);
+        let forced_hash = g.forced_hashes.remove(&key);
+        let forced = (g.explicit_full_depth > 0 && g.functions.refresh_on_full_recalc)
+            || forced_cell
+            || forced_hash;
+        let pinned = g.cache.get(key).is_some_and(|entry| entry.pinned);
+        let forced = forced && !pinned;
+        if !forced
+            && let Some(entry) = g.cache.get(key).cloned()
             && cache_fresh(
                 &entry,
                 &version,
@@ -935,7 +987,8 @@ impl AsyncNodeProvider for AiRuntime {
             g.results.insert(key, rt);
             return AsyncState::Ready(omacell_core::value::Value::Empty);
         }
-        if let Some(disk) = cache::read_disk(&self.cache_dir, key)
+        if !forced
+            && let Some(disk) = cache::read_disk(&self.cache_dir, key)
             && cache_fresh(
                 &disk,
                 &version,
@@ -953,6 +1006,35 @@ impl AsyncNodeProvider for AiRuntime {
             g.results.insert(key, rt);
             return AsyncState::Ready(omacell_core::value::Value::Empty);
         }
+        let keep = g.functions.keep_stale;
+        if keep
+            && previous != Some(key)
+            && !g.results.contains_key(&key)
+            && let Some(stale) = previous.and_then(|hash| g.results.get(&hash).cloned())
+        {
+            g.results.insert(key, stale);
+        }
+        let input_changed = previous != Some(key);
+        let runtime_changed = previous_version.as_deref() != Some(version.as_str());
+        let may_queue = forced
+            || (g.workbook_load_depth == 0
+                && g.functions.auto
+                && (input_changed || runtime_changed));
+        if !may_queue {
+            if !keep {
+                g.results.remove(&key);
+            }
+            return AsyncState::Pending {
+                cached: keep.then_some(omacell_core::value::Value::Empty),
+            };
+        }
+        if forced {
+            g.cache.remove(key);
+            g.pending.remove(&key);
+            if !keep {
+                g.results.remove(&key);
+            }
+        }
         let inserted = g
             .pending
             .insert(
@@ -967,10 +1049,19 @@ impl AsyncNodeProvider for AiRuntime {
         if inserted {
             g.pending_generation = g.pending_generation.wrapping_add(1);
         }
-        let keep = self.config.ai.functions.keep_stale;
         AsyncState::Pending {
             cached: keep.then_some(omacell_core::value::Value::Empty),
         }
+    }
+
+    fn begin_explicit_full_recalc(&self) {
+        let mut inner = self.lock();
+        inner.explicit_full_depth = inner.explicit_full_depth.saturating_add(1);
+    }
+
+    fn end_explicit_full_recalc(&self) {
+        let mut inner = self.lock();
+        inner.explicit_full_depth = inner.explicit_full_depth.saturating_sub(1);
     }
 
     fn runtime_result(&self, key: ContentHash) -> Option<RuntimeValue> {

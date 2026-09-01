@@ -1060,11 +1060,13 @@ fn calc_recalc(ctx: &mut CommandContext<'_>, args: CalcRecalcArgs) -> Result<Eff
     }
     let manual = ctx.workbook_ref().settings().calc_mode == CalcMode::Manual;
     let result = match args.mode.as_deref() {
-        None | Some("full") => ctx.recalc_full(),
-        Some("rebuild") => ctx.recalc_rebuild(),
+        None | Some("full" | "rebuild") => ctx.recalc_explicit_full(),
         Some("incremental") => {
             // Explicit calc.recalc must calculate even in Manual.
             if manual {
+                // This is an incremental settlement/input-change wave even
+                // though Manual mode requires a full engine pass. It must not
+                // opt into the user's full-refresh policy.
                 ctx.recalc_full()
             } else {
                 ctx.recalc_incremental()

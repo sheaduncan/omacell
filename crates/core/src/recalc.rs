@@ -188,6 +188,16 @@ pub enum AsyncState {
 pub trait AsyncNodeProvider: Send + Sync {
     /// Evaluate (or start) the request.
     fn evaluate(&self, key: ContentHash, req: &AsyncRequest) -> AsyncState;
+    /// Begin a user-requested full recalculation.
+    ///
+    /// Providers may use this bounded hook to invalidate non-volatile async
+    /// results when their configuration explicitly opts into full-refresh
+    /// behavior. Startup, file-open, and internal settlement recalculations do
+    /// not invoke this hook.
+    fn begin_explicit_full_recalc(&self) {}
+    /// Finish the user-requested full recalculation begun by
+    /// [`Self::begin_explicit_full_recalc`].
+    fn end_explicit_full_recalc(&self) {}
     /// Optional intern-free result (text/arrays) used when [`AsyncState::Ready`]
     /// cannot carry workbook `StrId`s.
     fn runtime_result(&self, key: ContentHash) -> Option<crate::eval::RuntimeValue> {
@@ -593,6 +603,29 @@ impl RecalcEngine {
         self.run_ctl(wb, true, cancel, progress.as_deref())
     }
 
+    /// User-requested full recalc, including provider opt-in refresh hooks.
+    pub fn recalc_explicit_full(&mut self, wb: &mut Workbook) -> RecalcResult {
+        self.recalc_explicit_full_with_ctl(wb, None, None)
+    }
+
+    /// User-requested full recalc with cooperative cancel and provider hooks.
+    pub fn recalc_explicit_full_with_ctl(
+        &mut self,
+        wb: &mut Workbook,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        progress: Option<std::sync::Arc<RecalcProgress>>,
+    ) -> RecalcResult {
+        let provider = self.async_provider.clone();
+        if let Some(provider) = &provider {
+            provider.begin_explicit_full_recalc();
+        }
+        let result = self.recalc_full_with_ctl(wb, cancel, progress);
+        if let Some(provider) = &provider {
+            provider.end_explicit_full_recalc();
+        }
+        result
+    }
+
     /// Rebuild graph then full recalc.
     pub fn recalc_rebuild(&mut self, wb: &mut Workbook) -> RecalcResult {
         self.recalc_full(wb)
@@ -774,6 +807,10 @@ impl RecalcEngine {
 
         accum.pending_async.sort_unstable();
         accum.pending_async.dedup();
+        // Async providers settle outside core. Retain their origin cells as
+        // dirty so the ordinary incremental second wave can consume ready
+        // results without forcing every formula through another full pass.
+        self.dirty.extend(accum.pending_async.iter().copied());
         accum
             .stale
             .extend(self.graph.propagate(accum.pending_async.iter().copied()));

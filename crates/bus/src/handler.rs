@@ -84,6 +84,16 @@ impl<'a> CommandContext<'a> {
         )
     }
 
+    /// User-requested full recalculation, including async-provider refresh
+    /// policy hooks.
+    pub fn recalc_explicit_full(&mut self) -> RecalcResult {
+        self.engine.recalc_explicit_full_with_ctl(
+            self.workbook,
+            self.task.cancel.as_deref(),
+            self.task.progress.clone(),
+        )
+    }
+
     /// Rebuild graph then full recalculation.
     pub fn recalc_rebuild(&mut self) -> RecalcResult {
         self.engine.recalc_rebuild_with_ctl(

@@ -96,10 +96,17 @@ impl InteractiveRuntime {
             last_ai_generation: None,
             ai_config: loaded.config.clone(),
         };
-        if scripts.policy.enabled
-            && let Err(error) = scripts.source()
-        {
-            scripts.push_message(format!("{}: {}", error.code, error.message));
+        if scripts.policy.enabled {
+            if let Some(ai) = &scripts.ai {
+                ai.begin_workbook_load();
+            }
+            let source_result = scripts.source();
+            if let Some(ai) = &scripts.ai {
+                ai.end_workbook_load();
+            }
+            if let Err(error) = source_result {
+                scripts.push_message(format!("{}: {}", error.code, error.message));
+            }
         }
         scripts.poll_ai()?;
         Ok(scripts)
@@ -119,8 +126,18 @@ impl InteractiveRuntime {
     pub fn poll_events(&self) -> Result<(), CoreError> {
         let events = self.handle.drain_bus_events();
         if let Some(runtime) = &self.runtime {
+            let opening = events
+                .iter()
+                .any(|event| matches!(event, Event::WorkbookOpened { .. }));
+            if opening && let Some(ai) = &self.ai {
+                ai.begin_workbook_load();
+            }
             let result = runtime.emit_events(&events);
-            self.refresh_functions_if_dirty()?;
+            let refresh = self.refresh_functions_if_dirty();
+            if opening && let Some(ai) = &self.ai {
+                ai.end_workbook_load();
+            }
+            refresh?;
             result?;
         }
         Ok(())
@@ -166,7 +183,7 @@ impl InteractiveRuntime {
                                 .submit(
                                     Origin::User,
                                     "calc.recalc",
-                                    serde_json::json!({"mode": "full"}),
+                                    serde_json::json!({"mode": "incremental"}),
                                 )
                                 .map(|_| ())
                         } else {
@@ -188,8 +205,15 @@ impl InteractiveRuntime {
     /// Emit `on_open` for a workbook loaded before the task runner existed.
     pub fn emit_open(&self) -> Result<(), CoreError> {
         if let Some(runtime) = &self.runtime {
+            if let Some(ai) = &self.ai {
+                ai.begin_workbook_load();
+            }
             let result = runtime.emit_hook("on_open");
-            self.refresh_functions_if_dirty()?;
+            let refresh = self.refresh_functions_if_dirty();
+            if let Some(ai) = &self.ai {
+                ai.end_workbook_load();
+            }
+            refresh?;
             result?;
         }
         Ok(())
@@ -252,9 +276,12 @@ impl InteractiveRuntime {
         Ok(loaded)
     }
 
-    /// Apply only stricter live scripting policy changes.
+    /// Apply live AI-function settings and only stricter scripting policy changes.
     pub fn tighten(&mut self, loaded: &LoadedConfig) -> Result<(), CoreError> {
         self.ai_config = loaded.config.clone();
+        if let Some(ai) = &self.ai {
+            ai.update_function_config(loaded.config.ai.functions.clone());
+        }
         self.policy.tighten(&ScriptPolicy::from_loaded(loaded));
         if !self.policy.enabled || !trusted_config_dir(&self.config_dir, &self.policy) {
             let previous = function_names(&lock_functions(&self.functions));

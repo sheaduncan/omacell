@@ -969,7 +969,7 @@ fn cmd_recalc(
     {
         let policy = ai.policy(Some(app.bus.workbook()));
         ai.settle(&policy)?;
-        outcome = app.execute("calc.recalc", args);
+        outcome = app.execute("calc.recalc", serde_json::json!({"mode": "incremental"}));
     }
     if write && outcome.ok {
         let save_args = serde_json::json!({"path": book.display().to_string()});
