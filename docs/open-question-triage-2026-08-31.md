@@ -222,7 +222,10 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 `AGENT` · yes; add a `repo_lint` check that scans `docs/` for `[a-z]+_[a-z]+\.[a-z]+`.
 
 ### WP-15.1 `[tui] graphics = auto` and chart blitting
-`AGENT` · **Decision: ship it in 1.0, sixel first.** Quattro's default terminal is Foot (sixel). Detection: kitty protocol when `KITTY_WINDOW_ID`/`GHOSTTY_RESOURCES_DIR` or a graphics query answers; sixel when DA1 advertises `4`; otherwise a Unicode block/braille chart. Under tmux/Herdr, require passthrough or fall back to text. **M**
+`CLOSED` — implemented with a 75 ms bounded terminal query, Kitty/Ghostty
+environment hints, shared-scene sixel/Kitty encoding on a bounded worker, and
+an ANSI Unicode-braille fallback. tmux/Herdr `auto` falls back; explicit
+protocol selection remains available for configured passthrough.
 
 ### WP-15.2 Share `App::bootstrap_live`
 `CLOSED` if WP-16 uses it; otherwise WP-28.

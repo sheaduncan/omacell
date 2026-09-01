@@ -2,8 +2,11 @@
 
 mod common;
 
-use common::{draw_text, harness_theme, seed_demo};
+use common::{draw_text, harness_theme, harness_workbook, seed_demo};
 use insta::assert_snapshot;
+use omacell_core::addr::{CellRef, RangeRef};
+use omacell_core::chart::{Axis, Chart, ChartAnchor, ChartId, ChartKind, LegendPos, Series};
+use omacell_core::workbook::Workbook;
 
 const THEMES: [&str; 3] = ["tokyo-night", "catppuccin-latte", "nord"];
 const SIZES: [(u16, u16); 3] = [(80, 24), (120, 40), (200, 60)];
@@ -89,4 +92,52 @@ fn workbook_text_cannot_emit_terminal_control_sequences() {
     assert!(!text.contains('\u{7}'));
     assert!(!text.contains('\u{202e}'));
     assert!(text.contains('�'));
+}
+
+#[test]
+fn modeled_chart_has_a_unicode_terminal_consumer() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    for (row, value) in [2.0, 5.0, 3.0, 8.0].into_iter().enumerate() {
+        workbook.set_number(sheet, row as u32, 0, value).unwrap();
+    }
+    let values = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(3, 0).unwrap());
+    workbook
+        .add_chart(Chart {
+            id: ChartId::new(0),
+            kind: ChartKind::Line,
+            title: Some("Quarterly Revenue".into()),
+            categories: None,
+            series: vec![Series {
+                name: "Revenue".into(),
+                values,
+                x: None,
+                size: None,
+                color: None,
+                secondary_axis: false,
+                trendline: None,
+            }],
+            category_axis: Axis::default(),
+            value_axis: Axis::default(),
+            secondary_axis: None,
+            legend: LegendPos::None,
+            data_labels: false,
+            anchor: ChartAnchor {
+                from_row: 2,
+                from_col: 1,
+                to_row: 12,
+                to_col: 6,
+            },
+            sheet,
+        })
+        .unwrap();
+
+    let h = harness_workbook(workbook);
+    let text = draw_text(&h.tui, 80, 24);
+    assert!(text.contains("Quarterly Revenue"), "{text}");
+    assert!(
+        text.chars()
+            .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+        "expected braille chart marks: {text}"
+    );
 }

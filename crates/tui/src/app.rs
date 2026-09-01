@@ -36,9 +36,10 @@ use omacell_ui::{
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
 
+use crate::graphics::ChartGraphics;
 use crate::input::{map_key, map_mouse};
 use crate::render;
-use crate::theme::truecolor_enabled;
+use crate::theme::{chart_theme, truecolor_enabled};
 
 /// Objects the CLI composition root hands to the TUI. No second config load.
 pub struct Launch {
@@ -90,6 +91,8 @@ pub struct Tui {
     formula_tasks: BTreeMap<TaskId, FormulaTask>,
     completion: InlineCompletion,
     last_grid: Mutex<Option<render::GridHitMap>>,
+    graphics: Mutex<Option<ChartGraphics>>,
+    graphics_setting: String,
     catalog: Vec<CommandJson>,
     active_sheet: SheetId,
     dirty: bool,
@@ -109,6 +112,7 @@ impl Tui {
     pub fn new(launch: Launch, ipc: bool) -> Result<Self, CoreError> {
         let loaded = launch.store.snapshot();
         let truecolor = truecolor_enabled(&loaded.config.tui.truecolor);
+        let graphics_setting = loaded.config.tui.graphics.clone();
         let catalog = {
             let text = launch
                 .bus
@@ -166,6 +170,8 @@ impl Tui {
             formula_tasks: BTreeMap::new(),
             completion: InlineCompletion::default(),
             last_grid: Mutex::new(None),
+            graphics: Mutex::new(None),
+            graphics_setting,
             catalog,
             active_sheet,
             dirty: false,
@@ -260,6 +266,9 @@ impl Tui {
                         self.reset_autopilot("Autopilot reset after configuration reload.");
                     }
                     self.truecolor = truecolor_enabled(&snapshot.config.tui.truecolor);
+                    if self.graphics_setting != snapshot.config.tui.graphics {
+                        self.configure_graphics(&snapshot.config.tui.graphics);
+                    }
                     if let ReloadEvent::ThemeChanged { name } = ev {
                         self.message = Some(format!("theme {name}"));
                     }
@@ -270,10 +279,26 @@ impl Tui {
         Ok(())
     }
 
+    fn configure_graphics(&mut self, setting: &str) {
+        match ChartGraphics::detect(setting) {
+            Ok(graphics) => {
+                *self
+                    .graphics
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(graphics);
+                self.graphics_setting = setting.to_string();
+            }
+            Err(error) => {
+                self.message = Some(format!("{}: {}", error.code, error.message));
+            }
+        }
+    }
+
     /// Draw using the current workbook snapshot.
     pub fn draw<B: Backend>(&self, terminal: &mut Terminal<B>) -> Result<(), B::Error> {
         let loaded = self.store.snapshot();
         let unicode = loaded.config.tui.unicode_borders;
+        let chart_theme = chart_theme(&loaded.theme);
         let snapshot = self.runner.handle().snapshot();
         let runner = self.runner.handle();
         let sheet = self.ui.selection().sheet;
@@ -290,6 +315,13 @@ impl Tui {
             progress_msg = Some(label);
         }
         let mut hit_map = None;
+        let mut graphics = self
+            .graphics
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(graphics) = graphics.as_mut() {
+            graphics.refresh(&snapshot, &chart_theme);
+        }
         terminal.draw(|frame| {
             hit_map = Some(render::draw(
                 frame,
@@ -306,9 +338,20 @@ impl Tui {
                     dirty: self.dirty,
                     busy,
                 },
+                &chart_theme,
+                graphics.as_ref(),
             ));
         })?;
         if let Some(grid) = &hit_map {
+            if let Some(graphics) = graphics.as_mut()
+                && let Some(worksheet) = snapshot.workbook.sheet(sheet)
+            {
+                for chart in &worksheet.charts {
+                    if let Some(area) = grid.chart_rect(chart.anchor) {
+                        graphics.request(snapshot.clone(), chart, &chart_theme, area);
+                    }
+                }
+            }
             let ranges = grid.conditional_format_ranges(&self.ui.viewport());
             let _ = runner.request_conditional_formats(&snapshot, sheet, &ranges);
         }
@@ -1558,6 +1601,8 @@ impl Tui {
             .execute(EnterAlternateScreen)
             .map_err(|e| CoreError::new("tui.tty", e.to_string()))?;
         restore.alternate = true;
+        let graphics_setting = self.graphics_setting.clone();
+        self.configure_graphics(&graphics_setting);
         if mouse {
             stdout()
                 .execute(EnableMouseCapture)

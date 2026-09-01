@@ -2,6 +2,9 @@
 
 use ratatui::style::Color;
 
+use omacell_conf::theme::ThemeRoles;
+use omacell_core::chart::ChartTheme;
+
 /// Whether file-origin hex colors may be sent as RGB.
 #[must_use]
 pub fn truecolor_enabled(setting: &str) -> bool {
@@ -33,15 +36,57 @@ pub fn file_color(hex: &str, truecolor: bool) -> Color {
     Color::Indexed(6)
 }
 
-/// Optional graphics protocol from `[tui] graphics`. Chart previews are WP-25.
+/// Explicit or environment-hinted protocol from `[tui] graphics`.
 #[must_use]
 pub fn graphics_protocol(setting: &str) -> Option<&'static str> {
+    graphics_protocol_with(setting, |key| std::env::var_os(key))
+}
+
+pub(crate) fn graphics_query_allowed(setting: &str) -> bool {
+    graphics_query_allowed_with(setting, |key| std::env::var_os(key))
+}
+
+/// Resolved theme colors for the shared chart scene.
+#[must_use]
+pub fn chart_theme(roles: &ThemeRoles) -> ChartTheme {
+    let fallback = ChartTheme::neutral();
+    let role = |key: &str, default: &str| {
+        roles
+            .roles
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| default.to_string())
+    };
+    ChartTheme {
+        background: role("surfaces.background", &fallback.background),
+        foreground: role("text.foreground", &fallback.foreground),
+        axis: role("charts.axis", &fallback.axis),
+        gridline: role("charts.gridline", &fallback.gridline),
+        palette: std::array::from_fn(|index| {
+            role(&format!("charts.palette.{index}"), &fallback.palette[index])
+        }),
+    }
+}
+
+fn graphics_protocol_with<T>(
+    setting: &str,
+    env: impl Fn(&str) -> Option<T>,
+) -> Option<&'static str> {
     match setting {
         "sixel" => Some("sixel"),
         "kitty" => Some("kitty"),
         "off" => None,
+        _ if env("TMUX").is_some() || env("HERDR_PANE_ID").is_some() => None,
+        _ if env("KITTY_WINDOW_ID").is_some() || env("GHOSTTY_RESOURCES_DIR").is_some() => {
+            Some("kitty")
+        }
         _ => None,
     }
+}
+
+fn graphics_query_allowed_with<T>(setting: &str, env: impl Fn(&str) -> Option<T>) -> bool {
+    setting != "off"
+        && (setting != "auto" || (env("TMUX").is_none() && env("HERDR_PANE_ID").is_none()))
 }
 
 /// Indexed ANSI roles so Omarchy's terminal palette applies.
@@ -103,6 +148,24 @@ mod tests {
         assert_eq!(graphics_protocol("sixel"), Some("sixel"));
         assert_eq!(graphics_protocol("kitty"), Some("kitty"));
         assert_eq!(graphics_protocol("off"), None);
-        assert_eq!(graphics_protocol("auto"), None);
+    }
+
+    #[test]
+    fn graphics_auto_uses_terminal_hints_but_not_through_a_multiplexer() {
+        let kitty = |key: &str| (key == "KITTY_WINDOW_ID").then_some("1");
+        let ghostty = |key: &str| (key == "GHOSTTY_RESOURCES_DIR").then_some("/opt/ghostty");
+        let tmux = |key: &str| match key {
+            "TMUX" => Some("/tmp/tmux-1000/default,1,0"),
+            "KITTY_WINDOW_ID" => Some("1"),
+            _ => None,
+        };
+        assert_eq!(graphics_protocol_with("auto", kitty), Some("kitty"));
+        assert_eq!(graphics_protocol_with("auto", ghostty), Some("kitty"));
+        assert_eq!(graphics_protocol_with("auto", tmux), None);
+        assert_eq!(graphics_protocol_with("sixel", tmux), Some("sixel"));
+        assert_eq!(graphics_protocol_with("off", kitty), None);
+        assert!(graphics_query_allowed_with("auto", kitty));
+        assert!(!graphics_query_allowed_with("auto", tmux));
+        assert!(graphics_query_allowed_with("sixel", tmux));
     }
 }

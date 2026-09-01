@@ -72,9 +72,11 @@ All P1 engine/file-fidelity items from this audit are complete.
    same process limit; oversized records retain `ipc.frame` and direct callers
    to chunk large ranges. The connection cap remains 32 and IPC v1 envelopes
    are unchanged.
-4. Complete `[tui] graphics = auto` detection and the sixel/kitty chart path.
-   The current function only returns explicit `sixel`/`kitty`; `auto` is a
-   named hook with no rendered chart consumer.
+4. **Complete:** `[tui] graphics = auto` detects sixel/Kitty with a 75 ms
+   bounded query and Kitty/Ghostty environment hints, then feeds the shared
+   chart scene through a bounded background layout/raster/encoding worker. tmux/Herdr
+   automatic mode and unsupported terminals use an ANSI Unicode-braille
+   fallback; explicit passthrough remains available.
 
 ### P3 — AI extension integration
 
@@ -141,7 +143,7 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-11` | OMC's readable/lossy-L3 policy and JSON-style writer decision are explicit. |
 | `WP-12` / `WP-13` | Composition, signal, keymap, and IPC undo decisions are resolved. |
 | `WP-14` | Deferred table is empty, count propagation and `ViewState` save synchronization are integrated; docs command-id lint is P2. |
-| `WP-15` | Runner/bootstrap follow-ups are complete; graphics is P2 and terminal coverage is HUMAN/G4. |
+| `WP-15` | Runner/bootstrap and terminal-chart graphics are complete; terminal coverage is HUMAN/G4. |
 | `WP-15a` | Worker/cancellation and runner-backed subscriptions are complete; stale-cell hatching is post-1.0. |
 | `WP-16` | Clipboard and conditional formatting are integrated; remaining GUI completion and hardware decisions are WP-28/HUMAN. |
 | `WP-17` / `WP-18` | Contracts were approved by merge; frontend clipboard/fill/drag and conditional-format consumers are integrated. |
@@ -150,7 +152,7 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-21` / `WP-22` | Agent/MCP and provider/privacy work is complete; WP-22 approval marker was reconciled. |
 | `WP-23` | Acceptance work is complete; remaining Lua/import/refresh connections are P3 and `COPILOT()` is HUMAN. |
 | `WP-24` / `WP-24a` | Pivot fidelity follow-up is complete; package-excluded Data Tables/Scenario Manager remain explicit post-1.0 scope. |
-| `WP-25` | Chart export is integrated; terminal graphics is P2, minimal release editing is WP-28, exotic modeling is post-1.0. |
+| `WP-25` | Chart export and terminal graphics are integrated; minimal release editing is WP-28 and exotic modeling is post-1.0. |
 | `WP-26` | Print gaps are explicitly owned by WP-28. |
 | `WP-27` | In-process XLS is complete; listed ODS/Parquet enhancements are explicit post-1.0 scope. |
 | `WP-29` | Parser/security hardening is complete; repository-policy work is WP-30. |
