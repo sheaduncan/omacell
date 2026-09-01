@@ -2,9 +2,11 @@
 
 mod common;
 
-use common::{draw_text, harness, harness_modal, harness_sets, harness_workbook, seed_demo};
+use common::{
+    draw_text, harness, harness_modal, harness_sets, harness_workbook, seed_demo, wait_tasks,
+};
 use omacell_core::workbook::Workbook;
-use omacell_ui::{KeyCode, KeyEvent, KeyOutcome};
+use omacell_ui::{FindScope, KeyCode, KeyEvent, KeyOutcome};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code)
@@ -174,6 +176,65 @@ fn goto_and_palette_argument_prompts_execute_real_commands() {
     assert_eq!(h.tui.ui().selection().cursor.row, 2);
     assert_eq!(h.tui.ui().selection().cursor.col, 2);
     assert!(!h.tui.ui().palette().open);
+}
+
+#[test]
+fn find_panel_enter_selects_the_next_match() {
+    let mut h = harness();
+    for cell in ["A1", "C1"] {
+        let outcome = h
+            .tui
+            .execute_cmd(
+                "cell.set",
+                serde_json::json!({"ref": cell, "input": "needle"}),
+            )
+            .unwrap();
+        assert!(outcome.ok, "{:?}", outcome.error);
+        wait_tasks(&mut h.tui);
+    }
+    let outcome = h
+        .tui
+        .execute_cmd("sheet.add", serde_json::json!({"name": "Other"}))
+        .unwrap();
+    assert!(outcome.ok, "{:?}", outcome.error);
+    wait_tasks(&mut h.tui);
+    let outcome = h
+        .tui
+        .execute_cmd(
+            "cell.set",
+            serde_json::json!({"ref": "Other!B1", "input": "needle"}),
+        )
+        .unwrap();
+    assert!(outcome.ok, "{:?}", outcome.error);
+    wait_tasks(&mut h.tui);
+    let mut find = h.tui.ui().find_replace();
+    find.scope = FindScope::Workbook;
+    h.tui.ui().set_find_replace(find);
+    h.tui
+        .step_key(KeyEvent {
+            code: KeyCode::Char('f'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        })
+        .unwrap();
+    for character in "needle".chars() {
+        h.tui.step_key(ch(character)).unwrap();
+    }
+    h.tui.step_key(key(KeyCode::Enter)).unwrap();
+    wait_tasks(&mut h.tui);
+
+    assert_eq!(h.tui.ui().selection().cursor.col, 2);
+    assert!(h.tui.ui().panel().visible.is_none());
+
+    let outcome = h
+        .tui
+        .execute_cmd("edit.searchnext", serde_json::json!({}))
+        .unwrap();
+    assert!(outcome.ok, "{:?}", outcome.error);
+    wait_tasks(&mut h.tui);
+    assert_eq!(h.tui.ui().selection().sheet.index(), 1);
+    assert_eq!(h.tui.ui().selection().cursor.col, 1);
 }
 
 #[test]

@@ -188,7 +188,7 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
     let Some(id) = &panel.visible else {
         return;
     };
-    let body = match id.as_str() {
+    let body = panel.body.clone().unwrap_or_else(|| match id.as_str() {
         "find" => {
             let f = session.find_replace();
             format!("find: {}\nreplace: {}", f.find, f.replace)
@@ -198,7 +198,7 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
         "changeset" => "changeset review (WP-07a store)".into(),
         "format" => "format panel (WP-18)".into(),
         other => format!("{other} panel"),
-    };
+    });
     let width = (panel.width as f32 / 8.0).clamp(180.0, 360.0);
     match panel.side.as_str() {
         "left" => {

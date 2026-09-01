@@ -7,6 +7,7 @@ use omacell_core::addr::{RefKind, parse_a1};
 use omacell_core::changeset::ChangeSummary;
 use omacell_core::error::CoreError;
 use omacell_core::event::Event;
+use omacell_core::find::{FindHit, FindSpec, find_cells};
 use omacell_core::graph::CellCoord;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::sheet::{FreezePanes, SheetVisibility, SplitView};
@@ -199,6 +200,21 @@ pub fn register_ui_commands(
         ("edit.replace", "Replace", HandlerKind::Find),
         ("edit.search", "Search", HandlerKind::Find),
         (
+            "edit.searchnext",
+            "Select the next search result",
+            HandlerKind::Search(true),
+        ),
+        (
+            "edit.searchprev",
+            "Select the previous search result",
+            HandlerKind::Search(false),
+        ),
+        (
+            "edit.explainerror",
+            "Explain the selected cell error",
+            HandlerKind::ExplainError,
+        ),
+        (
             "palette.open",
             "Open the command palette",
             HandlerKind::Palette,
@@ -328,6 +344,8 @@ enum HandlerKind {
     FormulaBar,
     ShowFormulas,
     Find,
+    Search(bool),
+    ExplainError,
     Palette,
     CommandLine,
     Help,
@@ -600,6 +618,28 @@ fn handle(
         HandlerKind::FormulaBar => g.formula_bar_expanded = !g.formula_bar_expanded,
         HandlerKind::ShowFormulas => g.show_formulas = !g.show_formulas,
         HandlerKind::Find => g.panel.open("find"),
+        HandlerKind::Search(forward) => {
+            effect = search(ctx, &mut g, forward, args.count.max(1))?;
+        }
+        HandlerKind::ExplainError => {
+            let cursor = g.selection.cursor;
+            let cell = CellCoord::new(g.selection.sheet, cursor.row, cursor.col);
+            let explanation =
+                omacell_core::audit::explain_error(ctx.workbook_ref(), ctx.engine_ref(), cell);
+            let body = explanation.as_ref().map_or_else(
+                || format!("{} does not contain an error.", g.selection.cursor.to_a1()),
+                |explanation| {
+                    format!(
+                        "{}!{}\n{}",
+                        explanation.sheet, explanation.cell_ref, explanation.message
+                    )
+                },
+            );
+            g.panel.open_with_body("explainerror", body);
+            effect = Effect::query(serde_json::to_value(explanation).map_err(|err| {
+                CoreError::new("ui.explain", format!("serialize error explanation: {err}"))
+            })?);
+        }
         HandlerKind::Palette => g.palette.open(),
         HandlerKind::CommandLine => {
             g.mode = Mode::Command;
@@ -613,6 +653,74 @@ fn handle(
     g.viewport.ensure_row_visible(row);
     g.viewport.ensure_col_visible(col);
     Ok(effect)
+}
+
+fn search(
+    ctx: &mut CommandContext<'_>,
+    inner: &mut UiInner,
+    forward: bool,
+    steps: u32,
+) -> Result<Effect, CoreError> {
+    let options = &inner.find;
+    let spec = FindSpec {
+        query: options.find.clone(),
+        formulas: options.in_formulas,
+        whole: options.whole_cell,
+        case: options.case,
+        regex: options.regex,
+        workbook: matches!(options.scope, crate::find::FindScope::Workbook),
+    };
+    let hits = find_cells(ctx.workbook_ref(), inner.selection.sheet, &spec)?;
+    let Some(hit) = search_hit(&hits, &inner.selection, forward, steps) else {
+        return Ok(Effect::query(serde_json::json!({"count": 0})));
+    };
+    ctx.workbook().set_active_sheet(hit.sheet)?;
+    let cell = omacell_core::addr::CellRef {
+        sheet: Some(hit.sheet),
+        row: hit.row,
+        col: hit.col,
+        row_abs: false,
+        col_abs: false,
+    };
+    inner.selection.replace(Area::cell(cell));
+    Ok(Effect::query(serde_json::json!({
+        "count": hits.len(),
+        "sheet": hit.sheet.index(),
+        "row": hit.row,
+        "col": hit.col,
+    })))
+}
+
+fn search_hit<'a>(
+    hits: &'a [FindHit],
+    selection: &crate::selection::Selection,
+    forward: bool,
+    steps: u32,
+) -> Option<&'a FindHit> {
+    if hits.is_empty() {
+        return None;
+    }
+    let current = (
+        selection.sheet.index(),
+        selection.cursor.row,
+        selection.cursor.col,
+    );
+    let insertion = hits.partition_point(|hit| (hit.sheet.index(), hit.row, hit.col) < current);
+    let len = hits.len();
+    let offset = usize::try_from(steps.saturating_sub(1)).unwrap_or(usize::MAX) % len;
+    let index = if forward {
+        let first_after =
+            hits.partition_point(|hit| (hit.sheet.index(), hit.row, hit.col) <= current);
+        (first_after % len + offset) % len
+    } else {
+        let first_before = if insertion == 0 {
+            len - 1
+        } else {
+            insertion - 1
+        };
+        (first_before + len - offset) % len
+    };
+    hits.get(index)
 }
 
 fn data_edge(

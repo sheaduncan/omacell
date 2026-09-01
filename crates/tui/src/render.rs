@@ -1166,7 +1166,7 @@ fn draw_panel(
         },
     };
     frame.render_widget(Clear, popup);
-    let body = match id {
+    let body = panel.body.clone().unwrap_or_else(|| match id {
         "find" => {
             let f = ui.find_replace();
             format!("find: {}\nreplace: {}", f.find, f.replace)
@@ -1178,7 +1178,7 @@ fn draw_panel(
         "format" => "format panel (WP-18)".into(),
         "sort" | "filter" => format!("{id} panel (WP-17)"),
         other => format!("{other} panel"),
-    };
+    });
     frame.render_widget(
         Paragraph::new(terminal_multiline(&body)).block(
             chrome_block(terminal_text(id), unicode)

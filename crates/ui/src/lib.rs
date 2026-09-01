@@ -35,7 +35,7 @@ pub use deferred::{
 pub use edit::{EditState, EditSurface, canonicalize_entry};
 pub use event::{KeyCode, KeyEvent};
 pub use fill::{FillKind, detect_series, extend_series};
-pub use find::{FindReplace, FindScope, GoTo};
+pub use find::{FindReplace, FindScope, GoTo, apply_search_result};
 pub use keymap::{Binding, KeyOutcome, Keymap, KeymapRoots, command_is_known, resolve_keymap_path};
 pub use local::{apply_local_command, is_local_command};
 pub use mode::{KeyModel, Mode};

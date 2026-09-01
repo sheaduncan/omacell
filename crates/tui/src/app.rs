@@ -24,6 +24,7 @@ use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
 use omacell_ui::{
     Area, ExtendMode, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_local_command,
+    apply_search_result,
 };
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -434,7 +435,21 @@ impl Tui {
                         }
                     }
                     self.ui.remember_command(&state.command);
-                    self.adopt_snapshot();
+                    if matches!(
+                        state.command.as_str(),
+                        "edit.searchnext" | "edit.searchprev"
+                    ) {
+                        self.adopt_snapshot();
+                        if !outcome
+                            .result
+                            .as_ref()
+                            .is_some_and(|result| apply_search_result(&self.ui, result))
+                        {
+                            self.message = Some("no matches".into());
+                        }
+                    } else {
+                        self.adopt_snapshot();
+                    }
                     if self.quit_after == Some(state.id) {
                         self.quit_after = None;
                         self.request_quit(true);
@@ -693,6 +708,14 @@ impl Tui {
                         panel.dismiss();
                         self.ui.set_panel(panel);
                     }
+                }
+            }
+            (KeyCode::Enter, false) if id == "find" && !self.ui.find_replace().find.is_empty() => {
+                let result = self.execute_cmd("edit.searchnext", serde_json::json!({}))?;
+                if result.ok {
+                    let mut panel = self.ui.panel();
+                    panel.dismiss();
+                    self.ui.set_panel(panel);
                 }
             }
             (KeyCode::Enter, false) if id == "command" => {
