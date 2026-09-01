@@ -314,41 +314,124 @@ fn client_loop_runner(stream: UnixStream, runner: TaskRunnerHandle, shutdown: Ar
     let mut reader = stream;
     let mut frames = FrameBuf::new();
     let mut chunk = [0u8; 8192];
-    while !shutdown.load(Ordering::SeqCst) {
+    let mut sub: Option<SubscriberId> = None;
+    let mut filter: Vec<String> = Vec::new();
+    'client: while !shutdown.load(Ordering::SeqCst) {
         match reader.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => match frames.push(&chunk[..n]) {
                 Ok(lines) => {
                     for line in lines {
-                        let request = match super::protocol::decode_request_bytes(&line) {
-                            Ok(r) => r,
-                            Err(err) => {
-                                let _ = write_reply(&mut writer, Reply::err(0, err));
-                                continue;
-                            }
-                        };
-                        let reply = dispatch_runner(&runner, request);
-                        if write_reply(&mut writer, reply).is_err() {
-                            return;
+                        if !handle_line_runner(&mut writer, &runner, &mut sub, &mut filter, &line) {
+                            break 'client;
                         }
                     }
                 }
                 Err(err) => {
                     let _ = write_reply(&mut writer, Reply::err(0, err));
-                    return;
+                    break 'client;
                 }
             },
             Err(err)
-                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut => {}
+                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut =>
+            {
+                if !flush_runner_events(&mut writer, &runner, &mut sub) {
+                    break 'client;
+                }
+            }
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
     }
+    if let Some(id) = sub.take() {
+        runner.unsubscribe_ipc(id);
+    }
 }
 
-fn dispatch_runner(runner: &TaskRunnerHandle, request: Request) -> Reply {
-    dispatch_runner_request(runner, Origin::Ipc, request)
-        .reject_subscriptions("event subscriptions are not available on the UI task runner")
+fn handle_line_runner(
+    writer: &mut UnixStream,
+    runner: &TaskRunnerHandle,
+    sub: &mut Option<SubscriberId>,
+    filter: &mut Vec<String>,
+    line: &[u8],
+) -> bool {
+    let request = match super::protocol::decode_request_bytes(line) {
+        Ok(request) => request,
+        Err(err) => {
+            let _ = write_reply(writer, Reply::err(0, err));
+            return true;
+        }
+    };
+    let reply = dispatch_runner(runner, sub, filter, request);
+    if write_reply(writer, reply).is_err() {
+        return false;
+    }
+    flush_runner_events(writer, runner, sub)
+}
+
+fn dispatch_runner(
+    runner: &TaskRunnerHandle,
+    sub: &mut Option<SubscriberId>,
+    filter: &mut Vec<String>,
+    request: Request,
+) -> Reply {
+    match dispatch_runner_request(runner, Origin::Ipc, request) {
+        Dispatch::Reply(reply) => reply,
+        Dispatch::Subscribe { id, events } => {
+            if let Some(old) = sub.take() {
+                runner.unsubscribe_ipc(old);
+            }
+            *filter = events;
+            *sub = Some(runner.subscribe_ipc(MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, filter));
+            Reply::ok(id, serde_json::json!({ "subscribed": filter.clone() }))
+        }
+        Dispatch::Unsubscribe { id } => {
+            if let Some(old) = sub.take() {
+                runner.unsubscribe_ipc(old);
+            }
+            filter.clear();
+            Reply::ok(id, serde_json::json!({ "unsubscribed": true }))
+        }
+    }
+}
+
+fn flush_runner_events(
+    writer: &mut UnixStream,
+    runner: &TaskRunnerHandle,
+    sub: &mut Option<SubscriberId>,
+) -> bool {
+    let Some(id) = *sub else {
+        return true;
+    };
+    let (dropped, events) = runner.drain_ipc_events(id);
+    if dropped > 0 {
+        let _ = write_record(writer, &ServerRecord::overflow(dropped));
+        if let Some(id) = sub.take() {
+            runner.unsubscribe_ipc(id);
+        }
+        return false;
+    }
+    let mut queued_bytes = 0usize;
+    for event in events {
+        let record = ServerRecord::event(event);
+        match encode_line(&record) {
+            Ok(line) => {
+                queued_bytes = queued_bytes.saturating_add(line.len());
+                if queued_bytes > MAX_EVENT_QUEUE_BYTES {
+                    let _ = write_record(writer, &ServerRecord::overflow(1));
+                    if let Some(id) = sub.take() {
+                        runner.unsubscribe_ipc(id);
+                    }
+                    return false;
+                }
+                if writer.write_all(line.as_bytes()).is_err() {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+    }
+    true
 }
 
 fn write_error_and_close(mut stream: UnixStream, err: CoreError) -> Result<(), CoreError> {

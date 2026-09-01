@@ -33,8 +33,8 @@ pub enum Dispatch {
 }
 
 impl Dispatch {
-    /// Return a reply, rejecting socket-only subscription operations with the
-    /// supplied transport-specific explanation.
+    /// Return a reply, rejecting subscription operations when a transport has
+    /// no persistent connection on which to deliver unsolicited records.
     #[must_use]
     pub fn reject_subscriptions(self, message: &str) -> Reply {
         match self {

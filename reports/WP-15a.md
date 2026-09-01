@@ -38,6 +38,13 @@ registry captured alongside the exact immutable reader snapshot. Results are
 discarded when that snapshot is superseded, so formula evaluation never runs on
 the paint thread and stale formatting cannot cross a workbook commit.
 
+Runner-backed IPC now fans committed bus events into independent per-client
+filtered queues with the same count and byte caps as the bus-backed server.
+This fan-out is separate from `drain_bus_events`, so live frontend and retained
+Lua consumers cannot lose an event to an IPC client; a stalled IPC connection
+receives the frozen overflow record and closes without blocking the writer or
+other clients.
+
 `Esc` cancels the focused queued/running task without dismissing unrelated panels. Dropping `TaskRunner` cancels accepted work, resolves queued replies, and joins the worker. Queued cancellation prevents handler dispatch. Terminal task records and cancel flags are released, accepted task state is capped at the channel capacity plus the writer, progress labels/events are bounded, and terminal events carry the `Outcome` needed by toolkits to reconcile dirty state.
 
 Recalc checks cancellation before/within generation commits, circular iteration, spill-follow waves, and stale-flag commits. Cancellation restores the pre-pass workbook/spill state; automatic recalc now runs inside the outer command transaction, so a cancelled edit and its derived values roll back together. CSV `file.open` loads and recalculates a staged workbook, then installs it only on success. CSV/OMC/XLSX save/export serialize to a unique same-directory temporary file and check cancellation before atomic destination replacement. `:wq` waits for save completion rather than immediately shutting down and cancelling the save.
@@ -59,7 +66,7 @@ Key files: `crates/bus/src/{task,runner}.rs`, `crates/ui/src/local.rs`, TUI `app
 | `register_hold_command` | Test-only `test.hold` |
 | `omacell_ui::{is_local_command, apply_local_command}` | Snapshot-backed session commands; toolkits call these before queueing |
 | `UiSession::apply_config_ids` | Keymap reload against captured command ids |
-| `ipc::serve_runner` | IPC execute/propose/dry-run through the same writer |
+| `ipc::serve_runner` | IPC execute/propose/dry-run and bounded event subscriptions through the same writer |
 | `CommandContext::{cancel_flag, is_cancelled, report_progress, progress_sink, recalc_staged}` | Adapters (file/recalc) |
 | `RecalcEngine::recalc_*_with_ctl` / `RecalcResult.cancelled` | Cooperative cancel + restore |
 
@@ -69,7 +76,6 @@ WP-16: spawn `TaskRunner` after registering commands; do not put `Bus` behind a 
 
 - **Snapshot clone is O(cells) at commit**, not per frame or progress tick. Making `Workbook` internally `Arc` per sheet would be a larger core change; Arc publication still meets the per-frame requirement.
 - **Debug paint bound is 100 ms**; release/CI-style 16 ms is the spec gate (`cfg!(debug_assertions)` in the TUI runner test). Criterion `tui_redraw_200x60_1m` remains the empty-sheet paint budget.
-- **IPC event subscribe/unsubscribe** is not yet available on `serve_runner`; registry commands plus changeset apply/revert/list/get use the runner and preserve the frozen IPC mutation policy. Bus-backed `serve()` still provides event subscriptions.
 - **CSV load_into into a caller-owned workbook** still writes partial rows then `csv.cancelled` (WP-08). The *command* path is atomic because `file.open` assigns the scratch book only on success.
 
 ## Measurements
@@ -78,7 +84,7 @@ Host: local Linux. Build artifacts were kept in the repository-local review scra
 
 - `just check` — pass
 - `cargo test -p omacell-bus --test runner` — 8 pass
-- `cargo test -p omacell-bus --test ipc_server` — runner-backed mutation policy/apply test passes with the existing IPC suite
+- `cargo test -p omacell-bus --test ipc_server` — 20 pass, including runner-backed mutation policy and subscription fan-out without stealing retained events
 - `cargo test -p omacell-tui --test runner` — 4 pass (debug uses the documented 100 ms CI-safe bound; release remains 16 ms)
 - `cargo test -p omacell-cli --test cancel_atomic` — 4 pass, including real command-path import/export and mid-auto-recalc rollback
 - Existing TUI keymap/reload/snapshot suites still pass
@@ -89,9 +95,8 @@ Host: local Linux. Build artifacts were kept in the repository-local review scra
 
 ## Open questions / decisions needed
 
-1. **Pre-WP-28 integration:** add bounded event subscribe/unsubscribe to
-   `serve_runner`; the live GUI/TUI use that server, while only the bus-backed
-   server currently exposes the frozen control operations end to end.
+1. **Resolved in pre-WP-28 integration:** `serve_runner` exposes bounded event
+   subscribe/unsubscribe without competing with retained host consumers.
 2. **Post-1.0 decision:** retain busy chrome rather than per-cell stale hatching
    during an in-progress recalculation.
 
