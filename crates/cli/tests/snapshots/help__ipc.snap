@@ -16,7 +16,7 @@ Options:
       --dry-run               Validate writes without changing files
       --quiet                 Suppress per-instance human output
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
-      --socket <SOCKET>       Socket path (default: newest live instance)
+      --socket <SOCKET>       Socket path (default: focused instance, then newest live instance)
       --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
       --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
   -v, --verbose...            Increase log verbosity

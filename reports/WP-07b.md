@@ -113,15 +113,22 @@ Review hardening added before merge:
 - Discovery treats metadata as untrusted: socket paths are reconstructed from the validated pid, instance files are size/type/owner checked, and failed startup removes a newly bound socket without following or deleting a pre-existing symlink.
 - The 1 MiB limit now includes the newline without transiently buffering an oversized frame, and control-op schemas exactly match the decoder's op-specific fields.
 
+The post-WP-16 integration adds focused-instance routing without changing IPC
+v1. `IpcHandle::set_focused` maintains a zero-byte, owned mode-0600
+`<pid>.focus` companion marker. GUI native focus and TUI terminal focus events
+publish it; default discovery prefers the newest valid focused live instance
+and falls back to the original newest-live rule. Startup and shutdown clear
+recycled markers, and marker symlinks are refused without touching their target.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
 |---|---|
-| `ipc::serve`, `IpcHandle` | bind `{runtime_dir}/{pid}.sock` |
-| `ipc::IpcClient` | `connect` / `connect_newest` / `command` / `control` / `apply` / `revert` / `subscribe` / `poll_record` |
+| `ipc::serve`, `IpcHandle` | bind `{runtime_dir}/{pid}.sock`; `set_focused` publishes frontend focus |
+| `ipc::IpcClient` | `connect` / `connect_focused` / `connect_newest` / `connect_default` / `command` / `control` / `apply` / `revert` / `subscribe` / `poll_record` |
 | `ipc::{Request, Reply, ServerRecord, Discovery, Mode, ControlOp}` | v1 envelopes |
 | `ipc::{decode_request, decode_request_bytes, MAX_*}` | decoder + limits |
-| `ipc::{discover_newest, default_runtime_dir}` | newest live owned instance |
+| `ipc::{discover_focused, discover_default, discover_newest, default_runtime_dir}` | focused/default/newest live owned instance selection |
 | Error codes | `ipc.version`, `ipc.frame`, `ipc.protocol`, `ipc.mode`, `ipc.limit`, `ipc.socket`, `ipc.timeout`, `ipc.disconnected`, `ipc.overflow` |
 | Schemas | `docs/schemas/ipc/*.schema.json` |
 
@@ -132,7 +139,7 @@ WP-13 should use `IpcClient`; it must not reach into server internals. Origin on
 - **Spec F-10.6 sketch `{id, cmd, args}`** is extended with `v`, optional `mode`, and control `op` as planned. Replies still echo `id` and carry exactly one of `result`/`error`.
 - **Event filter names** use frozen `Event` tags (`cell_changed`) rather than spec prose `cell.changed`.
 - **`edit.undo` / `edit.redo` / `calc.recalc`** execute directly (not changeset-eligible). Eligible mutating commands cannot use `mode: execute`.
-- **Focused-window discovery** is out of scope (WP-14/WP-16). `discover_newest` picks the newest live owned instance.
+- **Focused-window discovery was completed after WP-14/WP-16.** The frozen discovery JSON stays unchanged; a private companion marker carries ephemeral focus state. `discover_newest` retains its exact original behavior for explicit callers.
 
 ## Measurements
 
@@ -146,6 +153,10 @@ Host: local Linux.
 - `cargo bench -p omacell-bus --bench ipc_roundtrip -- --noplot` after review hardening:
   - `ipc_roundtrip/ping` — 10.5 µs (10.3–10.7)
   - `ipc_roundtrip/cell_set_propose` — 51.5 µs (49.5–54.0), no workbook recalc in the timed path.
+- Focus integration: the bus test proves a focused older instance beats a
+  synthetically newer live instance, startup/shutdown cleanup, and symlink
+  refusal; the black-box CLI test reaches that focused instance by default;
+  the GUI lifecycle test publishes and clears native focus.
 
 No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-approved). `libfuzzer-sys` remains fuzz-workspace only.
 

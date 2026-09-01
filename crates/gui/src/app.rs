@@ -103,7 +103,8 @@ pub struct Gui {
     focused_cancel: Option<CancelHandle>,
     last_title: String,
     print_preview: bool,
-    _ipc: Option<IpcHandle>,
+    window_focused: Option<bool>,
+    ipc: Option<IpcHandle>,
 }
 
 impl Gui {
@@ -196,7 +197,8 @@ impl Gui {
             focused_cancel,
             last_title: String::new(),
             print_preview: false,
-            _ipc: ipc_handle,
+            window_focused: None,
+            ipc: ipc_handle,
         })
     }
 
@@ -1372,6 +1374,7 @@ impl Gui {
 
     /// One egui frame (eframe + kittest).
     pub fn ui_frame(&mut self, ctx: &egui::Context) {
+        self.sync_ipc_focus(ctx.input(|input| input.focused));
         self.poll(ctx);
         if !self.close_requested
             && ctx.input(|input| input.viewport().close_requested())
@@ -1600,6 +1603,18 @@ impl Gui {
         }
         if let Some(wait) = self.sync_inline_completion() {
             ctx.request_repaint_after(wait);
+        }
+    }
+
+    fn sync_ipc_focus(&mut self, focused: bool) {
+        if self.window_focused == Some(focused) {
+            return;
+        }
+        self.window_focused = Some(focused);
+        if let Some(ipc) = &self.ipc
+            && let Err(error) = ipc.set_focused(focused)
+        {
+            self.message = Some(format!("{}: {}", error.code, error.message));
         }
     }
 

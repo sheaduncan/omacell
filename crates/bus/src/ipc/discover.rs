@@ -86,6 +86,44 @@ pub fn instance_path(dir: &Path, pid: u32) -> PathBuf {
     dir.join(format!("{pid}.instance"))
 }
 
+/// Ephemeral focus marker path `{dir}/{pid}.focus`.
+pub(super) fn focus_path(dir: &Path, pid: u32) -> PathBuf {
+    dir.join(format!("{pid}.focus"))
+}
+
+/// Publish or clear focus for one running instance.
+pub(super) fn set_instance_focused(dir: &Path, pid: u32, focused: bool) -> Result<(), CoreError> {
+    let path = focus_path(dir, pid);
+    let existing = match fs::symlink_metadata(&path) {
+        Ok(meta) => Some(meta),
+        Err(err) if err.kind() == ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(error::ipc_socket(format!("stat {}: {err}", path.display())));
+        }
+    };
+    if let Some(meta) = existing {
+        if meta.file_type().is_symlink() || !meta.is_file() || !owned_by_self(&meta) {
+            return Err(error::ipc_socket(format!(
+                "{} is not a regular file owned by this user",
+                path.display()
+            )));
+        }
+        fs::remove_file(&path)
+            .map_err(|err| error::ipc_socket(format!("remove {}: {err}", path.display())))?;
+    }
+    if !focused {
+        return Ok(());
+    }
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true).mode(FILE_MODE);
+    let file = opts
+        .open(&path)
+        .map_err(|err| error::ipc_socket(format!("write {}: {err}", path.display())))?;
+    file.set_permissions(fs::Permissions::from_mode(FILE_MODE))
+        .map_err(|err| error::ipc_socket(format!("chmod {}: {err}", path.display())))?;
+    Ok(())
+}
+
 /// Remove a leftover socket only when we own it and the pid is dead.
 pub fn remove_stale_socket(dir: &Path, pid: u32) -> Result<(), CoreError> {
     let path = socket_path(dir, pid);
@@ -226,6 +264,18 @@ pub fn discover_newest(dir: &Path) -> Result<Option<Discovery>, CoreError> {
     Ok(list_live_instances(dir)?.into_iter().next())
 }
 
+/// Most recently focused live owned instance, if one has published focus.
+pub fn discover_focused(dir: &Path) -> Result<Option<Discovery>, CoreError> {
+    let instances = list_live_instances(dir)?;
+    Ok(focused_instance(dir, &instances))
+}
+
+/// Default IPC target: focused instance, falling back to the newest live one.
+pub fn discover_default(dir: &Path) -> Result<Option<Discovery>, CoreError> {
+    let instances = list_live_instances(dir)?;
+    Ok(focused_instance(dir, &instances).or_else(|| instances.into_iter().next()))
+}
+
 /// Absolute socket path for a discovery record.
 #[must_use]
 pub fn discovered_socket(dir: &Path, record: &Discovery) -> PathBuf {
@@ -241,6 +291,27 @@ fn read_valid_started(path: &Path, pid: u32, socket: &str) -> Option<u64> {
     let record: Discovery = serde_json::from_str(&text).ok()?;
     (record.v == VERSION && record.pid == pid && record.socket == socket)
         .then_some(record.started_unix_ms)
+}
+
+fn focused_instance(dir: &Path, instances: &[Discovery]) -> Option<Discovery> {
+    instances
+        .iter()
+        .filter_map(|instance| {
+            let meta = fs::symlink_metadata(focus_path(dir, instance.pid)).ok()?;
+            let mode = meta.permissions().mode() & 0o777;
+            if !meta.is_file()
+                || meta.file_type().is_symlink()
+                || !owned_by_self(&meta)
+                || mode != FILE_MODE
+                || meta.len() != 0
+            {
+                return None;
+            }
+            let modified = meta.modified().ok()?;
+            Some((modified, instance.started_unix_ms, instance.pid, instance))
+        })
+        .max_by_key(|(modified, started, pid, _)| (*modified, *started, *pid))
+        .map(|(_, _, _, instance)| instance.clone())
 }
 
 #[must_use]

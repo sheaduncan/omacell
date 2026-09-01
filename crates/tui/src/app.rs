@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use crossterm::ExecutableCommand;
 use crossterm::cursor::Show;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyEventKind,
+    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+    Event as CEvent, KeyEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -98,7 +99,8 @@ pub struct Tui {
     focused_cancel: Option<CancelHandle>,
     quit_after: Option<TaskId>,
     file: Option<PathBuf>,
-    _ipc: Option<IpcHandle>,
+    window_focused: Option<bool>,
+    ipc: Option<IpcHandle>,
 }
 
 impl Tui {
@@ -171,7 +173,8 @@ impl Tui {
             focused_cancel: None,
             quit_after: None,
             file: launch.file,
-            _ipc: ipc_handle,
+            window_focused: None,
+            ipc: ipc_handle,
         })
     }
 
@@ -1512,6 +1515,7 @@ impl Tui {
             raw: true,
             alternate: false,
             mouse: false,
+            focus: false,
         };
         let mouse = self.store.snapshot().config.tui.mouse;
         stdout()
@@ -1524,6 +1528,11 @@ impl Tui {
                 .map_err(|e| CoreError::new("tui.tty", e.to_string()))?;
             restore.mouse = true;
         }
+        stdout()
+            .execute(EnableFocusChange)
+            .map_err(|e| CoreError::new("tui.tty", e.to_string()))?;
+        restore.focus = true;
+        self.sync_ipc_focus(true)?;
         let backend = CrosstermBackend::new(stdout());
         let mut terminal =
             Terminal::new(backend).map_err(|e| CoreError::new("tui.tty", e.to_string()))?;
@@ -1572,8 +1581,21 @@ impl Tui {
                     }
                 }
                 CEvent::Resize(_, _) => {}
+                CEvent::FocusGained => self.sync_ipc_focus(true)?,
+                CEvent::FocusLost => self.sync_ipc_focus(false)?,
                 _ => {}
             }
+        }
+        Ok(())
+    }
+
+    fn sync_ipc_focus(&mut self, focused: bool) -> Result<(), CoreError> {
+        if self.window_focused == Some(focused) {
+            return Ok(());
+        }
+        self.window_focused = Some(focused);
+        if let Some(ipc) = &self.ipc {
+            ipc.set_focused(focused)?;
         }
         Ok(())
     }
@@ -1650,10 +1672,14 @@ struct TerminalRestore {
     raw: bool,
     alternate: bool,
     mouse: bool,
+    focus: bool,
 }
 
 impl Drop for TerminalRestore {
     fn drop(&mut self) {
+        if self.focus {
+            let _ = stdout().execute(DisableFocusChange);
+        }
         if self.mouse {
             let _ = stdout().execute(DisableMouseCapture);
         }

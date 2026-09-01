@@ -126,6 +126,12 @@ existing command schema or IPC envelope changes.
 
 Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply, event/overflow, and discovery records. Mutating changeset-eligible commands default to `propose`; internal command ids are never addressable on the socket. Limits (`MAX_FRAME_BYTES` 1 MiB, `MAX_JSON_DEPTH` 32, `MAX_CONNECTIONS` 32) are part of the freeze.
 
+Focused-instance routing is additive and does not change those envelopes.
+Frontends publish an owned mode-0600 zero-byte `<pid>.focus` companion marker;
+default discovery selects the most recently focused live instance, then falls
+back to the newest live discovery record. Markers are cleared on focus loss,
+startup, and shutdown, and symlinks or malformed markers are ignored/refused.
+
 ## Changesets — `omacell_core::changeset`
 
 | Type | Source |

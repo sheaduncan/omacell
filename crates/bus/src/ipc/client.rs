@@ -9,7 +9,9 @@ use std::time::Duration;
 use omacell_core::error::CoreError;
 use serde_json::Value;
 
-use super::discover::{default_runtime_dir, discover_newest, discovered_socket};
+use super::discover::{
+    default_runtime_dir, discover_default, discover_focused, discover_newest, discovered_socket,
+};
 use super::protocol::{
     ControlOp, FrameBuf, Mode, Reply, ServerRecord, VERSION, check_json_depth, encode_command,
     encode_control,
@@ -63,9 +65,28 @@ impl IpcClient {
         Self::connect(discovered_socket(dir, &record))
     }
 
-    /// Connect using `$XDG_RUNTIME_DIR/omacell`.
+    /// Connect to the focused live owned instance under `dir`.
+    pub fn connect_focused(dir: impl AsRef<Path>) -> Result<Self, CoreError> {
+        let dir = dir.as_ref();
+        let Some(record) = discover_focused(dir)? else {
+            return Err(error::ipc_socket(format!(
+                "no focused Omacell instance in {}",
+                dir.display()
+            )));
+        };
+        Self::connect(discovered_socket(dir, &record))
+    }
+
+    /// Connect to the focused instance, or newest live instance as a fallback.
     pub fn connect_default() -> Result<Self, CoreError> {
-        Self::connect_newest(default_runtime_dir())
+        let dir = default_runtime_dir();
+        let Some(record) = discover_default(&dir)? else {
+            return Err(error::ipc_socket(format!(
+                "no live Omacell instance in {}",
+                dir.display()
+            )));
+        };
+        Self::connect(discovered_socket(&dir, &record))
     }
 
     /// Override the request timeout.
