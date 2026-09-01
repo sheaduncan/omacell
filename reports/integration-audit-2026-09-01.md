@@ -77,6 +77,10 @@ All P1 engine/file-fidelity items from this audit are complete.
    chart scene through a bounded background layout/raster/encoding worker. tmux/Herdr
    automatic mode and unsupported terminals use an ANSI Unicode-braille
    fallback; explicit passthrough remains available.
+5. **Complete:** the required repository lint scans `docs/` for command-id
+   shapes containing underscores while excluding documented filenames by known
+   suffix. Frozen runtime parsing and documentation now enforce the same dotted
+   lowercase command vocabulary.
 
 ### P3 — AI extension integration
 
@@ -142,7 +146,7 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-09` / `WP-10` | Split units, later WP-17/18/25 ownership, and fixed-range CSE preservation are covered. |
 | `WP-11` | OMC's readable/lossy-L3 policy and JSON-style writer decision are explicit. |
 | `WP-12` / `WP-13` | Composition, signal, keymap, and IPC undo decisions are resolved. |
-| `WP-14` | Deferred table is empty, count propagation and `ViewState` save synchronization are integrated; docs command-id lint is P2. |
+| `WP-14` | Deferred table is empty; count propagation, `ViewState` save synchronization, and the docs command-id lint are integrated. |
 | `WP-15` | Runner/bootstrap and terminal-chart graphics are complete; terminal coverage is HUMAN/G4. |
 | `WP-15a` | Worker/cancellation and runner-backed subscriptions are complete; stale-cell hatching is post-1.0. |
 | `WP-16` | Clipboard and conditional formatting are integrated; remaining GUI completion and hardware decisions are WP-28/HUMAN. |

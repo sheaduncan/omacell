@@ -219,7 +219,8 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 `AGENT` · yes (modal `5j`); verify in TUI and GUI.
 
 ### WP-14.3 Underscore-free command ids in docs
-`AGENT` · yes; add a `repo_lint` check that scans `docs/` for `[a-z]+_[a-z]+\.[a-z]+`.
+`CLOSED` — `repo_lint` scans `docs/` for underscore-bearing command-id shapes
+and distinguishes documented filenames by their known suffix.
 
 ### WP-15.1 `[tui] graphics = auto` and chart blitting
 `CLOSED` — implemented with a 75 ms bounded terminal query, Kitty/Ghostty
