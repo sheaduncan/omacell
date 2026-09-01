@@ -178,5 +178,82 @@
       { "row": 3, "col": 1, "n": 80 },
       { "row": 3, "col": 3, "n": 100 }
     ]
+  },
+  {
+    "name": "compact_nested_rows",
+    "headers": ["Region", "Product", "Amount"],
+    "rows": [
+      ["East", "A", 10],
+      ["East", "B", 20],
+      ["West", "A", 70]
+    ],
+    "rows_fields": ["Region", "Product"],
+    "layout": "compact",
+    "data": [{ "source": "Amount", "agg": "sum" }],
+    "expect": [
+      { "row": 1, "col": 0, "text": "East" },
+      { "row": 2, "col": 0, "text": "  A" },
+      { "row": 2, "col": 1, "n": 10 },
+      { "row": 3, "col": 0, "text": "  B" },
+      { "row": 3, "col": 1, "n": 20 },
+      { "row": 4, "col": 0, "text": "East Total" },
+      { "row": 5, "col": 0, "text": "West" },
+      { "row": 6, "col": 0, "text": "  A" },
+      { "row": 6, "col": 1, "n": 70 }
+    ]
+  },
+  {
+    "name": "tabular_nested_rows",
+    "headers": ["Region", "Product", "Amount"],
+    "rows": [
+      ["East", "A", 10],
+      ["East", "B", 20]
+    ],
+    "rows_fields": ["Region", "Product"],
+    "layout": "tabular",
+    "data": [{ "source": "Amount", "agg": "sum" }],
+    "expect": [
+      { "row": 1, "col": 0, "text": "East" },
+      { "row": 1, "col": 1, "text": "A" },
+      { "row": 1, "col": 2, "n": 10 },
+      { "row": 2, "col": 0, "text": "East" },
+      { "row": 2, "col": 1, "text": "B" },
+      { "row": 2, "col": 2, "n": 20 }
+    ]
+  },
+  {
+    "name": "outline_nested_rows",
+    "headers": ["Region", "Product", "Amount"],
+    "rows": [
+      ["East", "A", 10],
+      ["East", "B", 20]
+    ],
+    "rows_fields": ["Region", "Product"],
+    "layout": "outline",
+    "data": [{ "source": "Amount", "agg": "sum" }],
+    "expect": [
+      { "row": 1, "col": 0, "text": "East" },
+      { "row": 1, "col": 1, "text": "A" },
+      { "row": 1, "col": 2, "n": 10 },
+      { "row": 2, "col": 0, "text": "" },
+      { "row": 2, "col": 1, "text": "B" },
+      { "row": 2, "col": 2, "n": 20 }
+    ]
+  },
+  {
+    "name": "calc_field_tax",
+    "headers": ["Region", "Amount"],
+    "rows": [
+      ["East", 10],
+      ["West", 20]
+    ],
+    "rows_fields": ["Region"],
+    "calc_fields": [{ "name": "Tax", "formula": "'Amount'*0.1" }],
+    "data": [{ "source": "Tax", "agg": "sum" }],
+    "expect": [
+      { "row": 1, "col": 1, "n": 1 },
+      { "row": 2, "col": 1, "n": 2 },
+      { "row": 3, "col": 1, "n": 3 }
+    ]
   }
 ]

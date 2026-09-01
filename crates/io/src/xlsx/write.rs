@@ -1,6 +1,6 @@
 //! Regenerate modeled OPC parts and re-emit preserved L3 bytes.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Cursor, Write};
 
 use indexmap::IndexMap;
@@ -10,6 +10,7 @@ use omacell_core::error::CoreError;
 use omacell_core::geometry::DEFAULT_COL_PX;
 use omacell_core::intern::{Interners, RichTextRun};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
+use omacell_core::pivot::PivotTable;
 use omacell_core::sheet::{Sheet, SheetVisibility};
 use omacell_core::storage::CellSlot;
 use omacell_core::style::{
@@ -78,6 +79,126 @@ pub fn save_workbook_bytes(wb: &Workbook) -> Result<Vec<u8>, CoreError> {
     encode(wb, &HashMap::new(), None)
 }
 
+fn pivots_for_write(
+    wb: &Workbook,
+    package: Option<&OpcPackage>,
+) -> Result<Vec<PivotTable>, CoreError> {
+    let mut pivots: Vec<PivotTable> = wb.pivots().iter().cloned().collect();
+    let mut used_ids: BTreeSet<u32> = pivots
+        .iter()
+        .filter_map(|pivot| pivot.ooxml_cache_id)
+        .collect();
+    let mut used_parts: BTreeSet<String> = package
+        .into_iter()
+        .flat_map(|package| package.parts.keys())
+        .map(|name| name.replace('\\', "/").to_ascii_lowercase())
+        .collect();
+    for pivot in &pivots {
+        if let Some(name) = &pivot.ooxml_cache_def {
+            used_parts.insert(name.replace('\\', "/").to_ascii_lowercase());
+        }
+        if let Some(name) = &pivot.ooxml_table {
+            used_parts.insert(name.replace('\\', "/").to_ascii_lowercase());
+        }
+    }
+
+    let mut next_id = 1u32;
+    let mut next_cache_part = 1u32;
+    let mut next_table_part = 1u32;
+    for pivot in &mut pivots {
+        if pivot.ooxml_cache_id.is_none() {
+            pivot.ooxml_cache_id = Some(take_unused_id(&mut used_ids, &mut next_id)?);
+        }
+        if pivot.ooxml_cache_def.is_none() {
+            pivot.ooxml_cache_def = Some(take_unused_cache_part(
+                &mut used_parts,
+                &mut next_cache_part,
+            )?);
+        }
+        if pivot.ooxml_table.is_none() {
+            pivot.ooxml_table = Some(take_unused_table_part(
+                &mut used_parts,
+                &mut next_table_part,
+            )?);
+        }
+    }
+
+    // A cacheId may be shared only when it names the same cache definition.
+    // Malformed/imported identifiers must not make one generated relationship
+    // silently suppress another cache part.
+    let mut owners: BTreeMap<u32, String> = BTreeMap::new();
+    for pivot in &mut pivots {
+        let id = super::pivot::cache_id_of(pivot);
+        let definition = pivot.ooxml_cache_def.clone().unwrap_or_default();
+        if owners
+            .get(&id)
+            .is_some_and(|owner| !owner.eq_ignore_ascii_case(&definition))
+        {
+            pivot.ooxml_cache_id = Some(take_unused_id(&mut used_ids, &mut next_id)?);
+        }
+        owners.insert(super::pivot::cache_id_of(pivot), definition);
+    }
+    Ok(pivots)
+}
+
+fn take_unused_id(used: &mut BTreeSet<u32>, next: &mut u32) -> Result<u32, CoreError> {
+    loop {
+        let candidate = *next;
+        *next = next
+            .checked_add(1)
+            .ok_or_else(|| error::xlsx_write("pivot cache id space is exhausted"))?;
+        if used.insert(candidate) {
+            return Ok(candidate);
+        }
+    }
+}
+
+fn take_unused_cache_part(
+    used: &mut BTreeSet<String>,
+    next: &mut u32,
+) -> Result<String, CoreError> {
+    loop {
+        let number = *next;
+        *next = next
+            .checked_add(1)
+            .ok_or_else(|| error::xlsx_write("pivot cache part id space is exhausted"))?;
+        let definition = format!("xl/pivotCache/pivotCacheDefinition{number}.xml");
+        let records = format!("xl/pivotCache/pivotCacheRecords{number}.xml");
+        let rels = format!("xl/pivotCache/_rels/pivotCacheDefinition{number}.xml.rels");
+        if [&definition, &records, &rels]
+            .iter()
+            .all(|name| !used.contains(&name.to_ascii_lowercase()))
+        {
+            used.insert(definition.to_ascii_lowercase());
+            used.insert(records.to_ascii_lowercase());
+            used.insert(rels.to_ascii_lowercase());
+            return Ok(definition);
+        }
+    }
+}
+
+fn take_unused_table_part(
+    used: &mut BTreeSet<String>,
+    next: &mut u32,
+) -> Result<String, CoreError> {
+    loop {
+        let number = *next;
+        *next = next
+            .checked_add(1)
+            .ok_or_else(|| error::xlsx_write("pivot table part id space is exhausted"))?;
+        let table = format!("xl/pivotTables/pivotTable{number}.xml");
+        let rels = format!("xl/pivotTables/_rels/pivotTable{number}.xml.rels");
+        if [&table, &rels]
+            .iter()
+            .all(|name| !used.contains(&name.to_ascii_lowercase()))
+        {
+            used.insert(table.to_ascii_lowercase());
+            used.insert(rels.to_ascii_lowercase());
+            return Ok(table);
+        }
+    }
+}
+
 pub(crate) fn encode(
     wb: &Workbook,
     extras: &HashMap<String, WorksheetExtras>,
@@ -85,6 +206,7 @@ pub(crate) fn encode(
 ) -> Result<Vec<u8>, CoreError> {
     let intern = wb.intern();
     let sheets: Vec<&Sheet> = wb.sheets().collect();
+    let pivots = pivots_for_write(wb, package)?;
     let persons = threaded_persons(&sheets);
     if sheets.is_empty() {
         return Err(error::xlsx_write("workbook has no sheets"));
@@ -203,6 +325,7 @@ pub(crate) fn encode(
             package,
             &persons,
             &dxfs,
+            &pivots,
         )?;
         parts.insert(format!("xl/{target}"), sheet_xml);
         overrides.push((format!("/xl/{target}"), CT_WS.into()));
@@ -239,8 +362,31 @@ pub(crate) fn encode(
     }
 
     let mut pivot_caches: Vec<(u32, String)> = Vec::new();
-    for pivot in wb.pivots().iter() {
-        let cache = super::pivot::cache_parts(wb, pivot)?;
+    let mut cache_groups: BTreeMap<u32, Vec<&PivotTable>> = BTreeMap::new();
+    for pivot in &pivots {
+        cache_groups
+            .entry(super::pivot::cache_id_of(pivot))
+            .or_default()
+            .push(pivot);
+    }
+    for group in cache_groups.into_values() {
+        let Some(first) = group.first().copied() else {
+            continue;
+        };
+        let pivot = group
+            .iter()
+            .copied()
+            .find(|pivot| pivot.ooxml_dirty)
+            .unwrap_or(first);
+        let cache = if let Some(pkg) = package {
+            super::pivot::preserved_cache_parts(pkg, pivot)
+        } else {
+            None
+        };
+        let cache = match cache {
+            Some(parts) => parts,
+            None => super::pivot::cache_parts(wb, pivot)?,
+        };
         let r = format!("rId{rid}");
         rid += 1;
         wb_rels.push((
@@ -1139,6 +1285,7 @@ fn worksheet_xml(
     package: Option<&OpcPackage>,
     persons: &BTreeMap<String, String>,
     dxfs: &[CfDxf],
+    pivots: &[PivotTable],
 ) -> Result<
     (
         Vec<u8>,
@@ -1476,12 +1623,16 @@ fn worksheet_xml(
         }
         s.push_str("</tableParts>");
     }
-    for pivot in wb
-        .pivots()
-        .iter()
-        .filter(|pivot| pivot.dest_sheet == sheet.id)
-    {
-        let extra = super::pivot::table_parts(wb, pivot)?;
+    for pivot in pivots.iter().filter(|pivot| pivot.dest_sheet == sheet.id) {
+        let extra = if let Some(pkg) = package {
+            super::pivot::preserved_table_parts(pkg, pivot)
+        } else {
+            None
+        };
+        let extra = match extra {
+            Some(parts) => parts,
+            None => super::pivot::table_parts(wb, pivot)?,
+        };
         let id = format!("rId{rid}");
         rid += 1;
         rels.push((id, REL_PIVOT_TABLE.into(), extra.rel_target, false));

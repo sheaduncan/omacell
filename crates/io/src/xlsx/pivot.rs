@@ -6,8 +6,8 @@ use omacell_core::addr::{SheetId, col_to_letters, parse_a1};
 use omacell_core::error::CoreError;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::pivot::{
-    CacheValue, DateGroup, PivotAgg, PivotDataField, PivotGroup, PivotLayout, PivotTable, ShowAs,
-    cache_table,
+    CacheValue, DateGroup, PivotAgg, PivotCalcField, PivotDataField, PivotGroup, PivotLayout,
+    PivotTable, ShowAs, cache_table,
 };
 use omacell_core::workbook::Workbook;
 
@@ -32,7 +32,32 @@ pub(crate) const CT_PIVOT_TABLE: &str =
 const NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const NS_PKG: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+const X14_CACHE_URI: &str = "{725AE2AE-9491-48be-BD36-2398A43DD21F}";
+const X14_DATA_URI: &str = "{E15A36E0-9728-4e99-A89B-3F7291B0FE68}";
 const MAX_PIVOT_CACHE_CELLS: usize = 1_000_000;
+
+pub(crate) fn cache_id_of(pivot: &PivotTable) -> u32 {
+    pivot
+        .ooxml_cache_id
+        .unwrap_or_else(|| pivot.id.index().saturating_add(1).max(1))
+}
+
+fn cache_def_name(pivot: &PivotTable) -> String {
+    pivot.ooxml_cache_def.clone().unwrap_or_else(|| {
+        format!(
+            "xl/pivotCache/pivotCacheDefinition{}.xml",
+            cache_id_of(pivot)
+        )
+    })
+}
+
+fn table_part_name(pivot: &PivotTable) -> String {
+    pivot
+        .ooxml_table
+        .clone()
+        .unwrap_or_else(|| format!("xl/pivotTables/pivotTable{}.xml", cache_id_of(pivot)))
+}
 
 /// Cache definition + records parts for one pivot.
 pub(crate) struct CacheParts {
@@ -52,13 +77,114 @@ pub(crate) struct TableParts {
     pub parts: Vec<(String, Vec<u8>, String)>,
 }
 
+/// Copy original cache parts when the modeled pivot is unchanged.
+pub(crate) fn preserved_cache_parts(
+    package: &OpcPackage,
+    pivot: &PivotTable,
+) -> Option<CacheParts> {
+    if pivot.ooxml_dirty {
+        return None;
+    }
+    let def_name = pivot.ooxml_cache_def.as_deref()?;
+    let mut parts = Vec::new();
+    copy_part_tree(package, def_name, &mut parts)?;
+    Some(CacheParts {
+        cache_id: cache_id_of(pivot),
+        def_target: workbook_rel_from_part(def_name),
+        parts,
+    })
+}
+
+/// Copy original pivot table parts when the modeled pivot is unchanged.
+pub(crate) fn preserved_table_parts(
+    package: &OpcPackage,
+    pivot: &PivotTable,
+) -> Option<TableParts> {
+    if pivot.ooxml_dirty {
+        return None;
+    }
+    let table_name = pivot.ooxml_table.as_deref()?;
+    let mut parts = Vec::new();
+    copy_part_tree(package, table_name, &mut parts)?;
+    Some(TableParts {
+        rel_target: sheet_rel_from_part(table_name),
+        parts,
+    })
+}
+
+fn workbook_rel_from_part(name: &str) -> String {
+    name.strip_prefix("xl/")
+        .or_else(|| name.strip_prefix("/xl/"))
+        .unwrap_or(name)
+        .to_string()
+}
+
+fn sheet_rel_from_part(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("xl/") {
+        format!("../{rest}")
+    } else {
+        format!("../{name}")
+    }
+}
+
+fn copy_part_tree(
+    package: &OpcPackage,
+    name: &str,
+    out: &mut Vec<(String, Vec<u8>, String)>,
+) -> Option<()> {
+    if out
+        .iter()
+        .any(|(existing, _, _)| existing.eq_ignore_ascii_case(name))
+    {
+        return Some(());
+    }
+    let part = package.part(name)?;
+    out.push((
+        part.name.clone(),
+        part.bytes.clone(),
+        part.content_type.clone().unwrap_or_default(),
+    ));
+    let rels_name = super::opc::rels_path(name);
+    if let Some(rels_part) = package.part(&rels_name) {
+        out.push((
+            rels_part.name.clone(),
+            rels_part.bytes.clone(),
+            rels_part.content_type.clone().unwrap_or_default(),
+        ));
+    }
+    if let Ok(rels) = package.rels_for(name) {
+        for rel in rels {
+            if rel.external {
+                continue;
+            }
+            let target = rel.target;
+            let lower = target.to_ascii_lowercase();
+            if lower.starts_with("xl/workbook") || lower.starts_with("xl/worksheets/") {
+                continue;
+            }
+            copy_part_tree(package, &target, out)?;
+        }
+    }
+    Some(())
+}
+
 /// Emit cache definition and records for `pivot`.
 pub(crate) fn cache_parts(wb: &Workbook, pivot: &PivotTable) -> Result<CacheParts, CoreError> {
-    let cache_id = pivot.id.index().saturating_add(1);
+    let cache_id = cache_id_of(pivot);
     let (headers, rows) = cache_table(wb, pivot).map_err(|e| error::xlsx_write(e.to_string()))?;
-    let def_name = format!("xl/pivotCache/pivotCacheDefinition{cache_id}.xml");
-    let rec_name = format!("xl/pivotCache/pivotCacheRecords{cache_id}.xml");
-    let rels_name = format!("xl/pivotCache/_rels/pivotCacheDefinition{cache_id}.xml.rels");
+    let def_name = cache_def_name(pivot);
+    let rec_name = {
+        let stem = def_name
+            .rsplit('/')
+            .next()
+            .unwrap_or("pivotCacheDefinition1.xml");
+        let rec = stem.replace("Definition", "Records");
+        match def_name.rsplit_once('/') {
+            Some((dir, _)) => format!("{dir}/{rec}"),
+            None => rec,
+        }
+    };
+    let rels_name = super::opc::rels_path(&def_name);
     let sheet_name = wb
         .sheet(pivot.source_sheet)
         .map(|s| s.name.as_str())
@@ -79,16 +205,37 @@ pub(crate) fn cache_parts(wb: &Workbook, pivot: &PivotTable) -> Result<CachePart
             .get(header)
             .map(field_group_xml)
             .unwrap_or_default();
+        let calc = pivot
+            .calc_fields
+            .iter()
+            .find(|field| field.name == *header)
+            .map(|field| format!(r#" databaseField="0" formula="{}""#, escape(&field.formula)))
+            .unwrap_or_default();
         fields.push_str(&format!(
-            r#"<cacheField name="{}" numFmtId="0"><sharedItems{attrs}>{shared}</sharedItems>{group}</cacheField>"#,
+            r#"<cacheField name="{}" numFmtId="0"{calc}><sharedItems{attrs}>{shared}</sharedItems>{group}</cacheField>"#,
             escape(header)
         ));
     }
+    let distinct = pivot
+        .data
+        .iter()
+        .any(|field| field.agg == PivotAgg::DistinctCount);
+    let x14 = if distinct {
+        format!(
+            r#" xmlns:x14="{NS_X14}"><cacheSource type="worksheet"><worksheetSource ref="{source_ref}" sheet="{}"/></cacheSource><cacheFields count="{}">{fields}</cacheFields><extLst><ext uri="{X14_CACHE_URI}"><x14:pivotCacheDefinition/></ext></extLst></pivotCacheDefinition>"#,
+            escape(sheet_name),
+            headers.len()
+        )
+    } else {
+        format!(
+            r#"><cacheSource type="worksheet"><worksheetSource ref="{source_ref}" sheet="{}"/></cacheSource><cacheFields count="{}">{fields}</cacheFields></pivotCacheDefinition>"#,
+            escape(sheet_name),
+            headers.len()
+        )
+    };
     let def = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheDefinition xmlns="{NS}" xmlns:r="{NS_R}" r:id="rId1" refreshOnLoad="{refresh}" recordCount="{}" createdVersion="8" refreshedVersion="8"><cacheSource type="worksheet"><worksheetSource ref="{source_ref}" sheet="{}"/></cacheSource><cacheFields count="{}">{fields}</cacheFields></pivotCacheDefinition>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheDefinition xmlns="{NS}" xmlns:r="{NS_R}" r:id="rId1" refreshOnLoad="{refresh}" recordCount="{}" createdVersion="8" refreshedVersion="8"{x14}"#,
         rows.len(),
-        escape(sheet_name),
-        headers.len()
     );
     let mut recs = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotCacheRecords xmlns="{NS}" count="{}">"#,
@@ -106,12 +253,16 @@ pub(crate) fn cache_parts(wb: &Workbook, pivot: &PivotTable) -> Result<CachePart
         recs.push_str("</r>");
     }
     recs.push_str("</pivotCacheRecords>");
+    let rec_file = rec_name
+        .rsplit('/')
+        .next()
+        .unwrap_or("pivotCacheRecords1.xml");
     let rels = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{NS_PKG}"><Relationship Id="rId1" Type="{REL_PIVOT_CACHE_REC}" Target="pivotCacheRecords{cache_id}.xml"/></Relationships>"#
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{NS_PKG}"><Relationship Id="rId1" Type="{REL_PIVOT_CACHE_REC}" Target="{rec_file}"/></Relationships>"#
     );
     Ok(CacheParts {
         cache_id,
-        def_target: format!("pivotCache/pivotCacheDefinition{cache_id}.xml"),
+        def_target: workbook_rel_from_part(&def_name),
         parts: vec![
             (def_name, def.into_bytes(), CT_PIVOT_CACHE_DEF.into()),
             (rec_name, recs.into_bytes(), CT_PIVOT_CACHE_REC.into()),
@@ -122,10 +273,9 @@ pub(crate) fn cache_parts(wb: &Workbook, pivot: &PivotTable) -> Result<CachePart
 
 /// Emit a pivotTable part related from the destination worksheet.
 pub(crate) fn table_parts(wb: &Workbook, pivot: &PivotTable) -> Result<TableParts, CoreError> {
-    let cache_id = pivot.id.index().saturating_add(1);
-    let number = cache_id;
-    let name = format!("xl/pivotTables/pivotTable{number}.xml");
-    let rels_name = format!("xl/pivotTables/_rels/pivotTable{number}.xml.rels");
+    let cache_id = cache_id_of(pivot);
+    let name = table_part_name(pivot);
+    let rels_name = super::opc::rels_path(&name);
     let (headers, rows) = cache_table(wb, pivot).map_err(|e| error::xlsx_write(e.to_string()))?;
     let shared: Vec<Vec<CacheValue>> = (0..headers.len())
         .map(|index| {
@@ -223,12 +373,20 @@ pub(crate) fn table_parts(wb: &Workbook, pivot: &PivotTable) -> Result<TablePart
             } else {
                 format!(r#" showDataAs="{}""#, df.show_as.ooxml())
             };
-            data_fields.push_str(&format!(
-                r#"<dataField name="{} {}" fld="{i}" subtotal="{}"{show}/>"#,
-                escape(agg_caption(df.agg)),
-                escape(&df.source),
-                df.agg.ooxml_subtotal()
-            ));
+            let name = format!("{} {}", agg_caption(df.agg), df.source);
+            if df.agg == PivotAgg::DistinctCount {
+                data_fields.push_str(&format!(
+                    r#"<dataField name="{}" fld="{i}" subtotal="{}"{show}><extLst><ext uri="{X14_DATA_URI}"><x14:dataField pivotShowAs="distinctCount"/></ext></extLst></dataField>"#,
+                    escape(&name),
+                    df.agg.ooxml_subtotal()
+                ));
+            } else {
+                data_fields.push_str(&format!(
+                    r#"<dataField name="{}" fld="{i}" subtotal="{}"{show}/>"#,
+                    escape(&name),
+                    df.agg.ooxml_subtotal()
+                ));
+            }
         }
     }
     let row_xml = if pivot.rows.is_empty() {
@@ -263,18 +421,35 @@ pub(crate) fn table_parts(wb: &Workbook, pivot: &PivotTable) -> Result<TablePart
             pivot.data.len()
         )
     };
+    let x14_ns = if pivot
+        .data
+        .iter()
+        .any(|field| field.agg == PivotAgg::DistinctCount)
+    {
+        format!(r#" xmlns:x14="{NS_X14}""#)
+    } else {
+        String::new()
+    };
     let xml = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotTableDefinition xmlns="{NS}" name="{}" cacheId="{cache_id}" dataCaption="Values" rowGrandTotals="{}" colGrandTotals="{}" compact="{compact}" compactData="{compact}" outline="{outline}" outlineData="{outline}"><location ref="{loc}" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="{}">{fields}</pivotFields>{row_xml}{col_xml}{page_xml}{data_xml}</pivotTableDefinition>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><pivotTableDefinition xmlns="{NS}"{x14_ns} name="{}" cacheId="{cache_id}" dataCaption="Values" rowGrandTotals="{}" colGrandTotals="{}" compact="{compact}" compactData="{compact}" outline="{outline}" outlineData="{outline}"><location ref="{loc}" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="{}">{fields}</pivotFields>{row_xml}{col_xml}{page_xml}{data_xml}</pivotTableDefinition>"#,
         escape(&pivot.name),
         u8::from(pivot.grand_rows),
         u8::from(pivot.grand_cols),
         headers.len()
     );
+    let cache_target = {
+        let def = cache_def_name(pivot);
+        if let Some(rest) = def.strip_prefix("xl/") {
+            format!("../{rest}")
+        } else {
+            format!("../{def}")
+        }
+    };
     let rels = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{NS_PKG}"><Relationship Id="rId1" Type="{REL_PIVOT_CACHE_DEF}" Target="../pivotCache/pivotCacheDefinition{cache_id}.xml"/></Relationships>"#
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{NS_PKG}"><Relationship Id="rId1" Type="{REL_PIVOT_CACHE_DEF}" Target="{cache_target}"/></Relationships>"#
     );
     Ok(TableParts {
-        rel_target: format!("../pivotTables/pivotTable{number}.xml"),
+        rel_target: sheet_rel_from_part(&name),
         parts: vec![
             (name, xml.into_bytes(), CT_PIVOT_TABLE.into()),
             (rels_name, rels.into_bytes(), String::new()),
@@ -290,7 +465,9 @@ pub(crate) struct LoadedCache {
     shared: Vec<Vec<CacheValue>>,
     rows: Vec<Vec<CacheValue>>,
     groups: BTreeMap<String, PivotGroup>,
+    calc_fields: Vec<PivotCalcField>,
     refresh_on_load: bool,
+    def_part: String,
 }
 
 /// Load pivot caches declared on `workbook.xml`.
@@ -359,6 +536,7 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
     let mut current_field = String::new();
     let mut current_field_index = None;
     let mut in_shared_items = false;
+    let mut calc_fields = Vec::new();
     while let Some(ev) = r.next()? {
         match ev {
             XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
@@ -384,6 +562,13 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
                 headers.push(current_field.clone());
                 shared.push(Vec::new());
                 current_field_index = Some(headers.len() - 1);
+                let calculated = attr(&attrs, "databaseField").is_some_and(|value| value == "0");
+                if calculated {
+                    calc_fields.push(PivotCalcField {
+                        name: current_field.clone(),
+                        formula: attr(&attrs, "formula").unwrap_or("").to_string(),
+                    });
+                }
             }
             XmlEvent::Start { name, .. } if name == "sharedItems" => in_shared_items = true,
             XmlEvent::End { name } if name == "sharedItems" => in_shared_items = false,
@@ -435,7 +620,9 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
         shared,
         rows,
         groups,
+        calc_fields,
         refresh_on_load,
+        def_part: rel.target.clone(),
     })
 }
 
@@ -571,6 +758,7 @@ fn load_table(
     let mut col_idx: Vec<usize> = Vec::new();
     let mut page_specs: Vec<(usize, Option<usize>)> = Vec::new();
     let mut data = Vec::new();
+    let mut current_data: Option<(usize, PivotAgg, ShowAs)> = None;
     let mut pivot_field_items: Vec<Vec<(usize, bool)>> = Vec::new();
     let mut pivot_item_count = 0usize;
     let mut current_pivot_field = None;
@@ -685,21 +873,35 @@ fn load_table(
                     }
                 }
             }
-            XmlEvent::Empty { name: n, attrs } | XmlEvent::Start { name: n, attrs }
-                if n == "dataField" =>
-            {
-                let fld = attr(&attrs, "fld")
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .unwrap_or(0);
-                let agg = attr(&attrs, "subtotal")
-                    .and_then(PivotAgg::parse)
-                    .unwrap_or(PivotAgg::Sum);
-                let show_as = attr(&attrs, "showDataAs")
-                    .and_then(ShowAs::parse)
-                    .unwrap_or(ShowAs::Normal);
-                data.push((fld, agg, show_as));
-                if data.len() > usize::from(MAX_COLS) {
-                    return Err(error::xlsx_limit("too many pivot data fields"));
+            XmlEvent::Empty { name: n, attrs } if n == "dataField" => {
+                if let Some((_, agg, _)) = current_data.as_mut() {
+                    if attr(&attrs, "pivotShowAs").is_some_and(|value| value == "distinctCount") {
+                        *agg = PivotAgg::DistinctCount;
+                    }
+                } else {
+                    data.push(parse_data_field(&attrs));
+                    if data.len() > usize::from(MAX_COLS) {
+                        return Err(error::xlsx_limit("too many pivot data fields"));
+                    }
+                }
+            }
+            XmlEvent::Start { name: n, attrs } if n == "dataField" => {
+                if current_data.is_some() {
+                    if attr(&attrs, "pivotShowAs").is_some_and(|value| value == "distinctCount")
+                        && let Some((_, agg, _)) = current_data.as_mut()
+                    {
+                        *agg = PivotAgg::DistinctCount;
+                    }
+                } else {
+                    current_data = Some(parse_data_field(&attrs));
+                }
+            }
+            XmlEvent::End { name: n } if n == "dataField" => {
+                if let Some(field) = current_data.take() {
+                    data.push(field);
+                    if data.len() > usize::from(MAX_COLS) {
+                        return Err(error::xlsx_limit("too many pivot data fields"));
+                    }
                 }
             }
             _ => {}
@@ -803,7 +1005,12 @@ fn load_table(
         .collect();
     if let Some(cache) = cache {
         table.groups = cache.groups.clone();
+        table.calc_fields = cache.calc_fields.clone();
+        table.ooxml_cache_def = Some(cache.def_part.clone());
     }
+    table.ooxml_cache_id = Some(cache_id);
+    table.ooxml_table = Some(rel.target.clone());
+    table.ooxml_dirty = false;
     let source_present = source_sheet_found.is_some()
         && wb
             .get(source_sheet, source.start.row, source.start.col)
@@ -828,7 +1035,21 @@ fn load_table(
     {
         warnings.push("xlsx.pivot", error.message, Some(rel.target.clone()));
     }
+    let _ = wb.set_pivot_ooxml_dirty(id, false);
     Ok(())
+}
+
+fn parse_data_field(attrs: &[(String, String)]) -> (usize, PivotAgg, ShowAs) {
+    let fld = attr(attrs, "fld")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    let agg = attr(attrs, "subtotal")
+        .and_then(PivotAgg::parse)
+        .unwrap_or(PivotAgg::Sum);
+    let show_as = attr(attrs, "showDataAs")
+        .and_then(ShowAs::parse)
+        .unwrap_or(ShowAs::Normal);
+    (fld, agg, show_as)
 }
 
 fn parse_range_pr(attrs: &[(String, String)]) -> Option<PivotGroup> {

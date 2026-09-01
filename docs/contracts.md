@@ -147,13 +147,13 @@ WP-24 proposes the following additions to the frozen public core contract. The P
 
 | Type / fn | Source |
 |---|---|
-| `PivotId`, `PivotTable`, `PivotRegistry`, `PivotDataField`, `PivotColumns`, `PivotCell`, `PivotValue` | [`pivot.rs`](../crates/core/src/pivot.rs) |
+| `PivotId`, `PivotTable`, `PivotRegistry`, `PivotDataField`, `PivotCalcField`, `PivotColumns`, `PivotCell`, `PivotValue` | [`pivot.rs`](../crates/core/src/pivot.rs) |
 | `PivotAgg`, `ShowAs`, `DateGroup`, `PivotGroup`, `PivotLayout`, `CacheValue` | same |
 | `materialize`, `materialize_from_cache`, `cache_table`, `write_output` | same |
 | `GoalSeekResult`, `goal_seek`, `validate_goal_seek`, `DEFAULT_MAX_ITER`, `DEFAULT_TOL` | [`whatif.rs`](../crates/core/src/whatif.rs) |
 | `StatsSummary`, `HistBin`, `describe_range` | [`stats.rs`](../crates/core/src/stats.rs) |
 
-`Workbook` adds `pivots`, `add_pivot`, `import_pivot`, `refresh_pivot`, `refresh_pivot_from_cache`, `remove_pivot`, and `restore_pivot`; `WorkbookSnapshot` adds `pivots`. Pivot output cells are managed and reject ordinary edits with `pivot.readonly`. Percentage show-as values use fractional storage (`0.3` means 30%) and a percentage number format.
+`Workbook` adds `pivots`, `add_pivot`, `import_pivot`, `refresh_pivot`, `refresh_pivot_from_cache`, `remove_pivot`, `restore_pivot`, and `set_pivot_ooxml_dirty`; `WorkbookSnapshot` adds `pivots`. Pivot output cells are managed and reject ordinary edits with `pivot.readonly`. Percentage show-as values use fractional storage (`0.3` means 30%) and a percentage number format. `PivotTable` additive fields from WP-24a: `calc_fields`, plus serde-skipped OOXML identity (`ooxml_dirty`, `ooxml_cache_id`, `ooxml_cache_def`, `ooxml_table`) used only for `.xlsx` round-trip.
 
 The WP-07a command catalog adds public ids `pivot.create`, `pivot.refresh`, `pivot.remove`, `whatif.goalseek`, and `stats.describe` with the typed schemas in [`analysis.rs`](../crates/bus/src/analysis.rs). `pivot.restore` is an internal inverse and is excluded from `commands_json`. The catalog envelope remains schema version 1; existing ids and schemas are unchanged.
 

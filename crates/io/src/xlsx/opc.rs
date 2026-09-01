@@ -241,7 +241,7 @@ fn part_dir(part: &str) -> String {
     }
 }
 
-fn rels_path(part: &str) -> String {
+pub(crate) fn rels_path(part: &str) -> String {
     match part.rsplit_once('/') {
         Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
         None => format!("_rels/{part}.rels"),
