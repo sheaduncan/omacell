@@ -1,12 +1,12 @@
 # formula	expected	note
-=COUNTIF({1;2;3},">1")	2	comparison
-=COUNTIF({1;2;3},2)	1	equals
-=COUNTIF({"a";"b";"a"},"a")	2	text
-=COUNTIF({"ax";"ay";"b"},"a*")	2	wildcard *
-=COUNTIF({"a1";"b1"},"?1")	2	wildcard ?
-=COUNTIF({1;2;3},"<>2")	2	not equal
-=COUNTIF({1;2;3},">10")	0	none
-=COUNTIF({1;2;3},">0")	3	all
-=COUNTIF({"A";"a"},"a")	2	case-insensitive
-=COUNTIF({1;2;TRUE},TRUE)	1	bool; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
-=COUNTIF({"é"},"?")	1	question mark matches one Unicode scalar
+=COUNTIF({1;2;3},">1")	#VALUE!	array range arguments are rejected; comparison
+=COUNTIF({1;2;3},2)	#VALUE!	array range arguments are rejected; equals
+=COUNTIF({"a";"b";"a"},"a")	#VALUE!	array range arguments are rejected; text
+=COUNTIF({"ax";"ay";"b"},"a*")	#VALUE!	array range arguments are rejected; wildcard *
+=COUNTIF({"a1";"b1"},"?1")	#VALUE!	array range arguments are rejected; wildcard ?
+=COUNTIF({1;2;3},"<>2")	#VALUE!	array range arguments are rejected; not equal
+=COUNTIF({1;2;3},">10")	#VALUE!	array range arguments are rejected; none
+=COUNTIF({1;2;3},">0")	#VALUE!	array range arguments are rejected; all
+=COUNTIF({"A";"a"},"a")	#VALUE!	array range arguments are rejected; case-insensitive
+=COUNTIF({1;2;TRUE},TRUE)	#VALUE!	array range arguments are rejected; bool
+=COUNTIF({"é"},"?")	#VALUE!	array range arguments are rejected; question mark matches one Unicode scalar

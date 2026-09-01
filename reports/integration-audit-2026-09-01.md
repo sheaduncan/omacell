@@ -34,20 +34,21 @@ starting WP-28 unless a human changes their owner in the relevant report.
 
 ### P1 — engine and file fidelity
 
+Completed in the first P1 follow-up: the formula printer now preserves lexical
+`LET`/`LAMBDA` definition-site casing with shadowing, and all eight `*IF`
+aggregates require references for their range positions while rejecting array
+constants with `#VALUE!`.
+
 1. Preserve multi-cell legacy CSE formulas end to end. The current `ARRAY` flag
    prevents spilling but carries no fixed range; XLSX import/write therefore
    cannot preserve `<f t="array" ref="…">` semantics.
-2. Preserve definition-site casing for `LET` variables and `LAMBDA` parameters.
-   The current formula corpus still canonicalizes `f(2)` to `F(2)`.
-3. Make the `*IF` family reject array constants with `#VALUE!`, matching the
-   triaged Excel rule; the current `SUMIF` corpus accepts them.
-4. Add `Workbook::compact_interners()` (or an equivalent bounded writer pass)
+2. Add `Workbook::compact_interners()` (or an equivalent bounded writer pass)
    before XLSX/OMC serialization so evicted undo history cannot leave dead
    shared strings in saved files.
-5. Connect omitted-reference `CELL()` to the last changed cell retained by the
+3. Connect omitted-reference `CELL()` to the last changed cell retained by the
    live session. The current corpus intentionally uses the formula cell as a
    known difference.
-6. Decode the full bounded HTML5 named-entity table for clipboard HTML. The
+4. Decode the full bounded HTML5 named-entity table for clipboard HTML. The
    current test intentionally leaves `&eacute;` undecoded.
 
 ### P2 — retained UI, IPC, and terminal integration
@@ -116,10 +117,10 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-00` | Remote, ruleset, solo-review policy, and MIT are resolved; name/trademark and ADR-001 are explicit HUMAN gates. |
 | `WP-01` | Open questions are resolved by the extended error table and formula-layer external-reference ownership. |
 | `WP-02` | Structural rewrite, name grammar, and file-boundary geometry decisions are resolved; dead-interner compaction is P1. |
-| `WP-03` | Partial cut overlap, XFE names, and 3-D qualifier behavior are covered; lambda definition casing is P1. |
+| `WP-03` | Partial cut overlap, XFE names, 3-D qualifiers, and lexical lambda/LET definition casing are covered. |
 | `WP-04` | Broadcast and What-If-table decisions are covered; multi-cell CSE is P1 and worst-case timing is a human perf-gate decision. |
 | `WP-05F` | Zero-sized arrays and locale ownership are resolved. |
-| `WP-05a` | CEILING/FLOOR is fixed; omitted `CELL()` state and strict `*IF` array handling are P1. |
+| `WP-05a` | CEILING/FLOOR and strict reference-only `*IF` range handling are fixed; omitted `CELL()` session state remains P1. |
 | `WP-05b` | Windows-1252, DATEDIF, YEARFRAC, and spill display decisions are resolved. |
 | `WP-05c` | Duplicate metadata is closed; Excel-only oracle rows and fixed-host lookup baselines remain HUMAN/WP-28. |
 | `WP-06` | Release behavior is resolved; rare calendar renderers are explicitly post-1.0. |

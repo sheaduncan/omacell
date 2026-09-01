@@ -169,6 +169,52 @@ fn criteria_wildcards_on_sheet_ranges() {
 }
 
 #[test]
+fn if_family_requires_range_references() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    for (row, (criterion, value)) in [(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)]
+        .into_iter()
+        .enumerate()
+    {
+        wb.set_number(s, row as u32, 0, criterion).unwrap();
+        wb.set_number(s, row as u32, 1, value).unwrap();
+    }
+    let range_calls = [
+        ("=SUMIF(A1:A3,\">1\",B1:B3)", "50"),
+        ("=COUNTIF(A1:A3,\">1\")", "2"),
+        ("=AVERAGEIF(A1:A3,\">1\",B1:B3)", "25"),
+        ("=SUMIFS(B1:B3,A1:A3,\">1\")", "50"),
+        ("=COUNTIFS(A1:A3,\">1\")", "2"),
+        ("=AVERAGEIFS(B1:B3,A1:A3,\">1\")", "25"),
+        ("=MAXIFS(B1:B3,A1:A3,\">1\")", "30"),
+        ("=MINIFS(B1:B3,A1:A3,\">1\")", "20"),
+    ];
+    let array_calls = [
+        "=SUMIF({1;2;3},\">1\",{10;20;30})",
+        "=COUNTIF({1;2;3},\">1\")",
+        "=AVERAGEIF({1;2;3},\">1\",{10;20;30})",
+        "=SUMIFS({10;20;30},{1;2;3},\">1\")",
+        "=COUNTIFS({1;2;3},\">1\")",
+        "=AVERAGEIFS({10;20;30},{1;2;3},\">1\")",
+        "=MAXIFS({10;20;30},{1;2;3},\">1\")",
+        "=MINIFS({10;20;30},{1;2;3},\">1\")",
+    ];
+    for (row, (formula, _)) in range_calls.iter().enumerate() {
+        wb.set_formula_text(s, row as u32, 2, formula).unwrap();
+    }
+    for (row, formula) in array_calls.iter().enumerate() {
+        wb.set_formula_text(s, row as u32, 3, formula).unwrap();
+    }
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+    for (row, (_, expected)) in range_calls.iter().enumerate() {
+        assert_eq!(display(&wb, row as u32, 2), *expected);
+        assert_eq!(display(&wb, row as u32, 3), "#VALUE!");
+    }
+}
+
+#[test]
 fn isformula_and_cell_on_references() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

@@ -64,7 +64,7 @@ Key files:
 - `scripts/lo-crosscheck.py` — `_xlfn.` modern names, numeric compare, LO CSV error tokens
 - `fuzz/fuzz_targets/fn_eager.rs`
 
-Key tests: `crates/fn/tests/corpus.rs`, `integration.rs` (`lazy_if_family_*`, `and_or_do_not_short_circuit`, `hidden_row_subtotal_*`, `nested_subtotal_is_ignored`, `random_is_deterministic_across_thread_counts`, `whole_column_sum_sumifs_subtotal`, `criteria_wildcards_on_sheet_ranges`, `fuzz_smoke_eager_functions_do_not_panic`).
+Key tests: `crates/fn/tests/corpus.rs`, `integration.rs` (`lazy_if_family_*`, `and_or_do_not_short_circuit`, `hidden_row_subtotal_*`, `nested_subtotal_is_ignored`, `random_is_deterministic_across_thread_counts`, `whole_column_sum_sumifs_subtotal`, `criteria_wildcards_on_sheet_ranges`, `if_family_requires_range_references`, `fuzz_smoke_eager_functions_do_not_panic`).
 
 Review hardening corrects the Excel `AGGREGATE` option table, including hidden-row/nested-aggregate behavior and `COUNTA`/error handling. `GCD`/`LCM` now reject negative and ≥2^53 inputs/results. Mode calculations use a deterministic first-seen hash index instead of quadratic scans; `FREQUENCY` uses binary-search bins and validates its spill shape before allocation. Criteria wildcards are non-recursive and treat `?` as one Unicode scalar, eliminating adversarial recursion/stack growth.
 
@@ -87,7 +87,9 @@ Frozen WP-01 types unchanged.
 - **`PEARSON`** is a full catalog spec sharing `CORREL`'s body (not only an alias), so `functions.json` documents it independently.
 - **`CELL` omitted reference** uses the formula cell, not Excel desktop's last-edited cell.
 - **`PERMUTATIONA(0,0)`** returns `1` (empty product); Excel `#NUM!`.
-- **`*IF` array constants** are walked like ranges so one-cell corpora can cover criteria; Excel often `#VALUE!`.
+- **`*IF` range arguments are references, not arrays.** Array constants now
+  return `#VALUE!`; sheet-range integration tests retain the criteria, wildcard,
+  and multi-range behavior that the original one-cell corpora exercised.
 - **Spilled arrays** in `format_cell` show the origin scalar; corpus expected values follow that (1×1 `MODE.MULT` collapses via `RuntimeValue::array`).
 - **LibreOffice headless** disagrees on importer names, CSV error tokens, `TYPE(TRUE)`, and some array-logical aggregates; tagged `known difference` in corpus notes and summarised in `docs/compat/known-differences.md`.
 
@@ -118,8 +120,9 @@ Host: rustc 1.98.0, Linux.
 2. **Resolved 2026-08-31:** Excel 2010+ asymmetric sign handling
    (`CEILING(-2.5,2)=-2`, `FLOOR(-2.5,2)=-4`; a positive number with negative
    significance is `#NUM!`).
-3. **Pre-WP-28 integration:** make `SUMIF`/`COUNTIF`/`AVERAGEIF(S)` reject array
-   constants with `#VALUE!`; the current corpus still accepts array walking.
+3. **Resolved in the P1 fidelity follow-up:** `SUMIF(S)`, `COUNTIF(S)`,
+   `AVERAGEIF(S)`, `MAXIFS`, and `MINIFS` require reference-valued range
+   arguments and reject array constants with `#VALUE!`.
 
 ## RFC (only if a frozen contract changed)
 

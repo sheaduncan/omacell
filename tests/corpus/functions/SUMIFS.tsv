@@ -1,11 +1,11 @@
 # formula	expected	note
-=SUMIFS({10;20;30},{1;2;3},">1")	50	one criterion
-=SUMIFS({10;20;30},{1;2;3},">1",{"a";"b";"a"},"a")	30	two criteria
-=SUMIFS({10;20},{1;2},1)	10	equals
-=SUMIFS({1;2;3},{1;2;3},">10")	0	none
-=SUMIFS({1;2},{1;2;3},1)	#VALUE!	size mismatch
-=SUMIFS({10;20},{"ax";"b"},"a*")	10	wildcard
-=SUMIFS({1;2;3},{1;2;3},">0")	6	all
-=SUMIFS({5;5},{5;1},5)	5	one match
-=SUMIFS({-1;2},{-1;2},">0")	2	signed
-=SUMIFS({1;2},{1;2},"<>1")	2	not 1
+=SUMIFS({10;20;30},{1;2;3},">1")	#VALUE!	array range arguments are rejected; one criterion
+=SUMIFS({10;20;30},{1;2;3},">1",{"a";"b";"a"},"a")	#VALUE!	array range arguments are rejected; two criteria
+=SUMIFS({10;20},{1;2},1)	#VALUE!	array range arguments are rejected; equals
+=SUMIFS({1;2;3},{1;2;3},">10")	#VALUE!	array range arguments are rejected; none
+=SUMIFS({1;2},{1;2;3},1)	#VALUE!	array range arguments are rejected; size mismatch
+=SUMIFS({10;20},{"ax";"b"},"a*")	#VALUE!	array range arguments are rejected; wildcard
+=SUMIFS({1;2;3},{1;2;3},">0")	#VALUE!	array range arguments are rejected; all
+=SUMIFS({5;5},{5;1},5)	#VALUE!	array range arguments are rejected; one match
+=SUMIFS({-1;2},{-1;2},">0")	#VALUE!	array range arguments are rejected; signed
+=SUMIFS({1;2},{1;2},"<>1")	#VALUE!	array range arguments are rejected; not 1
