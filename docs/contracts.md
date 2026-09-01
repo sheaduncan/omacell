@@ -130,6 +130,14 @@ The final pre-release command integration adds five public workflow commands:
 These are additive schemas; the catalog envelope remains version 1 and no
 existing command schema or IPC envelope changes.
 
+The pre-WP-28 import-review integration additively extends two frozen argument
+schemas. `file.open` accepts optional `plan` JSON for an explicitly reviewed
+CSV/TSV `ImportPlan`; `ai.import.assist` accepts optional `preview` JSON holding
+the bounded retained preview. Existing path-only and plan-only requests remain
+valid, the catalog envelope remains version 1, and IPC envelopes are unchanged.
+The `file.open` result may add `{import:{current,preview}}` for delimited files.
+This frozen-contract change requires the human approval recorded on the PR.
+
 ## IPC v1 — `docs/schemas/ipc/` (WP-07b)
 
 Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply,

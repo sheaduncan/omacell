@@ -249,3 +249,38 @@ fn file_open_recalculates_with_a_fresh_workbook_session() {
     assert!(outcome.ok, "{:?}", outcome.error);
     assert_eq!(cell_text(bus.workbook(), 1, 1), "$B$2");
 }
+
+#[test]
+fn csv_open_returns_a_preview_and_accepts_an_explicit_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("readings.csv");
+    std::fs::write(&path, "sample,value\n007,14.7\n").unwrap();
+    let mut bus = bus_with(Workbook::new(), FileSession::new());
+
+    let opened = bus.execute(
+        Origin::User,
+        "file.open",
+        serde_json::json!({"path": path.display().to_string()}),
+    );
+    assert!(opened.ok, "{:?}", opened.error);
+    let result = opened.result.unwrap();
+    assert_eq!(result["import"]["preview"]["header"][0], "sample");
+    assert_eq!(result["import"]["preview"]["rows"][0][0]["raw"], "007");
+
+    let mut plan = result["import"]["current"].clone();
+    plan["columns"][1]["ty"] = serde_json::json!({"kind": "text"});
+    let applied = bus.execute(
+        Origin::User,
+        "file.open",
+        serde_json::json!({
+            "path": path.display().to_string(),
+            "plan": plan,
+        }),
+    );
+    assert!(applied.ok, "{:?}", applied.error);
+    assert_eq!(
+        applied.result.as_ref().unwrap()["import"]["current"]["columns"][1]["ty"]["kind"],
+        "text"
+    );
+    assert_eq!(cell_text(bus.workbook(), 1, 1), "14.7");
+}

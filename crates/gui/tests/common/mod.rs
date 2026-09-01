@@ -45,6 +45,8 @@ struct ThemeReloadArgs {}
 #[serde(deny_unknown_fields)]
 struct FileOpenArgs {
     path: String,
+    #[serde(default)]
+    plan: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -78,6 +80,13 @@ struct FormulaArgs {
 #[serde(deny_unknown_fields)]
 struct CompleteArgs {
     prefix: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ImportArgs {
+    plan: serde_json::Value,
+    preview: serde_json::Value,
 }
 
 fn register_test_agent(bus: &mut Bus) {
@@ -162,6 +171,31 @@ fn register_test_completion(bus: &mut Bus) {
         .unwrap();
 }
 
+fn register_test_import_assist(bus: &mut Bus) {
+    bus.registry_mut()
+        .register::<ImportArgs, _>(
+            CommandSpec {
+                id: "ai.import.assist",
+                doc: "Recorded import-plan proposal",
+                kind: CommandKind::Query,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, args| {
+                let mut proposed = args.plan.clone();
+                proposed["columns"][0]["name"] = json!("Pressure");
+                let _preview = args.preview;
+                Ok(Effect::query(json!({
+                    "current": args.plan,
+                    "proposed": proposed,
+                    "applied": false,
+                })))
+            },
+        )
+        .unwrap();
+}
+
 fn register_theme_reload(
     bus: &mut Bus,
     handle: omacell_conf::ReloadHandle,
@@ -209,6 +243,36 @@ fn register_file_open(
                 return Ok(Effect::query(json!({"path": args.path})));
             }
             open_count.fetch_add(1, Ordering::SeqCst);
+            if args.path.ends_with(".csv") {
+                let current = args.plan.unwrap_or_else(|| {
+                    json!({
+                        "delimiter": ",",
+                        "has_header": true,
+                        "columns": [{
+                            "name": "Pressure (psi)",
+                            "ty": {"kind": "auto"}
+                        }]
+                    })
+                });
+                return Ok(Effect {
+                    result: json!({
+                        "path": args.path,
+                        "import": {
+                            "current": current,
+                            "preview": {
+                                "header": ["Pressure (psi)"],
+                                "rows": [[{
+                                    "raw": "14.7",
+                                    "would_become": "14.7",
+                                    "kind": "number",
+                                    "changed": true
+                                }]]
+                            }
+                        }
+                    }),
+                    ..Effect::default()
+                });
+            }
             Ok(Effect {
                 result: json!({"path": args.path}),
                 ..Effect::default()
@@ -325,6 +389,7 @@ fn launch_opts_with_script(
     register_test_agent(&mut bus);
     register_test_formula_assist(&mut bus);
     register_test_completion(&mut bus);
+    register_test_import_assist(&mut bus);
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
     register_theme_reload(&mut bus, store.handle()).unwrap();
     let open_count = Arc::new(AtomicUsize::new(0));

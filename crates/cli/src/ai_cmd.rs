@@ -11,8 +11,9 @@ use omacell_ai::complete::{complete_schema, parse_completion};
 use omacell_ai::fence_data;
 use omacell_ai::formula::{formula_schema, parse_and_eval};
 use omacell_ai::functions::is_ai_formula;
-use omacell_ai::import_assist::parse_plan_overlay;
+use omacell_ai::import_assist::{import_request_payload, parse_plan_overlay};
 use omacell_ai::plan::{parse_plan, plan_schema};
+use omacell_ai::policy::PolicySnapshot;
 use omacell_ai::runtime::{AiRuntime, completion_enabled, fast_is_local};
 use omacell_bus::{Bus, CommandContext, CommandKind, CommandSpec, Effect, Exposure};
 use omacell_core::addr::RefKind;
@@ -20,6 +21,7 @@ use omacell_core::error::CoreError;
 use omacell_core::event::Event;
 use omacell_core::graph::CellCoord;
 use omacell_core::storage::{CellFlags, CellSlot, UsedRange};
+use omacell_io::csv::{ImportPlan, PreviewRows};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -71,6 +73,9 @@ struct CompleteArgs {
 struct ImportArgs {
     /// Current import plan JSON.
     plan: Value,
+    /// Bounded raw/converted rows from the retained import preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview: Option<Value>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -458,7 +463,11 @@ fn run_import(
     if ctx.is_preflight() {
         return Ok(ai_preflight(ctx));
     }
-    let user = fence_data("import plan", &args.plan);
+    let policy = session
+        .runtime
+        .policy_for(Slot::Default, Some(ctx.workbook_ref()));
+    let (current, request) = import_request(&args, &policy)?;
+    let user = fence_data("import preview", &request);
     let reply = session
         .runtime
         .chat_task(Slot::Default, "import", user, None, vec![])
@@ -466,10 +475,33 @@ fn run_import(
     let value = structured_reply("import", &reply.text)?;
     let proposed = parse_plan_overlay(&value).map_err(CoreError::from)?;
     Ok(Effect::query(json!({
-        "current": args.plan,
+        "current": current,
         "proposed": proposed,
         "applied": false,
     })))
+}
+
+fn import_request(
+    args: &ImportArgs,
+    policy: &PolicySnapshot,
+) -> Result<(ImportPlan, Value), CoreError> {
+    let current = parse_plan_overlay(&args.plan).map_err(CoreError::from)?;
+    let preview = args
+        .preview
+        .as_ref()
+        .map(|preview| {
+            serde_json::from_value(preview.clone()).map_err(|error| {
+                CoreError::new("ai.payload", format!("invalid import preview: {error}"))
+            })
+        })
+        .transpose()?
+        .unwrap_or(PreviewRows {
+            header: None,
+            rows: Vec::new(),
+        });
+    let request =
+        import_request_payload(current.clone(), preview, policy).map_err(CoreError::from)?;
+    Ok((current, request))
 }
 
 fn run_audit(ctx: &mut CommandContext<'_>, session: &AiSession) -> Result<Effect, CoreError> {
@@ -819,5 +851,37 @@ mod tests {
         );
         assert!(live.ok, "{:?}", live.error);
         assert_eq!(runtime.session_stats().requests, 1);
+    }
+
+    #[test]
+    fn import_request_includes_the_bounded_preview() {
+        let policy = omacell_ai::PolicySnapshot {
+            enabled: true,
+            send: omacell_ai::SendLevel::Full,
+            suggest_redaction: false,
+            log_content: false,
+            marks: Vec::new(),
+            local: true,
+        };
+        let (current, payload) = super::import_request(
+            &super::ImportArgs {
+                plan: json!({"delimiter": ",", "has_header": true}),
+                preview: Some(json!({
+                    "header": ["sample"],
+                    "rows": [[{
+                        "raw": "007",
+                        "would_become": "007",
+                        "kind": "text",
+                        "changed": false
+                    }]]
+                })),
+            },
+            &policy,
+        )
+        .unwrap();
+
+        assert!(current.has_header);
+        assert_eq!(payload["plan"]["has_header"], true);
+        assert_eq!(payload["preview"]["rows"][0][0]["raw"], "007");
     }
 }

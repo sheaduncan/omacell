@@ -273,7 +273,9 @@ fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
         );
     }
     let book = cli.files.first().map(PathBuf::as_path);
-    let mut app = App::bootstrap_live(cli, book)?;
+    // Like the GUI, let the TUI runner own open/progress/cancellation and the
+    // retained CSV import preview instead of blocking before first paint.
+    let mut app = App::bootstrap_live(cli, None)?;
     log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
     let _sig = crate::reload::spawn_sigusr1_reloader(app.reload_handle())?;
     let (ui, roots) = app.attach_session(cli.config.as_deref())?;
