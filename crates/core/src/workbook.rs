@@ -16,12 +16,13 @@ use crate::chart::{Chart, ChartId, Sparkline};
 pub use crate::date_system::DateSystem;
 use crate::error::CoreError;
 use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
+use crate::limits::{MAX_COLS, MAX_ROWS};
 use crate::locale::LocaleId;
 use crate::names::{DefinedName, NameRegistry, NameScope};
 use crate::numfmt;
 use crate::pivot::{
     CacheValue, PivotId, PivotRegistry, PivotTable, materialize, materialize_from_cache,
-    write_output,
+    shift_pivot_cols, shift_pivot_rows, write_output,
 };
 use crate::print::PageSetup;
 use crate::sheet::{
@@ -711,19 +712,86 @@ impl Workbook {
         Ok(())
     }
 
-    pub(crate) fn ensure_sheet_not_used_by_pivot(&self, id: SheetId) -> Result<(), CoreError> {
-        if let Some(pivot) = self
-            .pivots
-            .iter()
-            .find(|pivot| pivot.source_sheet == id || pivot.dest_sheet == id)
-        {
-            return Err(CoreError::new(
-                "pivot.readonly",
-                format!("structural edit would invalidate pivot {:?}", pivot.name),
-            )
-            .with_hint("remove the pivot before inserting or deleting cells, rows, or columns"));
+    pub(crate) fn rewrite_pivots_after_row_shift(
+        &mut self,
+        sheet: SheetId,
+        at: u32,
+        count: i32,
+    ) -> Result<(), CoreError> {
+        self.rewrite_pivots_after_row_band(sheet, at, count, 0, MAX_COLS.saturating_sub(1))
+    }
+
+    pub(crate) fn rewrite_pivots_after_col_shift(
+        &mut self,
+        sheet: SheetId,
+        at: u16,
+        count: i32,
+    ) -> Result<(), CoreError> {
+        self.rewrite_pivots_after_col_band(sheet, at, count, 0, MAX_ROWS.saturating_sub(1))
+    }
+
+    pub(crate) fn rewrite_pivots_after_row_band(
+        &mut self,
+        sheet: SheetId,
+        at: u32,
+        count: i32,
+        c0: u16,
+        c1: u16,
+    ) -> Result<(), CoreError> {
+        let planned = self.plan_pivot_row_band(sheet, at, count, c0, c1)?;
+        for pivot in planned {
+            self.restore_pivot(pivot)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn rewrite_pivots_after_col_band(
+        &mut self,
+        sheet: SheetId,
+        at: u16,
+        count: i32,
+        r0: u32,
+        r1: u32,
+    ) -> Result<(), CoreError> {
+        let planned = self.plan_pivot_col_band(sheet, at, count, r0, r1)?;
+        for pivot in planned {
+            self.restore_pivot(pivot)?;
+        }
+        Ok(())
+    }
+
+    fn plan_pivot_row_band(
+        &self,
+        sheet: SheetId,
+        at: u32,
+        count: i32,
+        c0: u16,
+        c1: u16,
+    ) -> Result<Vec<PivotTable>, CoreError> {
+        let mut planned = Vec::new();
+        for pivot in self.pivots.iter() {
+            if let Some(next) = shift_pivot_rows(pivot, sheet, at, count, c0, c1)? {
+                planned.push(next);
+            }
+        }
+        Ok(planned)
+    }
+
+    fn plan_pivot_col_band(
+        &self,
+        sheet: SheetId,
+        at: u16,
+        count: i32,
+        r0: u32,
+        r1: u32,
+    ) -> Result<Vec<PivotTable>, CoreError> {
+        let mut planned = Vec::new();
+        for pivot in self.pivots.iter() {
+            if let Some(next) = shift_pivot_cols(pivot, sheet, at, count, r0, r1)? {
+                planned.push(next);
+            }
+        }
+        Ok(planned)
     }
 
     /// Set a plain numeric cell.
@@ -1945,8 +2013,19 @@ impl Workbook {
     }
 
     /// Insert a pivot definition without writing output (xlsx import).
-    pub fn import_pivot(&mut self, table: PivotTable) -> Result<PivotId, CoreError> {
+    pub fn import_pivot(&mut self, mut table: PivotTable) -> Result<PivotId, CoreError> {
+        table.ooxml_dirty = false;
         self.pivots.insert(table)
+    }
+
+    /// Mark whether a loaded pivot's original OOXML parts may be re-emitted.
+    pub fn set_pivot_ooxml_dirty(&mut self, id: PivotId, dirty: bool) -> Result<(), CoreError> {
+        let table = self
+            .pivots
+            .get_mut(id)
+            .ok_or_else(|| CoreError::new("pivot.id", format!("unknown pivot {}", id.index())))?;
+        table.ooxml_dirty = dirty;
+        Ok(())
     }
 
     /// Insert a pivot table and materialize its output region.
@@ -1980,6 +2059,7 @@ impl Workbook {
         let before = table.clone();
         let cells = materialize(self, &table)?;
         write_output(self, &mut table, &cells)?;
+        table.ooxml_dirty = true;
         self.pivots.restore(table.clone())?;
         self.undo.record(Delta::Pivot {
             before: Some(Box::new(before)),
@@ -2011,6 +2091,7 @@ impl Workbook {
         let before = table.clone();
         let cells = materialize_from_cache(self.settings().date_system, &table, headers, rows)?;
         write_output(self, &mut table, &cells)?;
+        table.ooxml_dirty = true;
         self.pivots.restore(table.clone())?;
         self.undo.record(Delta::Pivot {
             before: Some(Box::new(before)),
@@ -2455,8 +2536,8 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
-        self.ensure_sheet_not_used_by_pivot(id)?;
         let n = i32::try_from(count).map_err(|_| CoreError::addr_ref("row count too large"))?;
+        self.rewrite_pivots_after_row_shift(id, at, n)?;
         self.sheet_mut(id)?.store.shift_rows(at, n)?;
         self.recount_ref_errors();
         self.undo.record(Delta::ShiftRows {
@@ -2473,12 +2554,12 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
-        self.ensure_sheet_not_used_by_pivot(id)?;
         if at >= crate::limits::MAX_ROWS {
             return Err(CoreError::addr_ref("row delete anchor is out of range"));
         }
         let actual = count.min(crate::limits::MAX_ROWS - at);
         let n = i32::try_from(actual).map_err(|_| CoreError::addr_ref("row count too large"))?;
+        self.rewrite_pivots_after_row_shift(id, at, -n)?;
         let removed = self
             .sheet(id)
             .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?
@@ -2501,8 +2582,8 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
-        self.ensure_sheet_not_used_by_pivot(id)?;
         let n = i32::from(count);
+        self.rewrite_pivots_after_col_shift(id, at, n)?;
         self.sheet_mut(id)?.store.shift_cols(at, n)?;
         self.recount_ref_errors();
         self.undo.record(Delta::ShiftCols {
@@ -2519,12 +2600,12 @@ impl Workbook {
         if count == 0 {
             return Ok(());
         }
-        self.ensure_sheet_not_used_by_pivot(id)?;
         if u32::from(at) >= u32::from(crate::limits::MAX_COLS) {
             return Err(CoreError::addr_ref("column delete anchor is out of range"));
         }
         let actual = count.min(crate::limits::MAX_COLS - at);
         let n = i32::from(actual);
+        self.rewrite_pivots_after_col_shift(id, at, -n)?;
         let removed = self
             .sheet(id)
             .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?
