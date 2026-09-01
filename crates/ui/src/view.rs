@@ -448,6 +448,7 @@ fn handle(
                 rows: g.selection.cursor.row,
                 cols: g.selection.cursor.col,
             };
+            g.viewport.split = None;
         }
         HandlerKind::Split => {
             let x = g
@@ -459,6 +460,7 @@ fn handle(
                 x_px: scaled_coordinate(x, g.viewport.zoom),
                 y_px: scaled_coordinate(y, g.viewport.zoom),
             });
+            g.viewport.freeze = FreezePanes::default();
         }
         HandlerKind::Center => {
             let row = g.selection.cursor.row;

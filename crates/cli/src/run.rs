@@ -227,6 +227,7 @@ fn cmd_gui(cli: &Cli) -> Result<(), CliError> {
     log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
     let _sig = crate::reload::spawn_sigusr1_reloader(app.reload_handle())?;
     let (ui, roots) = app.attach_session(cli.config.as_deref())?;
+    app.files.attach_ui(ui.clone());
     let launch = GuiLaunch {
         paths: app.paths,
         store: app.store,
@@ -274,6 +275,7 @@ fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
     log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
     let _sig = crate::reload::spawn_sigusr1_reloader(app.reload_handle())?;
     let (ui, roots) = app.attach_session(cli.config.as_deref())?;
+    app.files.attach_ui(ui.clone());
     let launch = Launch {
         paths: app.paths,
         store: app.store,

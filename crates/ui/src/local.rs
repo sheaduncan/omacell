@@ -216,6 +216,7 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
                 rows: inner.selection.cursor.row,
                 cols: inner.selection.cursor.col,
             };
+            inner.viewport.split = None;
         }
         "view.split" => {
             let x = inner
@@ -230,6 +231,7 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
                 x_px: scaled_coordinate(x, inner.viewport.zoom),
                 y_px: scaled_coordinate(y, inner.viewport.zoom),
             });
+            inner.viewport.freeze = FreezePanes::default();
         }
         "view.formulabar" => inner.formula_bar_expanded = !inner.formula_bar_expanded,
         "view.formulas" => inner.show_formulas = !inner.show_formulas,

@@ -11,13 +11,17 @@ use std::sync::{Arc, Mutex};
 
 use omacell_bus::{Bus, CommandContext, CommandKind, CommandSpec, Effect, Exposure};
 use omacell_conf::ReloadHandle;
+use omacell_core::addr::{CellRef, RangeRef, SheetId};
 use omacell_core::date_system::DateSystem;
 use omacell_core::error::CoreError;
 use omacell_core::event::Event;
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
+use omacell_core::sheet::ViewState;
 use omacell_core::workbook::Workbook;
 use omacell_io::csv::{self, ExportPlan};
 use omacell_io::omc::{self, OmcDocument};
 use omacell_io::xlsx::{self, OpcPackage, SaveOptions, WorksheetExtras, XlsxDocument};
+use omacell_ui::UiSession;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +50,7 @@ struct FileState {
     extras: HashMap<String, WorksheetExtras>,
     config: Option<ReloadHandle>,
     ai: Option<std::sync::Arc<omacell_ai::AiRuntime>>,
+    ui: Option<UiSession>,
 }
 
 /// Sidecar retained by file command closures (package bytes live outside `Workbook`).
@@ -80,6 +85,11 @@ impl FileSession {
 
     pub(crate) fn attach_ai(&self, runtime: std::sync::Arc<omacell_ai::AiRuntime>) {
         self.lock().ai = Some(runtime);
+    }
+
+    /// Attach the retained UI state that interactive saves persist into the workbook.
+    pub fn attach_ui(&self, ui: UiSession) {
+        self.lock().ui = Some(ui);
     }
 
     /// Path of the workbook attached to this session, if any.
@@ -433,20 +443,27 @@ fn file_save(
         return Err(cancelled());
     }
     ctx.report_progress(0, Some(1), "save");
-    let (ai, xlsx_export) = {
+    let (ai, ui, xlsx_export) = {
         let state = session.lock();
         let xlsx_export = state
             .config
             .as_ref()
             .map(|config| config.snapshot().config.ai.functions.xlsx_export)
             .unwrap_or_else(|| "formulas".into());
-        (state.ai.clone(), xlsx_export)
+        (state.ai.clone(), state.ui.clone(), xlsx_export)
     };
+    let retained_view = ui
+        .as_ref()
+        .map(|ui| retained_sheet_view(ui, ctx.workbook_ref()))
+        .transpose()?;
     let values_export = kind == FileKind::Xlsx && xlsx_export == "values";
     let mut output = None;
-    if ai.is_some() || values_export {
+    if ai.is_some() || values_export || retained_view.is_some() {
         let mut copy = ctx.workbook_ref().clone();
-        if let Some(ai) = ai {
+        if let Some((sheet, view)) = retained_view.as_ref() {
+            apply_retained_sheet_view(&mut copy, *sheet, view.clone())?;
+        }
+        if let Some(ai) = ai.as_ref() {
             ai.write_workbook_cache(&mut copy)
                 .map_err(CoreError::from)?;
         }
@@ -466,6 +483,9 @@ fn file_save(
         keep_backups,
         ctx.cancel_flag().map(Arc::as_ref),
     )?;
+    if let Some((sheet, view)) = retained_view {
+        apply_retained_sheet_view(ctx.workbook(), sheet, view)?;
+    }
     ctx.report_progress(1, Some(1), "save");
     {
         let mut state = session.lock();
@@ -485,6 +505,60 @@ fn file_save(
         auto_recalc: false,
         ..Effect::default()
     })
+}
+
+fn retained_sheet_view(
+    ui: &UiSession,
+    workbook: &Workbook,
+) -> Result<(SheetId, ViewState), CoreError> {
+    let (selection, viewport, show_formulas) = ui.sheet_view_snapshot();
+    let sheet = workbook.sheet(selection.sheet).ok_or_else(|| {
+        CoreError::sheet_id(format!(
+            "UI selection references unknown sheet {}",
+            selection.sheet.index()
+        ))
+    })?;
+    let (row_start, col_start, row_end, col_end) = selection.active().normalized();
+    let mut view = sheet.view.clone();
+    if viewport.zoom.is_finite() {
+        view.zoom = viewport.zoom.clamp(0.25, 8.0);
+    }
+    view.freeze.rows = viewport.freeze.rows.min(MAX_ROWS - 1);
+    view.freeze.cols = viewport.freeze.cols.min(MAX_COLS - 1);
+    view.split = if view.freeze.rows == 0 && view.freeze.cols == 0 {
+        viewport.split
+    } else {
+        None
+    };
+    view.scroll_row = viewport.first_row.min(MAX_ROWS - 1);
+    view.scroll_col = viewport.first_col.min(MAX_COLS - 1);
+    view.selection = RangeRef::from_corners(
+        CellRef {
+            sheet: None,
+            row: row_start,
+            col: col_start,
+            row_abs: false,
+            col_abs: false,
+        },
+        CellRef {
+            sheet: None,
+            row: row_end,
+            col: col_end,
+            row_abs: false,
+            col_abs: false,
+        },
+    );
+    view.show_formulas = show_formulas;
+    Ok((selection.sheet, view))
+}
+
+fn apply_retained_sheet_view(
+    workbook: &mut Workbook,
+    sheet: SheetId,
+    view: ViewState,
+) -> Result<(), CoreError> {
+    workbook.set_active_sheet(sheet)?;
+    workbook.set_sheet_view(sheet, view)
 }
 
 fn file_export(
