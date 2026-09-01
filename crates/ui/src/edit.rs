@@ -160,6 +160,14 @@ impl EditState {
         self.point = looks_like_formula(&self.buffer) && point_ready(&self.buffer);
     }
 
+    /// Insert text at the cursor.
+    pub fn insert_text(&mut self, text: &str) {
+        self.clamp_cursor();
+        self.buffer.insert_str(self.cursor, text);
+        self.cursor += text.len();
+        self.point = looks_like_formula(&self.buffer) && point_ready(&self.buffer);
+    }
+
     /// Remove the character immediately before the cursor.
     pub fn backspace(&mut self) {
         self.clamp_cursor();

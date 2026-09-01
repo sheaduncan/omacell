@@ -149,6 +149,7 @@ fn commands_json_includes_file_and_theme() {
         .stdout(predicate::str::contains("file.close"))
         .stdout(predicate::str::contains("file.export"))
         .stdout(predicate::str::contains("file.print"))
+        .stdout(predicate::str::contains("chart.export"))
         .stdout(predicate::str::contains("theme.reload"));
 }
 

@@ -140,6 +140,7 @@ impl LongOps {
                 "file.saveas",
                 "file.export",
                 "file.print",
+                "chart.export",
             ]
             .into_iter()
             .map(str::to_string)

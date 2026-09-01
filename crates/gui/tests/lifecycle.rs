@@ -99,7 +99,12 @@ fn find_panel_accepts_text_and_enter_selects_the_next_match() {
         .step_key(KeyEvent::new(KeyCode::Enter))
         .unwrap();
     assert!(harness.state().ui_session().panel().visible.is_none());
-    assert_ne!(harness.state().runner().tracked_tasks(), 0);
+    let selection = harness.state().ui_session().selection();
+    assert!(
+        harness.state().runner().tracked_tasks() != 0
+            || (selection.cursor.row, selection.cursor.col) == (1, 1),
+        "the search task must be pending or already applied"
+    );
     let started = Instant::now();
     while harness.state().runner().is_busy()
         || harness
@@ -260,6 +265,72 @@ fn required_argument_key_opens_the_schema_prompt() {
     let palette = harness.state().ui_session().palette();
     assert!(palette.open);
     assert!(palette.prompt.unwrap().contains("path"));
+    assert!(!harness.state().runner().is_busy());
+}
+
+#[test]
+fn name_keys_open_schema_prompts_with_selection_context() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::F(3)))
+        .unwrap();
+    let palette = harness.state().ui_session().palette();
+    assert!(palette.open);
+    assert!(palette.prompt.unwrap().contains("name"));
+    assert!(palette.query.is_empty());
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Esc))
+        .unwrap();
+    harness
+        .state_mut()
+        .step_key(KeyEvent {
+            code: KeyCode::F(3),
+            ctrl: true,
+            alt: false,
+            shift: true,
+        })
+        .unwrap();
+    let palette = harness.state().ui_session().palette();
+    assert!(palette.open);
+    assert!(palette.prompt.unwrap().contains("positions"));
+    assert!(
+        palette.query.contains(r#""range":"A1:A1""#),
+        "palette query: {:?}",
+        palette.query
+    );
+    assert!(!harness.state().runner().is_busy());
+}
+
+#[test]
+fn ai_assist_key_opens_the_formula_workflow_picker_locally() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent {
+            code: KeyCode::Char('x'),
+            ctrl: true,
+            alt: false,
+            shift: true,
+        })
+        .unwrap();
+
+    let palette = harness.state().ui_session().palette();
+    assert!(palette.open);
+    assert_eq!(palette.query, "ai.formula.");
+    assert!(palette.prompt.unwrap().contains("AI assist"));
     assert!(!harness.state().runner().is_busy());
 }
 

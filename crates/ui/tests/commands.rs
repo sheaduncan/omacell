@@ -334,3 +334,57 @@ fn explain_error_opens_a_panel_for_the_selected_cell() {
             .is_some_and(|body| body.contains("#DIV/0!") && body.contains("divisor 0"))
     );
 }
+
+#[test]
+fn name_manager_lists_names_and_paste_inserts_into_the_editor() {
+    let (_dir, session, mut bus) = harness();
+    assert!(
+        bus.execute(
+            Origin::User,
+            "name.define",
+            json!({
+                "name": "TaxRate",
+                "referent": {"type": "constant", "value": 0.2}
+            }),
+        )
+        .ok
+    );
+
+    let manager = bus.execute(Origin::User, "name.manager", json!({}));
+    assert!(manager.ok, "{:?}", manager.error);
+    let panel = session.panel();
+    assert_eq!(panel.visible.as_deref(), Some("names"));
+    assert!(panel.body.as_deref().is_some_and(|body| {
+        body.contains("TaxRate") && body.contains("workbook") && body.contains("0.2")
+    }));
+
+    let paste = bus.execute(Origin::User, "name.paste", json!({"name": "taxrate"}));
+    assert!(paste.ok, "{:?}", paste.error);
+    assert_eq!(session.edit().buffer, "=TaxRate");
+
+    session.begin_edit(EditSurface::FormulaBar, "=SUM(");
+    let paste = bus.execute(Origin::User, "name.paste", json!({"name": "TaxRate"}));
+    assert!(paste.ok, "{:?}", paste.error);
+    assert_eq!(session.edit().buffer, "=SUM(TaxRate");
+
+    let missing = bus.execute(Origin::User, "name.paste", json!({"name": "Missing"}));
+    assert!(!missing.ok);
+    assert_eq!(missing.error.unwrap().code, "name.defined");
+}
+
+#[test]
+fn ai_assist_opens_the_formula_workflow_picker() {
+    let (_dir, session, mut bus) = harness();
+
+    let outcome = bus.execute(Origin::User, "ai.assist", json!({}));
+    assert!(outcome.ok, "{:?}", outcome.error);
+    let palette = session.palette();
+    assert!(palette.open);
+    assert_eq!(palette.query, "ai.formula.");
+    assert!(
+        palette
+            .prompt
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("generate") && prompt.contains("refactor"))
+    );
+}

@@ -176,6 +176,82 @@ fn name_define_and_remove() {
 }
 
 #[test]
+fn name_createfrom_uses_edge_labels_and_undoes_atomically() {
+    let mut bus = common::bus();
+    for (cell, input) in [
+        ("A1", "Region"),
+        ("B1", "Net Sales"),
+        ("C1", "Margin"),
+        ("A2", "North"),
+        ("B2", "10"),
+        ("C2", "0.25"),
+        ("A3", "South"),
+        ("B3", "20"),
+        ("C3", "0.5"),
+    ] {
+        common::exec_ok(&mut bus, "cell.set", json!({"ref": cell, "input": input}));
+    }
+
+    let result = common::exec_ok(
+        &mut bus,
+        "name.createfrom",
+        json!({"range": "A1:C3", "positions": ["top", "left"]}),
+    );
+    assert_eq!(result, json!({"created": 4}));
+
+    use omacell_core::names::{NameReferent, NameScope};
+    let names = bus.workbook().names();
+    let net_sales = names.get(NameScope::Workbook, "Net_Sales").unwrap();
+    let north = names.get(NameScope::Workbook, "North").unwrap();
+    assert!(matches!(
+        net_sales.referent,
+        NameReferent::Range(range)
+            if (range.start.row, range.start.col, range.end.row, range.end.col) == (1, 1, 2, 1)
+                && range.start.row_abs
+                && range.start.col_abs
+                && range.end.row_abs
+                && range.end.col_abs
+    ));
+    assert!(matches!(
+        north.referent,
+        NameReferent::Range(range)
+            if (range.start.row, range.start.col, range.end.row, range.end.col) == (1, 1, 1, 2)
+    ));
+
+    common::exec_ok(&mut bus, "edit.undo", json!({}));
+    assert!(bus.workbook().names().is_empty());
+}
+
+#[test]
+fn name_createfrom_rejects_collisions_without_partial_mutation() {
+    let mut bus = common::bus();
+    for (cell, input) in [
+        ("A1", "Duplicate"),
+        ("B1", "Duplicate"),
+        ("A2", "1"),
+        ("B2", "2"),
+    ] {
+        common::exec_ok(&mut bus, "cell.set", json!({"ref": cell, "input": input}));
+    }
+
+    let error = common::exec_err(
+        &mut bus,
+        "name.createfrom",
+        json!({"range": "A1:B2", "positions": ["top"]}),
+    );
+    assert_eq!(error.code, "name.defined");
+    assert!(bus.workbook().names().is_empty());
+
+    let error = common::exec_err(
+        &mut bus,
+        "name.createfrom",
+        json!({"range": "A1:B2", "positions": []}),
+    );
+    assert_eq!(error.code, omacell_bus::codes::COMMAND_ARGS);
+    assert!(bus.workbook().names().is_empty());
+}
+
+#[test]
 fn format_and_style() {
     let mut bus = common::bus();
     common::exec_ok(&mut bus, "cell.set", json!({"ref": "A1", "input": "1"}));

@@ -463,9 +463,8 @@ impl Gui {
         cmd: &str,
         args: serde_json::Value,
     ) -> Result<Outcome, CoreError> {
-        if (args.is_null() || args.as_object().is_some_and(serde_json::Map::is_empty))
-            && self.prompt_command_args(cmd)
-        {
+        let args = inject_selection_context(&self.ui, cmd, args);
+        if self.prompt_command_args(cmd, &args) {
             return Ok(Outcome::success(json!({"prompt": true})));
         }
         if cmd == "file.close" {
@@ -492,16 +491,26 @@ impl Gui {
             }
             self.ui.remember_command(cmd);
             self.message = None;
-            if cmd == "palette.open" {
-                self.refresh_palette("");
+            if matches!(cmd, "palette.open" | "ai.assist") {
+                let query = if cmd == "ai.assist" {
+                    "ai.formula."
+                } else {
+                    ""
+                };
+                self.refresh_palette(query);
                 self.palette_command = None;
+                if cmd == "ai.assist" {
+                    let mut palette = self.ui.palette();
+                    palette.prompt =
+                        Some("AI assist — choose generate, explain, fix, or refactor".into());
+                    self.ui.set_palette(palette);
+                }
             }
             if cmd == "ai.agent" {
                 self.dispatch_agent();
             }
             return Ok(Outcome::success(json!({"ok": true})));
         }
-        let args = inject_chart_range(&self.ui, cmd, args);
         if cmd == "file.print" {
             self.toggle_print_preview();
         }
@@ -678,26 +687,30 @@ impl Gui {
     }
 
     fn choose_palette(&mut self, id: &str) -> Result<(), CoreError> {
-        if self.prompt_command_args(id) {
+        let args = inject_selection_context(&self.ui, id, json!({}));
+        if self.prompt_command_args(id, &args) {
             return Ok(());
         }
         self.close_palette();
-        let _ = self.execute_cmd(id, json!({}))?;
+        let _ = self.execute_cmd(id, args)?;
         Ok(())
     }
 
-    fn prompt_command_args(&mut self, id: &str) -> bool {
+    fn prompt_command_args(&mut self, id: &str, args: &serde_json::Value) -> bool {
         let Some(command) = self
             .catalog
             .iter()
             .find(|command| command.id == id)
             .cloned()
-            .filter(has_required_args)
+            .filter(|command| has_missing_required_args(command, args))
         else {
             return false;
         };
         let mut palette = self.ui.palette();
         palette.open();
+        if args.as_object().is_some_and(|fields| !fields.is_empty()) {
+            palette.query = serde_json::to_string(args).unwrap_or_default();
+        }
         palette.prompt_for(&command);
         if let Some(fields) = palette.prompt.take() {
             palette.prompt = Some(format!("{id} — {fields}; enter JSON object"));
@@ -1255,8 +1268,12 @@ impl Drop for Gui {
 
 const DEFAULT_FIT_ROW: u32 = 20;
 
-fn inject_chart_range(ui: &UiSession, cmd: &str, mut args: serde_json::Value) -> serde_json::Value {
-    if cmd == "chart.fromselection"
+fn inject_selection_context(
+    ui: &UiSession,
+    cmd: &str,
+    mut args: serde_json::Value,
+) -> serde_json::Value {
+    if matches!(cmd, "chart.fromselection" | "name.createfrom")
         && args
             .get("range")
             .and_then(|v| v.as_str())
@@ -1285,12 +1302,17 @@ fn toolkit_owns_key(edit: &omacell_ui::EditState, event: &KeyEvent) -> bool {
     }
 }
 
-fn has_required_args(command: &CommandJson) -> bool {
+fn has_missing_required_args(command: &CommandJson, args: &serde_json::Value) -> bool {
     command
         .arg_schema
         .get("required")
         .and_then(serde_json::Value::as_array)
-        .is_some_and(|required| !required.is_empty())
+        .is_some_and(|required| {
+            required
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|name| args.get(name).is_none_or(serde_json::Value::is_null))
+        })
 }
 
 fn catalog_from_bus(bus: &Bus) -> Result<Vec<CommandJson>, CoreError> {
