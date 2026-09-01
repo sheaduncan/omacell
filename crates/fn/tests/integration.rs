@@ -236,6 +236,23 @@ fn isformula_and_cell_on_references() {
     assert_eq!(display(&wb, 4, 1), "2");
 }
 
+#[test]
+fn cell_without_reference_uses_last_changed_session_cell() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_number(s, 2, 3, 42.0).unwrap();
+    wb.set_formula_text(s, 0, 0, "=CELL(\"address\")").unwrap();
+    wb.set_formula_text(s, 0, 1, "=CELL(\"contents\")").unwrap();
+
+    let mut eng = engine();
+    eng.notify_edit(&wb, CellCoord::new(s, 2, 3));
+    eng.recalc_full(&mut wb);
+
+    assert_eq!(display(&wb, 0, 0), "$D$3");
+    assert_eq!(display(&wb, 0, 1), "42");
+}
+
 fn scalar_from_byte(byte: u8) -> Scalar {
     match byte % 6 {
         0 => Scalar::Empty,

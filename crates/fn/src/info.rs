@@ -127,7 +127,7 @@ ifn!(
     ArrayBehavior::None,
     true,
     "CELL(info_type, [reference])",
-    "Subset: address, col, row, contents, type, format. Omitted reference is the formula cell.",
+    "Subset: address, col, row, contents, type, format. Omitted reference is the live session's last changed cell, or the formula cell without a session.",
     FnBody::Eager(cell_impl)
 );
 ifn!(
@@ -407,7 +407,10 @@ fn cell_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
             Some(t) => t,
             None => return RuntimeValue::error(ErrorKind::Value),
         },
-        _ => (ctx.cell.sheet, ctx.cell.row, ctx.cell.col),
+        _ => {
+            let cell = ctx.default_reference_cell();
+            (cell.sheet, cell.row, cell.col)
+        }
     };
     match info.as_str() {
         "address" => {

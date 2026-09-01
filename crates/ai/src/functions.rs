@@ -187,8 +187,12 @@ pub fn stored_input(wb: &Workbook, slot: &CellSlot) -> String {
 
 /// Replace AI formulas with their cached values (xlsx `values` export).
 pub fn strip_ai_formulas(wb: &mut Workbook) -> Result<(), CoreError> {
+    enum StripJob {
+        Cell(SheetId, u32, u16, CellSlot),
+        Array(SheetId, u32, u16),
+    }
     type SheetCells = (SheetId, Vec<(u32, u16, CellSlot)>);
-    let jobs: Vec<(SheetId, u32, u16, CellSlot)> = {
+    let jobs: Vec<StripJob> = {
         let sheets: Vec<SheetCells> = wb
             .sheets()
             .map(|sheet| (sheet.id, sheet.store.iter().collect()))
@@ -201,20 +205,35 @@ pub fn strip_ai_formulas(wb: &mut Workbook) -> Result<(), CoreError> {
                 };
                 let src = wb.intern().formulas.get(fid).unwrap_or("");
                 if is_ai_formula(src) {
-                    slot.formula = None;
-                    slot.flags = slot
-                        .flags
-                        .with(omacell_core::storage::CellFlags::DIRTY, false)
-                        .with(omacell_core::storage::CellFlags::STALE, false)
-                        .with(omacell_core::storage::CellFlags::ARRAY, false);
-                    out.push((id, row, col, slot));
+                    if wb
+                        .sheet(id)
+                        .and_then(|sheet| sheet.array_formula_at(row, col))
+                        .is_some()
+                    {
+                        out.push(StripJob::Array(id, row, col));
+                    } else {
+                        slot.formula = None;
+                        slot.flags = slot
+                            .flags
+                            .with(omacell_core::storage::CellFlags::DIRTY, false)
+                            .with(omacell_core::storage::CellFlags::STALE, false)
+                            .with(omacell_core::storage::CellFlags::ARRAY, false);
+                        out.push(StripJob::Cell(id, row, col, slot));
+                    }
                 }
             }
         }
         out
     };
-    for (id, row, col, slot) in jobs {
-        wb.set_slot(id, row, col, slot)?;
+    for job in jobs {
+        match job {
+            StripJob::Cell(id, row, col, slot) => {
+                wb.set_slot(id, row, col, slot)?;
+            }
+            StripJob::Array(id, row, col) => {
+                wb.detach_array_formula(id, row, col)?;
+            }
+        }
     }
     Ok(())
 }

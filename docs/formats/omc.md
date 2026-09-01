@@ -67,7 +67,9 @@ after a closing quote are parse errors.
 Writers add `type=text` or `type=formula` where needed so quoting used for field
 escaping never changes the value type. Literal/spill arrays use a depth-limited
 JSON value tree in `array=` (or `v_array=` for a formula cache). Rich-text runs
-are JSON in `rich=` / `v_rich=` and use UTF-8 byte offsets.
+are JSON in `rich=` / `v_rich=` and use UTF-8 byte offsets. Formula cells may
+also carry `cse_ref=A1:B2`, a bounded sheet-local rectangle anchored at that
+cell, to preserve a legacy fixed array formula.
 
 ## Ordering (writers)
 

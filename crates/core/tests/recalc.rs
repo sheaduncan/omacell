@@ -1,5 +1,6 @@
 //! Recalc engine: cycles, determinism, incremental dirty, async stale.
 
+use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::eval::FnRegistry;
 use omacell_core::graph::CellCoord;
 use omacell_core::recalc::{MockAsyncProvider, RecalcEngine, format_cell};
@@ -219,6 +220,96 @@ fn direct_reference_to_a_spill_ghost_sees_the_new_value() {
     let mut eng = RecalcEngine::new(FnRegistry::new());
     eng.recalc_full(&mut wb);
     assert_eq!(display(&wb, 0, 1), "3");
+}
+
+#[test]
+fn fixed_cse_range_truncates_pads_and_orders_dependents() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(1, 1).unwrap());
+    wb.set_array_formula_text(s, range, "={1,2,3}").unwrap();
+    wb.set_formula_text(s, 0, 2, "=B1*10").unwrap();
+
+    let mut eng = RecalcEngine::new(FnRegistry::new());
+    eng.recalc_full(&mut wb);
+
+    assert_eq!(display(&wb, 0, 0), "1");
+    assert_eq!(display(&wb, 0, 1), "2");
+    assert_eq!(display(&wb, 1, 0), "#N/A");
+    assert_eq!(display(&wb, 1, 1), "#N/A");
+    assert_eq!(display(&wb, 0, 2), "20");
+    for row in 0..=1 {
+        for col in 0..=1 {
+            let slot = wb.get(s, row, col).unwrap().unwrap();
+            assert!(slot.flags.array());
+            assert_eq!(slot.formula.is_some(), row == 0 && col == 0);
+        }
+    }
+    let cse = wb.sheet(s).unwrap().array_formula_at(1, 1).unwrap();
+    assert_eq!(cse.anchor, CellRef::new(0, 0).unwrap());
+    assert_eq!(cse.range, range);
+    assert_eq!(wb.formula_text_at(s, 1, 1).as_deref(), Some("{={1,2,3}}"));
+}
+
+#[test]
+fn fixed_cse_rejects_partial_edits_but_allows_whole_range_replacement() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(1, 1).unwrap());
+    wb.set_array_formula_text(s, range, "={1,2;3,4}").unwrap();
+
+    let follower = wb.set_cell_contents(s, 1, 1, "9").unwrap_err();
+    assert_eq!(follower.code, "formula.array");
+    let anchor = wb.set_formula_text(s, 0, 0, "=9").unwrap_err();
+    assert_eq!(anchor.code, "formula.array");
+
+    wb.set_array_formula_text(s, range, "={5,6;7,8}").unwrap();
+    let mut eng = RecalcEngine::new(FnRegistry::new());
+    eng.recalc_full(&mut wb);
+    assert_eq!(display(&wb, 0, 0), "5");
+    assert_eq!(display(&wb, 1, 1), "8");
+}
+
+#[test]
+fn detaching_fixed_cse_keeps_cached_values_and_removes_formula_state() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(0, 1).unwrap());
+    wb.set_array_formula_text(sheet, range, "={1,2}").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_full(&mut wb);
+
+    assert_eq!(wb.detach_array_formula(sheet, 0, 0).unwrap(), Some(range));
+
+    assert!(wb.sheet(sheet).unwrap().array_formula_at(0, 1).is_none());
+    assert_eq!(display(&wb, 0, 0), "1");
+    assert_eq!(display(&wb, 0, 1), "2");
+    for col in 0..=1 {
+        let slot = wb.get(sheet, 0, col).unwrap().unwrap();
+        assert!(slot.formula.is_none());
+        assert!(!slot.flags.array());
+    }
+}
+
+#[test]
+fn undoing_fixed_cse_clears_derived_followers_on_rebuild() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(1, 1).unwrap());
+    wb.set_array_formula_text(s, range, "={1,2;3,4}").unwrap();
+    let mut eng = RecalcEngine::new(FnRegistry::new());
+    eng.recalc_full(&mut wb);
+    assert_eq!(display(&wb, 1, 1), "4");
+
+    wb.undo().unwrap();
+    eng.rebuild(&wb);
+    eng.recalc_incremental(&mut wb);
+
+    for row in 0..=1 {
+        for col in 0..=1 {
+            assert!(wb.get(s, row, col).unwrap().is_none());
+        }
+    }
 }
 
 #[test]

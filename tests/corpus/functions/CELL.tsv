@@ -1,10 +1,10 @@
 # formula	expected	note
-=CELL("row")	1	omitted ref is formula cell row 1; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CELL("row")	1	direct corpus evaluation has no live session, so omitted ref falls back to formula cell row 1
 =CELL("col")	1	formula cell col 1
-=CELL("address")	$A$1	absolute address of formula cell; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
-=CELL("type")	b	formula result is a value; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
-=CELL("format")	G	default General; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
-=CELL("ROW")	1	info_type is case-insensitive; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=CELL("address")	$A$1	absolute address of formula cell when no live session exists
+=CELL("type")	b	formula result is a value; direct evaluation uses the formula cell
+=CELL("format")	G	default General; direct evaluation uses the formula cell
+=CELL("ROW")	1	info_type is case-insensitive
 =CELL("xyz")	#VALUE!	unknown info_type
 =CELL(#N/A)	#N/A	error info_type
 =CELL(1)	#VALUE!	numeric info_type becomes text? 1 as number - to_text is "1" unknown

@@ -320,7 +320,7 @@ fn file_new(ctx: &mut CommandContext<'_>, session: &FileSession) -> Result<Effec
         return Err(cancelled());
     }
     session.detach_workbook();
-    *ctx.workbook() = workbook;
+    ctx.install_staged_workbook(workbook);
     Ok(Effect {
         events: vec![Event::WorkbookOpened { path: None }],
         result: serde_json::json!({"path": null}),
@@ -377,7 +377,7 @@ fn file_open(
     if !ctx.is_preflight() {
         session.attach(&path, &opened);
     }
-    *ctx.workbook() = opened.workbook;
+    ctx.install_staged_workbook(opened.workbook);
     Ok(Effect {
         events: vec![Event::WorkbookOpened {
             path: Some(path.display().to_string()),

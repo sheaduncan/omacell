@@ -1029,13 +1029,12 @@ fn cell_text(
     {
         return (spark_glyphs(&series.y, spark.kind), Align::Left);
     }
+    if formulas && let Some(source) = wb.formula_text_at(sheet, row, col) {
+        return (source, Align::Left);
+    }
     let Ok(Some(slot)) = wb.get(sheet, row, col) else {
         return (String::new(), Align::Left);
     };
-    if formulas && let Some(fid) = slot.formula {
-        let src = wb.intern().formulas.get(fid).unwrap_or("");
-        return (src.to_string(), Align::Left);
-    }
     let (text, value_align) = match slot.value {
         Value::Empty => (String::new(), Align::Left),
         Value::Number(n) => {

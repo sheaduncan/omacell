@@ -2176,7 +2176,10 @@ fn edit_clear(ctx: &mut CommandContext<'_>, args: EditClearArgs) -> Result<Effec
                     omacell_core::style::Style::default(),
                 )?;
                 if let Some(mut slot) = ctx.workbook_ref().get(range.sheet, *row, *col)?.copied() {
-                    slot.flags = omacell_core::storage::CellFlags::DEFAULT;
+                    slot.flags = slot
+                        .flags
+                        .with(omacell_core::storage::CellFlags::LOCKED, true)
+                        .with(omacell_core::storage::CellFlags::HIDDEN, false);
                     ctx.workbook().set_slot(range.sheet, *row, *col, slot)?;
                 }
             }

@@ -21,7 +21,7 @@ indexmap = { workspace = true }
 omacell-core = { path = "../core", version = "0.0.0" }
 parquet = { version = "59", default-features = false, features = ["arrow", "snap", "flate2-rust_backend"] }
 pdf-writer = "0.12"
-quick-xml = "0.41"
+quick-xml = { version = "0.41", features = ["escape-html"] }
 resvg = "0.48"
 tiny-skia = "0.12"
 ttf-parser = "0.25"

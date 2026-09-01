@@ -39,17 +39,21 @@ Completed in the first P1 follow-up: the formula printer now preserves lexical
 aggregates require references for their range positions while rejecting array
 constants with `#VALUE!`.
 
-1. Preserve multi-cell legacy CSE formulas end to end. The current `ARRAY` flag
-   prevents spilling but carries no fixed range; XLSX import/write therefore
-   cannot preserve `<f t="array" ref="…">` semantics.
-2. Add `Workbook::compact_interners()` (or an equivalent bounded writer pass)
-   before XLSX/OMC serialization so evicted undo history cannot leave dead
-   shared strings in saved files.
-3. Connect omitted-reference `CELL()` to the last changed cell retained by the
-   live session. The current corpus intentionally uses the formula cell as a
-   known difference.
-4. Decode the full bounded HTML5 named-entity table for clipboard HTML. The
-   current test intentionally leaves `&eacute;` undecoded.
+Completed in the second P1 follow-up: live recalculation supplies omitted
+`CELL()` references from the session's last changed cell; clipboard HTML decodes
+all 2,125 semicolon-terminated HTML5 named references with bounded scanning; and
+XLSX/OMC regression tests confirm both writers already rebuild output from live
+workbook structures, excluding undo-only and evicted-history strings.
+
+Completed in the third P1 follow-up: legacy multi-cell CSE formulas now retain a
+fixed anchor range, recalculate without spilling, pad with `#N/A` or truncate to
+that range, display `{=…}` from every member cell, survive undo/rebuild cleanup,
+and round-trip through XLSX (`t="array"`) and OMC. Partial content and structural
+edits that would split the fixed range are rejected before mutation. The frozen
+v1 XLSX AI-formula bridge cannot encode CSE metadata, so that synthetic
+combination is rejected in formula mode and flattened safely in values mode.
+
+All P1 engine/file-fidelity items from this audit are complete.
 
 ### P2 — retained UI, IPC, and terminal integration
 
@@ -116,18 +120,18 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `G1` | Engine gate complete; fixed-host/10% performance enforcement and remaining live Excel oracle rows are WP-28/HUMAN. |
 | `WP-00` | Remote, ruleset, solo-review policy, and MIT are resolved; name/trademark and ADR-001 are explicit HUMAN gates. |
 | `WP-01` | Open questions are resolved by the extended error table and formula-layer external-reference ownership. |
-| `WP-02` | Structural rewrite, name grammar, and file-boundary geometry decisions are resolved; dead-interner compaction is P1. |
+| `WP-02` | Structural rewrite, name grammar, file-boundary geometry, and live-only XLSX/OMC serialization are covered. |
 | `WP-03` | Partial cut overlap, XFE names, 3-D qualifiers, and lexical lambda/LET definition casing are covered. |
-| `WP-04` | Broadcast and What-If-table decisions are covered; multi-cell CSE is P1 and worst-case timing is a human perf-gate decision. |
+| `WP-04` | Broadcast, What-If-table, and fixed-range legacy CSE decisions are covered; worst-case timing is a human perf-gate decision. |
 | `WP-05F` | Zero-sized arrays and locale ownership are resolved. |
-| `WP-05a` | CEILING/FLOOR and strict reference-only `*IF` range handling are fixed; omitted `CELL()` session state remains P1. |
+| `WP-05a` | CEILING/FLOOR, strict reference-only `*IF` ranges, and omitted-reference `CELL()` session state are covered. |
 | `WP-05b` | Windows-1252, DATEDIF, YEARFRAC, and spill display decisions are resolved. |
 | `WP-05c` | Duplicate metadata is closed; Excel-only oracle rows and fixed-host lookup baselines remain HUMAN/WP-28. |
 | `WP-06` | Release behavior is resolved; rare calendar renderers are explicitly post-1.0. |
 | `WP-07a` | Command ids, IPC origin policy, and number-format allocation are resolved. |
 | `WP-07b` | Undo origin policy is resolved; frame-cap/chunking is P2 and requires an RFC. |
-| `WP-08` | Open/recalc decisions are resolved; complete HTML entities are P1. |
-| `WP-09` / `WP-10` | Split units and later WP-17/18/25 ownership are resolved; fixed-range CSE preservation remains P1. |
+| `WP-08` | Open/recalc decisions and complete bounded HTML5 clipboard entities are covered. |
+| `WP-09` / `WP-10` | Split units, later WP-17/18/25 ownership, and fixed-range CSE preservation are covered. |
 | `WP-11` | OMC's readable/lossy-L3 policy and JSON-style writer decision are explicit. |
 | `WP-12` / `WP-13` | Composition, signal, keymap, and IPC undo decisions are resolved. |
 | `WP-14` | Deferred table is empty and count propagation is integrated; `ViewState` flush and docs command-id lint are P2. |

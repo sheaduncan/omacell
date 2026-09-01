@@ -122,6 +122,13 @@ pub fn insert_rows(
     if count == 0 {
         return Ok(());
     }
+    wb.ensure_range_not_array_formula_output(
+        sheet,
+        at,
+        0,
+        MAX_ROWS.saturating_sub(1),
+        MAX_COLS.saturating_sub(1),
+    )?;
     wb.insert_rows(sheet, at, count)?;
     shift_side_tables(wb, sheet, at, count as i32, true)?;
     rewrite_formulas(
@@ -145,6 +152,13 @@ pub fn delete_rows(
     if count == 0 {
         return Ok(());
     }
+    wb.ensure_range_not_array_formula_output(
+        sheet,
+        at,
+        0,
+        MAX_ROWS.saturating_sub(1),
+        MAX_COLS.saturating_sub(1),
+    )?;
     wb.delete_rows(sheet, at, count)?;
     shift_side_tables(wb, sheet, at, -(count as i32), true)?;
     rewrite_formulas(
@@ -168,6 +182,13 @@ pub fn insert_cols(
     if count == 0 {
         return Ok(());
     }
+    wb.ensure_range_not_array_formula_output(
+        sheet,
+        0,
+        at,
+        MAX_ROWS.saturating_sub(1),
+        MAX_COLS.saturating_sub(1),
+    )?;
     wb.insert_cols(sheet, at, count)?;
     shift_side_tables_cols(wb, sheet, at, count as i32)?;
     rewrite_formulas(
@@ -191,6 +212,13 @@ pub fn delete_cols(
     if count == 0 {
         return Ok(());
     }
+    wb.ensure_range_not_array_formula_output(
+        sheet,
+        0,
+        at,
+        MAX_ROWS.saturating_sub(1),
+        MAX_COLS.saturating_sub(1),
+    )?;
     wb.delete_cols(sheet, at, count)?;
     shift_side_tables_cols(wb, sheet, at, -(count as i32))?;
     rewrite_formulas(
@@ -215,6 +243,13 @@ pub fn insert_cells(
     match shift {
         Shift::Down => {
             let n = r1.saturating_sub(r0).saturating_add(1);
+            wb.ensure_range_not_array_formula_output(
+                sheet,
+                r0,
+                c0,
+                MAX_ROWS.saturating_sub(1),
+                c1,
+            )?;
             wb.rewrite_pivots_after_row_band(sheet, r0, n as i32, c0, c1)?;
             shift_band_rows(wb, sheet, r0, n, c0, c1, false)?;
             shift_band_side_tables_rows(wb, sheet, r0, n, c0, c1, false)?;
@@ -232,6 +267,13 @@ pub fn insert_cells(
         }
         Shift::Right => {
             let n = c1.saturating_sub(c0).saturating_add(1);
+            wb.ensure_range_not_array_formula_output(
+                sheet,
+                r0,
+                c0,
+                r1,
+                MAX_COLS.saturating_sub(1),
+            )?;
             wb.rewrite_pivots_after_col_band(sheet, c0, i32::from(n), r0, r1)?;
             shift_band_cols(wb, sheet, c0, n, r0, r1, false)?;
             shift_band_side_tables_cols(wb, sheet, c0, n, r0, r1, false)?;
@@ -261,6 +303,13 @@ pub fn delete_cells(
     match shift {
         Shift::Down => {
             let n = r1.saturating_sub(r0).saturating_add(1);
+            wb.ensure_range_not_array_formula_output(
+                sheet,
+                r0,
+                c0,
+                MAX_ROWS.saturating_sub(1),
+                c1,
+            )?;
             wb.rewrite_pivots_after_row_band(sheet, r0, -(n as i32), c0, c1)?;
             shift_band_rows(wb, sheet, r0, n, c0, c1, true)?;
             shift_band_side_tables_rows(wb, sheet, r0, n, c0, c1, true)?;
@@ -278,6 +327,13 @@ pub fn delete_cells(
         }
         Shift::Right => {
             let n = c1.saturating_sub(c0).saturating_add(1);
+            wb.ensure_range_not_array_formula_output(
+                sheet,
+                r0,
+                c0,
+                r1,
+                MAX_COLS.saturating_sub(1),
+            )?;
             wb.rewrite_pivots_after_col_band(sheet, c0, -i32::from(n), r0, r1)?;
             shift_band_cols(wb, sheet, c0, n, r0, r1, true)?;
             shift_band_side_tables_cols(wb, sheet, c0, n, r0, r1, true)?;
@@ -609,7 +665,16 @@ fn rewrite_formulas(
         }
     }
     for (id, row, col, src) in updates {
-        wb.set_cell_contents(id, row, col, &src)?;
+        let cse_range = wb
+            .sheet(id)
+            .and_then(|sheet| sheet.array_formula_at(row, col))
+            .filter(|formula| formula.anchor.row == row && formula.anchor.col == col)
+            .map(|formula| formula.range);
+        if let Some(range) = cse_range {
+            wb.set_array_formula_text(id, range, &src)?;
+        } else {
+            wb.set_cell_contents(id, row, col, &src)?;
+        }
     }
     Ok(())
 }
@@ -1239,6 +1304,9 @@ pub fn fill_range(
 ) -> Result<u32, CoreError> {
     let (sr0, sc0, sr1, sc1) = norm(src);
     let (dr0, dc0, dr1, dc1) = norm(dest);
+    if mode != FillMode::Formats {
+        wb.ensure_range_not_array_formula_output(sheet, dr0, dc0, dr1, dc1)?;
+    }
     let mut changed = 0u32;
     if dr0 >= sr0 && dc0 == sc0 && dc1 == sc1 {
         // fill down
@@ -1513,6 +1581,7 @@ fn copy_slot(
     drow: i32,
     dcol: i32,
 ) -> Result<(), CoreError> {
+    wb.ensure_range_not_array_formula_output(sheet, row, col, row, col)?;
     if let Some(fid) = slot.formula {
         let src = wb.intern().formulas.get(fid).unwrap_or("").to_string();
         if let Ok(rewritten) = rewrite_print(&src, &RewriteOp::Copy { dcol, drow }) {
@@ -1522,12 +1591,19 @@ fn copy_slot(
                 .copied()
                 .unwrap_or_else(CellSlot::empty);
             copied.style = slot.style;
-            copied.flags = slot.flags;
+            copied.flags = copied
+                .flags
+                .with(CellFlags::LOCKED, slot.flags.locked())
+                .with(CellFlags::HIDDEN, slot.flags.hidden());
             replace_cell_slot(wb, sheet, row, col, Some(copied))?;
             return Ok(());
         }
     }
-    replace_cell_slot(wb, sheet, row, col, Some(slot))?;
+    let mut copied = slot;
+    copied.flags = CellFlags::DEFAULT
+        .with(CellFlags::LOCKED, slot.flags.locked())
+        .with(CellFlags::HIDDEN, slot.flags.hidden());
+    replace_cell_slot(wb, sheet, row, col, Some(copied))?;
     Ok(())
 }
 
@@ -1833,6 +1909,40 @@ pub fn paste_special_from(
         && !spec.column_widths
         && spec.operation == PasteOp::None
         && !spec.paste_link;
+    if (ordinary || spec.formulas) && grid.iter().flatten().any(|cell| cell.flags.array()) {
+        return Err(CoreError::new(
+            "formula.array",
+            "copying a legacy array formula as a formula is not supported",
+        )
+        .with_hint("use paste values to copy the cached results"));
+    }
+    let changes_contents = ordinary
+        || spec.values
+        || spec.formulas
+        || spec.operation != PasteOp::None
+        || spec.paste_link;
+    if changes_contents {
+        let rows =
+            u32::try_from(grid.len()).map_err(|_| CoreError::addr_ref("paste is too tall"))?;
+        let cols = grid.iter().map(Vec::len).max().unwrap_or(0);
+        let cols = u32::try_from(cols).map_err(|_| CoreError::addr_ref("paste is too wide"))?;
+        let (height, width) = if spec.transpose {
+            (cols, rows)
+        } else {
+            (rows, cols)
+        };
+        if height > 0 && width > 0 {
+            let width =
+                u16::try_from(width).map_err(|_| CoreError::addr_ref("paste is too wide"))?;
+            wb.ensure_range_not_array_formula_output(
+                sheet,
+                dest.row,
+                dest.col,
+                dest.row + height - 1,
+                dest.col + width - 1,
+            )?;
+        }
+    }
     let mut changed = 0u32;
     for (source_row, cells) in grid.iter().enumerate() {
         for (source_col, cell) in cells.iter().enumerate() {
@@ -1940,6 +2050,7 @@ fn set_clip_value(
     col: u16,
     value: &ClipValue,
 ) -> Result<(), CoreError> {
+    wb.ensure_range_not_array_formula_output(sheet, row, col, row, col)?;
     match value {
         ClipValue::Empty => {
             wb.set_cell_contents(sheet, row, col, "")?;
@@ -2016,7 +2127,10 @@ fn apply_clip_style(
             .get(sheet, row, col)?
             .copied()
             .unwrap_or_else(CellSlot::empty);
-        slot.flags = cell.flags;
+        slot.flags = slot
+            .flags
+            .with(CellFlags::LOCKED, cell.flags.locked())
+            .with(CellFlags::HIDDEN, cell.flags.hidden());
         wb.set_slot(sheet, row, col, slot)?;
     }
     Ok(())
@@ -2035,6 +2149,14 @@ pub fn move_range_cells(
     if height > MAX_ROWS - dest.row || u32::from(width) > u32::from(MAX_COLS - dest.col) {
         return Err(CoreError::addr_ref("move exceeds the worksheet grid"));
     }
+    wb.ensure_range_not_array_formula_output(sheet, r0, c0, r1, c1)?;
+    wb.ensure_range_not_array_formula_output(
+        sheet,
+        dest.row,
+        dest.col,
+        dest.row + height - 1,
+        dest.col + width - 1,
+    )?;
     let grid: Vec<Vec<Option<CellSlot>>> = (r0..=r1)
         .map(|row| {
             (c0..=c1)
@@ -2082,6 +2204,14 @@ pub fn move_range_cells_between(
     if height > MAX_ROWS - dest.row || u32::from(width) > u32::from(MAX_COLS - dest.col) {
         return Err(CoreError::addr_ref("move exceeds the worksheet grid"));
     }
+    wb.ensure_range_not_array_formula_output(source_sheet, r0, c0, r1, c1)?;
+    wb.ensure_range_not_array_formula_output(
+        dest_sheet,
+        dest.row,
+        dest.col,
+        dest.row + height - 1,
+        dest.col + width - 1,
+    )?;
     validate_cross_sheet_merges(wb, source_sheet, src, dest_sheet, dest, height, width)?;
     let grid: Vec<Vec<Option<CellSlot>>> = (r0..=r1)
         .map(|row| {
@@ -2763,6 +2893,7 @@ pub fn remove_duplicates_with_header(
     has_headers: bool,
 ) -> Result<u32, CoreError> {
     let (r0, c0, r1, c1) = norm(range);
+    wb.ensure_range_not_array_formula_output(sheet, r0, c0, r1, c1)?;
     if wb
         .sheet(sheet)
         .ok_or_else(|| CoreError::sheet_id("unknown sheet"))?

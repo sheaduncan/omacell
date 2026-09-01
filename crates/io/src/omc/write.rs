@@ -215,6 +215,12 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
                     push_field(out, &format!("={src}"));
                 }
                 push_kv(out, "type", "formula");
+                if let Some(array_formula) = sheet
+                    .array_formula_at(row, col)
+                    .filter(|formula| formula.anchor.row == row && formula.anchor.col == col)
+                {
+                    push_kv(out, "cse_ref", &array_formula.range.to_a1());
+                }
                 if !matches!(slot.value, Value::Empty) {
                     push_cached_value(out, intern, slot.value)?;
                 }
