@@ -89,8 +89,11 @@ Host: local Linux. Build artifacts were kept in the repository-local review scra
 
 ## Open questions / decisions needed
 
-1. Whether `serve_runner` should grow event subscribe/unsubscribe before G3 dogfooding of `omacell ipc` against a live TUI.
-2. Per-cell stale hatching during an in-progress recalc still waits on a committed snapshot (busy chrome only).
+1. **Pre-WP-28 integration:** add bounded event subscribe/unsubscribe to
+   `serve_runner`; the live GUI/TUI use that server, while only the bus-backed
+   server currently exposes the frozen control operations end to end.
+2. **Post-1.0 decision:** retain busy chrome rather than per-cell stale hatching
+   during an in-progress recalculation.
 
 ## RFC (only if a frozen contract changed)
 

@@ -33,7 +33,7 @@
   - Unit tests: `SEQUENCE`/`RANDARRAY`/`MAKEARRAY`/`VSTACK`/`HSTACK`/`WRAP*` reject `0`, `MAX_ROWS+1`, `MAX_COLS+1`, and overflowed products **before** allocation; lambda call-cap via existing `enter_call`; IRR/XIRR/RATE convergence and non-convergence `#NUM!`; RANDARRAY 1-vs-8-thread identity under a locked nonce.
 - Items the package says to "decide and document" and the decision taken:
   - **§6.4 vs Appendix D engineering:** Appendix D lists Engineering as Tier 0 (12, `CONVERT`, bases). §6.4 prose puts `CONVERT` / `BIN2*` / `DEC2*` / `HEX2*` in Tier 1. Execution decision: keep the WP-05c explicit list as **Tier 0**. Do not add Bessel/complex/`ERF`. Recorded below.
-  - **`HYPERLINK` / `FORMULATEXT`:** Appendix D Tier 1. Not implemented.
+  - **`HYPERLINK` / `FORMULATEXT`:** explicit post-1.0 Appendix D Tier 1 scope.
   - **`LET` / `LAMBDA` / `ISOMITTED`:** evaluator-owned (WP-04). Catalog metadata + integration corpus only; no duplicate `FnDef`.
   - **Invalid array shapes:** keep WP-05F `#NUM!` (not Excel 365 `#CALC!`) for zero / negative / out-of-grid / overflow, including `MAKEARRAY` and stacking/wrapping. Confirmed for WP-05c.
   - **`SEQUENCE` arity:** replace the 2-arg probe with Excel's `SEQUENCE(rows, [columns], [start], [step])`. Dimension args truncate toward zero (Excel), not round (probe).
@@ -91,7 +91,7 @@ No commands, CLI, or WP-01 type changes. `LET`/`LAMBDA`/`ISOMITTED` are **not** 
 
 - **§6.4 vs Appendix D engineering:** implemented as **Tier 0** per Appendix D and the WP list. §6.4 prose grouping `CONVERT`/bases under Tier 1 is recorded as a spec inconsistency. Bessel/`COMPLEX`/`ERF` not added.
 - **Engineering count 14 vs “12”:** the named WP list is 14 functions; Appendix D’s 12 is approximate.
-- **`HYPERLINK` / `FORMULATEXT`:** not implemented (Appendix D Tier 1).
+- **`HYPERLINK` / `FORMULATEXT`:** explicit post-1.0 Appendix D Tier 1 scope.
 - **Invalid shapes `#NUM!`:** confirmed (not Excel 365 `#CALC!`) for `SEQUENCE`/`RANDARRAY`/`MAKEARRAY`/stacking/wrapping.
 - **`SEQUENCE` dimensions:** truncate toward zero (Excel), not the WP-05F probe’s `round`.
 - **LibreOffice CSV:** many `_xlfn.*` helpers evaluate to `#NAME?`; error tokens are `Err:NNN`; some numeric cases disagree. Documented; `lo-crosscheck.py` maps error codes/percents and classifies missing modern names as known. Semantic LO disagreements keep Excel-matching Omacell results.
@@ -113,9 +113,12 @@ Host: rustc 1.98.0, Linux.
 
 ## Open questions / decisions needed
 
-1. WP-05a also plans `ISOMITTED` catalog metadata in `info.rs`. This package already ships it under `lambda`. 05a should skip a duplicate spec.
-2. LibreOffice headless still lacks most dynamic-array/lambda/`XNPV` functions even with `_xlfn.`; Excel remains the behaviour source.
-3. Fill 1M-row criterion wall times on the review host (`cargo bench -p omacell-fn --bench lookup_array`) if a full sample was not recorded in this run.
+1. **Resolved:** `ISOMITTED` metadata remains under `lambda`; no duplicate spec
+   was added.
+2. **Human / WP-28 oracle:** LibreOffice lacks most dynamic-array/lambda/`XNPV`
+   functions; record the remaining rows against live Excel 365.
+3. **Human / WP-28 fixed host:** record the full 1M-row lookup-array Criterion
+   sample and committed baseline.
 
 ## RFC (only if a frozen contract changed)
 

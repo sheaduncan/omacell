@@ -112,9 +112,14 @@ Host: rustc 1.98.0, Linux.
 
 ## Open questions / decisions needed
 
-1. Excel desktop `CELL` without a reference tracks the last edited cell; we use the formula cell. Confirm when UI editing exists.
-2. Resolved 2026-08-31: Excel 2010+ asymmetric sign handling (`CEILING(-2.5,2)=-2`, `FLOOR(-2.5,2)=-4`; a positive number with negative significance is `#NUM!`).
-3. Whether `*IF` should reject array constants (`#VALUE!`) to match Excel strictly, or keep array walking for dynamic-array compatibility.
+1. **Pre-WP-28 integration:** `CELL` without a reference must use the last changed
+   cell retained by the live session; the current formula-cell behavior remains
+   an explicit known difference until connected.
+2. **Resolved 2026-08-31:** Excel 2010+ asymmetric sign handling
+   (`CEILING(-2.5,2)=-2`, `FLOOR(-2.5,2)=-4`; a positive number with negative
+   significance is `#NUM!`).
+3. **Pre-WP-28 integration:** make `SUMIF`/`COUNTIF`/`AVERAGEIF(S)` reject array
+   constants with `#VALUE!`; the current corpus still accepts array walking.
 
 ## RFC (only if a frozen contract changed)
 

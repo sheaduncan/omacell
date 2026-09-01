@@ -25,7 +25,7 @@ The spec left several choices as ADRs. Agents need fixed contracts, so this plan
 | D7 | `.xlsx` | Own OOXML layer over `zip` + `quick-xml`; `calamine` only as a test oracle | Round-trip and L3 preservation need part-level control | — |
 | D8 | AI providers (ADR-005) | Two wire protocols (OpenAI-compatible, Anthropic Messages); no vendor SDKs; async confined to `ai`/MCP via `tokio` | Spec §8.1 | — |
 | D9 | Skill format (ADR-006) | `SKILL.md` directories, same layout as Omarchy's | Spec §8.8 | — |
-| D10 | License | MIT placeholder | Matches Omarchy; human confirms before first public tag | Human decision |
+| D10 | License | **MIT** | Matches Omarchy; confirmed by the merged maintenance-policy change and committed `LICENSE` | Decided |
 | D11 | Name | `omacell` (chosen 27 Aug 2026; previously `omacalc`), held in one constant and one packaging variable | Rename is a script (WP-28) | Omarchy-project clearance or trademark search says no |
 | D12 | Test policy | Corpora first; no network in CI; LibreOffice/openpyxl cross-checks skip when absent; performance gates with committed baselines | Spec §14 | — |
 
@@ -69,7 +69,7 @@ Do not start WP-28 until every package in its *Depends on* list is merged.
 | G4 | Phase 4 | GUI on real Omarchy hardware: theme switching, fractional scaling, IME, Orca, 1M-row scroll. Sort/filter/CF on real files. |
 | G5 | Phase 5 | Privacy review of the payload builder; injection-suite and eval results read; run the shipped skill with your own default agent on a real workbook. |
 | G6 | Phase 6 | Pivots and charts opened in Excel (or LibreOffice) from files Omacell wrote; print a real sheet. |
-| G7 | Phase 7 | Name and license final; VM job green on three channels; read the manual end to end. |
+| G7 | Phase 7 | Name cleared (MIT is already final); VM job green on three channels; read the manual end to end. |
 
 ## 5. Lanes and concurrency
 
@@ -310,7 +310,7 @@ Those paths have landed. The remaining critical path is AI + formats + release: 
 
 ## 11. What only a human can do
 
-- Confirm D1–D12, the name, and the license.
+- Confirm D1–D12 and the name; D10/MIT is already decided.
 - Provide real `.xlsx` files for the corpus (G2) and real workbooks for dogfooding (G3, G6).
 - Run the GUI on Omarchy hardware (G4): theme switch, fractional scaling, IME, Orca, feel.
 - Read the AI payloads once with `log_content = true` on a local model and confirm the privacy levels do what §8.7 says (G5).

@@ -162,8 +162,11 @@ No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-a
 
 ## Open questions / decisions needed
 
-1. Should WP-13 hide `edit.undo` / `edit.redo` on `omacell ipc` even though the socket allows them as direct execute?
-2. Confirm 1 MiB frame / 32 connections is enough once file commands land (WP-08–11).
+1. **Resolved:** do not hide undo/redo from same-user IPC or script origins;
+   agent origins remain changeset-only.
+2. **Pre-WP-28 integration / RFC:** keep 32 connections, but resolve the frozen
+   1 MiB frame limit by adopting the triaged configurable 16 MiB cap or a tested
+   chunking contract for 100k-cell operations.
 
 ## RFC (only if a frozen contract changed)
 
