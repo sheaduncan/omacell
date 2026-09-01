@@ -76,6 +76,8 @@ pub mod codes {
     pub const SETUP: &str = "ai.setup";
     /// AI is disabled.
     pub const DISABLED: &str = "ai.disabled";
+    /// Trusted runtime extensions changed while a request was in flight.
+    pub const EXTENSIONS: &str = "ai.extensions";
     /// Per-session autopilot policy denied a command.
     pub const AUTOPILOT: &str = "ai.autopilot";
 }

@@ -93,6 +93,13 @@ impl FnDef {
 
 /// Host-provided custom function (Lua, WP-20).
 pub trait DynamicFnBody: Send + Sync {
+    /// Whether this body delegates evaluation to the asynchronous-node provider.
+    ///
+    /// Existing synchronous extension bodies remain synchronous by default.
+    fn async_node(&self) -> bool {
+        false
+    }
+
     /// Evaluate with already-computed arguments.
     fn eval(&self, args: &[ArgVal]) -> RuntimeValue;
 }
@@ -121,6 +128,7 @@ impl fmt::Debug for DynamicFn {
             .field("min_args", &self.min_args)
             .field("max_args", &self.max_args)
             .field("volatile", &self.volatile)
+            .field("async_node", &self.body.async_node())
             .field("array_lift", &self.array_lift)
             .finish_non_exhaustive()
     }

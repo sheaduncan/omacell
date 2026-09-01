@@ -1503,7 +1503,13 @@ fn dispatch_dynamic(ctx: &mut EvalCtx<'_>, def: &DynamicFn, args: &[Option<Expr>
             value: ctx.materialize(arg.value),
         })
         .collect::<Vec<_>>();
-    if def.array_lift == ArrayLift::All {
+    if def.body.async_node() {
+        let Some(provider) = ctx.async_provider else {
+            ctx.mark_pending();
+            return RuntimeValue::error(ErrorKind::GettingData);
+        };
+        eval_async_named_fn(ctx, &def.name, &argv, provider)
+    } else if def.array_lift == ArrayLift::All {
         eval_array_lifted(ctx, |_, cell_args| def.body.eval(cell_args), &argv)
     } else {
         def.body.eval(&argv)
@@ -1820,12 +1826,22 @@ pub fn eval_async_fn(
     args: &[ArgVal],
     provider: &dyn crate::recalc::AsyncNodeProvider,
 ) -> RuntimeValue {
+    eval_async_named_fn(ctx, def.name, args, provider)
+}
+
+/// Dispatch a dynamically named async function through `provider`.
+pub fn eval_async_named_fn(
+    ctx: &mut EvalCtx<'_>,
+    name: &str,
+    args: &[ArgVal],
+    provider: &dyn crate::recalc::AsyncNodeProvider,
+) -> RuntimeValue {
     let req = AsyncRequest {
-        name: def.name.to_string(),
+        name: name.to_string(),
         cell: ctx.cell,
         args: args.to_vec(),
     };
-    let key = ContentHash::of_args(def.name, args);
+    let key = ContentHash::of_args(name, args);
     match provider.evaluate(key, &req) {
         AsyncState::Ready(v) => provider
             .runtime_result(key)

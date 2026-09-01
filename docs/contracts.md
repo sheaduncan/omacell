@@ -250,7 +250,7 @@ WP-20 proposes additive extensions to frozen calculation and command contracts. 
 | `FnRegistry::{register_dynamic,lookup_dynamic,iter_dynamic}` | same |
 | `CommandObserver`, `Bus::observe_commands` | [`session.rs`](../crates/bus/src/session.rs) |
 
-Dynamic function names are case-insensitive and additive beside built-ins; built-ins retain lookup precedence. Dynamic arguments are materialized before dispatch, volatility participates in graph invalidation, and `ArrayLift::All` uses the same lift machinery as built-ins. `FnRegistry::len` and `is_empty` include dynamic entries.
+Dynamic function names are case-insensitive and additive beside built-ins; built-ins retain lookup precedence. Dynamic arguments are materialized before dispatch, volatility participates in graph invalidation, and `ArrayLift::All` uses the same lift machinery as built-ins. `DynamicFnBody::async_node()` defaults to `false`; an implementation that returns `true` routes through the configured `AsyncNodeProvider` and participates in the same pending/settlement graph path as built-in AI functions. `FnRegistry::len` and `is_empty` include dynamic entries.
 
 The WP-07a public command catalog adds `macro.record`, `macro.stop`, `macro.save`, and `script.source`. The first, second, and fourth use the closed empty-object schema; `macro.save` requires one string `path`. All four are non-changeset-eligible mutating commands; `script.source` signals the retained GUI/TUI host to rebuild its user-profile runtime and reload trusted `init.lua` / plugin entry points. Its mutating classification prevents model origins from causing full-profile user code execution. The catalog envelope remains schema version 1 and existing command schemas are unchanged.
 

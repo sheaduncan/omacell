@@ -43,6 +43,7 @@ fn setup() -> (tempfile::TempDir, Tui, Terminal<TestBackend>) {
             ui,
             roots,
             long_ops: LongOps::production(),
+            ai: None,
             file: None,
         },
         false,

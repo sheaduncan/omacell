@@ -3,10 +3,13 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+use omacell_ai::{AiRuntime, Slot};
 use omacell_bus::TaskRunnerHandle;
 use omacell_conf::LoadedConfig;
+use omacell_conf::schema::Config;
 use omacell_core::command::Origin;
 use omacell_core::error::CoreError;
 use omacell_core::eval::DynamicFn;
@@ -48,6 +51,10 @@ pub struct InteractiveRuntime {
     messages: Arc<Mutex<VecDeque<String>>>,
     functions: Arc<Mutex<BTreeMap<String, DynamicFn>>>,
     functions_dirty: Arc<AtomicBool>,
+    ai: Option<Arc<AiRuntime>>,
+    ai_settlement: Option<Receiver<()>>,
+    last_ai_generation: Option<u64>,
+    ai_config: Config,
 }
 
 impl InteractiveRuntime {
@@ -61,6 +68,20 @@ impl InteractiveRuntime {
         config_dir: PathBuf,
         loaded: &LoadedConfig,
     ) -> Result<Self, CoreError> {
+        Self::new_with_ai(handle, ui, config_dir, loaded, None)
+    }
+
+    /// Build the retained VM with an optional process-wide AI runtime.
+    ///
+    /// Successful source replacement atomically replaces the runtime's Lua AI
+    /// tasks and request/response hooks; a failed source keeps the prior set.
+    pub fn new_with_ai(
+        handle: TaskRunnerHandle,
+        ui: Arc<dyn InteractiveUi>,
+        config_dir: PathBuf,
+        loaded: &LoadedConfig,
+        ai: Option<Arc<AiRuntime>>,
+    ) -> Result<Self, CoreError> {
         let mut scripts = Self {
             runtime: None,
             handle,
@@ -70,12 +91,17 @@ impl InteractiveRuntime {
             messages: Arc::new(Mutex::new(VecDeque::new())),
             functions: Arc::new(Mutex::new(BTreeMap::new())),
             functions_dirty: Arc::new(AtomicBool::new(false)),
+            ai,
+            ai_settlement: None,
+            last_ai_generation: None,
+            ai_config: loaded.config.clone(),
         };
         if scripts.policy.enabled
             && let Err(error) = scripts.source()
         {
             scripts.push_message(format!("{}: {}", error.code, error.message));
         }
+        scripts.poll_ai()?;
         Ok(scripts)
     }
 
@@ -97,6 +123,65 @@ impl InteractiveRuntime {
             self.refresh_functions_if_dirty()?;
             result?;
         }
+        Ok(())
+    }
+
+    /// Start or reconcile one off-thread AI-cell settlement wave.
+    ///
+    /// A successful wave queues the ordinary `calc.recalc` command on the
+    /// single writer. Failed work stays pending but is not retried until a new
+    /// content hash is evaluated, preventing a provider-error retry loop.
+    pub fn poll_ai(&mut self) -> Result<(), CoreError> {
+        if let Some(receiver) = &self.ai_settlement {
+            match receiver.try_recv() {
+                Ok(()) | Err(TryRecvError::Disconnected) => self.ai_settlement = None,
+                Err(TryRecvError::Empty) => return Ok(()),
+            }
+        }
+        let Some(ai) = &self.ai else {
+            return Ok(());
+        };
+        let Some(generation) = ai.pending_generation() else {
+            return Ok(());
+        };
+        if self.last_ai_generation == Some(generation) {
+            return Ok(());
+        }
+        let config = self.ai_config.clone();
+        let snapshot = self.handle.snapshot();
+        let policy = ai.policy_for_config(&config, Slot::Default, Some(&snapshot.workbook));
+        let ai = Arc::clone(ai);
+        let handle = self.handle.clone();
+        let messages = Arc::clone(&self.messages);
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("omacell-ai-settle".into())
+            .spawn(move || {
+                let result = ai
+                    .settle(&policy)
+                    .map_err(CoreError::from)
+                    .and_then(|done| {
+                        if done > 0 {
+                            handle
+                                .submit(
+                                    Origin::User,
+                                    "calc.recalc",
+                                    serde_json::json!({"mode": "full"}),
+                                )
+                                .map(|_| ())
+                        } else {
+                            Ok(())
+                        }
+                    });
+                if let Err(error) = result {
+                    push_message(&messages, format!("{}: {}", error.code, error.message));
+                }
+                let _ = tx.send(());
+                handle.wake_frontend();
+            })
+            .map_err(|error| CoreError::new("ai.thread", error.to_string()))?;
+        self.last_ai_generation = Some(generation);
+        self.ai_settlement = Some(rx);
         Ok(())
     }
 
@@ -141,6 +226,15 @@ impl InteractiveRuntime {
                 return Err(error);
             }
         };
+        if let Some(ai) = &self.ai
+            && let Err(error) = ai.replace_extensions(runtime.ai_tasks(), runtime.ai_hooks())
+        {
+            let mut replaced = function_names(&previous);
+            replaced.extend(function_names(&lock_functions(&functions)));
+            self.handle
+                .replace_functions(replaced, previous.into_values().collect())?;
+            return Err(error.into());
+        }
         let current = lock_functions(&functions).clone();
         self.handle.replace_functions(
             function_names(&previous),
@@ -160,6 +254,7 @@ impl InteractiveRuntime {
 
     /// Apply only stricter live scripting policy changes.
     pub fn tighten(&mut self, loaded: &LoadedConfig) -> Result<(), CoreError> {
+        self.ai_config = loaded.config.clone();
         self.policy.tighten(&ScriptPolicy::from_loaded(loaded));
         if !self.policy.enabled || !trusted_config_dir(&self.config_dir, &self.policy) {
             let previous = function_names(&lock_functions(&self.functions));
@@ -169,6 +264,9 @@ impl InteractiveRuntime {
             self.runtime = None;
             self.functions = Arc::new(Mutex::new(BTreeMap::new()));
             self.functions_dirty = Arc::new(AtomicBool::new(false));
+            if let Some(ai) = &self.ai {
+                ai.replace_extensions(Vec::new(), None)?;
+            }
             self.ui.clear_keymap();
         }
         Ok(())

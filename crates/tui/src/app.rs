@@ -15,7 +15,7 @@ use crossterm::event::{
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use omacell_ai::{AutopilotPolicy, AutopilotScope, Plan, to_calls};
+use omacell_ai::{AiRuntime, AutopilotPolicy, AutopilotScope, Plan, to_calls};
 use omacell_bus::ipc::{IpcHandle, IpcLimits, default_runtime_dir, serve_runner_with_limits};
 use omacell_bus::{
     Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskId, TaskRunner,
@@ -55,6 +55,8 @@ pub struct Launch {
     pub roots: KeymapRoots,
     /// Long-operation classifier (composition layer).
     pub long_ops: LongOps,
+    /// Process-wide AI runtime retained by the CLI composition root.
+    pub ai: Option<Arc<AiRuntime>>,
     /// Workbook path from `omacell --tui [file]`, if any.
     pub file: Option<PathBuf>,
 }
@@ -127,11 +129,12 @@ impl Tui {
             ui: launch.ui.clone(),
             known: runner.handle().command_ids().clone(),
         });
-        let scripts = InteractiveRuntime::new(
+        let scripts = InteractiveRuntime::new_with_ai(
             runner.handle(),
             script_ui,
             launch.paths.user_config.clone(),
             &loaded,
+            launch.ai,
         )?;
         let mut message = scripts.take_messages().into_iter().last();
         let script_status = message.clone();
@@ -737,6 +740,9 @@ impl Tui {
             }
         }
         if let Err(error) = self.scripts.poll_events() {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+        }
+        if let Err(error) = self.scripts.poll_ai() {
             self.message = Some(format!("{}: {}", error.code, error.message));
         }
         if let Some(message) = self.scripts.take_messages().into_iter().last() {

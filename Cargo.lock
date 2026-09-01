@@ -4087,7 +4087,9 @@ dependencies = [
 name = "omacell-lua"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "mlua",
+ "omacell-ai",
  "omacell-bus",
  "omacell-conf",
  "omacell-core",
@@ -4097,6 +4099,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
  "toml",
 ]
 

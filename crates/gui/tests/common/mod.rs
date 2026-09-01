@@ -354,6 +354,7 @@ fn launch_opts_with_script(
             ui,
             roots,
             long_ops: LongOps::production(),
+            ai: None,
             file: None,
             use_shell_font: false,
         },

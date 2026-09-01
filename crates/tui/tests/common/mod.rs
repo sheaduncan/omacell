@@ -325,6 +325,7 @@ fn harness_opts_with_script(
             ui,
             roots,
             long_ops: LongOps::production().with("test.hold"),
+            ai: None,
             file: None,
         },
         false,
