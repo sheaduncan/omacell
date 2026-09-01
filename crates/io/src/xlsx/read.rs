@@ -212,6 +212,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
 
     apply_print_defined_names(&mut wb);
     load_omacell_parts(&mut wb, &package);
+    super::ai_formula::restore(&mut wb, &mut warnings);
 
     let mut doc = XlsxDocument {
         workbook: wb,

@@ -25,6 +25,116 @@ struct FileSaveAsArgs {
     path: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AgentTurnArgs {
+    prompt: String,
+    #[serde(default)]
+    apply: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FormulaArgs {
+    #[serde(default)]
+    prompt: String,
+    #[serde(default, rename = "ref")]
+    reference: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CompleteArgs {
+    prefix: String,
+}
+
+fn register_test_agent(bus: &mut Bus) {
+    bus.registry_mut()
+        .register::<AgentTurnArgs, _>(
+            CommandSpec {
+                id: "ai.agent.turn",
+                doc: "Recorded in-app agent turn",
+                kind: CommandKind::Query,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, args| {
+                let target = if args.prompt.contains("B1") {
+                    "B1"
+                } else {
+                    "A1"
+                };
+                Ok(Effect::query(json!({
+                    "prompt": args.prompt,
+                    "proposed": [{
+                        "id": "cell.set",
+                        "args": {"ref": target, "input": "agent"}
+                    }],
+                    "applied": false,
+                    "autopilot": false,
+                })))
+            },
+        )
+        .unwrap();
+}
+
+fn register_test_formula_assist(bus: &mut Bus) {
+    for id in [
+        "ai.formula.generate",
+        "ai.formula.explain",
+        "ai.formula.fix",
+        "ai.formula.refactor",
+    ] {
+        bus.registry_mut()
+            .register::<FormulaArgs, _>(
+                CommandSpec {
+                    id,
+                    doc: "Recorded formula-assist result",
+                    kind: CommandKind::Query,
+                    changeset_eligible: false,
+                    exposure: Exposure::Public,
+                    default_keys: &[],
+                },
+                move |_ctx, args| {
+                    let _request = (args.prompt, args.reference);
+                    if id == "ai.formula.explain" {
+                        Ok(Effect::query(json!({
+                            "explanation": "Adds the selected inputs."
+                        })))
+                    } else {
+                        Ok(Effect::query(json!({
+                            "formula": "=SUM(B1:C1)+D2",
+                            "scratch": "Number(6)"
+                        })))
+                    }
+                },
+            )
+            .unwrap();
+    }
+}
+
+fn register_test_completion(bus: &mut Bus) {
+    bus.registry_mut()
+        .register::<CompleteArgs, _>(
+            CommandSpec {
+                id: "ai.complete",
+                doc: "Recorded inline completion",
+                kind: CommandKind::Query,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, args| {
+                Ok(Effect::query(json!({
+                    "prefix": args.prefix,
+                    "text": "=SUM(A1:A3)"
+                })))
+            },
+        )
+        .unwrap();
+}
+
 fn register_file_lifecycle(bus: &mut Bus) {
     let register_empty =
         |bus: &mut Bus, id: &'static str, doc: &'static str, keys: &'static [&'static str]| {
@@ -201,6 +311,9 @@ fn harness_opts_with_script(
     omacell_bus::register_analysis_commands(bus.registry_mut()).unwrap();
     omacell_lua::register_script_commands(bus.registry_mut(), omacell_lua::ScriptGate::default())
         .unwrap();
+    register_test_agent(&mut bus);
+    register_test_formula_assist(&mut bus);
+    register_test_completion(&mut bus);
     register_file_lifecycle(&mut bus);
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
 

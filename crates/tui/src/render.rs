@@ -282,6 +282,12 @@ fn draw_formula_bar(
             ui,
             truecolor,
         ));
+        if let Some(ghost) = &edit.ghost {
+            spans.push(Span::styled(
+                terminal_text(ghost),
+                Style::default().add_modifier(Modifier::DIM),
+            ));
+        }
     }
     frame.render_widget(
         Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false }),
@@ -411,6 +417,8 @@ fn draw_grid(
         .iter()
         .map(|area| area.normalized())
         .collect::<Vec<_>>();
+    let review = ui.changeset_review();
+    let review_sheet = wb.sheet(sheet).map(|sheet| sheet.name.as_str());
     let cursor_style = cfg.appearance.cursor_style.as_str();
     let selection_style = cfg.appearance.selection_style.as_str();
     let zebra = cfg.appearance.zebra_rows;
@@ -461,7 +469,14 @@ fn draw_grid(
                             && origin.col == col.index
                     });
                 let (text, align) = if editing_here {
-                    (edit.buffer.clone(), Align::Left)
+                    (
+                        format!(
+                            "{}{}",
+                            edit.buffer,
+                            edit.ghost.as_deref().unwrap_or_default()
+                        ),
+                        Align::Left,
+                    )
                 } else if subline == 0 {
                     cell_text(
                         wb,
@@ -507,6 +522,18 @@ fn draw_grid(
                 );
                 if slot.is_some_and(|slot| slot.flags.stale()) {
                     style = style.add_modifier(Modifier::DIM);
+                }
+                if let Some(mark) = review.as_ref().and_then(|review| {
+                    review_sheet.and_then(|name| review.cell_mark(name, row.index, col.index))
+                }) {
+                    style = style.bg(if mark.accepted {
+                        ratatui::style::Color::Indexed(2)
+                    } else {
+                        ratatui::style::Color::Indexed(1)
+                    });
+                    if mark.selected {
+                        style = style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
+                    }
                 }
                 if let Some(region) = spill.region_at(sheet, row.index, col.index) {
                     let on_edge = row.index == region.origin.row
@@ -1173,7 +1200,20 @@ fn draw_panel(
         }
         "goto" => format!("goto: {}", ui.goto().target),
         "keys" => "F1 keys overlay\nEsc closes panels\nCtrl+Q quits".into(),
-        "changeset" => "changeset review (WP-07a store)".into(),
+        "changeset" => ui
+            .changeset_review()
+            .map_or_else(|| "no proposed changesets".into(), |review| review.body()),
+        "agent" => ui.agent_panel().body(),
+        "formula" => {
+            let mut body = ui
+                .formula_assist()
+                .map_or_else(|| "no formula-assist result".into(), |assist| assist.body());
+            if let Some(review) = ui.changeset_review() {
+                body.push_str("\n\n");
+                body.push_str(&review.body());
+            }
+            body
+        }
         "comments" => "comments (WP-19)".into(),
         "format" => "format panel (WP-18)".into(),
         "sort" | "filter" => format!("{id} panel (WP-17)"),

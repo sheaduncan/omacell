@@ -46,3 +46,27 @@ jobs:
           else
             echo "No fuzz targets yet; skip."
           fi
+
+  local-model-evals:
+    name: local-model-evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-28
+        with:
+          toolchain: 1.98.0
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Start loopback model
+        run: |
+          docker run -d --name omacell-ollama -p 11434:11434 ollama/ollama
+          docker exec omacell-ollama ollama pull qwen2.5:0.5b
+
+      - name: Score WP-23 eval suite
+        env:
+          OMACELL_LOCAL_EVAL_ENDPOINT: http://127.0.0.1:11434/v1
+          OMACELL_LOCAL_EVAL_MODEL: qwen2.5:0.5b
+        run: cargo test -p omacell-ai --test local_model_eval -- --ignored --nocapture

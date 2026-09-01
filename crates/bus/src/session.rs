@@ -14,8 +14,9 @@ use crate::changeset::{ChangesetStore, MAX_EFFECT_RECORDS};
 use crate::commands::register_core;
 use crate::error as bus_error;
 use crate::event::{EventBus, SubscriberId};
-use crate::handler::{CommandContext, Effect};
+use crate::handler::{CommandContext, Effect, TaskCtl};
 use crate::policy::MutationPolicy;
+use crate::preview::{CellPreview, ChangePreview, ChangePreviewItem};
 use crate::registry::{CommandRegistry, Exposure};
 
 /// Outcome of a dry-run. Live session state is not modified.
@@ -267,6 +268,124 @@ impl Bus {
             id: changeset.id.clone(),
         });
         Ok(changeset)
+    }
+
+    /// Replace the accepted command subset of a proposal without touching live state.
+    pub fn revise_proposal(
+        &mut self,
+        origin: Origin,
+        id: &ChangesetId,
+        forward: Vec<CommandCall>,
+    ) -> Result<Changeset, CoreError> {
+        if !MutationPolicy::allow_apply(origin) {
+            return Err(bus_error::denied(
+                "this origin cannot revise a changeset proposal",
+            ));
+        }
+        let proposal_origin = self.changesets.get(id)?.origin;
+        let effect = self.run(proposal_origin, &forward, Run::propose())?;
+        let changeset =
+            self.changesets
+                .replace_proposed(id, forward, effect.inverse, effect.summary)?;
+        self.events.emit(Event::ChangesetProposed {
+            id: changeset.id.clone(),
+        });
+        Ok(changeset)
+    }
+
+    /// Reject and remove a proposal without touching live state.
+    pub fn discard_proposal(
+        &mut self,
+        origin: Origin,
+        id: &ChangesetId,
+    ) -> Result<Changeset, CoreError> {
+        if !MutationPolicy::allow_apply(origin) {
+            return Err(bus_error::denied(
+                "this origin cannot discard a changeset proposal",
+            ));
+        }
+        self.changesets.remove_proposed(id)
+    }
+
+    /// Build bounded command-local before/after data for a proposal.
+    pub fn preview_changeset(&self, id: &ChangesetId) -> Result<ChangePreview, CoreError> {
+        use std::collections::BTreeSet;
+
+        let changeset = self.changesets.get(id)?.clone();
+        let forward = self.changesets.forward_for_apply(id)?.to_vec();
+        let mut workbook = self.workbook.clone();
+        let mut engine = clone_engine(&self.engine);
+        let mut items = Vec::with_capacity(forward.len());
+        for command in forward {
+            let before = workbook.clone();
+            let effect = dispatch(
+                &self.registry,
+                &mut workbook,
+                &mut engine,
+                changeset.origin,
+                std::slice::from_ref(&command),
+                false,
+                true,
+                &TaskCtl::default(),
+            )?;
+            // Effects already enforce MAX_EFFECT_RECORDS. Building the preview
+            // from their bounded coordinates keeps review proportional to the
+            // command, rather than scanning an arbitrarily large workbook.
+            let coordinates = effect
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::CellChanged { sheet, row, col } => Some((sheet.index(), *row, *col)),
+                    _ => None,
+                })
+                .chain(
+                    effect
+                        .dirty
+                        .iter()
+                        .map(|cell| (cell.sheet.index(), cell.row, cell.col)),
+                )
+                .collect::<BTreeSet<_>>();
+            if coordinates.len() > MAX_EFFECT_RECORDS {
+                return Err(bus_error::changeset_limit(format!(
+                    "preview has more than {MAX_EFFECT_RECORDS} changed cells"
+                )));
+            }
+            let mut cells = Vec::new();
+            for (sheet_index, row, col) in coordinates {
+                let sheet = omacell_core::addr::SheetId::new(sheet_index);
+                let old = before.get(sheet, row, col).ok().flatten();
+                let new = workbook.get(sheet, row, col).ok().flatten();
+                if old == new {
+                    continue;
+                }
+                let name = workbook
+                    .sheet(sheet)
+                    .or_else(|| before.sheet(sheet))
+                    .map_or_else(
+                        || format!("Sheet{}", sheet.index()),
+                        |sheet| sheet.name.clone(),
+                    );
+                cells.push(CellPreview {
+                    sheet: name,
+                    row,
+                    col,
+                    before: old.map(|slot| crate::logical::slot_input(&before, slot)),
+                    after: new.map(|slot| crate::logical::slot_input(&workbook, slot)),
+                    style_changed: old.map(|slot| slot.style) != new.map(|slot| slot.style),
+                });
+            }
+            items.push(ChangePreviewItem {
+                command,
+                summary: effect.summary,
+                cells,
+            });
+        }
+        Ok(ChangePreview {
+            id: changeset.id,
+            origin: changeset.origin,
+            summary: changeset.summary,
+            items,
+        })
     }
 
     /// Apply a proposed changeset as one undo unit and recalculate once.

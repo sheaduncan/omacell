@@ -68,6 +68,9 @@ pub fn formula_bar(
         if response.changed() && !session.edit().is_idle() {
             changed = Some(text.clone());
         }
+        if let Some(ghost) = session.edit().ghost {
+            ui.label(RichText::new(ghost).color(theme.muted).monospace());
+        }
     });
     changed
 }
@@ -195,7 +198,20 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
         }
         "goto" => format!("goto: {}", session.goto().target),
         "keys" => "F1 keys overlay\nEsc closes panels\nCtrl+Q quits".into(),
-        "changeset" => "changeset review (WP-07a store)".into(),
+        "changeset" => session
+            .changeset_review()
+            .map_or_else(|| "no proposed changesets".into(), |review| review.body()),
+        "agent" => session.agent_panel().body(),
+        "formula" => {
+            let mut body = session
+                .formula_assist()
+                .map_or_else(|| "no formula-assist result".into(), |assist| assist.body());
+            if let Some(review) = session.changeset_review() {
+                body.push_str("\n\n");
+                body.push_str(&review.body());
+            }
+            body
+        }
         "format" => "format panel (WP-18)".into(),
         other => format!("{other} panel"),
     });

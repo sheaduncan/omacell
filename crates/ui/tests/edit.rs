@@ -108,3 +108,18 @@ fn localized_entry_becomes_canonical_without_touching_strings() {
         "=SUM(1.5,2.5,\"1,5\")"
     );
 }
+
+#[test]
+fn ghost_completion_is_stale_safe_and_accepts_only_the_suffix() {
+    let mut edit = EditState::default();
+    edit.begin(EditSurface::FormulaBar, cell(0, 0), "=SU");
+    assert!(edit.set_ghost("=SU", "=SUM(A1:A3)"));
+    assert_eq!(edit.ghost.as_deref(), Some("M(A1:A3)"));
+    assert!(edit.accept_ghost());
+    assert_eq!(edit.buffer, "=SUM(A1:A3)");
+    assert!(edit.ghost.is_none());
+
+    assert!(!edit.set_ghost("=stale", "+1"));
+    edit.insert_char('+');
+    assert!(edit.ghost.is_none());
+}

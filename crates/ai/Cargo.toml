@@ -31,6 +31,7 @@ tracing = "0.1"
 calamine = "0.36"
 criterion = { workspace = true }
 insta = { version = "1", features = ["json"] }
+omacell-bus = { path = "../bus", version = "0.0.0" }
 omacell-fn = { path = "../fn", version = "0.0.0" }
 proptest = { workspace = true }
 tempfile = "3"

@@ -37,6 +37,8 @@ pub struct GuiTheme {
     pub selection_border: Color32,
     /// Error.
     pub error: Color32,
+    /// Success.
+    pub success: Color32,
     /// Warning.
     pub warning: Color32,
     /// Stale hatch.
@@ -79,6 +81,7 @@ impl GuiTheme {
             selection: role(roles, "state.selection"),
             selection_border: role(roles, "state.selection_border"),
             error: role(roles, "semantic.error"),
+            success: role(roles, "semantic.success"),
             warning: role(roles, "semantic.warning"),
             stale: role(roles, "state.stale"),
             references: std::array::from_fn(|i| role(roles, &format!("references.{i}"))),

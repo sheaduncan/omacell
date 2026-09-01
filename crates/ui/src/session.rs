@@ -8,15 +8,18 @@ use omacell_conf::{Config, LoadedConfig};
 use omacell_core::addr::SheetId;
 use omacell_core::error::CoreError;
 
+use crate::agent_panel::AgentPanel;
 use crate::clipboard::ClipboardPayload;
 use crate::edit::{EditState, EditSurface};
 use crate::error;
 use crate::find::{FindReplace, GoTo};
+use crate::formula_assist::FormulaAssist;
 use crate::keymap::{Keymap, KeymapRoots};
 use crate::mode::{KeyModel, Mode};
 use crate::palette::{AiPlanProvider, Palette};
 use crate::panel::PanelState;
 use crate::persist::SessionState;
+use crate::review::ChangesetReview;
 use crate::selection::Selection;
 use crate::status::StatusLine;
 use crate::undo::UndoHistory;
@@ -36,6 +39,9 @@ pub(crate) struct UiInner {
     pub viewport: Viewport,
     pub palette: Palette,
     pub panel: PanelState,
+    pub changeset_review: Option<ChangesetReview>,
+    pub agent_panel: AgentPanel,
+    pub formula_assist: Option<FormulaAssist>,
     pub status: StatusLine,
     pub undo: UndoHistory,
     pub session: SessionState,
@@ -231,6 +237,39 @@ impl UiSession {
     /// Replace docked-panel presentation after a frontend resize or focus change.
     pub fn set_panel(&self, panel: PanelState) {
         self.lock().panel = panel;
+    }
+
+    /// Active proposed-changeset review, if any.
+    #[must_use]
+    pub fn changeset_review(&self) -> Option<ChangesetReview> {
+        self.lock().changeset_review.clone()
+    }
+
+    /// Replace or clear the active proposed-changeset review.
+    pub fn set_changeset_review(&self, review: Option<ChangesetReview>) {
+        self.lock().changeset_review = review;
+    }
+
+    /// Retained in-app agent transcript, entry, and policy presentation.
+    #[must_use]
+    pub fn agent_panel(&self) -> AgentPanel {
+        self.lock().agent_panel.clone()
+    }
+
+    /// Replace the retained in-app agent panel state.
+    pub fn set_agent_panel(&self, panel: AgentPanel) {
+        self.lock().agent_panel = panel;
+    }
+
+    /// Latest formula-assist result.
+    #[must_use]
+    pub fn formula_assist(&self) -> Option<FormulaAssist> {
+        self.lock().formula_assist.clone()
+    }
+
+    /// Replace or clear the formula-assist result.
+    pub fn set_formula_assist(&self, assist: Option<FormulaAssist>) {
+        self.lock().formula_assist = assist;
     }
 
     /// Current status-line presentation.
@@ -452,6 +491,13 @@ impl UiSession {
     pub fn handle_key(&self, event: crate::event::KeyEvent) -> crate::keymap::KeyOutcome {
         let mut g = self.lock();
         if !g.edit.is_idle() {
+            if matches!(
+                (event.code, event.ctrl, event.alt, event.shift),
+                (crate::event::KeyCode::Tab, false, false, false)
+            ) && g.edit.accept_ghost()
+            {
+                return crate::keymap::KeyOutcome::Pending;
+            }
             match (event.code, event.ctrl, event.alt) {
                 (crate::event::KeyCode::Enter, false, true) => {
                     g.edit.insert_char('\n');
@@ -585,6 +631,9 @@ fn load_inner(config: &LoadedConfig, roots: &KeymapRoots) -> Result<UiInner, Cor
             width: config.config.layout.panel_width,
             grid_focused: true,
         },
+        changeset_review: None,
+        agent_panel: AgentPanel::default(),
+        formula_assist: None,
         status: StatusLine::default(),
         undo: UndoHistory::default(),
         session: SessionState::default(),

@@ -13,7 +13,7 @@ use omacell_core::style::{Border, BorderSide, BorderStyle};
 use omacell_core::style::{Color, Fill, HorizontalAlign, Style};
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
-use omacell_ui::{UiSession, Viewport};
+use omacell_ui::{EditSurface, UiSession, Viewport};
 
 use crate::theme::GuiTheme;
 
@@ -171,6 +171,7 @@ pub fn paint(
     let (first_row, _, _) = vp.screen_rows();
     let first_col = vp.first_col.max(vp.freeze.cols);
     let show_formulas = session.show_formulas();
+    let edit = session.edit();
     let grid_lines = session.config().appearance.grid_lines;
     let font = FontId::monospace((theme.ui_font_size_pt as f32 * zoom).clamp(9.0, 48.0));
     let hair = 1.0_f32 / ppp.max(1.0);
@@ -244,6 +245,8 @@ pub fn paint(
     }
 
     let active = sel.active();
+    let review = session.changeset_review();
+    let review_sheet = wb.sheet(sheet).map(|sheet| sheet.name.as_str());
     let (r0, c0, r1, c1) = active.normalized();
     let last_visible_col = header_cols.last().map(|(col, _, _)| *col);
     let last_visible_row = row_list.last().copied();
@@ -286,7 +289,45 @@ pub fn paint(
             if in_sel {
                 painter.rect_filled(cell_rect, 0.0, theme.selection.gamma_multiply(0.45));
             }
-            let (text, align, is_error, stale) = cell_text(wb, sheet, row, *col, show_formulas);
+            if let Some(mark) = review
+                .as_ref()
+                .and_then(|review| review_sheet.and_then(|name| review.cell_mark(name, row, *col)))
+            {
+                let color = if mark.accepted {
+                    theme.success
+                } else {
+                    theme.error
+                };
+                painter.rect_filled(cell_rect, 0.0, color.gamma_multiply(0.32));
+                if mark.selected {
+                    painter.rect_stroke(
+                        cell_rect.shrink(1.0),
+                        0.0,
+                        Stroke::new(2.0_f32, theme.warning),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
+            let editing_here = edit.surface == EditSurface::InCell
+                && edit.origin.is_some_and(|origin| {
+                    origin.sheet.unwrap_or(sheet) == sheet
+                        && origin.row == row
+                        && origin.col == *col
+                });
+            let (text, align, is_error, stale) = if editing_here {
+                (
+                    format!(
+                        "{}{}",
+                        edit.buffer,
+                        edit.ghost.as_deref().unwrap_or_default()
+                    ),
+                    Align::Left,
+                    false,
+                    false,
+                )
+            } else {
+                cell_text(wb, sheet, row, *col, show_formulas)
+            };
             let mut color = theme.foreground;
             if is_error {
                 color = theme.error;

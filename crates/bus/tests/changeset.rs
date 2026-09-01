@@ -11,6 +11,7 @@ use omacell_core::recalc::RecalcEngine;
 use omacell_core::storage::CellSlot;
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
+use proptest::prelude::*;
 use serde_json::json;
 
 fn set(cell: &str, input: &str) -> CommandCall {
@@ -31,6 +32,121 @@ fn propose_does_not_mutate_live() {
     assert!(cs.inverse.is_empty());
     assert_eq!(common::logical_dump(&bus), start);
     assert_eq!(common::undo_depth(&bus), (false, false));
+}
+
+#[test]
+fn review_can_revise_a_proposal_before_one_unit_apply() {
+    let mut bus = common::bus();
+    let proposed = bus
+        .propose(
+            Origin::PalettePlan,
+            vec![set("A1", "rejected"), set("B1", "accepted")],
+        )
+        .unwrap();
+
+    let revised = bus
+        .revise_proposal(Origin::User, &proposed.id, vec![set("B1", "accepted")])
+        .unwrap();
+    assert_eq!(revised.id, proposed.id);
+    assert_eq!(revised.origin, Origin::PalettePlan);
+    assert_eq!(revised.status, ChangesetStatus::Proposed);
+    assert_eq!(revised.forward, vec![set("B1", "accepted")]);
+    assert_eq!(revised.summary.cells, 1);
+    assert!(common::cell_value(&bus, 0, 0).is_none());
+    assert!(common::cell_value(&bus, 0, 1).is_none());
+
+    bus.apply(Origin::User, &proposed.id).unwrap();
+    assert!(common::cell_value(&bus, 0, 0).is_none());
+    let slot = bus
+        .workbook()
+        .get(bus.workbook().active_sheet(), 0, 1)
+        .unwrap()
+        .unwrap();
+    let Value::Text(text) = slot.value else {
+        panic!("expected accepted text");
+    };
+    assert_eq!(bus.workbook().intern().strings.get(text), Some("accepted"));
+
+    common::exec_ok(&mut bus, "edit.undo", json!({}));
+    assert!(common::cell_value(&bus, 0, 1).is_none());
+}
+
+#[test]
+fn invalid_revision_is_atomic_and_keeps_the_original_proposal() {
+    let mut bus = common::bus();
+    let proposed = bus
+        .propose(Origin::InAppAgent, vec![set("A1", "original")])
+        .unwrap();
+    let before = bus.get_changeset(&proposed.id).unwrap().clone();
+
+    let err = bus
+        .revise_proposal(
+            Origin::User,
+            &proposed.id,
+            vec![CommandCall {
+                id: CommandId::new("cell.set").unwrap(),
+                args: json!({"ref": "not-a-ref", "input": "invalid"}),
+            }],
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "addr.parse");
+    assert_eq!(bus.get_changeset(&proposed.id).unwrap(), &before);
+    assert!(common::cell_value(&bus, 0, 0).is_none());
+}
+
+#[test]
+fn review_can_discard_a_proposal_without_mutating() {
+    let mut bus = common::bus();
+    let proposed = bus
+        .propose(Origin::ExternalAgent, vec![set("A1", "discarded")])
+        .unwrap();
+
+    let discarded = bus.discard_proposal(Origin::User, &proposed.id).unwrap();
+    assert_eq!(discarded, proposed);
+    assert!(bus.list_changesets().is_empty());
+    assert!(common::cell_value(&bus, 0, 0).is_none());
+    let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::CHANGESET_NOT_FOUND);
+}
+
+#[test]
+fn review_preview_reports_before_after_cells_without_mutating() {
+    let mut bus = common::bus();
+    common::exec_ok(
+        &mut bus,
+        "cell.set",
+        json!({"ref": "A1", "input": "before"}),
+    );
+    let proposed = bus
+        .propose(
+            Origin::PalettePlan,
+            vec![set("A1", "after"), set("B1", "new")],
+        )
+        .unwrap();
+
+    let preview = bus.preview_changeset(&proposed.id).unwrap();
+    assert_eq!(preview.id, proposed.id);
+    assert_eq!(preview.origin, Origin::PalettePlan);
+    assert_eq!(preview.items.len(), 2);
+    assert_eq!(preview.items[0].cells.len(), 1);
+    assert_eq!(preview.items[0].cells[0].sheet, "Sheet1");
+    assert_eq!(preview.items[0].cells[0].row, 0);
+    assert_eq!(preview.items[0].cells[0].col, 0);
+    assert_eq!(preview.items[0].cells[0].before.as_deref(), Some("before"));
+    assert_eq!(preview.items[0].cells[0].after.as_deref(), Some("after"));
+    assert_eq!(preview.items[1].cells[0].before, None);
+    assert_eq!(preview.items[1].cells[0].after.as_deref(), Some("new"));
+
+    let slot = bus
+        .workbook()
+        .get(bus.workbook().active_sheet(), 0, 0)
+        .unwrap()
+        .unwrap();
+    let Value::Text(text) = slot.value else {
+        panic!("expected original text");
+    };
+    assert_eq!(bus.workbook().intern().strings.get(text), Some("before"));
+    assert!(common::cell_value(&bus, 0, 1).is_none());
 }
 
 #[test]
@@ -151,6 +267,39 @@ fn invalid_lifecycle_transitions_fail_before_mutating_live_state() {
     assert_eq!(err.code, omacell_bus::codes::CHANGESET_STATE);
     assert_eq!(common::logical_dump(&bus), before_apply);
     assert!(bus.drain(sub).is_empty());
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64,
+        failure_persistence: Some(Box::new(proptest::test_runner::FileFailurePersistence::Off)),
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn model_review_and_apply_revert_inverse_hold_for_generated_batches(
+        edits in prop::collection::vec((0u32..20, 0u16..10, "[a-z0-9]{0,12}"), 1..20),
+    ) {
+        let mut bus = common::bus();
+        common::exec_ok(&mut bus, "cell.set", json!({"ref":"A1", "input":"seed"}));
+        let before = common::logical_dump(&bus);
+        let calls = edits
+            .into_iter()
+            .map(|(row, col, input)| {
+                let reference = format!(
+                    "{}{}",
+                    omacell_core::addr::col_to_letters(col).unwrap(),
+                    row + 1,
+                );
+                set(&reference, &input)
+            })
+            .collect();
+        let proposed = bus.propose(Origin::PalettePlan, calls).unwrap();
+        prop_assert_eq!(common::logical_dump(&bus), before.clone());
+        bus.apply(Origin::User, &proposed.id).unwrap();
+        bus.revert(Origin::User, &proposed.id).unwrap();
+        prop_assert_eq!(common::logical_dump(&bus), before);
+    }
 }
 
 #[test]
