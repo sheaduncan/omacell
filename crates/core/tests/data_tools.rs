@@ -1066,6 +1066,7 @@ fn flash_fill_first_word() {
 }
 
 #[test]
+#[ignore = "nightly wall-clock performance gate"]
 fn cf_eval_100k_cells_20_rules_is_under_100ms() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
@@ -1100,8 +1101,8 @@ fn cf_eval_100k_cells_20_rules_is_under_100ms() {
     let overlays = resolve_overlay(&wb, s, range(0, 0, 4999, 19)).unwrap();
     let elapsed = start.elapsed();
     assert_eq!(overlays.len(), 100_000);
-    // Debug builds are not the acceptance target; release is measured in the
-    // criterion bench and must stay under 100 ms after a one-cell edit.
+    // The required PR lane runs debug correctness only. Nightly invokes this
+    // ignored test in release mode for the product budget.
     if !cfg!(debug_assertions) {
         assert!(
             elapsed.as_millis() < 100,

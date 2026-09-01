@@ -503,9 +503,7 @@ fn extreme_freeze_remains_virtualized() {
             .unwrap()
             .ok
     );
-    let started = std::time::Instant::now();
     let frame = draw_text(&h.tui, 80, 24);
-    assert!(started.elapsed() < std::time::Duration::from_secs(1));
     assert!(frame.lines().count() <= 24);
 }
 

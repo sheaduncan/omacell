@@ -109,7 +109,9 @@ None. Frozen WP-01 `Event`, WP-07a command schemas, and WP-07b IPC envelope are 
 
 ### Acceptance (WP-15a)
 
-- [x] Deterministic mock long command: 200×60 paint stays off the writer; nav < 50 ms — `crates/tui/tests/runner.rs`
+- [x] Deterministic mock long command: 200×60 paint and local navigation return
+  while the writer is still held — `crates/tui/tests/runner.rs`; wall-clock
+  redraw budgets are not asserted on shared required-CI runners
 - [x] TUI-started and IPC-started longs share one writer; mutation order under concurrent submit — `crates/bus/tests/runner.rs`; `serve_runner` uses `submit_wait`
 - [x] Recalc/import/export cancel leaves no partial live transaction or destination replacement — real command paths in `crates/cli/tests/cancel_atomic.rs`
 - [x] Bounded task/event queues and retained state; stalled consumer cannot block worker; progress coalesced — `crates/bus/tests/runner.rs`

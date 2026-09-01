@@ -37,6 +37,9 @@ jobs:
       - name: GUI software-render performance gate
         run: cargo +nightly test --release -p omacell-gui --test performance -- --ignored --nocapture
 
+      - name: Conditional-format performance gate
+        run: cargo +nightly test --release -p omacell-core --test data_tools cf_eval_100k_cells_20_rules_is_under_100ms -- --ignored --exact --nocapture
+
       - name: Fuzz targets (10 minutes each)
         run: |
           if [[ -f fuzz/Cargo.toml ]]; then
