@@ -211,6 +211,17 @@ impl UiSession {
         self.lock().viewport = viewport;
     }
 
+    /// Atomically snapshot the retained fields that make up a persisted sheet view.
+    #[must_use]
+    pub fn sheet_view_snapshot(&self) -> (Selection, Viewport, bool) {
+        let state = self.lock();
+        (
+            state.selection.clone(),
+            state.viewport.clone(),
+            state.show_formulas,
+        )
+    }
+
     /// Session persistence blob.
     #[must_use]
     pub fn session_state(&self) -> SessionState {

@@ -102,6 +102,14 @@ result `{close: true}`; `file.saveas` uses the existing save pipeline and makes
 the destination the active path. The catalog envelope remains schema version 1
 and existing command ids and schemas are unchanged.
 
+Interactive `file.save` and `file.saveas` snapshot the retained UI selection,
+scroll position, zoom, frozen panes, split, and show-formulas mode into the
+selected sheet's `ViewState`. The validated view is written through the atomic
+save path and installed in the live workbook only after that write succeeds;
+the workbook-owned gridline setting is preserved. Frozen and split panes are
+mutually exclusive, and save gives frozen panes precedence when canonicalizing
+an older inconsistent retained state.
+
 The final pre-release command integration adds five public workflow commands:
 
 - `name.manager` uses a closed empty-object schema and opens the session's

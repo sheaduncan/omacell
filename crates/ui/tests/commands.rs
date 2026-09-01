@@ -5,11 +5,12 @@ use omacell_conf::{Paths, load};
 use omacell_core::command::Origin;
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
+use omacell_core::sheet::FreezePanes;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
 use omacell_ui::{
     EditSurface, FindScope, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, Mode, UiSession,
-    register_ui_commands,
+    apply_local_command, register_ui_commands,
 };
 use serde_json::json;
 
@@ -42,6 +43,32 @@ fn harness_with_keymap(keymap: &str) -> (tempfile::TempDir, UiSession, Bus) {
         .unwrap();
     register_ui_commands(bus.registry_mut(), &session).unwrap();
     (dir, session, bus)
+}
+
+#[test]
+fn freeze_and_split_are_mutually_exclusive_in_both_dispatch_paths() {
+    let (_dir, session, mut bus) = harness();
+    let mut selection = session.selection();
+    selection.move_by(2, 3);
+    session.set_selection(selection);
+
+    assert!(bus.execute(Origin::User, "view.split", json!({})).ok);
+    assert_eq!(session.viewport().freeze, FreezePanes::default());
+    assert!(session.viewport().split.is_some());
+    assert!(bus.execute(Origin::User, "view.freeze", json!({})).ok);
+    assert_eq!(session.viewport().freeze, FreezePanes { rows: 2, cols: 3 });
+    assert!(session.viewport().split.is_none());
+
+    apply_local_command(&session, bus.workbook(), "view.split", &json!({}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.viewport().freeze, FreezePanes::default());
+    assert!(session.viewport().split.is_some());
+    apply_local_command(&session, bus.workbook(), "view.freeze", &json!({}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.viewport().freeze, FreezePanes { rows: 2, cols: 3 });
+    assert!(session.viewport().split.is_none());
 }
 
 fn execute_key(bus: &mut Bus, outcome: KeyOutcome) {

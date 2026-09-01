@@ -18,8 +18,8 @@ The audit:
   current production/test sources;
 - checked the live GitHub `main` ruleset (pull request plus strict required
   `check` status); and
-- used the full green `just check` and `cargo deny check` results from the
-  conditional-format integration stack as the repository gate.
+- used the full green `just check` result from the retained-view integration
+  stack and the prior green `cargo deny check` as the repository gate.
 
 An unchecked box is not silently treated as complete. After this cleanup, the
 only unchecked boxes in completed reports are the WP-15 terminal matrix and
@@ -57,9 +57,11 @@ All P1 engine/file-fidelity items from this audit are complete.
 
 ### P2 — retained UI, IPC, and terminal integration
 
-1. Flush the retained selection, scroll position, zoom, freeze, and split state
-   into the active sheet `ViewState` before save. Both frontends hydrate those
-   fields, but no reverse synchronization exists.
+1. **Complete:** interactive saves now snapshot retained selection, scroll,
+   zoom, freeze, split, and show-formulas state into the selected sheet
+   `ViewState`, preserving workbook-owned gridlines and updating the live model
+   only after the atomic file write succeeds. Lifecycle and pane-mode regression
+   suites plus the full repository gate pass.
 2. Add bounded subscribe/unsubscribe support to runner-backed IPC. The frozen
    control operations and bus-backed server already support it; live GUI/TUI
    use `serve_runner` and currently cannot expose that event stream.
@@ -134,7 +136,7 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-09` / `WP-10` | Split units, later WP-17/18/25 ownership, and fixed-range CSE preservation are covered. |
 | `WP-11` | OMC's readable/lossy-L3 policy and JSON-style writer decision are explicit. |
 | `WP-12` / `WP-13` | Composition, signal, keymap, and IPC undo decisions are resolved. |
-| `WP-14` | Deferred table is empty and count propagation is integrated; `ViewState` flush and docs command-id lint are P2. |
+| `WP-14` | Deferred table is empty, count propagation and `ViewState` save synchronization are integrated; docs command-id lint is P2. |
 | `WP-15` | Runner/bootstrap follow-ups are complete; graphics is P2 and terminal coverage is HUMAN/G4. |
 | `WP-15a` | Worker/cancellation is complete; runner-backed subscriptions are P2; stale-cell hatching is post-1.0. |
 | `WP-16` | Clipboard and conditional formatting are integrated; remaining GUI completion and hardware decisions are WP-28/HUMAN. |
