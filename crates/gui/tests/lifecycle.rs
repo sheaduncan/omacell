@@ -9,12 +9,44 @@ use common::{launch_opts, launch_script, launch_theme};
 use egui::{Event, Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+#[cfg(unix)]
+use omacell_bus::ipc::{default_runtime_dir, discover_focused};
 use omacell_core::changeset::CommandCall;
 use omacell_core::command::{CommandId, Origin};
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_gui::Gui;
 use omacell_ui::{EditSurface, FindScope, KeyCode, KeyEvent};
+
+#[cfg(unix)]
+#[test]
+fn native_window_focus_publishes_the_default_ipc_target() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, true, &cc.egui_ctx).unwrap());
+    let runtime = default_runtime_dir();
+    let pid = std::process::id();
+
+    harness.step();
+    assert_eq!(discover_focused(&runtime).unwrap().unwrap().pid, pid);
+
+    harness.input_mut().focused = false;
+    harness.step();
+    assert_ne!(
+        discover_focused(&runtime)
+            .unwrap()
+            .map(|instance| instance.pid),
+        Some(pid)
+    );
+
+    harness.input_mut().focused = true;
+    harness.step();
+    assert_eq!(discover_focused(&runtime).unwrap().unwrap().pid, pid);
+
+    drop(harness);
+    assert!(!runtime.join(format!("{pid}.focus")).exists());
+}
 
 #[test]
 fn startup_file_is_opened_through_the_task_runner() {

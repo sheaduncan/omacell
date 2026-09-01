@@ -170,7 +170,7 @@ pub enum Commands {
         /// Suppress per-instance human output.
         #[arg(long)]
         quiet: bool,
-        /// Socket path (default: newest live instance).
+        /// Socket path (default: focused instance, then newest live instance).
         #[arg(long, conflicts_with = "all")]
         socket: Option<PathBuf>,
     },

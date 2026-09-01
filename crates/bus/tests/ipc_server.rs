@@ -12,8 +12,8 @@ use std::thread;
 use std::time::Duration;
 
 use omacell_bus::ipc::{
-    IpcClient, MAX_EVENT_QUEUE, Mode, default_runtime_dir, discover_newest, discovered_socket,
-    serve, serve_runner, serve_shared,
+    IpcClient, MAX_EVENT_QUEUE, Mode, default_runtime_dir, discover_default, discover_focused,
+    discover_newest, discovered_socket, serve, serve_runner, serve_shared,
 };
 use omacell_bus::{Bus, LongOps, TaskRunner};
 use omacell_core::changeset::CommandCall;
@@ -344,6 +344,71 @@ fn discovery_metadata_cannot_redirect_outside_the_runtime_dir() {
     assert_eq!(newest.socket, format!("{pid}.sock"));
     assert_eq!(discovered_socket(&dir, &newest), handle.socket_path());
     handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn focus_marker_drives_default_discovery_and_is_removed_on_shutdown() {
+    let (handle, dir) = start();
+    let newest_path = dir.join("1.sock");
+    let _newest_listener = UnixListener::bind(&newest_path).unwrap();
+    std::fs::set_permissions(&newest_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(
+        dir.join("1.instance"),
+        r#"{"v":1,"pid":1,"socket":"1.sock","started_unix_ms":18446744073709551615}"#,
+    )
+    .unwrap();
+    assert_eq!(discover_newest(&dir).unwrap().unwrap().pid, 1);
+    assert!(discover_focused(&dir).unwrap().is_none());
+
+    handle.set_focused(true).unwrap();
+    let focused = discover_focused(&dir).unwrap().unwrap();
+    assert_eq!(focused.pid, std::process::id());
+    assert_eq!(discover_default(&dir).unwrap(), Some(focused));
+
+    handle.set_focused(false).unwrap();
+    assert!(discover_focused(&dir).unwrap().is_none());
+    assert_eq!(discover_default(&dir).unwrap().unwrap().pid, 1);
+
+    handle.set_focused(true).unwrap();
+    let marker = dir.join(format!("{}.focus", std::process::id()));
+    assert!(marker.exists());
+    handle.shutdown();
+    assert!(!marker.exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn startup_clears_a_recycled_pid_focus_marker() {
+    let dir = runtime_dir();
+    omacell_bus::ipc::prepare_runtime_dir(&dir).unwrap();
+    let marker = dir.join(format!("{}.focus", std::process::id()));
+    std::fs::write(&marker, []).unwrap();
+    std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let handle = serve(dir.clone(), bus()).unwrap();
+    assert!(discover_focused(&dir).unwrap().is_none());
+    assert!(!marker.exists());
+
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn focus_marker_refuses_symlinks_without_touching_the_target() {
+    let (handle, dir) = start();
+    let target = dir.join("focus-target");
+    std::fs::write(&target, b"leave me").unwrap();
+    let marker = dir.join(format!("{}.focus", std::process::id()));
+    std::os::unix::fs::symlink(&target, &marker).unwrap();
+
+    let error = handle.set_focused(true).unwrap_err();
+    assert_eq!(error.code, omacell_bus::codes::IPC_SOCKET);
+    assert_eq!(std::fs::read(&target).unwrap(), b"leave me");
+    assert!(marker.symlink_metadata().unwrap().file_type().is_symlink());
+
+    handle.shutdown();
+    assert_eq!(std::fs::read(&target).unwrap(), b"leave me");
     let _ = std::fs::remove_dir_all(dir);
 }
 

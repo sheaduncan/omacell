@@ -28,7 +28,7 @@ Expose the WP-07a registry, changesets, and event stream over a bounded, version
 - Hard limits documented and tested before allocation: maximum frame bytes, JSON nesting, connections, subscriptions, and queued event bytes. Oversized frames are rejected and the server remains usable.
 - Two or more clients may issue requests concurrently; all workbook mutation is serialized through the single-writer command context and replies retain per-client request ordering.
 - Client library with request correlation, subscribe iterator, timeouts, clean disconnect, and machine-readable errors.
-- Instance discovery for the newest live owned instance. Focused-window targeting is deferred until WP-14/WP-16 can publish focus state.
+- Instance discovery targets the focused live owned instance by default and falls back to the newest live instance. Focus publication was integrated after WP-14/WP-16 without changing IPC v1.
 - Fuzz target for frame decoding and state-machine tests for malformed/partial lines, disconnects, stale sockets, and event overflow.
 
 ## Protocol sketch
@@ -61,7 +61,6 @@ Exact field names and limits are fixed in the committed schemas and report befor
 
 ## Out of scope
 
-- Focused-window discovery (WP-14/WP-16).
 - CLI syntax and `--dry-run` flags (WP-13 consumes this client).
 - MCP transport (WP-21) and AI provider async work (WP-22/23).
 - File command implementations (WP-08–11/13).

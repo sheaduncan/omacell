@@ -13,7 +13,8 @@ use omacell_core::command::Origin;
 use omacell_core::error::CoreError;
 
 use super::discover::{
-    instance_path, prepare_runtime_dir, remove_stale_socket, socket_path, write_discovery,
+    instance_path, prepare_runtime_dir, remove_stale_socket, set_instance_focused, socket_path,
+    write_discovery,
 };
 use super::dispatch::{Dispatch, dispatch_bus_request, dispatch_runner_request};
 use super::protocol::{
@@ -51,6 +52,11 @@ impl IpcHandle {
         &self.dir
     }
 
+    /// Publish whether this frontend currently owns window/terminal focus.
+    pub fn set_focused(&self, focused: bool) -> Result<(), CoreError> {
+        set_instance_focused(&self.dir, self.pid, focused)
+    }
+
     /// Signal shutdown and join the accept thread.
     pub fn shutdown(mut self) {
         self.stop();
@@ -70,6 +76,7 @@ impl IpcHandle {
         for client in clients {
             let _ = client.join();
         }
+        let _ = set_instance_focused(&self.dir, self.pid, false);
         let _ = std::fs::remove_file(&self.path);
         let _ = std::fs::remove_file(instance_path(&self.dir, self.pid));
     }
@@ -94,6 +101,7 @@ pub fn serve_shared(dir: PathBuf, bus: Arc<Mutex<Bus>>) -> Result<IpcHandle, Cor
     prepare_runtime_dir(&dir)?;
     let pid = std::process::id();
     remove_stale_socket(&dir, pid)?;
+    set_instance_focused(&dir, pid, false)?;
     let path = socket_path(&dir, pid);
     if path
         .symlink_metadata()
@@ -150,6 +158,7 @@ pub fn serve_runner(dir: PathBuf, runner: TaskRunnerHandle) -> Result<IpcHandle,
     prepare_runtime_dir(&dir)?;
     let pid = std::process::id();
     remove_stale_socket(&dir, pid)?;
+    set_instance_focused(&dir, pid, false)?;
     let path = socket_path(&dir, pid);
     if path
         .symlink_metadata()

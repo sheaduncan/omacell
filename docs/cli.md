@@ -35,6 +35,11 @@ Stubs that exit 3:
 
 `omacell ipc theme.reload --all --quiet` is the Omarchy theme-set hook. It enumerates live owned instances and executes the registered `theme.reload` command. It does not add an IPC `ControlOp`.
 
+Without `--socket` or `--all`, `omacell ipc` targets the focused GUI/TUI
+instance. If no frontend has published focus yet, it falls back to the newest
+live owned instance. GUI focus comes from eframe/winit; the TUI enables and
+consumes Crossterm focus-change events.
+
 `omacell convert input.csv output.xlsx --plan plan.json` consumes the shared WP-08 `ImportPlan` JSON (bounded to 1 MiB). For JSON input, `--jq .items` selects an array with a dotted object path; it is a selector, not the full jq language. `omacell config diff` emits sorted effective user/package differences and honors `--config`.
 
 Legacy Excel 97–2003 `.xls` input is read natively, without LibreOffice or an external converter. It is read-only: use `omacell convert old.xls new.xlsx` before editing in place, or save an opened workbook to a writable format.
