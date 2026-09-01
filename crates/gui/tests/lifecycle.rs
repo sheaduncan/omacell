@@ -263,6 +263,72 @@ fn required_argument_key_opens_the_schema_prompt() {
     assert!(!harness.state().runner().is_busy());
 }
 
+#[test]
+fn name_keys_open_schema_prompts_with_selection_context() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::F(3)))
+        .unwrap();
+    let palette = harness.state().ui_session().palette();
+    assert!(palette.open);
+    assert!(palette.prompt.unwrap().contains("name"));
+    assert!(palette.query.is_empty());
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Esc))
+        .unwrap();
+    harness
+        .state_mut()
+        .step_key(KeyEvent {
+            code: KeyCode::F(3),
+            ctrl: true,
+            alt: false,
+            shift: true,
+        })
+        .unwrap();
+    let palette = harness.state().ui_session().palette();
+    assert!(palette.open);
+    assert!(palette.prompt.unwrap().contains("positions"));
+    assert!(
+        palette.query.contains(r#""range":"A1:A1""#),
+        "palette query: {:?}",
+        palette.query
+    );
+    assert!(!harness.state().runner().is_busy());
+}
+
+#[test]
+fn ai_assist_key_opens_the_formula_workflow_picker_locally() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent {
+            code: KeyCode::Char('x'),
+            ctrl: true,
+            alt: false,
+            shift: true,
+        })
+        .unwrap();
+
+    let palette = harness.state().ui_session().palette();
+    assert!(palette.open);
+    assert_eq!(palette.query, "ai.formula.");
+    assert!(palette.prompt.unwrap().contains("AI assist"));
+    assert!(!harness.state().runner().is_busy());
+}
+
 fn wait_tasks(harness: &mut Harness<'_, Gui>) {
     let started = Instant::now();
     while harness.state().runner().tracked_tasks() != 0 {

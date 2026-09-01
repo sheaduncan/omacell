@@ -4,8 +4,8 @@ mod common;
 
 use omacell_bus::args::{
     CalcModeArgs, CalcRecalcArgs, CellClearArgs, CellSetArgs, EmptyArgs, FormatNumberArgs,
-    NameDefineArgs, NameRemoveArgs, RangeClearArgs, RangeSetArgs, SheetAddArgs, SheetRenameArgs,
-    SheetVisibilityArgs, StyleSetArgs,
+    NameCreateFromArgs, NameDefineArgs, NameRemoveArgs, RangeClearArgs, RangeSetArgs, SheetAddArgs,
+    SheetRenameArgs, SheetVisibilityArgs, StyleSetArgs,
 };
 use omacell_bus::{SCHEMA, commands_json};
 use omacell_core::command::Origin;
@@ -141,6 +141,7 @@ fn commands_json_is_sorted_stable_and_matches_schema() {
         "sheet.visibility",
         "name.define",
         "name.remove",
+        "name.createfrom",
         "format.number",
         "style.set",
         "calc.recalc",
@@ -203,6 +204,7 @@ fn public_arg_types_round_trip() {
         "sheet.visibility",
         "name.define",
         "name.remove",
+        "name.createfrom",
         "format.number",
         "style.set",
         "calc.recalc",
@@ -234,6 +236,9 @@ fn public_arg_types_round_trip() {
         json!({"name": "Tax", "referent": {"type": "constant", "value": 0.2}}),
     );
     assert_round_trip::<NameRemoveArgs>(json!({"name": "Tax"}));
+    assert_round_trip::<NameCreateFromArgs>(
+        json!({"range": "A1:B2", "positions": ["top", "left"]}),
+    );
     assert_round_trip::<FormatNumberArgs>(json!({"range": "A1", "format": "0.00"}));
     assert_round_trip::<StyleSetArgs>(json!({"range": "A1", "bold": true}));
     assert_round_trip::<CalcRecalcArgs>(json!({"mode": "full"}));

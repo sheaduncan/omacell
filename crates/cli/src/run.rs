@@ -692,66 +692,17 @@ fn cmd_export_chart(
     sheet: Option<&str>,
     output: Output,
 ) -> Result<(), CliError> {
-    let app = init_app_book_plan(cli, input, None)?;
-    let loaded = app.store.snapshot();
-    let theme = chart_theme_from_roles(&loaded.theme.roles);
-    let wb = app.bus.workbook().clone();
-    let sheet_id = match sheet {
-        Some(name) => wb
-            .sheet_by_name(name)
-            .map(|s| s.id)
-            .ok_or_else(|| CliError::new("chart.export", format!("unknown sheet {name}")))?,
-        None => wb.active_sheet(),
-    };
-    let chart = wb
-        .sheet(sheet_id)
-        .and_then(|s| s.charts.first())
-        .cloned()
-        .ok_or_else(|| CliError::new("chart.export", "workbook has no chart on that sheet"))?;
-    if cli.dry_run {
-        return finish_outcome(
-            omacell_core::command::Outcome::success(serde_json::json!({
-                "path": dest.display().to_string(),
-                "dry_run": true,
-            })),
-            output,
-        );
-    }
-    let png = dest
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("png"));
-    let bytes = if png {
-        omacell_io::chart_export::chart_png(&wb, &chart, &theme, 800, 480)?
+    let mut app = init_app_book_plan(cli, input, None)?;
+    let args = serde_json::json!({
+        "path": dest.display().to_string(),
+        "sheet": sheet,
+    });
+    let outcome = if cli.dry_run {
+        app.dry_run("chart.export", args)?.outcome
     } else {
-        omacell_io::chart_export::chart_svg(&wb, &chart, &theme, 800.0, 480.0)?.into_bytes()
+        app.execute("chart.export", args)
     };
-    std::fs::write(dest, bytes).map_err(|err| CliError::new("chart.export", err.to_string()))?;
-    finish_outcome(
-        omacell_core::command::Outcome::success(serde_json::json!({
-            "path": dest.display().to_string(),
-        })),
-        output,
-    )
-}
-
-fn chart_theme_from_roles(
-    roles: &std::collections::BTreeMap<String, String>,
-) -> omacell_core::chart::ChartTheme {
-    fn grab(
-        roles: &std::collections::BTreeMap<String, String>,
-        key: &str,
-        fallback: &str,
-    ) -> String {
-        roles.get(key).cloned().unwrap_or_else(|| fallback.into())
-    }
-    omacell_core::chart::ChartTheme {
-        background: grab(roles, "surfaces.background", "#1a1b26"),
-        foreground: grab(roles, "text.foreground", "#c0caf5"),
-        axis: grab(roles, "charts.axis", "#a9b1d6"),
-        gridline: grab(roles, "charts.gridline", "#3b4261"),
-        palette: std::array::from_fn(|i| grab(roles, &format!("charts.palette.{i}"), "#7aa2f7")),
-    }
+    finish_outcome(outcome, output)
 }
 
 fn read_import_plan(path: &Path) -> Result<ImportPlan, CliError> {

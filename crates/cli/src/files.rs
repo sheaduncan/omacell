@@ -147,6 +147,34 @@ pub struct FileExportArgs {
     pub range: Option<String>,
 }
 
+/// `chart.export`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChartExportArgs {
+    /// SVG or PNG destination.
+    pub path: String,
+    /// Sheet containing the chart. Omitted = active sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<String>,
+    /// Stable chart id. Omitted = first chart on the selected sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// Output width in pixels/units.
+    #[serde(default = "default_chart_width")]
+    pub width: u32,
+    /// Output height in pixels/units.
+    #[serde(default = "default_chart_height")]
+    pub height: u32,
+}
+
+const fn default_chart_width() -> u32 {
+    800
+}
+
+const fn default_chart_height() -> u32 {
+    480
+}
+
 /// `file.print`
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -251,6 +279,18 @@ pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(),
             default_keys: &["Ctrl+P"],
         },
         move |ctx, args| file_print(ctx, &print_session, args),
+    )?;
+    let chart_session = session.clone();
+    bus.registry_mut().register::<ChartExportArgs, _>(
+        CommandSpec {
+            id: "chart.export",
+            doc: "Export a chart to SVG or PNG",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        move |ctx, args| chart_export(ctx, &chart_session, args),
     )?;
     Ok(())
 }
@@ -581,6 +621,126 @@ fn file_export(
         auto_recalc: false,
         ..Effect::default()
     })
+}
+
+fn chart_export(
+    ctx: &mut CommandContext<'_>,
+    session: &FileSession,
+    args: ChartExportArgs,
+) -> Result<Effect, CoreError> {
+    let path = PathBuf::from(&args.path);
+    let format = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| CoreError::new("chart.export", "destination requires .svg or .png"))?;
+    if !matches!(format.as_str(), "svg" | "png") {
+        return Err(CoreError::new(
+            "chart.export",
+            format!("unsupported chart format .{format}"),
+        )
+        .with_hint("use an .svg or .png destination"));
+    }
+    let sheet = match args.sheet.as_deref() {
+        Some(name) => ctx
+            .workbook_ref()
+            .sheet_by_name(name)
+            .map(|sheet| sheet.id)
+            .ok_or_else(|| CoreError::new("chart.export", format!("unknown sheet {name}")))?,
+        None => ctx.workbook_ref().active_sheet(),
+    };
+    let chart = ctx
+        .workbook_ref()
+        .sheet(sheet)
+        .and_then(|sheet| match args.id {
+            Some(id) => sheet.charts.iter().find(|chart| chart.id.index() == id),
+            None => sheet.charts.first(),
+        })
+        .cloned()
+        .ok_or_else(|| {
+            CoreError::new(
+                "chart.export",
+                args.id.map_or_else(
+                    || "selected sheet has no chart".into(),
+                    |id| format!("selected sheet has no chart {id}"),
+                ),
+            )
+        })?;
+    let theme = session
+        .lock()
+        .config
+        .as_ref()
+        .map(|config| chart_theme_from_roles(&config.snapshot().theme.roles))
+        .unwrap_or_else(omacell_core::chart::ChartTheme::neutral);
+    let bytes = if format == "png" {
+        omacell_io::chart_export::chart_png(
+            ctx.workbook_ref(),
+            &chart,
+            &theme,
+            args.width,
+            args.height,
+        )?
+    } else {
+        omacell_io::chart_export::chart_svg(
+            ctx.workbook_ref(),
+            &chart,
+            &theme,
+            args.width as f32,
+            args.height as f32,
+        )?
+        .into_bytes()
+    };
+    if !ctx.is_preflight() {
+        if ctx.is_cancelled() {
+            return Err(cancelled());
+        }
+        ctx.report_progress(0, Some(1), "chart export");
+        atomic_write_bytes(&path, &bytes, ctx.cancel_flag().map(Arc::as_ref)).map_err(|error| {
+            if error.code == "task.cancelled" {
+                error
+            } else {
+                CoreError {
+                    code: "chart.export".into(),
+                    message: error.message,
+                    hint: error.hint,
+                }
+            }
+        })?;
+        ctx.report_progress(1, Some(1), "chart export");
+    }
+    Ok(Effect {
+        result: serde_json::json!({
+            "path": path.display().to_string(),
+            "sheet": sheet.index(),
+            "chart": chart.id.index(),
+            "width": args.width,
+            "height": args.height,
+            "dry_run": ctx.is_dry_run(),
+        }),
+        auto_recalc: false,
+        ..Effect::default()
+    })
+}
+
+fn chart_theme_from_roles(
+    roles: &std::collections::BTreeMap<String, String>,
+) -> omacell_core::chart::ChartTheme {
+    fn role(
+        roles: &std::collections::BTreeMap<String, String>,
+        key: &str,
+        fallback: &str,
+    ) -> String {
+        roles.get(key).cloned().unwrap_or_else(|| fallback.into())
+    }
+    omacell_core::chart::ChartTheme {
+        background: role(roles, "surfaces.background", "#1a1b26"),
+        foreground: role(roles, "text.foreground", "#c0caf5"),
+        axis: role(roles, "charts.axis", "#a9b1d6"),
+        gridline: role(roles, "charts.gridline", "#3b4261"),
+        palette: std::array::from_fn(|index| {
+            role(roles, &format!("charts.palette.{index}"), "#7aa2f7")
+        }),
+    }
 }
 
 /// Opened workbook plus format sidecar state.

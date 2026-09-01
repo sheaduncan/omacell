@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod assist;
 mod clipboard;
 mod complete;
 mod deferred;
@@ -16,6 +17,7 @@ mod find;
 mod keymap;
 mod local;
 mod mode;
+mod name;
 mod palette;
 mod panel;
 mod persist;

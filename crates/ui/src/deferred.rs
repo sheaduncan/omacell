@@ -22,32 +22,12 @@ pub const COMPOSITION_COMMANDS: &[&str] = &[
     "file.saveas",
     "file.close",
     "file.print",
+    "chart.export",
     "ai.plan",
 ];
 
 /// Tested deferred-command table. Empty only at the final integration gate.
-pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
-    DeferredCommand {
-        id: "name.manager",
-        wp: "WP-18",
-    },
-    DeferredCommand {
-        id: "name.paste",
-        wp: "WP-18",
-    },
-    DeferredCommand {
-        id: "name.createfrom",
-        wp: "WP-18",
-    },
-    DeferredCommand {
-        id: "ai.assist",
-        wp: "WP-23",
-    },
-    DeferredCommand {
-        id: "chart.export",
-        wp: "WP-25",
-    },
-];
+pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[];
 
 /// Look up a deferred owner.
 #[must_use]

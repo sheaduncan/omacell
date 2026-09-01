@@ -102,6 +102,26 @@ result `{close: true}`; `file.saveas` uses the existing save pipeline and makes
 the destination the active path. The catalog envelope remains schema version 1
 and existing command ids and schemas are unchanged.
 
+The final pre-release command integration adds five public workflow commands:
+
+- `name.manager` uses a closed empty-object schema and opens the session's
+  defined-name panel. `name.paste` requires `{name: string}` and inserts the
+  resolved workbook/sheet name into the current formula edit. Both mutate only
+  UI session state and are not changeset-eligible.
+- `name.createfrom` requires `{range: string, positions: (top|left|bottom|right)[]}`.
+  It creates workbook-scoped, absolute range names from text labels, excludes
+  every selected label edge from the referents, normalizes invalid label
+  separators to `_`, rejects collisions atomically, and is changeset-eligible.
+- `ai.assist` uses a closed empty-object schema and opens the formula workflow
+  picker for `ai.formula.generate|explain|fix|refactor`. It mutates UI session
+  state only and is not changeset-eligible.
+- `chart.export` requires `path`, accepts optional `sheet` and chart `id`, and
+  defaults `width`/`height` to 800×480. It is a non-changeset-eligible mutating
+  composition command because it writes bounded SVG/PNG output atomically.
+
+These are additive schemas; the catalog envelope remains version 1 and no
+existing command schema or IPC envelope changes.
+
 ## IPC v1 — `docs/schemas/ipc/` (WP-07b)
 
 Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply, event/overflow, and discovery records. Mutating changeset-eligible commands default to `propose`; internal command ids are never addressable on the socket. Limits (`MAX_FRAME_BYTES` 1 MiB, `MAX_JSON_DEPTH` 32, `MAX_CONNECTIONS` 32) are part of the freeze.

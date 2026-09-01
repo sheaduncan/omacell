@@ -70,6 +70,7 @@ pub fn is_local_command(id: &str) -> bool {
             | "view.formulabar"
             | "view.formulas"
             | "palette.open"
+            | "ai.assist"
             | "ai.agent"
             | "help.keys"
             | "command.line"
@@ -234,6 +235,7 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
         "view.formulas" => inner.show_formulas = !inner.show_formulas,
         "view.select" => apply_select(wb, &mut inner.selection, args)?,
         "palette.open" => inner.palette.open(),
+        "ai.assist" => crate::assist::open(&mut inner.palette),
         "ai.agent" => {
             inner.pending_agent = Some(crate::session::AgentHandoff {
                 prompt: args

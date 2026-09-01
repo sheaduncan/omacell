@@ -130,6 +130,32 @@ pub struct NameRemoveArgs {
     pub sheet: Option<String>,
 }
 
+/// Edge containing labels for `name.createfrom`.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum NameLabelPosition {
+    /// Use labels in the top row.
+    Top,
+    /// Use labels in the left column.
+    Left,
+    /// Use labels in the bottom row.
+    Bottom,
+    /// Use labels in the right column.
+    Right,
+}
+
+/// `name.createfrom`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NameCreateFromArgs {
+    /// Selected range, including the label edges.
+    pub range: String,
+    /// Edges whose text cells supply workbook-scoped names.
+    pub positions: Vec<NameLabelPosition>,
+}
+
 /// `format.number`
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

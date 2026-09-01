@@ -61,6 +61,8 @@ pub fn register_ui_commands(
     registry: &mut CommandRegistry,
     session: &crate::session::UiSession,
 ) -> Result<(), CoreError> {
+    crate::assist::register_ai_assist(registry, session)?;
+    crate::name::register_name_commands(registry, session)?;
     let inner = session.inner.clone();
     let specs: &[(&str, &str, HandlerKind)] = &[
         (

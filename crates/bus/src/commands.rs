@@ -4,7 +4,7 @@ use omacell_core::changeset::ChangeSummary;
 use omacell_core::error::CoreError;
 use omacell_core::event::Event;
 use omacell_core::graph::CellCoord;
-use omacell_core::names::{DefinedName, NameReferent, NameScope};
+use omacell_core::names::{DefinedName, NameReferent, NameScope, validate_defined_name};
 use omacell_core::sheet::SheetVisibility;
 use omacell_core::storage::CellSlot;
 use omacell_core::style::NumFmtId;
@@ -14,9 +14,9 @@ use omacell_core::workbook::CalcMode;
 
 use crate::args::{
     CalcModeArgs, CalcRecalcArgs, CellClearArgs, CellRestoreArgs, CellSetArgs, EmptyArgs,
-    FormatNumberArgs, NameDefineArgs, NameReferentArg, NameRemoveArgs, RangeClearArgs,
-    RangeSetArgs, SheetAddArgs, SheetRemoveArgs, SheetRenameArgs, SheetVisibilityArgs,
-    StyleRestoreArgs, StyleSetArgs,
+    FormatNumberArgs, NameCreateFromArgs, NameDefineArgs, NameLabelPosition, NameReferentArg,
+    NameRemoveArgs, RangeClearArgs, RangeSetArgs, SheetAddArgs, SheetRemoveArgs, SheetRenameArgs,
+    SheetVisibilityArgs, StyleRestoreArgs, StyleSetArgs,
 };
 use crate::error as bus_error;
 use crate::handler::{CommandContext, Effect};
@@ -129,6 +129,17 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
             default_keys: &[],
         },
         name_remove,
+    )?;
+    registry.register(
+        CommandSpec {
+            id: "name.createfrom",
+            doc: "Create workbook names from labels on selection edges",
+            kind: CommandKind::Mutating,
+            changeset_eligible: true,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+Shift+F3"],
+        },
+        name_createfrom,
     )?;
     registry.register(
         CommandSpec {
@@ -637,6 +648,236 @@ fn name_remove(ctx: &mut CommandContext<'_>, args: NameRemoveArgs) -> Result<Eff
         auto_recalc: true,
         rebuild: true,
     })
+}
+
+fn name_createfrom(
+    ctx: &mut CommandContext<'_>,
+    args: NameCreateFromArgs,
+) -> Result<Effect, CoreError> {
+    if args.positions.is_empty() {
+        return Err(bus_error::args(
+            "name.createfrom requires at least one label position",
+        ));
+    }
+    let positions = args
+        .positions
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    let range = resolve_range(ctx.workbook_ref(), &args.range)?;
+    let top = positions.contains(&NameLabelPosition::Top);
+    let left = positions.contains(&NameLabelPosition::Left);
+    let bottom = positions.contains(&NameLabelPosition::Bottom);
+    let right = positions.contains(&NameLabelPosition::Right);
+    let data_min_row = range.min_row + u32::from(top);
+    let data_max_row = range.max_row.saturating_sub(u32::from(bottom));
+    let data_min_col = range.min_col + u16::from(left);
+    let data_max_col = range.max_col.saturating_sub(u16::from(right));
+    if data_min_row > data_max_row || data_min_col > data_max_col {
+        return Err(bus_error::args(
+            "label edges must leave at least one data cell in the selected range",
+        ));
+    }
+
+    let mut definitions = Vec::new();
+    if top {
+        collect_column_names(
+            ctx,
+            &mut definitions,
+            range.sheet,
+            range.min_row,
+            data_min_col,
+            data_max_col,
+            data_min_row,
+            data_max_row,
+        )?;
+    }
+    if bottom {
+        collect_column_names(
+            ctx,
+            &mut definitions,
+            range.sheet,
+            range.max_row,
+            data_min_col,
+            data_max_col,
+            data_min_row,
+            data_max_row,
+        )?;
+    }
+    if left {
+        collect_row_names(
+            ctx,
+            &mut definitions,
+            range.sheet,
+            range.min_col,
+            data_min_row,
+            data_max_row,
+            data_min_col,
+            data_max_col,
+        )?;
+    }
+    if right {
+        collect_row_names(
+            ctx,
+            &mut definitions,
+            range.sheet,
+            range.max_col,
+            data_min_row,
+            data_max_row,
+            data_min_col,
+            data_max_col,
+        )?;
+    }
+    if definitions.is_empty() {
+        return Err(bus_error::args(
+            "selected label edges do not contain any text labels",
+        ));
+    }
+
+    let mut planned = std::collections::BTreeSet::new();
+    for definition in &definitions {
+        let key = definition.name.to_lowercase();
+        if !planned.insert(key)
+            || ctx
+                .workbook_ref()
+                .names()
+                .get(NameScope::Workbook, &definition.name)
+                .is_some()
+        {
+            return Err(CoreError::name_defined(format!(
+                "defined name {:?} already exists in this selection or workbook",
+                definition.name
+            )));
+        }
+    }
+
+    let mut inverse = Vec::with_capacity(definitions.len());
+    for definition in definitions {
+        let name = definition.name.clone();
+        ctx.workbook().define_name(definition)?;
+        inverse.push(call("name.remove", serde_json::json!({"name": name}))?);
+    }
+    let created = inverse.len();
+    Ok(Effect {
+        inverse,
+        summary: ChangeSummary {
+            text: format!("create {created} names from selection"),
+            ..ChangeSummary::default()
+        },
+        result: serde_json::json!({"created": created}),
+        auto_recalc: true,
+        rebuild: true,
+        ..Effect::default()
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_column_names(
+    ctx: &CommandContext<'_>,
+    definitions: &mut Vec<DefinedName>,
+    sheet: omacell_core::addr::SheetId,
+    label_row: u32,
+    min_col: u16,
+    max_col: u16,
+    data_min_row: u32,
+    data_max_row: u32,
+) -> Result<(), CoreError> {
+    for col in min_col..=max_col {
+        if let Some(name) = label_name(ctx, sheet, label_row, col)? {
+            definitions.push(DefinedName {
+                name,
+                scope: NameScope::Workbook,
+                referent: absolute_range(sheet, data_min_row, col, data_max_row, col)?,
+                comment: None,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_row_names(
+    ctx: &CommandContext<'_>,
+    definitions: &mut Vec<DefinedName>,
+    sheet: omacell_core::addr::SheetId,
+    label_col: u16,
+    min_row: u32,
+    max_row: u32,
+    data_min_col: u16,
+    data_max_col: u16,
+) -> Result<(), CoreError> {
+    for row in min_row..=max_row {
+        if let Some(name) = label_name(ctx, sheet, row, label_col)? {
+            definitions.push(DefinedName {
+                name,
+                scope: NameScope::Workbook,
+                referent: absolute_range(sheet, row, data_min_col, row, data_max_col)?,
+                comment: None,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn label_name(
+    ctx: &CommandContext<'_>,
+    sheet: omacell_core::addr::SheetId,
+    row: u32,
+    col: u16,
+) -> Result<Option<String>, CoreError> {
+    let Some(slot) = ctx.workbook_ref().get(sheet, row, col)? else {
+        return Ok(None);
+    };
+    let Value::Text(id) = slot.value else {
+        return Ok(None);
+    };
+    let label = ctx.workbook_ref().intern().strings.get(id).unwrap_or("");
+    if label.trim().is_empty() {
+        return Ok(None);
+    }
+    normalize_label(label).map(Some)
+}
+
+fn normalize_label(label: &str) -> Result<String, CoreError> {
+    let label = label.trim();
+    let mut normalized = String::with_capacity(label.len() + 1);
+    for character in label.chars().take(255) {
+        if character.is_alphanumeric() || matches!(character, '_' | '.' | '?') {
+            normalized.push(character);
+        } else if !normalized.ends_with('_') {
+            normalized.push('_');
+        }
+    }
+    if normalized
+        .chars()
+        .next()
+        .is_none_or(|first| !(first.is_alphabetic() || first == '_' || first == '\\'))
+    {
+        normalized.insert(0, '_');
+    }
+    if validate_defined_name(&normalized).is_err() {
+        normalized.insert(0, '_');
+    }
+    while normalized.chars().count() > 255 {
+        normalized.pop();
+    }
+    validate_defined_name(&normalized)?;
+    Ok(normalized)
+}
+
+fn absolute_range(
+    sheet: omacell_core::addr::SheetId,
+    start_row: u32,
+    start_col: u16,
+    end_row: u32,
+    end_col: u16,
+) -> Result<NameReferent, CoreError> {
+    let start =
+        omacell_core::addr::CellRef::with_abs(start_row, start_col, true, true)?.on_sheet(sheet);
+    let end = omacell_core::addr::CellRef::with_abs(end_row, end_col, true, true)?.on_sheet(sheet);
+    Ok(NameReferent::Range(
+        omacell_core::addr::RangeRef::from_corners(start, end),
+    ))
 }
 
 fn referent_arg(referent: &NameReferent, ctx: &CommandContext<'_>) -> serde_json::Value {
