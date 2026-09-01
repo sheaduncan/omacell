@@ -11,8 +11,9 @@ use omacell_ai::complete::{complete_schema, parse_completion};
 use omacell_ai::fence_data;
 use omacell_ai::formula::{formula_schema, parse_and_eval};
 use omacell_ai::functions::is_ai_formula;
-use omacell_ai::import_assist::parse_plan_overlay;
+use omacell_ai::import_assist::{import_request_payload, parse_plan_overlay};
 use omacell_ai::plan::{parse_plan, plan_schema};
+use omacell_ai::policy::PolicySnapshot;
 use omacell_ai::runtime::{AiRuntime, completion_enabled, fast_is_local};
 use omacell_bus::{Bus, CommandContext, CommandKind, CommandSpec, Effect, Exposure};
 use omacell_core::addr::RefKind;
@@ -20,7 +21,7 @@ use omacell_core::error::CoreError;
 use omacell_core::event::Event;
 use omacell_core::graph::CellCoord;
 use omacell_core::storage::{CellFlags, CellSlot, UsedRange};
-use omacell_io::csv::{ImportAssistRequest, ImportPlan, PreviewRows, import_assist_request};
+use omacell_io::csv::{ImportPlan, PreviewRows};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -462,7 +463,10 @@ fn run_import(
     if ctx.is_preflight() {
         return Ok(ai_preflight(ctx));
     }
-    let (current, request) = import_request(&args)?;
+    let policy = session
+        .runtime
+        .policy_for(Slot::Default, Some(ctx.workbook_ref()));
+    let (current, request) = import_request(&args, &policy)?;
     let user = fence_data("import preview", &request);
     let reply = session
         .runtime
@@ -477,27 +481,26 @@ fn run_import(
     })))
 }
 
-fn import_request(args: &ImportArgs) -> Result<(ImportPlan, Value), CoreError> {
+fn import_request(
+    args: &ImportArgs,
+    policy: &PolicySnapshot,
+) -> Result<(ImportPlan, Value), CoreError> {
     let current = parse_plan_overlay(&args.plan).map_err(CoreError::from)?;
-    let request = if let Some(preview) = &args.preview {
-        let preview: PreviewRows = serde_json::from_value(preview.clone()).map_err(|error| {
-            CoreError::new("ai.payload", format!("invalid import preview: {error}"))
-        })?;
-        let request: ImportAssistRequest = import_assist_request(current.clone(), preview);
-        serde_json::to_value(request).map_err(|error| {
-            CoreError::new(
-                "ai.payload",
-                format!("cannot serialize import preview: {error}"),
-            )
-        })?
-    } else {
-        serde_json::to_value(&current).map_err(|error| {
-            CoreError::new(
-                "ai.payload",
-                format!("cannot serialize import plan: {error}"),
-            )
-        })?
-    };
+    let preview = args
+        .preview
+        .as_ref()
+        .map(|preview| {
+            serde_json::from_value(preview.clone()).map_err(|error| {
+                CoreError::new("ai.payload", format!("invalid import preview: {error}"))
+            })
+        })
+        .transpose()?
+        .unwrap_or(PreviewRows {
+            header: None,
+            rows: Vec::new(),
+        });
+    let request =
+        import_request_payload(current.clone(), preview, policy).map_err(CoreError::from)?;
     Ok((current, request))
 }
 
@@ -852,18 +855,29 @@ mod tests {
 
     #[test]
     fn import_request_includes_the_bounded_preview() {
-        let (current, payload) = super::import_request(&super::ImportArgs {
-            plan: json!({"delimiter": ",", "has_header": true}),
-            preview: Some(json!({
-                "header": ["sample"],
-                "rows": [[{
-                    "raw": "007",
-                    "would_become": "007",
-                    "kind": "text",
-                    "changed": false
-                }]]
-            })),
-        })
+        let policy = omacell_ai::PolicySnapshot {
+            enabled: true,
+            send: omacell_ai::SendLevel::Full,
+            suggest_redaction: false,
+            log_content: false,
+            marks: Vec::new(),
+            local: true,
+        };
+        let (current, payload) = super::import_request(
+            &super::ImportArgs {
+                plan: json!({"delimiter": ",", "has_header": true}),
+                preview: Some(json!({
+                    "header": ["sample"],
+                    "rows": [[{
+                        "raw": "007",
+                        "would_become": "007",
+                        "kind": "text",
+                        "changed": false
+                    }]]
+                })),
+            },
+            &policy,
+        )
         .unwrap();
 
         assert!(current.has_header);

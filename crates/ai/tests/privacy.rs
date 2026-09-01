@@ -1,10 +1,12 @@
 //! Privacy choke-point tests.
 
 use omacell_ai::card::{CardLevel, CardRequest};
+use omacell_ai::import_assist::import_request_payload;
 use omacell_ai::policy::{AI_PART, PolicySnapshot, SendLevel, WorkbookAi, build_card};
 use omacell_ai::redact::redact_text;
 use omacell_conf::schema::package_defaults;
 use omacell_core::workbook::Workbook;
+use omacell_io::csv::{ImportPlan, PreviewCell, PreviewRows};
 
 fn book_with_secret() -> Workbook {
     let mut wb = Workbook::new();
@@ -40,6 +42,35 @@ fn schema_level_payloads_contain_no_cell_values() {
     assert!(!dumped.contains("alice@example.com"), "{dumped}");
     assert!(!dumped.contains("999888"), "{dumped}");
     assert!(dumped.contains("formula_count") || dumped.contains("sheets"));
+}
+
+#[test]
+fn import_preview_uses_the_same_privacy_boundary() {
+    let mut config = package_defaults().unwrap();
+    config.ai.privacy.send = "schema".into();
+    config.ai.privacy.local_full = false;
+    let schema = PolicySnapshot::capture(&config, None, false);
+    let preview = PreviewRows {
+        header: Some(vec!["email".into()]),
+        rows: vec![vec![PreviewCell {
+            raw: "alice@example.com".into(),
+            would_become: "alice@example.com".into(),
+            kind: "text".into(),
+            changed: false,
+        }]],
+    };
+    let payload = import_request_payload(ImportPlan::default(), preview.clone(), &schema).unwrap();
+    let dumped = payload.to_string();
+    assert!(!dumped.contains("alice@example.com"), "{dumped}");
+    assert!(dumped.contains("\"kind\":\"text\""), "{dumped}");
+
+    config.ai.privacy.send = "full".into();
+    config.ai.privacy.suggest_redaction = true;
+    let full = PolicySnapshot::capture(&config, None, false);
+    let payload = import_request_payload(ImportPlan::default(), preview, &full).unwrap();
+    let dumped = payload.to_string();
+    assert!(dumped.contains("[REDACTED:email]"), "{dumped}");
+    assert!(!dumped.contains("alice@example.com"), "{dumped}");
 }
 
 #[test]
