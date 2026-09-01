@@ -57,4 +57,4 @@ pub use session::{AgentHandoff, UiSession};
 pub use status::{StatusLine, StatusSegment, ai_status_text, diagnose_offer};
 pub use undo::{UndoEntry, UndoHistory};
 pub use view::register_ui_commands;
-pub use viewport::Viewport;
+pub use viewport::{Viewport, conditional_format_ranges};

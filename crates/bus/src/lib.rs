@@ -57,5 +57,6 @@ pub use runner::register_hold_command;
 pub use runner::{TaskRunner, TaskRunnerHandle};
 pub use session::{Bus, CommandObserver, DryRun};
 pub use task::{
-    CancelHandle, LongOps, ReaderSnapshot, TaskEvent, TaskId, TaskProgress, TaskState, TaskStatus,
+    CancelHandle, ConditionalFormatSnapshot, LongOps, ReaderSnapshot, TaskEvent, TaskId,
+    TaskProgress, TaskState, TaskStatus,
 };

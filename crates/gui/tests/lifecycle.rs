@@ -11,8 +11,11 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 #[cfg(unix)]
 use omacell_bus::ipc::{default_runtime_dir, discover_focused};
+use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::changeset::CommandCall;
 use omacell_core::command::{CommandId, Origin};
+use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat};
+use omacell_core::style::Color;
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_gui::Gui;
@@ -67,6 +70,60 @@ fn startup_file_is_opened_through_the_task_runner() {
 
     assert_eq!(open_count.load(Ordering::SeqCst), 1);
     assert!(harness.state().title().contains("book.csv"));
+}
+
+#[test]
+fn grid_paints_worker_resolved_conditional_format_fill() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook.set_number(sheet, 1, 1, 3.0).unwrap();
+    workbook
+        .set_cond_formats(
+            sheet,
+            vec![CondFormat {
+                range: RangeRef::from_corners(
+                    CellRef::new(1, 1).unwrap(),
+                    CellRef::new(1, 1).unwrap(),
+                ),
+                priority: 1,
+                stop_if_true: true,
+                kind: CfKind::CellIs {
+                    op: CfOp::Greater,
+                    formula1: "0".into(),
+                    formula2: None,
+                },
+                dxf: CfDxf {
+                    fill: Some(Color::Rgb { argb: 0xFF12_3456 }),
+                    font: None,
+                },
+            }],
+        )
+        .unwrap();
+    let parts = launch_opts(None, workbook, false);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+
+    harness.step();
+    let snapshot = harness.state().runner().snapshot();
+    let started = Instant::now();
+    while harness
+        .state()
+        .runner()
+        .conditional_formats(&snapshot, sheet)
+        .is_none()
+    {
+        harness.step();
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+    harness.step();
+    let image = harness.render().unwrap();
+    assert!(
+        image
+            .pixels()
+            .any(|pixel| pixel.0[..3] == [0x12, 0x34, 0x56]),
+        "conditional-format fill was not painted"
+    );
 }
 
 #[test]

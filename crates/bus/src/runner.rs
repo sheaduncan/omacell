@@ -2,12 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
+use omacell_core::addr::{RangeRef, SheetId};
 use omacell_core::changeset::{Changeset, ChangesetId, CommandCall};
 use omacell_core::command::{Origin, Outcome};
+use omacell_core::condfmt::{MAX_CF_OVERLAY_CELLS, resolve_overlay_with_registry};
 use omacell_core::error::CoreError;
 use omacell_core::eval::{DynamicFn, FnRegistry};
 use omacell_core::event::Event;
@@ -22,9 +24,11 @@ use crate::registry::CommandSpec;
 use crate::registry::{CommandKind, Exposure};
 use crate::session::{Bus, DryRun};
 use crate::task::{
-    CancelHandle, LongOps, MAX_SUBMIT_QUEUE, MAX_TASK_EVENTS, ReaderSnapshot, TaskEvent, TaskId,
-    TaskProgress, TaskState, TaskStatus,
+    CancelHandle, ConditionalFormatSnapshot, LongOps, MAX_SUBMIT_QUEUE, MAX_TASK_EVENTS,
+    ReaderSnapshot, TaskEvent, TaskId, TaskProgress, TaskState, TaskStatus,
 };
+
+const MAX_CF_VIEWPORT_RANGES: usize = 4;
 
 enum WorkerMsg {
     Execute {
@@ -93,8 +97,35 @@ enum WorkerMsg {
     Shutdown,
 }
 
+enum CfWorkerMsg {
+    Resolve,
+    Shutdown,
+}
+
+#[derive(Clone)]
+struct CfRequest {
+    reader: Arc<ReaderSnapshot>,
+    registry: Arc<FnRegistry>,
+    sheet: SheetId,
+    ranges: Vec<RangeRef>,
+}
+
+#[derive(Default)]
+struct CfRequestState {
+    pending: Option<CfRequest>,
+    last: Option<CfRequest>,
+    wake_queued: bool,
+}
+
+struct PublishedReader {
+    reader: Arc<ReaderSnapshot>,
+    registry: Arc<FnRegistry>,
+}
+
 struct Shared {
-    snapshot: Mutex<Arc<ReaderSnapshot>>,
+    snapshot: Mutex<PublishedReader>,
+    conditional_formats: Mutex<Option<Arc<ConditionalFormatSnapshot>>>,
+    cf_requests: Mutex<CfRequestState>,
     tasks: Mutex<BTreeMap<TaskId, TaskState>>,
     cancels: Mutex<BTreeMap<TaskId, Arc<AtomicBool>>>,
     events: Mutex<VecDeque<TaskEvent>>,
@@ -115,6 +146,7 @@ struct Shared {
 pub struct TaskRunnerHandle {
     shared: Arc<Shared>,
     submit: SyncSender<WorkerMsg>,
+    cf_submit: Sender<CfWorkerMsg>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -122,15 +154,20 @@ pub struct TaskRunnerHandle {
 pub struct TaskRunner {
     handle: TaskRunnerHandle,
     worker: Option<JoinHandle<()>>,
+    cf_worker: Option<JoinHandle<()>>,
 }
 
 impl TaskRunner {
     /// Spawn a worker that exclusively owns `bus`.
     pub fn spawn(mut bus: Bus, long_ops: LongOps) -> Result<Self, CoreError> {
-        let snapshot = Arc::new(ReaderSnapshot {
+        let reader = Arc::new(ReaderSnapshot {
             workbook: bus.workbook().clone(),
             spill: bus.engine().spill().clone(),
         });
+        let snapshot = PublishedReader {
+            reader,
+            registry: Arc::new(bus.engine().registry().clone()),
+        };
         let command_ids = bus
             .registry()
             .iter()
@@ -149,6 +186,8 @@ impl TaskRunner {
         let bus_event_subscriber = bus.subscribe(crate::changeset::MAX_EFFECT_RECORDS + 1);
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(snapshot),
+            conditional_formats: Mutex::new(None),
+            cf_requests: Mutex::new(CfRequestState::default()),
             tasks: Mutex::new(BTreeMap::new()),
             cancels: Mutex::new(BTreeMap::new()),
             events: Mutex::new(VecDeque::new()),
@@ -164,18 +203,37 @@ impl TaskRunner {
             shutdown: AtomicBool::new(false),
         });
         let (submit, rx) = mpsc::sync_channel(MAX_SUBMIT_QUEUE);
+        let (cf_submit, cf_rx) = mpsc::channel();
         let worker_shared = Arc::clone(&shared);
         let worker = thread::Builder::new()
             .name("omacell-cmd-worker".into())
             .spawn(move || worker_loop(bus, bus_event_subscriber, rx, worker_shared))
             .map_err(|err| CoreError::new("task.spawn", format!("spawn command worker: {err}")))?;
+        let cf_shared = Arc::clone(&shared);
+        let cf_worker = match thread::Builder::new()
+            .name("omacell-cf-worker".into())
+            .spawn(move || cf_worker_loop(cf_rx, cf_shared))
+        {
+            Ok(worker) => worker,
+            Err(err) => {
+                shared.shutdown.store(true, Ordering::SeqCst);
+                let _ = submit.send(WorkerMsg::Shutdown);
+                let _ = worker.join();
+                return Err(CoreError::new(
+                    "task.spawn",
+                    format!("spawn conditional-format worker: {err}"),
+                ));
+            }
+        };
         Ok(Self {
             handle: TaskRunnerHandle {
                 shared,
                 submit,
+                cf_submit,
                 next_id: Arc::new(AtomicU64::new(1)),
             },
             worker: Some(worker),
+            cf_worker: Some(cf_worker),
         })
     }
 
@@ -190,6 +248,9 @@ impl Drop for TaskRunner {
     fn drop(&mut self) {
         self.handle.shutdown();
         if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+        if let Some(worker) = self.cf_worker.take() {
             let _ = worker.join();
         }
     }
@@ -239,7 +300,113 @@ impl TaskRunnerHandle {
             .snapshot
             .lock()
             .unwrap_or_else(|p| p.into_inner())
+            .reader
             .clone()
+    }
+
+    /// Queue resolution of conditional formats for up to four visible-pane ranges.
+    ///
+    /// Requests are coalesced and evaluated on a dedicated reader worker. The
+    /// result is published only if `snapshot` is still the current committed
+    /// reader view.
+    pub fn request_conditional_formats(
+        &self,
+        snapshot: &Arc<ReaderSnapshot>,
+        sheet: SheetId,
+        ranges: &[RangeRef],
+    ) -> Result<(), CoreError> {
+        if self.shared.shutdown.load(Ordering::SeqCst) {
+            return Err(error::task_shutdown());
+        }
+        validate_cf_ranges(ranges)?;
+        let published = self
+            .shared
+            .snapshot
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if !Arc::ptr_eq(snapshot, &published.reader) {
+            return Ok(());
+        }
+        let Some(sheet_ref) = snapshot.workbook.sheet(sheet) else {
+            return Err(CoreError::sheet_id(format!(
+                "unknown sheet {}",
+                sheet.index()
+            )));
+        };
+        let request = CfRequest {
+            reader: Arc::clone(snapshot),
+            registry: Arc::clone(&published.registry),
+            sheet,
+            ranges: ranges.to_vec(),
+        };
+        if sheet_ref.cond_formats.is_empty() || ranges.is_empty() {
+            if self.conditional_formats(snapshot, sheet).is_some() {
+                return Ok(());
+            }
+            *self
+                .shared
+                .conditional_formats
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = Some(Arc::new(ConditionalFormatSnapshot {
+                reader: Arc::clone(snapshot),
+                sheet,
+                overlays: Vec::new(),
+                error: None,
+            }));
+            return Ok(());
+        }
+        drop(published);
+
+        let should_wake = {
+            let mut state = self
+                .shared
+                .cf_requests
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if state
+                .last
+                .as_ref()
+                .is_some_and(|last| same_cf_request(last, &request))
+            {
+                return Ok(());
+            }
+            state.pending = Some(request.clone());
+            state.last = Some(request);
+            if state.wake_queued {
+                false
+            } else {
+                state.wake_queued = true;
+                true
+            }
+        };
+        if should_wake && self.cf_submit.send(CfWorkerMsg::Resolve).is_err() {
+            let mut state = self
+                .shared
+                .cf_requests
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            state.pending = None;
+            state.last = None;
+            state.wake_queued = false;
+            return Err(error::task_shutdown());
+        }
+        Ok(())
+    }
+
+    /// Latest worker-resolved conditional formats for `snapshot` and `sheet`.
+    #[must_use]
+    pub fn conditional_formats(
+        &self,
+        snapshot: &Arc<ReaderSnapshot>,
+        sheet: SheetId,
+    ) -> Option<Arc<ConditionalFormatSnapshot>> {
+        let resolved = self
+            .shared
+            .conditional_formats
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()?;
+        (resolved.sheet == sheet && Arc::ptr_eq(&resolved.reader, snapshot)).then_some(resolved)
     }
 
     /// Running task, if any.
@@ -655,6 +822,7 @@ impl TaskRunnerHandle {
             self.cancel_handle(id, flag).cancel();
         }
         let _ = self.submit.try_send(WorkerMsg::Shutdown);
+        let _ = self.cf_submit.send(CfWorkerMsg::Shutdown);
     }
 
     fn push_event(&self, event: TaskEvent) {
@@ -839,6 +1007,106 @@ fn worker_loop(
     shared.writer_busy.store(false, Ordering::SeqCst);
 }
 
+fn cf_worker_loop(rx: Receiver<CfWorkerMsg>, shared: Arc<Shared>) {
+    while let Ok(message) = rx.recv() {
+        match message {
+            CfWorkerMsg::Shutdown => break,
+            CfWorkerMsg::Resolve => loop {
+                if shared.shutdown.load(Ordering::SeqCst) {
+                    let mut state = shared.cf_requests.lock().unwrap_or_else(|p| p.into_inner());
+                    state.pending = None;
+                    state.wake_queued = false;
+                    break;
+                }
+                let request = {
+                    let mut state = shared.cf_requests.lock().unwrap_or_else(|p| p.into_inner());
+                    let Some(request) = state.pending.take() else {
+                        state.wake_queued = false;
+                        break;
+                    };
+                    request
+                };
+                let resolved = request
+                    .ranges
+                    .iter()
+                    .copied()
+                    .map(|range| {
+                        resolve_overlay_with_registry(
+                            &request.reader.workbook,
+                            request.sheet,
+                            range,
+                            &request.registry,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                let (overlays, error) = match resolved {
+                    Ok(overlays) => (overlays, None),
+                    Err(error) => (Vec::new(), Some(error)),
+                };
+                let current = {
+                    let published = shared.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+                    Arc::ptr_eq(&published.reader, &request.reader)
+                };
+                let latest = shared
+                    .cf_requests
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .last
+                    .as_ref()
+                    .is_some_and(|last| same_cf_request(last, &request));
+                if current && latest {
+                    *shared
+                        .conditional_formats
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner()) =
+                        Some(Arc::new(ConditionalFormatSnapshot {
+                            reader: Arc::clone(&request.reader),
+                            sheet: request.sheet,
+                            overlays,
+                            error,
+                        }));
+                    wake_event_consumer(&shared);
+                }
+            },
+        }
+    }
+}
+
+fn same_cf_request(left: &CfRequest, right: &CfRequest) -> bool {
+    Arc::ptr_eq(&left.reader, &right.reader)
+        && left.sheet == right.sheet
+        && left.ranges == right.ranges
+}
+
+fn validate_cf_ranges(ranges: &[RangeRef]) -> Result<(), CoreError> {
+    if ranges.len() > MAX_CF_VIEWPORT_RANGES {
+        return Err(CoreError::new(
+            "condfmt.limit",
+            format!(
+                "conditional-format viewport has {} ranges; maximum is {MAX_CF_VIEWPORT_RANGES}",
+                ranges.len()
+            ),
+        ));
+    }
+    let mut total = 0u64;
+    for range in ranges {
+        let rows = u64::from(range.start.row.abs_diff(range.end.row)) + 1;
+        let cols = u64::from(range.start.col.abs_diff(range.end.col)) + 1;
+        total = total
+            .checked_add(rows.saturating_mul(cols))
+            .ok_or_else(|| CoreError::new("condfmt.limit", "viewport size overflow"))?;
+    }
+    if total > MAX_CF_OVERLAY_CELLS {
+        return Err(CoreError::new(
+            "condfmt.limit",
+            format!(
+                "conditional-format viewport has {total} cells; maximum is {MAX_CF_OVERLAY_CELLS}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn mark_cancelling(shared: &Shared, id: TaskId) {
     let mut tasks = shared.tasks.lock().unwrap_or_else(|p| p.into_inner());
     let Some(state) = tasks.get_mut(&id) else {
@@ -942,7 +1210,18 @@ fn publish_snapshot(shared: &Shared, bus: &Bus) {
         workbook: bus.workbook().clone(),
         spill: bus.engine().spill().clone(),
     });
-    *shared.snapshot.lock().unwrap_or_else(|p| p.into_inner()) = next;
+    *shared.snapshot.lock().unwrap_or_else(|p| p.into_inner()) = PublishedReader {
+        reader: next,
+        registry: Arc::new(bus.engine().registry().clone()),
+    };
+    *shared
+        .conditional_formats
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = None;
+    let mut requests = shared.cf_requests.lock().unwrap_or_else(|p| p.into_inner());
+    requests.pending = None;
+    requests.last = None;
+    drop(requests);
     wake_event_consumer(shared);
 }
 

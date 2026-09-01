@@ -5,6 +5,9 @@ mod common;
 use common::{
     draw_text, harness, harness_modal, harness_sets, harness_workbook, seed_demo, wait_tasks,
 };
+use omacell_core::addr::{CellRef, RangeRef};
+use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat};
+use omacell_core::style::Color;
 use omacell_core::workbook::Workbook;
 use omacell_ui::{FindScope, KeyCode, KeyEvent, KeyOutcome};
 
@@ -28,6 +31,59 @@ fn classic_arrows_move_the_cursor() {
     assert_eq!(h.tui.ui().selection().cursor.row, 1);
     let frame = draw_text(&h.tui, 80, 24);
     assert!(frame.contains("B2") || frame.contains("READY"), "{frame}");
+}
+
+#[test]
+fn grid_paints_worker_resolved_conditional_format_fill() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook.set_number(sheet, 1, 1, 3.0).unwrap();
+    workbook
+        .set_cond_formats(
+            sheet,
+            vec![CondFormat {
+                range: RangeRef::from_corners(
+                    CellRef::new(1, 1).unwrap(),
+                    CellRef::new(1, 1).unwrap(),
+                ),
+                priority: 1,
+                stop_if_true: true,
+                kind: CfKind::CellIs {
+                    op: CfOp::Greater,
+                    formula1: "0".into(),
+                    formula2: None,
+                },
+                dxf: CfDxf {
+                    fill: Some(Color::Indexed { index: 42 }),
+                    font: None,
+                },
+            }],
+        )
+        .unwrap();
+    let h = harness_workbook(workbook);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+
+    h.tui.draw(&mut terminal).unwrap();
+    let snapshot = h.tui.runner().snapshot();
+    let started = std::time::Instant::now();
+    while h
+        .tui
+        .runner()
+        .conditional_formats(&snapshot, sheet)
+        .is_none()
+    {
+        std::thread::yield_now();
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+    h.tui.draw(&mut terminal).unwrap();
+    assert!(
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .any(|cell| { cell.bg == ratatui::style::Color::Indexed(42) })
+    );
 }
 
 #[test]
