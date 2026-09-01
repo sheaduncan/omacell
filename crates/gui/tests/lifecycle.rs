@@ -99,7 +99,12 @@ fn find_panel_accepts_text_and_enter_selects_the_next_match() {
         .step_key(KeyEvent::new(KeyCode::Enter))
         .unwrap();
     assert!(harness.state().ui_session().panel().visible.is_none());
-    assert_ne!(harness.state().runner().tracked_tasks(), 0);
+    let selection = harness.state().ui_session().selection();
+    assert!(
+        harness.state().runner().tracked_tasks() != 0
+            || (selection.cursor.row, selection.cursor.col) == (1, 1),
+        "the search task must be pending or already applied"
+    );
     let started = Instant::now();
     while harness.state().runner().is_busy()
         || harness
