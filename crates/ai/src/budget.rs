@@ -47,16 +47,27 @@ impl RateLimit {
         self.stamps.push_back(now);
         Ok(())
     }
+
+    /// Apply a live request-per-minute limit without discarding the current
+    /// window's accounting.
+    pub fn set_max_per_minute(&mut self, max_per_minute: u32) {
+        self.max_per_minute = max_per_minute.max(1);
+    }
 }
 
 /// Guardrail for AI-cell batches (WP-23 uses this).
 pub fn check_cell_budget(config: &Config, cells: u32) -> Result<(), AiError> {
-    if cells > config.ai.functions.max_cells_per_recalc {
+    check_cell_budget_limit(config.ai.functions.max_cells_per_recalc, cells)
+}
+
+/// Guardrail for an already-snapshotted live AI-function limit.
+pub(crate) fn check_cell_budget_limit(max_cells: u32, cells: u32) -> Result<(), AiError> {
+    if cells > max_cells {
         return Err(AiError::new(
             codes::BUDGET,
             format!(
                 "{cells} AI cells exceeds max_cells_per_recalc {}",
-                config.ai.functions.max_cells_per_recalc
+                max_cells
             ),
         )
         .with_hint("raise [ai.functions] max_cells_per_recalc or shrink the range"));

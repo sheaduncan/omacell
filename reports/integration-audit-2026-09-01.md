@@ -87,16 +87,21 @@ All P1 engine/file-fidelity items from this audit are complete.
 1. **Complete:** user-profile Lua tasks and request/response hooks are installed
    atomically in `AiRuntime`; `omacell.ai.fn` opts into the async graph through
    the source-compatible `DynamicFnBody::async_node()` default method. GUI/TUI
-   settle new pending generations off-thread and queue the normal full recalc on
-   the single writer. Embedded scripts retain no AI extension capability.
+   settle new pending generations off-thread and queue an incremental settlement
+   wave on the single writer. Embedded scripts retain no AI extension capability.
 2. **Complete:** CSV/TSV opens retain the sniffed `ImportPlan` and bounded
    preview in GUI/TUI. `A` explicitly sends a provider-policy-filtered preview
    to `ai.import.assist`; the proposal remains unapplied until Enter atomically
    reopens the source with the reviewed plan. Schema policy strips sample
    values, detector redaction precedes hooks/providers, and stale results fail
    closed.
-3. Wire `[ai.functions] refresh_on_full_recalc` and AI-function `auto` through
-   the retained hosts without weakening budget confirmation or autopilot scope.
+3. **Complete:** `[ai.functions] auto` gates cache-miss requests to changed
+   inputs, while `ai.refresh` and configured user-requested full recalculation
+   explicitly authorize re-query. File-open, startup Lua sourcing, and
+   `on_open` establish AI-cell hashes without sending; retained config reloads
+   update function limits and policy. Pending nodes survive for the incremental
+   settlement wave, so budget confirmation and non-volatile cache semantics are
+   preserved without a full-recalc loop.
 
 `COPILOT()` remains inert on import. The design decision is HUMAN; the current
 lean is an explicit one-key conversion, never automatic remapping.

@@ -258,7 +258,7 @@ fn stricter_policy_drops_runtime_keymaps_and_functions() {
 }
 
 #[test]
-fn retained_lua_ai_function_settles_through_hooks_and_the_task_runner() {
+fn retained_lua_ai_function_waits_for_user_edit_then_settles_through_the_runner() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
     std::fs::create_dir_all(&paths.user_config).unwrap();
@@ -279,6 +279,9 @@ fn retained_lua_ai_function_settles_through_hooks_and_the_task_runner() {
             response.response.text =
                 '{"results":[{"i":0,"value":"hooked response"}]}'
             return response
+        end)
+        omacell.on_open(function()
+            omacell.cmd("cell.set", {ref = "B1", input = '=MY.AI("opened")'})
         end)
         "##;
     std::fs::write(paths.user_config.join("init.lua"), source).unwrap();
@@ -349,6 +352,16 @@ fn retained_lua_ai_function_settles_through_hooks_and_the_task_runner() {
         Some(ai.clone()),
     )
     .unwrap();
+
+    scripts.emit_open().unwrap();
+    assert!(transport.requests.lock().unwrap().is_empty());
+    assert!(ai.pending_generation().is_none());
+    let edited = runner.handle().submit_wait(
+        Origin::User,
+        "cell.set",
+        json!({"ref":"A1","input":"=MY.AI(\"edited input\")"}),
+    );
+    assert!(edited.ok, "{:?}", edited.error);
 
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
