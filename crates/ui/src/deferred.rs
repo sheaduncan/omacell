@@ -15,22 +15,18 @@ pub struct DeferredCommand {
 /// The CLI integration suite verifies that every id in this list is present in
 /// the live catalog. Keeping this separate from [`DEFERRED_COMMANDS`] prevents
 /// shipped commands from being mistaken for unfinished work.
-pub const COMPOSITION_COMMANDS: &[&str] = &["file.open", "file.save", "file.print", "ai.plan"];
+pub const COMPOSITION_COMMANDS: &[&str] = &[
+    "file.new",
+    "file.open",
+    "file.save",
+    "file.saveas",
+    "file.close",
+    "file.print",
+    "ai.plan",
+];
 
 /// Tested deferred-command table. Empty only at the final integration gate.
 pub const DEFERRED_COMMANDS: &[DeferredCommand] = &[
-    DeferredCommand {
-        id: "file.new",
-        wp: "WP-16",
-    },
-    DeferredCommand {
-        id: "file.close",
-        wp: "WP-16",
-    },
-    DeferredCommand {
-        id: "file.saveas",
-        wp: "WP-16",
-    },
     DeferredCommand {
         id: "name.manager",
         wp: "WP-18",

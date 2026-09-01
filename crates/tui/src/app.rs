@@ -67,6 +67,7 @@ pub struct Tui {
     catalog: Vec<CommandJson>,
     active_sheet: SheetId,
     dirty: bool,
+    discard_armed: Option<String>,
     quit_armed: bool,
     quit_requested: bool,
     last_queued: Option<TaskId>,
@@ -117,6 +118,7 @@ impl Tui {
             catalog,
             active_sheet,
             dirty: false,
+            discard_armed: None,
             quit_armed: false,
             quit_requested: false,
             last_queued: None,
@@ -261,16 +263,24 @@ impl Tui {
             return Ok(KeyOutcome::Pending);
         }
         if self.ui.palette().open {
+            if event.code != KeyCode::Enter {
+                self.discard_armed = None;
+            }
             return self.step_palette(event);
         }
         if let Some(id) = self.ui.panel().visible.clone()
             && matches!(id.as_str(), "find" | "goto" | "command")
         {
+            if event.code != KeyCode::Enter {
+                self.discard_armed = None;
+            }
             return self.step_panel(event, &id);
         }
         let outcome = self.ui.handle_key(event);
         if let KeyOutcome::Command { cmd, args, .. } = outcome.clone() {
             self.execute_cmd(&cmd, args)?;
+        } else {
+            self.discard_armed = None;
         }
         Ok(outcome)
     }
@@ -281,6 +291,26 @@ impl Tui {
         cmd: &str,
         args: serde_json::Value,
     ) -> Result<Outcome, CoreError> {
+        if (args.is_null() || args.as_object().is_some_and(serde_json::Map::is_empty))
+            && self.prompt_command_args(cmd)
+        {
+            return Ok(Outcome::success(serde_json::json!({"prompt": true})));
+        }
+        if cmd == "file.close" {
+            if !self.confirm_discard(cmd) {
+                return Ok(discard_confirmation(cmd));
+            }
+            self.ui.remember_command(cmd);
+            self.message = None;
+            self.request_quit(true);
+            return Ok(Outcome::success(serde_json::json!({"close": true})));
+        }
+        if matches!(cmd, "file.new" | "file.open") && !self.confirm_discard(cmd) {
+            return Ok(discard_confirmation(cmd));
+        }
+        if !matches!(cmd, "file.new" | "file.open") {
+            self.discard_armed = None;
+        }
         let handle = self.runner.handle();
         self.last_queued = None;
         if let Some(local) = apply_local_command(&self.ui, &handle.snapshot().workbook, cmd, &args)
@@ -414,16 +444,17 @@ impl Tui {
                         );
                         self.ui.set_palette(palette);
                     }
-                    if state.command == "file.open" || state.command == "file.save" {
+                    if matches!(
+                        state.command.as_str(),
+                        "file.open" | "file.save" | "file.saveas" | "file.new"
+                    ) {
                         self.dirty = false;
-                        if let Some(path) = outcome
+                        self.file = outcome
                             .result
                             .as_ref()
                             .and_then(|value| value.get("path"))
                             .and_then(|value| value.as_str())
-                        {
-                            self.file = Some(PathBuf::from(path));
-                        }
+                            .map(PathBuf::from);
                     } else {
                         let mutating = self
                             .catalog
@@ -435,7 +466,11 @@ impl Tui {
                         }
                     }
                     self.ui.remember_command(&state.command);
-                    if matches!(
+                    if state.command == "file.close" {
+                        self.request_quit(false);
+                    } else if matches!(state.command.as_str(), "file.open" | "file.new") {
+                        self.adopt_file_snapshot();
+                    } else if matches!(
                         state.command.as_str(),
                         "edit.searchnext" | "edit.searchprev"
                     ) {
@@ -510,21 +545,7 @@ impl Tui {
                 }
                 if let Some(hit) = palette.hits.get(self.palette_index) {
                     let id = hit.id.clone();
-                    if let Some(command) = self
-                        .command_catalog()?
-                        .into_iter()
-                        .find(|command| command.id == id)
-                        && has_required_args(&command)
-                    {
-                        let mut palette = palette;
-                        palette.prompt_for(&command);
-                        if let Some(fields) = palette.prompt.take() {
-                            palette.prompt = Some(format!("{id} — {fields}; enter JSON object"));
-                        }
-                        palette.query.clear();
-                        self.ui.set_palette(palette);
-                        self.palette_command = Some(id);
-                    } else {
+                    if !self.prompt_command_args(&id) {
                         let result = self.execute_cmd(&id, serde_json::json!({}))?;
                         if result.ok {
                             self.close_palette();
@@ -616,6 +637,40 @@ impl Tui {
         self.ui.set_palette(palette);
         self.palette_index = 0;
         self.palette_command = None;
+    }
+
+    fn prompt_command_args(&mut self, id: &str) -> bool {
+        let Some(command) = self
+            .catalog
+            .iter()
+            .find(|command| command.id == id)
+            .cloned()
+            .filter(has_required_args)
+        else {
+            return false;
+        };
+        let mut palette = self.ui.palette();
+        palette.open();
+        palette.prompt_for(&command);
+        if let Some(fields) = palette.prompt.take() {
+            palette.prompt = Some(format!("{id} — {fields}; enter JSON object"));
+        }
+        self.ui.set_palette(palette);
+        self.palette_command = Some(id.to_string());
+        self.palette_index = 0;
+        true
+    }
+
+    fn confirm_discard(&mut self, command: &str) -> bool {
+        if !self.dirty || self.discard_armed.as_deref() == Some(command) {
+            self.discard_armed = None;
+            return true;
+        }
+        self.discard_armed = Some(command.to_string());
+        self.message = Some(format!(
+            "unsaved changes; run {command} again to discard them"
+        ));
+        false
     }
 
     fn submit_palette_plan(&mut self, prompt: String) -> Result<(), CoreError> {
@@ -932,6 +987,13 @@ impl Tui {
         self.message = Some("unsaved changes; press Ctrl+Q again to quit".into());
     }
 
+    fn adopt_file_snapshot(&mut self) {
+        let snapshot = self.runner.handle().snapshot();
+        let sheet = snapshot.workbook.active_sheet();
+        apply_sheet_view(&self.ui, &snapshot.workbook, sheet);
+        self.active_sheet = sheet;
+    }
+
     fn sync_active_sheet(&mut self) {
         self.adopt_snapshot();
     }
@@ -1043,6 +1105,9 @@ fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutatin
                 | "changeset.review"
                 | "file.open"
                 | "file.save"
+                | "file.saveas"
+                | "file.new"
+                | "file.close"
                 | "file.export"
                 | "theme.reload"
         )
@@ -1050,6 +1115,13 @@ fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutatin
         return false;
     }
     true
+}
+
+fn discard_confirmation(command: &str) -> Outcome {
+    Outcome::failure(CoreError::new(
+        "file.unsaved",
+        format!("unsaved changes; run {command} again to discard them"),
+    ))
 }
 
 fn inject_chart_range(ui: &UiSession, cmd: &str, mut args: serde_json::Value) -> serde_json::Value {

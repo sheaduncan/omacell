@@ -64,6 +64,8 @@ pub struct Gui {
     catalog: Vec<CommandJson>,
     message: Option<String>,
     dirty: bool,
+    discard_armed: Option<String>,
+    close_requested: bool,
     active_sheet: SheetId,
     grid: GridLayout,
     palette_index: usize,
@@ -135,6 +137,8 @@ impl Gui {
             catalog,
             message,
             dirty: false,
+            discard_armed: None,
+            close_requested: false,
             active_sheet,
             grid: GridLayout::default(),
             palette_index: 0,
@@ -179,6 +183,18 @@ impl Gui {
     #[must_use]
     pub fn message(&self) -> Option<&str> {
         self.message.as_deref()
+    }
+
+    /// Whether the current workbook has unsaved frontend mutations.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Whether a file-close command asked the native window to close.
+    #[must_use]
+    pub fn close_requested(&self) -> bool {
+        self.close_requested
     }
 
     /// Resolved theme name (status / reload tests).
@@ -270,16 +286,17 @@ impl Gui {
                         );
                         self.ui.set_palette(palette);
                     }
-                    if state.command == "file.open" || state.command == "file.save" {
+                    if matches!(
+                        state.command.as_str(),
+                        "file.open" | "file.save" | "file.saveas" | "file.new"
+                    ) {
                         self.dirty = false;
-                        if let Some(path) = outcome
+                        self.file = outcome
                             .result
                             .as_ref()
                             .and_then(|value| value.get("path"))
                             .and_then(|value| value.as_str())
-                        {
-                            self.file = Some(PathBuf::from(path));
-                        }
+                            .map(PathBuf::from);
                     } else {
                         let mutating = self
                             .catalog
@@ -291,8 +308,12 @@ impl Gui {
                         }
                     }
                     self.ui.remember_command(&state.command);
-                    if state.command == "file.open" {
+                    if state.command == "file.close" {
+                        self.request_close();
+                    } else if state.command == "file.open" {
                         self.adopt_opened_snapshot();
+                    } else if state.command == "file.new" {
+                        self.adopt_new_snapshot();
                     } else if matches!(state.command.as_str(), "sheet.next" | "sheet.prev") {
                         self.adopt_snapshot();
                     } else if matches!(
@@ -363,6 +384,13 @@ impl Gui {
         self.active_sheet = self.ui.selection().sheet;
     }
 
+    fn adopt_new_snapshot(&mut self) {
+        let snapshot = self.runner.handle().snapshot();
+        let sheet = snapshot.workbook.active_sheet();
+        apply_sheet_view(&self.ui, &snapshot.workbook, sheet);
+        self.active_sheet = sheet;
+    }
+
     /// Handle one toolkit-neutral key.
     pub fn step_key(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
         if event.code == KeyCode::Esc
@@ -377,6 +405,9 @@ impl Gui {
             return Ok(KeyOutcome::Pending);
         }
         if self.ui.palette().open {
+            if event.code != KeyCode::Enter {
+                self.discard_armed = None;
+            }
             return self.step_palette(event);
         }
         if self.ui.panel().visible.as_deref() == Some("find") {
@@ -385,6 +416,8 @@ impl Gui {
         let outcome = self.ui.handle_key(event);
         if let KeyOutcome::Command { cmd, args, .. } = outcome.clone() {
             self.execute_cmd(&cmd, args)?;
+        } else {
+            self.discard_armed = None;
         }
         Ok(outcome)
     }
@@ -430,6 +463,26 @@ impl Gui {
         cmd: &str,
         args: serde_json::Value,
     ) -> Result<Outcome, CoreError> {
+        if (args.is_null() || args.as_object().is_some_and(serde_json::Map::is_empty))
+            && self.prompt_command_args(cmd)
+        {
+            return Ok(Outcome::success(json!({"prompt": true})));
+        }
+        if cmd == "file.close" {
+            if !self.confirm_discard(cmd) {
+                return Ok(discard_confirmation(cmd));
+            }
+            self.ui.remember_command(cmd);
+            self.message = None;
+            self.close_requested = true;
+            return Ok(Outcome::success(json!({"close": true})));
+        }
+        if matches!(cmd, "file.new" | "file.open") && !self.confirm_discard(cmd) {
+            return Ok(discard_confirmation(cmd));
+        }
+        if !matches!(cmd, "file.new" | "file.open") {
+            self.discard_armed = None;
+        }
         let handle = self.runner.handle();
         if let Some(local) = apply_local_command(&self.ui, &handle.snapshot().workbook, cmd, &args)
         {
@@ -625,26 +678,52 @@ impl Gui {
     }
 
     fn choose_palette(&mut self, id: &str) -> Result<(), CoreError> {
-        if let Some(command) = self
-            .catalog
-            .iter()
-            .find(|command| command.id == id)
-            .cloned()
-            && has_required_args(&command)
-        {
-            let mut palette = self.ui.palette();
-            palette.prompt_for(&command);
-            if let Some(fields) = palette.prompt.take() {
-                palette.prompt = Some(format!("{id} — {fields}; enter JSON object"));
-            }
-            palette.query.clear();
-            self.ui.set_palette(palette);
-            self.palette_command = Some(id.to_string());
+        if self.prompt_command_args(id) {
             return Ok(());
         }
         self.close_palette();
         let _ = self.execute_cmd(id, json!({}))?;
         Ok(())
+    }
+
+    fn prompt_command_args(&mut self, id: &str) -> bool {
+        let Some(command) = self
+            .catalog
+            .iter()
+            .find(|command| command.id == id)
+            .cloned()
+            .filter(has_required_args)
+        else {
+            return false;
+        };
+        let mut palette = self.ui.palette();
+        palette.open();
+        palette.prompt_for(&command);
+        if let Some(fields) = palette.prompt.take() {
+            palette.prompt = Some(format!("{id} — {fields}; enter JSON object"));
+        }
+        self.ui.set_palette(palette);
+        self.palette_command = Some(id.to_string());
+        self.palette_index = 0;
+        true
+    }
+
+    fn confirm_discard(&mut self, command: &str) -> bool {
+        if !self.dirty || self.discard_armed.as_deref() == Some(command) {
+            self.discard_armed = None;
+            return true;
+        }
+        self.discard_armed = Some(command.to_string());
+        self.message = Some(format!(
+            "unsaved changes; run {command} again to discard them"
+        ));
+        false
+    }
+
+    fn request_close(&mut self) {
+        if self.confirm_discard("file.close") {
+            self.close_requested = true;
+        }
     }
 
     fn submit_palette_plan(&mut self, prompt: String) -> Result<(), CoreError> {
@@ -678,6 +757,16 @@ impl Gui {
     /// One egui frame (eframe + kittest).
     pub fn ui_frame(&mut self, ctx: &egui::Context) {
         self.poll(ctx);
+        if !self.close_requested
+            && ctx.input(|input| input.viewport().close_requested())
+            && self.dirty
+        {
+            if self.confirm_discard("file.close") {
+                self.close_requested = true;
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
+        }
         let title = self.title();
         if title != self.last_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -889,6 +978,9 @@ impl Gui {
                 chrome::palette(ctx, &self.ui.palette(), self.palette_index, &self.theme)
         {
             let _ = self.choose_palette(&id);
+        }
+        if self.close_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -1289,6 +1381,9 @@ fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutatin
                 | "changeset.review"
                 | "file.open"
                 | "file.save"
+                | "file.saveas"
+                | "file.new"
+                | "file.close"
                 | "file.export"
                 | "file.print"
                 | "theme.reload"
@@ -1297,6 +1392,13 @@ fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutatin
         return false;
     }
     true
+}
+
+fn discard_confirmation(command: &str) -> Outcome {
+    Outcome::failure(CoreError::new(
+        "file.unsaved",
+        format!("unsaved changes; run {command} again to discard them"),
+    ))
 }
 
 /// Native event loop.

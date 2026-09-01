@@ -137,6 +137,7 @@ impl LongOps {
                 "calc.recalc",
                 "file.open",
                 "file.save",
+                "file.saveas",
                 "file.export",
                 "file.print",
             ]
