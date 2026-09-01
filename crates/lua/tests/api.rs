@@ -154,8 +154,9 @@ fn command_events_dispatch_to_registered_hooks() {
         omacell.on_change(function() changes = changes + 1 end)
         omacell.on_recalc(function() recalcs = recalcs + 1 end)
         omacell.cmd("cell.set", {ref = "A1", input = "2"})
-        assert(changes == 1)
-        assert(recalcs == 1)
+        omacell.book():sheet():cell("A2"):set("3")
+        assert(changes == 2)
+        assert(recalcs == 2)
         "#);
 }
 

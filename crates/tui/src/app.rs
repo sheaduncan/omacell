@@ -1,8 +1,9 @@
 //! TUI session over the WP-13 composition objects.
 
+use std::collections::BTreeSet;
 use std::io::{IsTerminal, stdout};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossterm::ExecutableCommand;
@@ -22,6 +23,7 @@ use omacell_core::addr::{SheetId, quote_sheet_name};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
+use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
     Area, ExtendMode, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_local_command,
     apply_search_result,
@@ -56,10 +58,12 @@ pub struct Tui {
     paths: Paths,
     store: ConfigStore,
     runner: TaskRunner,
+    scripts: InteractiveRuntime,
     ui: UiSession,
     roots: KeymapRoots,
     truecolor: bool,
     message: Option<String>,
+    script_status: Option<String>,
     palette_index: usize,
     palette_command: Option<String>,
     palette_plan_task: Option<TaskId>,
@@ -92,6 +96,23 @@ impl Tui {
                 .map_err(|err| CoreError::new("tui.palette", err.to_string()))?
         };
         let runner = TaskRunner::spawn(launch.bus, launch.long_ops)?;
+        let script_ui = Arc::new(FrontendScriptUi {
+            ui: launch.ui.clone(),
+            known: runner.handle().command_ids().clone(),
+        });
+        let scripts = InteractiveRuntime::new(
+            runner.handle(),
+            script_ui,
+            launch.paths.user_config.clone(),
+            &loaded,
+        )?;
+        let mut message = scripts.take_messages().into_iter().last();
+        let script_status = message.clone();
+        if launch.file.is_some()
+            && let Err(error) = scripts.emit_open()
+        {
+            message = Some(format!("{}: {}", error.code, error.message));
+        }
         let ipc_handle = if ipc {
             Some(omacell_bus::ipc::serve_runner(
                 default_runtime_dir(),
@@ -107,10 +128,12 @@ impl Tui {
             paths: launch.paths,
             store: launch.store,
             runner,
+            scripts,
             ui: launch.ui,
             roots: launch.roots,
             truecolor,
-            message: None,
+            message,
+            script_status,
             palette_index: 0,
             palette_command: None,
             palette_plan_task: None,
@@ -193,6 +216,9 @@ impl Tui {
                     ) {
                         self.message = Some(format!("{}: {}", err.code, err.message));
                         continue;
+                    }
+                    if let Err(error) = self.scripts.tighten(&snapshot) {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
                     }
                     self.truecolor = truecolor_enabled(&snapshot.config.tui.truecolor);
                     if let ReloadEvent::ThemeChanged { name } = ev {
@@ -339,6 +365,10 @@ impl Tui {
             }
             return Ok(Outcome::success(serde_json::json!({"ok": true})));
         }
+        if let Err(error) = self.scripts.before_command(cmd) {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+            return Ok(Outcome::failure(error));
+        }
         let (id, cancel) = match handle.submit(Origin::User, cmd, args) {
             Ok(task) => task,
             Err(err) => {
@@ -475,6 +505,11 @@ impl Tui {
                         }
                     }
                     self.ui.remember_command(&state.command);
+                    if state.command == "script.source"
+                        && let Err(error) = self.scripts.source()
+                    {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
                     if state.command == "file.close" {
                         self.request_quit(false);
                     } else if matches!(state.command.as_str(), "file.open" | "file.new") {
@@ -533,6 +568,15 @@ impl Tui {
                 }
                 TaskEvent::Cancelling(_) | TaskEvent::Running(_) | TaskEvent::Queued(_) => {}
             }
+        }
+        if let Err(error) = self.scripts.poll_events() {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+        }
+        if let Some(message) = self.scripts.take_messages().into_iter().last() {
+            self.script_status = Some(message.clone());
+            self.message = Some(message);
+        } else if self.message.is_none() {
+            self.message.clone_from(&self.script_status);
         }
     }
 
@@ -1140,6 +1184,21 @@ fn discard_confirmation(command: &str) -> Outcome {
         "file.unsaved",
         format!("unsaved changes; run {command} again to discard them"),
     ))
+}
+
+struct FrontendScriptUi {
+    ui: UiSession,
+    known: BTreeSet<String>,
+}
+
+impl InteractiveUi for FrontendScriptUi {
+    fn keymap_set(&self, mode: &str, keys: &str, cmd: &str) -> Result<(), CoreError> {
+        self.ui.set_script_binding_ids(mode, keys, cmd, &self.known)
+    }
+
+    fn clear_keymap(&self) {
+        self.ui.clear_script_bindings();
+    }
 }
 
 fn inject_selection_context(

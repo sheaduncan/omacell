@@ -4,7 +4,7 @@ Generated from `omacell_lua::catalog::API`. Do not edit by hand.
 
 ## Runtime profiles
 
-User-profile scripts have the documented API and Lua standard library. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt, change keymaps, register AI extensions or AI payload hooks, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.
+User-profile scripts have the documented API and Lua standard library. GUI/TUI load trusted `init.lua` and sorted plugin entry points once at startup; only the explicit `script.source` command reloads them, replacing hooks, script keymaps, and custom functions. Filesystem notifications never execute scripts, and workbook-embedded scripts never run on open. Interactive worksheet callbacks preserve their Lua closure during normal calculation; calculation that overlaps a running hook uses an isolated fallback, so callbacks used on that path must be self-contained. Embedded workbook scripts run with a strict capability set: `io`, `os`, `package`, `debug`, `require`, dynamic loading, coroutines, `pcall`, and `xpcall` are unavailable. Protected calls are deliberately removed so the hard instruction-budget error cannot be caught. Embedded scripts also cannot prompt, change keymaps, register AI extensions or AI payload hooks, and `omacell.cmd` accepts only a fixed, reviewed workbook-command allowlist. New commands remain unavailable until explicitly reviewed. In both profiles, `print(...)` writes to the Omacell status sink instead of stdout.
 
 ## `omacell.cmd`
 
@@ -94,13 +94,13 @@ Register a namespaced custom function (`USER.NAME`) on the calc registry.
 
 `omacell.keymap.set(mode, keys, cmd)`
 
-Bind a chord in a UI mode to a command id or Lua function name.
+Bind a chord in a UI mode to a registered command id.
 
 ## `omacell.ui.prompt`
 
 `omacell.ui.prompt(message) -> string`
 
-Prompt the user; CLI reads a line from the host.
+Prompt the user; CLI reads a line, while GUI/TUI currently return `lua.prompt`.
 
 ## `omacell.ui.status`
 

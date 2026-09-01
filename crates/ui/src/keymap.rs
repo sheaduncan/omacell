@@ -249,6 +249,38 @@ impl Keymap {
         })
     }
 
+    pub(crate) fn set_script_binding(
+        &mut self,
+        mode: &str,
+        keys: &str,
+        cmd: &str,
+    ) -> Result<String, CoreError> {
+        let valid_mode = match self.model {
+            KeyModel::Classic => mode == "classic",
+            KeyModel::Modal => matches!(mode, "normal" | "insert" | "visual" | "command"),
+        };
+        if !valid_mode {
+            return Err(error::keymap(format!(
+                "mode {mode} does not belong to the active {} keymap",
+                model_name(self.model)
+            )));
+        }
+        CommandId::new(cmd).map_err(|error| error::keymap(error.to_string()))?;
+        let chord = normalize_chord(&expand_leader(keys, self.leader.as_deref()));
+        if chord.is_empty() {
+            return Err(error::keymap("script key binding chord cannot be empty"));
+        }
+        self.tables.entry(mode.to_string()).or_default().insert(
+            chord.clone(),
+            Binding {
+                cmd: cmd.to_string(),
+                args: Value::Null,
+            },
+        );
+        self.reset_pending();
+        Ok(chord)
+    }
+
     /// Reject bindings that are neither registered, composition-provided, nor
     /// assigned to a later WP.
     pub fn validate_commands(&self, registry: &CommandRegistry) -> Result<(), CoreError> {

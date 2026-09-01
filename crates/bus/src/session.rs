@@ -80,6 +80,14 @@ impl Bus {
         &mut self.engine
     }
 
+    pub(crate) fn recalc_after_registry_change(&mut self) {
+        let result = self.engine.recalc_rebuild(&mut self.workbook);
+        self.events.emit(Event::RecalcDone {
+            cells: result.cells_evaluated,
+            elapsed_ms: result.elapsed_ms,
+        });
+    }
+
     /// Command registry.
     #[must_use]
     pub fn registry(&self) -> &CommandRegistry {

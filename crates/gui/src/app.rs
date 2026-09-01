@@ -1,6 +1,8 @@
 //! eframe application over the WP-13 composition root and WP-15a runner.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use eframe::egui;
 use omacell_bus::ipc::{IpcHandle, default_runtime_dir, serve_runner};
@@ -14,6 +16,7 @@ use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
 use omacell_core::print::paginate;
 use omacell_core::{PRODUCT_DISPLAY_NAME, PRODUCT_NAME};
+use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
     Area, EditSurface, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, SessionState, UiSession,
     apply_local_command, apply_search_result,
@@ -58,11 +61,13 @@ pub struct Gui {
     paths: Paths,
     store: ConfigStore,
     runner: TaskRunner,
+    scripts: InteractiveRuntime,
     ui: UiSession,
     roots: KeymapRoots,
     theme: GuiTheme,
     catalog: Vec<CommandJson>,
     message: Option<String>,
+    script_status: Option<String>,
     dirty: bool,
     discard_armed: Option<String>,
     close_requested: bool,
@@ -96,15 +101,30 @@ impl Gui {
         runner
             .handle()
             .set_event_waker(move || task_repaint.request_repaint());
+        let script_ui = Arc::new(FrontendScriptUi {
+            ui: launch.ui.clone(),
+            known: runner.handle().command_ids().clone(),
+        });
+        let scripts = InteractiveRuntime::new(
+            runner.handle(),
+            script_ui,
+            launch.paths.user_config.clone(),
+            &loaded,
+        )?;
+        let startup_message = scripts.take_messages().into_iter().last();
+        let script_status = startup_message.clone();
         let (message, focused_cancel) = if let Some(path) = requested_file {
             let (_, cancel) = runner.handle().submit(
                 Origin::User,
                 "file.open",
                 json!({"path": path.display().to_string()}),
             )?;
-            (Some("opening…".into()), Some(cancel))
+            (
+                startup_message.or_else(|| Some("opening…".into())),
+                Some(cancel),
+            )
         } else {
-            (None, None)
+            (startup_message, None)
         };
         let ipc_handle = if ipc {
             Some(serve_runner(default_runtime_dir(), runner.handle())?)
@@ -131,11 +151,13 @@ impl Gui {
             paths: launch.paths,
             store: launch.store,
             runner,
+            scripts,
             ui: launch.ui,
             roots: launch.roots,
             theme,
             catalog,
             message,
+            script_status,
             dirty: false,
             discard_armed: None,
             close_requested: false,
@@ -241,6 +263,9 @@ impl Gui {
                         self.message = Some(format!("{}: {}", err.code, err.message));
                         continue;
                     }
+                    if let Err(error) = self.scripts.tighten(&snapshot) {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
                     self.rebuild_theme(&snapshot, ctx);
                     if let ReloadEvent::ThemeChanged { name } = ev {
                         self.message = Some(format!("theme {name}"));
@@ -308,6 +333,11 @@ impl Gui {
                         }
                     }
                     self.ui.remember_command(&state.command);
+                    if state.command == "script.source"
+                        && let Err(error) = self.scripts.source()
+                    {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
                     if state.command == "file.close" {
                         self.request_close();
                     } else if state.command == "file.open" {
@@ -360,6 +390,15 @@ impl Gui {
                 }
                 TaskEvent::Running(_) | TaskEvent::Queued(_) | TaskEvent::Cancelling(_) => {}
             }
+        }
+        if let Err(error) = self.scripts.poll_events() {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+        }
+        if let Some(message) = self.scripts.take_messages().into_iter().last() {
+            self.script_status = Some(message.clone());
+            self.message = Some(message);
+        } else if self.message.is_none() {
+            self.message.clone_from(&self.script_status);
         }
     }
 
@@ -513,6 +552,10 @@ impl Gui {
         }
         if cmd == "file.print" {
             self.toggle_print_preview();
+        }
+        if let Err(error) = self.scripts.before_command(cmd) {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+            return Ok(Outcome::failure(error));
         }
         match handle.submit(Origin::User, cmd, args) {
             Ok((id, cancel)) => {
@@ -1421,6 +1464,21 @@ fn discard_confirmation(command: &str) -> Outcome {
         "file.unsaved",
         format!("unsaved changes; run {command} again to discard them"),
     ))
+}
+
+struct FrontendScriptUi {
+    ui: UiSession,
+    known: BTreeSet<String>,
+}
+
+impl InteractiveUi for FrontendScriptUi {
+    fn keymap_set(&self, mode: &str, keys: &str, cmd: &str) -> Result<(), CoreError> {
+        self.ui.set_script_binding_ids(mode, keys, cmd, &self.known)
+    }
+
+    fn clear_keymap(&self) {
+        self.ui.clear_script_bindings();
+    }
 }
 
 /// Native event loop.

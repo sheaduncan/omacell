@@ -250,6 +250,43 @@ fn sparse_user_map_overlays_the_package_map() {
 }
 
 #[test]
+fn script_binding_is_validated_and_survives_config_reload() {
+    let (dir, session, registry, _keymap) = load_session("keys/classic.toml");
+    session
+        .set_script_binding("classic", "Ctrl+L", "cell.clear", &registry)
+        .unwrap();
+
+    assert!(matches!(
+        session.handle_key(KeyEvent {
+            code: KeyCode::Char('l'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        }),
+        KeyOutcome::Command { cmd, .. } if cmd == "cell.clear"
+    ));
+
+    let paths = Paths::from_home(dir.path());
+    let loaded = load(&paths, &[], None).unwrap();
+    let roots = KeymapRoots::new(paths.user_config, paths.default_dir, None);
+    session.apply_config(&loaded, &roots, &registry).unwrap();
+    assert!(matches!(
+        session.handle_key(KeyEvent {
+            code: KeyCode::Char('l'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        }),
+        KeyOutcome::Command { cmd, .. } if cmd == "cell.clear"
+    ));
+
+    let err = session
+        .set_script_binding("classic", "Ctrl+U", "unknown.command", &registry)
+        .unwrap_err();
+    assert_eq!(err.code, "ui.keymap");
+}
+
+#[test]
 fn unknown_modes_and_unowned_user_commands_are_rejected() {
     assert!(
         Keymap::parse(

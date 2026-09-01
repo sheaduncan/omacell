@@ -169,9 +169,33 @@ pub fn launch_watched(theme: Option<&str>) -> HarnessParts {
 }
 
 pub fn launch_opts(theme: Option<&str>, workbook: Workbook, watch: bool) -> HarnessParts {
+    launch_opts_with_script(theme, workbook, watch, None)
+}
+
+pub fn launch_script(source: &str) -> HarnessParts {
+    launch_opts_with_script(None, Workbook::new(), false, Some(source))
+}
+
+fn launch_opts_with_script(
+    theme: Option<&str>,
+    workbook: Workbook,
+    watch: bool,
+    script: Option<&str>,
+) -> HarnessParts {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
     std::fs::create_dir_all(&paths.user_config).unwrap();
+    if let Some(script) = script {
+        std::fs::write(
+            paths.user_config.join("config.toml"),
+            format!(
+                "[scripting]\ntrusted_dirs = [{:?}]\n",
+                paths.user_config.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::write(paths.user_config.join("init.lua"), script).unwrap();
+    }
     if let Some(theme) = theme {
         install_omarchy_theme(&paths, theme);
     }

@@ -126,6 +126,17 @@ pub fn harness_sets(sets: &[&str]) -> Harness {
     harness_opts_with_workbook(None, "keys/classic.toml", "off", Workbook::new(), sets)
 }
 
+pub fn harness_script(source: &str) -> Harness {
+    harness_opts_with_script(
+        None,
+        "keys/classic.toml",
+        "off",
+        Workbook::new(),
+        &[],
+        Some(source),
+    )
+}
+
 fn harness_opts_with_workbook(
     theme: Option<&str>,
     keymap: &str,
@@ -133,14 +144,36 @@ fn harness_opts_with_workbook(
     workbook: Workbook,
     extra_sets: &[&str],
 ) -> Harness {
+    harness_opts_with_script(theme, keymap, truecolor, workbook, extra_sets, None)
+}
+
+fn harness_opts_with_script(
+    theme: Option<&str>,
+    keymap: &str,
+    truecolor: &str,
+    workbook: Workbook,
+    extra_sets: &[&str],
+    script: Option<&str>,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
     std::fs::create_dir_all(&paths.user_config).unwrap();
+    let scripting = script
+        .map(|_| {
+            format!(
+                "[scripting]\ntrusted_dirs = [{:?}]\n",
+                paths.user_config.display().to_string()
+            )
+        })
+        .unwrap_or_default();
     std::fs::write(
         paths.user_config.join("config.toml"),
-        format!("[keys]\nfile = {keymap:?}\n[tui]\ntruecolor = {truecolor:?}\n"),
+        format!("[keys]\nfile = {keymap:?}\n[tui]\ntruecolor = {truecolor:?}\n{scripting}"),
     )
     .unwrap();
+    if let Some(script) = script {
+        std::fs::write(paths.user_config.join("init.lua"), script).unwrap();
+    }
     if let Some(theme) = theme {
         install_omarchy_theme(&paths, theme);
     }

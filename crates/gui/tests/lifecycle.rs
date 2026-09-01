@@ -5,7 +5,7 @@ mod common;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use common::{launch_opts, launch_theme};
+use common::{launch_opts, launch_script, launch_theme};
 use egui::{Event, Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -32,6 +32,70 @@ fn startup_file_is_opened_through_the_task_runner() {
 
     assert_eq!(open_count.load(Ordering::SeqCst), 1);
     assert!(harness.state().title().contains("book.csv"));
+}
+
+#[test]
+fn retained_lua_runtime_loads_hooks_keymaps_and_source() {
+    let parts = launch_script(
+        r#"
+        omacell.ui.status("lua loaded")
+        omacell.keymap.set("classic", "Ctrl+L", "cell.clear")
+        omacell.on_change(function() omacell.ui.status("lua changed") end)
+        "#,
+    );
+    let script = parts.launch.paths.user_config.join("init.lua");
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    assert_eq!(harness.state().message(), Some("lua loaded"));
+
+    harness
+        .state_mut()
+        .execute_cmd("cell.set", serde_json::json!({"ref": "A1", "input": "1"}))
+        .unwrap();
+    let started = Instant::now();
+    while harness.state().runner().is_busy() {
+        harness.step();
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+    harness.step();
+    assert_eq!(harness.state().message(), Some("lua changed"));
+    assert!(matches!(
+        harness.state().ui_session().handle_key(KeyEvent {
+            code: KeyCode::Char('l'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        }),
+        omacell_ui::KeyOutcome::Command { cmd, .. } if cmd == "cell.clear"
+    ));
+
+    std::fs::write(
+        script,
+        r#"
+        omacell.ui.status("lua reloaded")
+        omacell.keymap.set("classic", "Ctrl+J", "cell.clear")
+        "#,
+    )
+    .unwrap();
+    harness
+        .state_mut()
+        .execute_cmd("script.source", serde_json::json!({}))
+        .unwrap();
+    let started = Instant::now();
+    while harness.state().runner().is_busy() {
+        harness.step();
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+    harness.step();
+    assert_eq!(harness.state().message(), Some("lua reloaded"));
+    let keymap = harness.state().ui_session().keymap();
+    let classic = keymap.table(omacell_ui::Mode::Classic).unwrap();
+    assert_ne!(
+        classic.get("Ctrl+L").map(|binding| binding.cmd.as_str()),
+        Some("cell.clear")
+    );
+    assert_eq!(classic["Ctrl+J"].cmd, "cell.clear");
 }
 
 #[test]

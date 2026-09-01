@@ -11,6 +11,7 @@ use omacell_bus::{
 use omacell_core::command::Origin;
 use omacell_core::error::CoreError;
 use omacell_core::eval::FnRegistry;
+use omacell_core::event::Event;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use serde_json::json;
@@ -270,4 +271,26 @@ fn task_events_wake_a_registered_frontend() {
     assert!(outcome.ok, "{:?}", outcome.error);
     assert!(wakes.load(Ordering::SeqCst) >= 3);
     *frontend.lock().unwrap() = None;
+}
+
+#[test]
+fn synchronous_commands_publish_core_events_before_returning() {
+    let bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).unwrap();
+    let runner = TaskRunner::spawn(bus, LongOps::production()).unwrap();
+    let handle = runner.handle();
+
+    let outcome = handle.submit_wait(Origin::User, "cell.set", json!({"ref": "A1", "input": "7"}));
+
+    assert!(outcome.ok, "{:?}", outcome.error);
+    let events = handle.drain_bus_events();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::CellChanged { row: 0, col: 0, .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::RecalcDone { .. }))
+    );
 }

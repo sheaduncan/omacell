@@ -18,10 +18,16 @@ pub trait ScriptHost: Send {
         let _ = id;
         false
     }
+    /// Refresh any reader snapshot cached by a runner-backed host.
+    fn refresh(&mut self) {}
     /// Borrow the live workbook.
     fn workbook(&self) -> &Workbook;
     /// Register a custom function on the live calc registry.
     fn register_function(&mut self, def: DynamicFn) -> Result<(), CoreError>;
+    /// Whether worksheet callbacks must use a separate VM from UI hooks.
+    fn isolate_functions(&self) -> bool {
+        false
+    }
     /// Drain command-bus events produced by the most recent host action.
     fn take_events(&mut self) -> Vec<Event> {
         Vec::new()
@@ -35,6 +41,11 @@ pub trait ScriptHost: Send {
     /// Optional keymap overlay (`mode`, `keys`, `cmd`).
     fn keymap_set(&mut self, mode: &str, keys: &str, cmd: &str) {
         let _ = (mode, keys, cmd);
+    }
+    /// Fallible keymap overlay used by interactive hosts.
+    fn try_keymap_set(&mut self, mode: &str, keys: &str, cmd: &str) -> Result<(), CoreError> {
+        self.keymap_set(mode, keys, cmd);
+        Ok(())
     }
 }
 

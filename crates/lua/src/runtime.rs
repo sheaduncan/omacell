@@ -12,7 +12,7 @@ use omacell_core::error::{CoreError, ErrorKind};
 use omacell_core::eval::{ArgVal, ArrayLift, DynamicFn, DynamicFnBody, RuntimeValue};
 use omacell_core::value::Value;
 use serde_json::Value as Json;
-use std::sync::Mutex;
+use std::sync::{Mutex, TryLockError};
 
 use crate::host::ScriptHost;
 use crate::trust::{TrustStore, sha256_hex, trust_path};
@@ -129,6 +129,7 @@ pub struct Runtime {
     host: Arc<Mutex<Box<dyn ScriptHost>>>,
     profile: Profile,
     instruction_counter: Option<Arc<AtomicU32>>,
+    script_depth: Arc<AtomicU32>,
 }
 
 impl Runtime {
@@ -144,12 +145,21 @@ impl Runtime {
         let host = Arc::new(Mutex::new(host));
         let lua = Arc::new(Mutex::new(lua));
         let function_depth = Arc::new(AtomicU32::new(0));
-        install_api(&lock_mutex(&lua), &host, profile, &function_depth)?;
+        let script_depth = Arc::new(AtomicU32::new(0));
+        install_api(
+            &lock_mutex(&lua),
+            &lua,
+            &host,
+            profile,
+            &function_depth,
+            &script_depth,
+        )?;
         Ok(Self {
             lua,
             host,
             profile,
             instruction_counter,
+            script_depth,
         })
     }
 
@@ -161,7 +171,9 @@ impl Runtime {
 
     /// Run a host command (e.g. `file.save` after a script).
     pub fn execute_cmd(&self, id: &str, args: Json) -> Result<Json, CoreError> {
+        let _execution = FunctionEvaluation::enter(&self.script_depth);
         self.reset_instruction_budget();
+        self.sync_host();
         dispatch_before_command(&lock_mutex(&self.lua), id)?;
         let (result, events) = {
             let mut host = lock_mutex(&self.host);
@@ -175,7 +187,9 @@ impl Runtime {
 
     /// Execute a chunk. Errors include file:line when Lua reports it.
     pub fn exec(&self, source: &str, name: &str) -> Result<(), CoreError> {
+        let _execution = FunctionEvaluation::enter(&self.script_depth);
         self.reset_instruction_budget();
+        self.sync_host();
         let lua = lock_mutex(&self.lua);
         lua.load(source)
             .set_name(name)
@@ -185,9 +199,31 @@ impl Runtime {
 
     /// Fire a named hook (`on_open`, …). Missing hooks are no-ops.
     pub fn emit_hook(&self, name: &str) -> Result<(), CoreError> {
+        let _execution = FunctionEvaluation::enter(&self.script_depth);
         self.reset_instruction_budget();
+        self.sync_host();
         let lua = lock_mutex(&self.lua);
         dispatch_hook(&lua, name)
+    }
+
+    /// Fire pre-command hooks before an interactive host queues a save.
+    pub fn before_command(&self, id: &str) -> Result<(), CoreError> {
+        let _execution = FunctionEvaluation::enter(&self.script_depth);
+        self.reset_instruction_budget();
+        self.sync_host();
+        dispatch_before_command(&lock_mutex(&self.lua), id)
+    }
+
+    /// Dispatch committed bus events drained by a retained frontend runtime.
+    pub fn emit_events(&self, events: &[omacell_core::event::Event]) -> Result<(), CoreError> {
+        let _execution = FunctionEvaluation::enter(&self.script_depth);
+        self.reset_instruction_budget();
+        self.sync_host();
+        dispatch_command_events(&lock_mutex(&self.lua), events)
+    }
+
+    fn sync_host(&self) {
+        lock_mutex(&self.host).refresh();
     }
 
     fn reset_instruction_budget(&self) {
@@ -248,9 +284,11 @@ fn strip_embedded(lua: &Lua) -> Result<(), CoreError> {
 
 fn install_api(
     lua: &Lua,
+    runtime_lua: &Arc<Mutex<Lua>>,
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
     profile: Profile,
     function_depth: &Arc<AtomicU32>,
+    script_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
     install_print(lua, host, function_depth)?;
     let omacell = lua
@@ -284,14 +322,17 @@ fn install_api(
         .set("cmd", cmd)
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
 
-    let host_fn = Arc::clone(host);
-    let register_depth = Arc::clone(function_depth);
+    let registration = FunctionRegistration {
+        runtime_lua: Arc::clone(runtime_lua),
+        host: Arc::clone(host),
+        function_depth: Arc::clone(function_depth),
+        script_depth: Arc::clone(script_depth),
+    };
     let register = lua
         .create_function(
             move |lua, (name, spec, func): (String, Table, mlua::Function)| {
-                host_api_available(&register_depth)?;
-                register_lua_fn(lua, &host_fn, &register_depth, name, spec, func)
-                    .map_err(mlua::Error::external)
+                host_api_available(&registration.function_depth)?;
+                register_lua_fn(lua, &registration, name, spec, func).map_err(mlua::Error::external)
             },
         )
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
@@ -431,7 +472,7 @@ fn install_events(lua: &Lua, omacell: &Table, profile: Profile) -> Result<(), Co
 }
 
 fn dispatch_before_command(lua: &Lua, id: &str) -> Result<(), CoreError> {
-    if id == "file.save" {
+    if matches!(id, "file.save" | "file.saveas") {
         dispatch_hook(lua, "on_before_save")?;
     }
     Ok(())
@@ -494,8 +535,9 @@ fn install_keymap(
             "set",
             lua.create_function(move |_, (mode, keys, cmd): (String, String, String)| {
                 host_api_available(&depth)?;
-                lock_mutex(&h).keymap_set(&mode, &keys, &cmd);
-                Ok(())
+                lock_mutex(&h)
+                    .try_keymap_set(&mode, &keys, &cmd)
+                    .map_err(mlua::Error::external)
             })
             .map_err(|e| CoreError::new("lua.api", e.to_string()))?,
         )
@@ -704,7 +746,7 @@ impl mlua::UserData for LuaCell {
         });
     }
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("set", |_, this, input: String| {
+        methods.add_method("set", |lua, this, input: String| {
             host_api_available(&this.function_depth)?;
             let mut host = lock_mutex(&this.host);
             let r#ref = qualify(&this.sheet, &this.a1);
@@ -713,9 +755,12 @@ impl mlua::UserData for LuaCell {
                 serde_json::json!({"ref": r#ref, "input": input}),
             )
             .map_err(mlua::Error::external)?;
+            let events = host.take_events();
+            drop(host);
+            dispatch_command_events(lua, &events).map_err(mlua::Error::external)?;
             Ok(())
         });
-        methods.add_method("set_style", |_, this, patch: LuaValue| {
+        methods.add_method("set_style", |lua, this, patch: LuaValue| {
             host_api_available(&this.function_depth)?;
             let mut args = match lua_to_json(&patch).map_err(mlua::Error::external)? {
                 Json::Object(args) => args,
@@ -727,9 +772,12 @@ impl mlua::UserData for LuaCell {
                 }
             };
             args.insert("range".into(), Json::String(qualify(&this.sheet, &this.a1)));
-            lock_mutex(&this.host)
-                .execute("style.set", Json::Object(args))
+            let mut host = lock_mutex(&this.host);
+            host.execute("style.set", Json::Object(args))
                 .map_err(mlua::Error::external)?;
+            let events = host.take_events();
+            drop(host);
+            dispatch_command_events(lua, &events).map_err(mlua::Error::external)?;
             Ok(())
         });
     }
@@ -961,6 +1009,25 @@ struct LuaBody {
     function_depth: Arc<AtomicU32>,
 }
 
+struct FunctionRegistration {
+    runtime_lua: Arc<Mutex<Lua>>,
+    host: Arc<Mutex<Box<dyn ScriptHost>>>,
+    function_depth: Arc<AtomicU32>,
+    script_depth: Arc<AtomicU32>,
+}
+
+struct IsolatedLuaBody {
+    lua: Lua,
+    func: mlua::Function,
+}
+
+struct HybridLuaBody {
+    primary: LuaBody,
+    fallback: IsolatedLuaBody,
+    runtime_lua: Arc<Mutex<Lua>>,
+    script_depth: Arc<AtomicU32>,
+}
+
 impl DynamicFnBody for LuaBody {
     fn eval(&self, args: &[ArgVal]) -> RuntimeValue {
         let _evaluation = FunctionEvaluation::enter(&self.function_depth);
@@ -985,6 +1052,46 @@ impl DynamicFnBody for LuaBody {
             Ok(v) => lua_to_runtime(&v),
             Err(_) => RuntimeValue::error(omacell_core::error::ErrorKind::Value),
         }
+    }
+}
+
+impl DynamicFnBody for IsolatedLuaBody {
+    fn eval(&self, args: &[ArgVal]) -> RuntimeValue {
+        let mut values = Vec::new();
+        for arg in args {
+            let value = if arg.omitted {
+                LuaValue::Nil
+            } else {
+                match runtime_to_lua(&self.lua, &arg.value) {
+                    Ok(value) => value,
+                    Err(_) => return RuntimeValue::error(ErrorKind::Value),
+                }
+            };
+            values.push(value);
+        }
+        match self
+            .func
+            .call::<LuaValue>(mlua::MultiValue::from_vec(values))
+        {
+            Ok(value) => lua_to_runtime(&value),
+            Err(_) => RuntimeValue::error(ErrorKind::Value),
+        }
+    }
+}
+
+impl DynamicFnBody for HybridLuaBody {
+    fn eval(&self, args: &[ArgVal]) -> RuntimeValue {
+        if self.script_depth.load(Ordering::SeqCst) == 0 {
+            match self.runtime_lua.try_lock() {
+                Ok(_guard) => return self.primary.eval(args),
+                Err(TryLockError::Poisoned(poisoned)) => {
+                    let _guard = poisoned.into_inner();
+                    return self.primary.eval(args);
+                }
+                Err(TryLockError::WouldBlock) => {}
+            }
+        }
+        self.fallback.eval(args)
     }
 }
 
@@ -1087,8 +1194,7 @@ fn lua_to_scalar(value: &LuaValue) -> Option<Scalar> {
 
 fn register_lua_fn(
     lua: &Lua,
-    host: &Arc<Mutex<Box<dyn ScriptHost>>>,
-    function_depth: &Arc<AtomicU32>,
+    registration: &FunctionRegistration,
     name: String,
     spec: Table,
     func: mlua::Function,
@@ -1166,7 +1272,40 @@ fn register_lua_fn(
             t
         }
     };
-    let body_fn = func.clone();
+    let isolated = lock_mutex(&registration.host).isolate_functions();
+    let body: Arc<dyn DynamicFnBody> = if isolated {
+        if func.info().what != "Lua" {
+            return Err(CoreError::new(
+                "lua.fn",
+                "interactive custom functions must be Lua callbacks",
+            ));
+        }
+        let evaluator = Lua::new();
+        let callback = evaluator
+            .load(func.dump(true))
+            .set_name(name.as_str())
+            .into_function()
+            .map_err(|error| CoreError::new("lua.fn", error.to_string()))?;
+        Arc::new(HybridLuaBody {
+            primary: LuaBody {
+                lua: lua.clone(),
+                func: func.clone(),
+                function_depth: Arc::clone(&registration.function_depth),
+            },
+            fallback: IsolatedLuaBody {
+                lua: evaluator,
+                func: callback,
+            },
+            runtime_lua: Arc::clone(&registration.runtime_lua),
+            script_depth: Arc::clone(&registration.script_depth),
+        })
+    } else {
+        Arc::new(LuaBody {
+            lua: lua.clone(),
+            func: func.clone(),
+            function_depth: Arc::clone(&registration.function_depth),
+        })
+    };
     fns.set(name.as_str(), func)
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     let def = DynamicFn {
@@ -1175,13 +1314,9 @@ fn register_lua_fn(
         max_args,
         volatile,
         array_lift,
-        body: Arc::new(LuaBody {
-            lua: lua.clone(),
-            func: body_fn,
-            function_depth: Arc::clone(function_depth),
-        }),
+        body,
     };
-    lock_mutex(host).register_function(def)
+    lock_mutex(&registration.host).register_function(def)
 }
 
 struct FunctionEvaluation<'a>(&'a AtomicU32);

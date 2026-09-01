@@ -1,5 +1,6 @@
 //! `UiSession` and `apply_config`.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use omacell_bus::{CommandJson, CommandRegistry};
@@ -28,6 +29,8 @@ pub(crate) struct UiInner {
     pub mode: Mode,
     pub model: KeyModel,
     pub keymap: Keymap,
+    pub base_keymap: Keymap,
+    pub script_bindings: Vec<(String, String, String)>,
     pub selection: Selection,
     pub edit: EditState,
     pub viewport: Viewport,
@@ -84,8 +87,16 @@ impl UiSession {
         roots: &KeymapRoots,
         registry: &CommandRegistry,
     ) -> Result<(), CoreError> {
-        let next = load_inner(config, roots)?;
+        let mut next = load_inner(config, roots)?;
         next.keymap.validate_commands(registry)?;
+        let script_bindings = self.lock().script_bindings.clone();
+        for (mode, keys, cmd) in &script_bindings {
+            if registry.get_str(cmd).is_err() {
+                return Err(error::keymap(format!("unowned script command {cmd}")));
+            }
+            next.keymap.set_script_binding(mode, keys, cmd)?;
+        }
+        next.script_bindings = script_bindings;
         let mut g = self.lock();
         if next.model != g.model {
             g.mode = if !g.edit.is_idle() && next.model == KeyModel::Modal {
@@ -96,6 +107,8 @@ impl UiSession {
         }
         g.model = next.model;
         g.keymap = next.keymap;
+        g.base_keymap = next.base_keymap;
+        g.script_bindings = next.script_bindings;
         g.reference_colors = next.reference_colors;
         g.enter_moves = next.enter_moves;
         g.status_ids = next.status_ids;
@@ -110,9 +123,9 @@ impl UiSession {
         &self,
         config: &LoadedConfig,
         roots: &KeymapRoots,
-        known: &std::collections::BTreeSet<String>,
+        known: &BTreeSet<String>,
     ) -> Result<(), CoreError> {
-        let next = load_inner(config, roots)?;
+        let mut next = load_inner(config, roots)?;
         for (_mode, chord, binding) in next.keymap.iter() {
             if !known.contains(&binding.cmd)
                 && crate::deferred::owner(&binding.cmd).is_none()
@@ -124,6 +137,14 @@ impl UiSession {
                 )));
             }
         }
+        let script_bindings = self.lock().script_bindings.clone();
+        for (mode, keys, cmd) in &script_bindings {
+            if !known.contains(cmd) {
+                return Err(error::keymap(format!("unowned script command {cmd}")));
+            }
+            next.keymap.set_script_binding(mode, keys, cmd)?;
+        }
+        next.script_bindings = script_bindings;
         let mut g = self.lock();
         if next.model != g.model {
             g.mode = if !g.edit.is_idle() && next.model == KeyModel::Modal {
@@ -134,6 +155,8 @@ impl UiSession {
         }
         g.model = next.model;
         g.keymap = next.keymap;
+        g.base_keymap = next.base_keymap;
+        g.script_bindings = next.script_bindings;
         g.reference_colors = next.reference_colors;
         g.enter_moves = next.enter_moves;
         g.status_ids = next.status_ids;
@@ -343,6 +366,72 @@ impl UiSession {
         self.lock().keymap.clone()
     }
 
+    /// Add or replace a user-Lua key binding after registry validation.
+    pub fn set_script_binding(
+        &self,
+        mode: &str,
+        keys: &str,
+        cmd: &str,
+        registry: &CommandRegistry,
+    ) -> Result<(), CoreError> {
+        if registry.get_str(cmd).is_err() {
+            return Err(error::keymap(format!("unowned script command {cmd}")));
+        }
+        self.set_script_binding_validated(mode, keys, cmd)
+    }
+
+    /// Add or replace a user-Lua key binding using a task-runner catalog.
+    pub fn set_script_binding_ids(
+        &self,
+        mode: &str,
+        keys: &str,
+        cmd: &str,
+        known: &BTreeSet<String>,
+    ) -> Result<(), CoreError> {
+        if !known.contains(cmd) {
+            return Err(error::keymap(format!("unowned script command {cmd}")));
+        }
+        self.set_script_binding_validated(mode, keys, cmd)
+    }
+
+    fn set_script_binding_validated(
+        &self,
+        mode: &str,
+        keys: &str,
+        cmd: &str,
+    ) -> Result<(), CoreError> {
+        const MAX_SCRIPT_BINDINGS: usize = 1024;
+        let mut g = self.lock();
+        let mut keymap = g.keymap.clone();
+        let chord = keymap.set_script_binding(mode, keys, cmd)?;
+        if let Some(existing) = g
+            .script_bindings
+            .iter_mut()
+            .find(|(bound_mode, bound_keys, _)| bound_mode == mode && bound_keys == &chord)
+        {
+            existing.2 = cmd.to_string();
+            g.keymap = keymap;
+            return Ok(());
+        }
+        if g.script_bindings.len() >= MAX_SCRIPT_BINDINGS {
+            return Err(error::keymap(format!(
+                "script keymap exceeds {MAX_SCRIPT_BINDINGS} bindings"
+            )));
+        }
+        g.keymap = keymap;
+        g.script_bindings
+            .push((mode.to_string(), chord, cmd.to_string()));
+        Ok(())
+    }
+
+    /// Remove all user-Lua bindings while retaining config-file bindings.
+    pub fn clear_script_bindings(&self) {
+        let mut g = self.lock();
+        let base = g.base_keymap.clone();
+        g.keymap = base;
+        g.script_bindings.clear();
+    }
+
     /// Effective UI configuration retained for thin frontends.
     #[must_use]
     pub fn config(&self) -> Config {
@@ -466,6 +555,7 @@ impl UiSession {
 
 fn load_inner(config: &LoadedConfig, roots: &KeymapRoots) -> Result<UiInner, CoreError> {
     let keymap = Keymap::load_from_roots(&config.config.keys.file, roots)?;
+    let base_keymap = keymap.clone();
     let model = keymap.model;
     let mut colors: [String; 8] = std::array::from_fn(|_| String::new());
     for (i, slot) in colors.iter_mut().enumerate() {
@@ -482,6 +572,8 @@ fn load_inner(config: &LoadedConfig, roots: &KeymapRoots) -> Result<UiInner, Cor
         mode: Mode::for_model(model),
         model,
         keymap,
+        base_keymap,
+        script_bindings: Vec::new(),
         selection: Selection::a1(SheetId::new(0)),
         edit: EditState::default(),
         viewport: Viewport::default(),

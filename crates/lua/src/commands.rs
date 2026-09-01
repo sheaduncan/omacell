@@ -38,7 +38,7 @@ struct MacroSaveArgs {
     path: String,
 }
 
-/// Register `macro.*` and `script.source` (source is a no-op hint; CLI reloads).
+/// Register `macro.*` and the interactive-host `script.source` signal.
 pub fn register_script_commands(
     registry: &mut CommandRegistry,
     gate: ScriptGate,
@@ -146,8 +146,8 @@ pub fn register_script_commands(
             id: "script.source",
             doc: "Reload user Lua scripts (init.lua and plugins)",
             // Sourcing executes user-controlled code with the full user
-            // profile. Classify it as mutating even while the live host action
-            // is deferred so model origins can never trigger that effect.
+            // profile. Its mutating classification prevents model origins from
+            // triggering that host action.
             kind: CommandKind::Mutating,
             changeset_eligible: false,
             exposure: Exposure::Public,
@@ -156,7 +156,7 @@ pub fn register_script_commands(
         |_ctx: &mut CommandContext<'_>, _args: EmptyArgs| {
             Ok(Effect::query(serde_json::json!({
                 "ok": true,
-                "hint": "CLI/UI host reloads ~/.config/omacell/init.lua"
+                "source": true
             })))
         },
     )?;
