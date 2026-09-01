@@ -4,6 +4,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use omacell_core::addr::SheetId;
+use omacell_core::condfmt::{CfOverlay, ResolvedCfOverlay};
+use omacell_core::error::CoreError;
 use omacell_core::spill::SpillTable;
 use omacell_core::workbook::Workbook;
 
@@ -120,6 +123,37 @@ pub struct ReaderSnapshot {
     pub workbook: Workbook,
     /// Spill table as of that commit.
     pub spill: SpillTable,
+}
+
+/// Worker-resolved conditional-format overlays for one reader snapshot.
+#[derive(Clone, Debug)]
+pub struct ConditionalFormatSnapshot {
+    pub(crate) reader: Arc<ReaderSnapshot>,
+    pub(crate) sheet: SheetId,
+    pub(crate) overlays: Vec<ResolvedCfOverlay>,
+    pub(crate) error: Option<CoreError>,
+}
+
+impl ConditionalFormatSnapshot {
+    /// Effective conditional-format overlay for one cell in the cached viewport.
+    #[must_use]
+    pub fn get(&self, row: u32, col: u16) -> Option<CfOverlay> {
+        self.overlays
+            .iter()
+            .find_map(|overlay| overlay.get(row, col))
+    }
+
+    /// Number of rectangular viewport caches retained by this snapshot.
+    #[must_use]
+    pub fn range_count(&self) -> usize {
+        self.overlays.len()
+    }
+
+    /// Resolution failure, if the worker could not build this viewport cache.
+    #[must_use]
+    pub fn error(&self) -> Option<&CoreError> {
+        self.error.as_ref()
+    }
 }
 
 /// Composition-layer set of long-running commands.

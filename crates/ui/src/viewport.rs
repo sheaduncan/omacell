@@ -1,7 +1,58 @@
 //! Virtualized viewport: frozen panes, split, zoom, hidden rows.
 
+use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::geometry::{AxisGeometry, DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::sheet::{FreezePanes, SplitView};
+
+/// Rectangles covering painted frozen and scrolling cells without spanning the
+/// off-screen gap between them.
+#[must_use]
+pub fn conditional_format_ranges(rows: &[u32], cols: &[u16], freeze: FreezePanes) -> Vec<RangeRef> {
+    let row_ranges = pane_ranges(rows, freeze.rows);
+    let col_ranges = pane_ranges(cols, u32::from(freeze.cols));
+    let mut ranges = Vec::with_capacity(row_ranges.len().saturating_mul(col_ranges.len()));
+    for &(first_row, last_row) in &row_ranges {
+        for &(first_col, last_col) in &col_ranges {
+            let Ok(first_col) = u16::try_from(first_col) else {
+                continue;
+            };
+            let Ok(last_col) = u16::try_from(last_col) else {
+                continue;
+            };
+            let (Ok(start), Ok(end)) = (
+                CellRef::new(first_row, first_col),
+                CellRef::new(last_row, last_col),
+            ) else {
+                continue;
+            };
+            ranges.push(RangeRef::from_corners(start, end));
+        }
+    }
+    ranges
+}
+
+fn pane_ranges<T>(indices: &[T], frozen: u32) -> Vec<(u32, u32)>
+where
+    T: Copy + Into<u32>,
+{
+    let frozen_end = indices
+        .iter()
+        .copied()
+        .map(Into::into)
+        .take_while(|index| *index < frozen)
+        .last();
+    let scrolling = indices
+        .iter()
+        .copied()
+        .map(Into::into)
+        .find(|index| *index >= frozen)
+        .zip(indices.last().copied().map(Into::into));
+    frozen_end
+        .map(|last| (0, last))
+        .into_iter()
+        .chain(scrolling)
+        .collect()
+}
 
 /// Visible window over a sheet.
 #[derive(Clone, Debug)]
@@ -276,4 +327,32 @@ fn midpoint(axis: &AxisGeometry, first: u32, last: u32) -> u32 {
     let start_px = axis.index_to_pixel(first);
     let end_px = axis.index_to_pixel(last.saturating_add(1));
     axis.pixel_to_index(start_px.saturating_add(end_px.saturating_sub(start_px) / 2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conditional_format_ranges;
+    use omacell_core::sheet::FreezePanes;
+
+    #[test]
+    fn conditional_format_ranges_keep_frozen_and_scrolled_panes_separate() {
+        let ranges = conditional_format_ranges(
+            &[0, 100, 101],
+            &[0, 10, 11],
+            FreezePanes { rows: 1, cols: 1 },
+        );
+        assert_eq!(
+            ranges
+                .into_iter()
+                .map(omacell_core::addr::RangeRef::to_a1)
+                .collect::<Vec<_>>(),
+            ["A1:A1", "K1:L1", "A101:A102", "K101:L102"]
+        );
+    }
+
+    #[test]
+    fn conditional_format_ranges_require_visible_rows_and_columns() {
+        assert!(conditional_format_ranges(&[], &[0], FreezePanes::default()).is_empty());
+        assert!(conditional_format_ranges(&[0], &[], FreezePanes::default()).is_empty());
+    }
 }

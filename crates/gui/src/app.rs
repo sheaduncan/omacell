@@ -1420,6 +1420,8 @@ impl Gui {
             self.last_title = title;
         }
         let snapshot = self.runner.handle().snapshot();
+        let sheet = self.ui.selection().sheet;
+        let conditional_formats = self.runner.handle().conditional_formats(&snapshot, sheet);
         let busy = self.runner.handle().is_busy();
         let cfg = self.ui.config();
         let compact = ctx.screen_rect().width() < cfg.layout.compact_below_width as f32;
@@ -1552,12 +1554,12 @@ impl Gui {
                 ui,
                 &snapshot.workbook,
                 &snapshot.spill,
+                conditional_formats.as_deref(),
                 &self.ui,
                 &self.theme,
                 ctx.pixels_per_point(),
                 &a11y,
             );
-            let sheet = self.ui.selection().sheet;
             if let Some(ws) = snapshot.workbook.sheet(sheet) {
                 let theme = self.theme.chart_theme();
                 for chart in &ws.charts {
@@ -1602,6 +1604,11 @@ impl Gui {
                 }
             }
         });
+        let ranges = self.grid.conditional_format_ranges(&self.ui.viewport());
+        let _ = self
+            .runner
+            .handle()
+            .request_conditional_formats(&snapshot, sheet, &ranges);
 
         let double = input
             .pointer
@@ -1979,9 +1986,6 @@ fn cursor_a1(ui: &UiSession, wb: &omacell_core::workbook::Workbook) -> String {
 impl eframe::App for Gui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ui_frame(ctx);
-        if self.runner.handle().is_busy() {
-            ctx.request_repaint();
-        }
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {

@@ -31,6 +31,13 @@
 
 A single-writer command worker (`TaskRunner`) owns the live `Bus`. Front-ends and runner-backed IPC (`serve_runner`) submit work; they paint from `Arc<ReaderSnapshot>` published after each successful mutation. TUI commands outside the session-local set are always submitted asynchronously because even a nominally short edit can trigger a long automatic recalc. Long operations remain explicitly listed in composition-layer `LongOps`, not frozen command metadata. Session-local navigation/selection/zoom/edit-mode/palette/panel actions run through `omacell_ui::apply_local_command` against the last snapshot.
 
+The conditional-format integration adds a dedicated read-only worker beside the
+writer. GUI/TUI viewport requests are bounded to four frozen/scrolling pane
+rectangles, coalesced to the newest request, and evaluated with the function
+registry captured alongside the exact immutable reader snapshot. Results are
+discarded when that snapshot is superseded, so formula evaluation never runs on
+the paint thread and stale formatting cannot cross a workbook commit.
+
 `Esc` cancels the focused queued/running task without dismissing unrelated panels. Dropping `TaskRunner` cancels accepted work, resolves queued replies, and joins the worker. Queued cancellation prevents handler dispatch. Terminal task records and cancel flags are released, accepted task state is capped at the channel capacity plus the writer, progress labels/events are bounded, and terminal events carry the `Outcome` needed by toolkits to reconcile dirty state.
 
 Recalc checks cancellation before/within generation commits, circular iteration, spill-follow waves, and stale-flag commits. Cancellation restores the pre-pass workbook/spill state; automatic recalc now runs inside the outer command transaction, so a cancelled edit and its derived values roll back together. CSV `file.open` loads and recalculates a staged workbook, then installs it only on success. CSV/OMC/XLSX save/export serialize to a unique same-directory temporary file and check cancellation before atomic destination replacement. `:wq` waits for save completion rather than immediately shutting down and cancelling the save.
@@ -44,8 +51,9 @@ Key files: `crates/bus/src/{task,runner}.rs`, `crates/ui/src/local.rs`, TUI `app
 | Item | Notes |
 |---|---|
 | `TaskRunner::spawn(bus, LongOps)` | Worker owns `Bus`. Drop = cancel in-flight + join |
-| `TaskRunnerHandle` | `submit` / `submit_wait` / changeset propose/apply/revert/list/get / `dry_run` / `snapshot` / `drain_events` / `running_cancel` / `command_ids` |
+| `TaskRunnerHandle` | `submit` / `submit_wait` / changeset propose/apply/revert/list/get / `dry_run` / `snapshot` / `drain_events` / `running_cancel` / `command_ids`; `request_conditional_formats` / `conditional_formats` provide a nonblocking viewport cache |
 | `ReaderSnapshot` | `{ workbook, spill }` behind `Arc`; clone of Arc is O(1) per frame |
+| `ConditionalFormatSnapshot` | Snapshot-bound resolved rectangles with O(1) cell lookup through the WP-18 overlays; exposes a bounded resolution error without blocking paint |
 | `TaskState` / `TaskStatus` / `TaskProgress` / `TaskEvent` / `CancelHandle` | Additive; terminal success includes `Outcome`; not frozen `Event` or IPC |
 | `LongOps::production()` | `calc.recalc`, `file.open`, `file.save`, `file.export` |
 | `register_hold_command` | Test-only `test.hold` |
@@ -74,6 +82,9 @@ Host: local Linux. Build artifacts were kept in the repository-local review scra
 - `cargo test -p omacell-tui --test runner` — 4 pass (debug uses the documented 100 ms CI-safe bound; release remains 16 ms)
 - `cargo test -p omacell-cli --test cancel_atomic` — 4 pass, including real command-path import/export and mid-auto-recalc rollback
 - Existing TUI keymap/reload/snapshot suites still pass
+- Conditional-format follow-up: the barrier-held writer test proves overlay
+  resolution remains independent; the full `just check` gate passes with worker
+  invalidation, both renderer consumers, GUI snapshots, and strict Clippy.
 - `cargo deny check` — pass (no new crates.io deps)
 
 ## Open questions / decisions needed

@@ -3,7 +3,9 @@
 use egui::{
     Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2, WidgetInfo, WidgetType, pos2,
 };
+use omacell_bus::ConditionalFormatSnapshot;
 use omacell_core::addr::{SheetId, col_to_letters};
+use omacell_core::condfmt::CfVisual;
 use omacell_core::geometry::{DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::locale::LocaleId;
@@ -13,7 +15,7 @@ use omacell_core::style::{Border, BorderSide, BorderStyle};
 use omacell_core::style::{Color, Fill, HorizontalAlign, Style};
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
-use omacell_ui::{EditSurface, UiSession, Viewport};
+use omacell_ui::{EditSurface, UiSession, Viewport, conditional_format_ranges};
 
 use crate::theme::GuiTheme;
 
@@ -130,6 +132,17 @@ impl GridLayout {
         self.fill_handle.is_some_and(|rect| rect.contains(pos))
     }
 
+    /// Conditional-format request rectangles for the cells painted this frame.
+    #[must_use]
+    pub fn conditional_format_ranges(
+        &self,
+        viewport: &Viewport,
+    ) -> Vec<omacell_core::addr::RangeRef> {
+        let rows = self.rows.iter().map(|(row, _, _)| *row).collect::<Vec<_>>();
+        let cols = self.cols.iter().map(|(col, _, _)| *col).collect::<Vec<_>>();
+        conditional_format_ranges(&rows, &cols, viewport.freeze)
+    }
+
     /// Screen rect covering `row`/`col` if those cells were painted.
     #[must_use]
     pub fn cell_rect(&self, row: u32, col: u16) -> Option<Rect> {
@@ -140,10 +153,12 @@ impl GridLayout {
 }
 
 /// Paint the visible window. Returns layout for the next pointer event.
+#[allow(clippy::too_many_arguments)]
 pub fn paint(
     ui: &mut Ui,
     wb: &Workbook,
     spill: &SpillTable,
+    conditional_formats: Option<&ConditionalFormatSnapshot>,
     session: &UiSession,
     theme: &GuiTheme,
     ppp: f32,
@@ -276,13 +291,35 @@ pub fn paint(
         );
         for (col, x0, x1) in &header_cols {
             let cell_rect = Rect::from_min_max(pos2(*x0, y0), pos2(*x1, y1));
+            let overlay = conditional_formats.and_then(|resolved| resolved.get(row, *col));
             let style = wb
                 .get(sheet, row, *col)
                 .ok()
                 .flatten()
                 .and_then(|slot| wb.intern().styles.get(slot.style));
-            if let Some(fill) = style.and_then(style_fill) {
+            let fill = overlay
+                .and_then(|overlay| overlay.fill)
+                .and_then(explicit_color)
+                .or_else(|| style.and_then(style_fill));
+            if let Some(fill) = fill {
                 painter.rect_filled(cell_rect, 0.0, fill);
+            }
+            if let Some(CfVisual::DataBar {
+                color,
+                gradient,
+                fraction,
+                axis,
+            }) = overlay.and_then(|overlay| overlay.visual)
+                && let (Some(color), Some(bar)) = (
+                    explicit_color(color),
+                    data_bar_rect(cell_rect, fraction, axis),
+                )
+            {
+                painter.rect_filled(bar, 1.0, color.gamma_multiply(0.72));
+                if gradient {
+                    let highlight = Rect::from_min_max(bar.min, pos2(bar.center().x, bar.max.y));
+                    painter.rect_filled(highlight, 1.0, color.gamma_multiply(0.36));
+                }
             }
             let in_sel = row >= r0 && row <= r1 && *col >= c0 && *col <= c1;
             let is_cursor = sel.cursor.row == row && sel.cursor.col == *col;
@@ -331,8 +368,10 @@ pub fn paint(
             let mut color = theme.foreground;
             if is_error {
                 color = theme.error;
-            } else if let Some(file_color) =
-                style.and_then(|style| explicit_color(style.font.color))
+            } else if let Some(file_color) = overlay
+                .and_then(|overlay| overlay.font)
+                .and_then(explicit_color)
+                .or_else(|| style.and_then(|style| explicit_color(style.font.color)))
             {
                 color = file_color;
             }
@@ -360,8 +399,23 @@ pub fn paint(
                     );
                 }
             }
+            let icon = overlay
+                .and_then(|overlay| overlay.visual)
+                .and_then(conditional_icon);
+            if let Some(icon) = icon {
+                painter.text(
+                    pos2(cell_rect.left() + 3.0, cell_rect.center().y),
+                    Align2::LEFT_CENTER,
+                    icon,
+                    font.clone(),
+                    color,
+                );
+            }
             let galley_pos = match align {
-                Align::Left => pos2(cell_rect.left() + 3.0, cell_rect.center().y),
+                Align::Left => pos2(
+                    cell_rect.left() + if icon.is_some() { 17.0 } else { 3.0 },
+                    cell_rect.center().y,
+                ),
                 Align::Right => pos2(cell_rect.right() - 3.0, cell_rect.center().y),
                 Align::Center => cell_rect.center(),
             };
@@ -516,6 +570,33 @@ fn style_fill(style: &Style) -> Option<Color32> {
             .and_then(|stop| explicit_color(stop.color)),
         Fill::None => None,
     }
+}
+
+fn data_bar_rect(cell: Rect, fraction: f64, axis: f64) -> Option<Rect> {
+    if !fraction.is_finite() || !axis.is_finite() {
+        return None;
+    }
+    let fraction = fraction.clamp(0.0, 1.0) as f32;
+    let axis = axis.clamp(0.0, 1.0) as f32;
+    if (fraction - axis).abs() <= f32::EPSILON {
+        return None;
+    }
+    let inner = cell.shrink2(Vec2::new(2.0, cell.height() * 0.2));
+    let start = inner.left() + inner.width() * fraction.min(axis);
+    let end = inner.left() + inner.width() * fraction.max(axis);
+    (end > start).then(|| Rect::from_min_max(pos2(start, inner.top()), pos2(end, inner.bottom())))
+}
+
+fn conditional_icon(visual: CfVisual) -> Option<&'static str> {
+    let CfVisual::Icon { icons, index } = visual else {
+        return None;
+    };
+    let glyphs: &[&str] = match icons {
+        3 => &["▼", "◆", "▲"],
+        4 => &["▼", "◀", "▶", "▲"],
+        _ => &["▼", "◢", "◆", "◤", "▲"],
+    };
+    glyphs.get(usize::from(index)).copied()
 }
 
 fn cell_border(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> Border {
@@ -759,8 +840,11 @@ pub fn autofit_col_px(wb: &Workbook, session: &UiSession, col: u16) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{GridLayout, explicit_color, strongest_border, style_fill};
+    use super::{
+        GridLayout, conditional_icon, data_bar_rect, explicit_color, strongest_border, style_fill,
+    };
     use egui::{Color32, Rect, pos2};
+    use omacell_core::condfmt::CfVisual;
     use omacell_core::style::{BorderSide, BorderStyle, Color, Fill, Style};
     use omacell_ui::Viewport;
 
@@ -813,5 +897,17 @@ mod tests {
         };
         assert_eq!(strongest_border(thin, thick), thick);
         assert_eq!(strongest_border(thick, thin), thick);
+    }
+
+    #[test]
+    fn conditional_visual_geometry_is_bounded_to_the_cell() {
+        let cell = Rect::from_min_max(pos2(10.0, 20.0), pos2(110.0, 40.0));
+        let positive = data_bar_rect(cell, 0.75, 0.25).unwrap();
+        assert!(cell.contains(positive.min) && cell.contains(positive.max));
+        assert_eq!(
+            conditional_icon(CfVisual::Icon { icons: 3, index: 2 }),
+            Some("▲")
+        );
+        assert!(data_bar_rect(cell, f64::NAN, 0.0).is_none());
     }
 }

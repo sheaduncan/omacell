@@ -2,17 +2,20 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use omacell_bus::args::EmptyArgs;
 use omacell_bus::{
     Bus, CommandKind, CommandSpec, Effect, Exposure, LongOps, TaskEvent, TaskRunner,
 };
+use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::command::Origin;
+use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat};
 use omacell_core::error::CoreError;
 use omacell_core::eval::FnRegistry;
 use omacell_core::event::Event;
 use omacell_core::recalc::RecalcEngine;
+use omacell_core::style::Color;
 use omacell_core::workbook::Workbook;
 use serde_json::json;
 
@@ -293,4 +296,86 @@ fn synchronous_commands_publish_core_events_before_returning() {
             .iter()
             .any(|event| matches!(event, Event::RecalcDone { .. }))
     );
+}
+
+#[test]
+fn conditional_formats_resolve_off_thread_and_invalidate_with_the_reader_snapshot() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook.set_number(sheet, 0, 0, 7.0).unwrap();
+    let cell = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(0, 0).unwrap());
+    workbook
+        .set_cond_formats(
+            sheet,
+            vec![CondFormat {
+                range: cell,
+                priority: 1,
+                stop_if_true: true,
+                kind: CfKind::CellIs {
+                    op: CfOp::Greater,
+                    formula1: "0".into(),
+                    formula2: None,
+                },
+                dxf: CfDxf {
+                    fill: Some(Color::Rgb { argb: 0xFF12_3456 }),
+                    font: None,
+                },
+            }],
+        )
+        .unwrap();
+    let start = Arc::new(Barrier::new(2));
+    let release = Arc::new(AtomicBool::new(false));
+    let mut bus = Bus::new(workbook, RecalcEngine::new(FnRegistry::new())).unwrap();
+    register_hold_command(bus.registry_mut(), Arc::clone(&start), Arc::clone(&release)).unwrap();
+    let runner = TaskRunner::spawn(bus, LongOps::production().with("test.hold")).unwrap();
+    let handle = runner.handle();
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+    handle.set_event_waker(move || {
+        let _ = wake_tx.send(());
+    });
+
+    let first = handle.snapshot();
+    handle.submit(Origin::User, "test.hold", json!({})).unwrap();
+    start.wait();
+    assert!(handle.is_busy());
+    handle
+        .request_conditional_formats(&first, sheet, &[cell])
+        .unwrap();
+    let resolved = wait_for_conditional_formats(&handle, &first, sheet, &wake_rx);
+    assert_eq!(
+        resolved.get(0, 0).and_then(|overlay| overlay.fill),
+        Some(Color::Rgb { argb: 0xFF12_3456 })
+    );
+
+    release.store(true, Ordering::SeqCst);
+    let outcome = handle.submit_wait(
+        Origin::User,
+        "cell.set",
+        json!({"ref": "A1", "input": "-1"}),
+    );
+    assert!(outcome.ok, "{:?}", outcome.error);
+    let second = handle.snapshot();
+    assert!(handle.conditional_formats(&second, sheet).is_none());
+    handle
+        .request_conditional_formats(&second, sheet, &[cell])
+        .unwrap();
+    let resolved = wait_for_conditional_formats(&handle, &second, sheet, &wake_rx);
+    assert_eq!(resolved.get(0, 0).and_then(|overlay| overlay.fill), None);
+}
+
+fn wait_for_conditional_formats(
+    handle: &omacell_bus::TaskRunnerHandle,
+    snapshot: &Arc<omacell_bus::ReaderSnapshot>,
+    sheet: omacell_core::addr::SheetId,
+    wake_rx: &std::sync::mpsc::Receiver<()>,
+) -> Arc<omacell_bus::ConditionalFormatSnapshot> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(resolved) = handle.conditional_formats(snapshot, sheet) {
+            return resolved;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "conditional formats did not resolve");
+        wake_rx.recv_timeout(remaining).unwrap();
+    }
 }

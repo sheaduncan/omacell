@@ -1,6 +1,8 @@
 //! Virtualized grid, formula bar, tabs, status, palette, and panels.
 
+use omacell_bus::ConditionalFormatSnapshot;
 use omacell_core::addr::{SheetId, col_to_letters};
+use omacell_core::condfmt::{CfOverlay, CfVisual};
 use omacell_core::geometry::{AxisGeometry, DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::locale::LocaleId;
 use omacell_core::numfmt::{FormatOptions, FormatValue, format_with};
@@ -10,7 +12,9 @@ use omacell_core::storage::CellSlot;
 use omacell_core::style::{Color as CellColor, Fill, HorizontalAlign, Underline};
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
-use omacell_ui::{EditSurface, Palette, PanelState, StatusLine, UiSession, Viewport};
+use omacell_ui::{
+    EditSurface, Palette, PanelState, StatusLine, UiSession, Viewport, conditional_format_ranges,
+};
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -26,6 +30,8 @@ pub struct FrameInput<'a> {
     pub wb: &'a Workbook,
     /// Recalculation spill regions.
     pub spill: &'a SpillTable,
+    /// Worker-resolved conditional formats for this reader snapshot.
+    pub conditional_formats: Option<&'a ConditionalFormatSnapshot>,
     /// WP-14 session.
     pub ui: &'a UiSession,
     /// Resolved theme name for the status line.
@@ -66,6 +72,15 @@ impl GridHitMap {
             .index;
         Some((row, col))
     }
+
+    pub(crate) fn conditional_format_ranges(
+        &self,
+        viewport: &Viewport,
+    ) -> Vec<omacell_core::addr::RangeRef> {
+        let rows = self.rows.iter().map(|row| row.index).collect::<Vec<_>>();
+        let cols = self.columns.iter().map(|col| col.index).collect::<Vec<_>>();
+        conditional_format_ranges(&rows, &cols, viewport.freeze)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,6 +104,7 @@ pub fn draw(frame: &mut Frame<'_>, input: FrameInput<'_>) -> GridHitMap {
     let FrameInput {
         wb,
         spill,
+        conditional_formats,
         ui,
         theme_name,
         truecolor,
@@ -150,6 +166,7 @@ pub fn draw(frame: &mut Frame<'_>, input: FrameInput<'_>) -> GridHitMap {
         grid,
         wb,
         spill,
+        conditional_formats,
         ui,
         unicode_borders,
         col_chars,
@@ -353,6 +370,7 @@ fn draw_grid(
     area: Rect,
     wb: &Workbook,
     spill: &SpillTable,
+    conditional_formats: Option<&ConditionalFormatSnapshot>,
     ui: &UiSession,
     unicode: bool,
     col_chars: u16,
@@ -461,6 +479,8 @@ fn draw_grid(
                     ));
                 }
                 let slot = wb.get(sheet, row.index, col.index).ok().flatten();
+                let overlay =
+                    conditional_formats.and_then(|resolved| resolved.get(row.index, col.index));
                 let editing_here = subline == 0
                     && edit.surface == EditSurface::InCell
                     && edit.origin.is_some_and(|origin| {
@@ -468,7 +488,7 @@ fn draw_grid(
                             && origin.row == row.index
                             && origin.col == col.index
                     });
-                let (text, align) = if editing_here {
+                let (mut text, align) = if editing_here {
                     (
                         format!(
                             "{}{}",
@@ -490,6 +510,13 @@ fn draw_grid(
                 } else {
                     (String::new(), Align::Left)
                 };
+                if subline == 0
+                    && let Some(prefix) = overlay
+                        .and_then(|overlay| overlay.visual)
+                        .and_then(conditional_visual_prefix)
+                {
+                    text = format!("{prefix} {text}");
+                }
                 let (overflow, width) = if subline == 0 {
                     overflow_cols(
                         wb,
@@ -511,6 +538,7 @@ fn draw_grid(
                 let mut style = cell_style(
                     wb,
                     slot,
+                    overlay,
                     ansi,
                     zebra && vis_i % 2 == 1,
                     in_sel,
@@ -755,6 +783,7 @@ fn row_height(vp: &Viewport, row: u32) -> u16 {
 fn cell_style(
     wb: &Workbook,
     slot: Option<&CellSlot>,
+    overlay: Option<CfOverlay>,
     ansi: AnsiRoles,
     zebra: bool,
     selected: bool,
@@ -792,6 +821,20 @@ fn cell_style(
             style = style.bg(color);
         }
     }
+    if let Some(overlay) = overlay {
+        if let Some(color) = overlay
+            .font
+            .and_then(|color| workbook_color(color, truecolor))
+        {
+            style = style.fg(color);
+        }
+        if let Some(color) = overlay
+            .fill
+            .and_then(|color| workbook_color(color, truecolor))
+        {
+            style = style.bg(color);
+        }
+    }
     if error {
         style = style.fg(ansi.error);
     }
@@ -821,6 +864,27 @@ fn workbook_color(color: CellColor, truecolor: bool) -> Option<ratatui::style::C
             (argb & 0xff) as u8,
         )),
         CellColor::Rgb { .. } => None,
+    }
+}
+
+fn conditional_visual_prefix(visual: CfVisual) -> Option<&'static str> {
+    match visual {
+        CfVisual::Icon { icons, index } => {
+            let glyphs: &[&str] = match icons {
+                3 => &["▼", "◆", "▲"],
+                4 => &["▼", "◀", "▶", "▲"],
+                _ => &["▼", "◢", "◆", "◤", "▲"],
+            };
+            glyphs.get(usize::from(index)).copied()
+        }
+        CfVisual::DataBar { fraction, axis, .. } => {
+            if !fraction.is_finite() || !axis.is_finite() {
+                return None;
+            }
+            let magnitude = (fraction - axis).abs().clamp(0.0, 1.0);
+            let index = (magnitude * 7.0).round() as usize;
+            ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"].get(index).copied()
+        }
     }
 }
 
@@ -1277,4 +1341,37 @@ pub fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
         out.push('\n');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conditional_visual_prefix;
+    use omacell_core::condfmt::CfVisual;
+    use omacell_core::style::Color;
+
+    #[test]
+    fn conditional_visuals_have_bounded_terminal_glyphs() {
+        assert_eq!(
+            conditional_visual_prefix(CfVisual::Icon { icons: 3, index: 2 }),
+            Some("▲")
+        );
+        assert_eq!(
+            conditional_visual_prefix(CfVisual::DataBar {
+                color: Color::Auto,
+                gradient: false,
+                fraction: 1.0,
+                axis: 0.0,
+            }),
+            Some("█")
+        );
+        assert_eq!(
+            conditional_visual_prefix(CfVisual::DataBar {
+                color: Color::Auto,
+                gradient: false,
+                fraction: f64::NAN,
+                axis: 0.0,
+            }),
+            None
+        );
+    }
 }

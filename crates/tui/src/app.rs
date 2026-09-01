@@ -273,6 +273,9 @@ impl Tui {
         let loaded = self.store.snapshot();
         let unicode = loaded.config.tui.unicode_borders;
         let snapshot = self.runner.handle().snapshot();
+        let runner = self.runner.handle();
+        let sheet = self.ui.selection().sheet;
+        let conditional_formats = runner.conditional_formats(&snapshot, sheet);
         let busy = self.runner.handle().is_busy();
         let mut progress_msg = self.message.clone();
         if let Some(task) = self.runner.handle().running()
@@ -291,6 +294,7 @@ impl Tui {
                 render::FrameInput {
                     wb: &snapshot.workbook,
                     spill: &snapshot.spill,
+                    conditional_formats: conditional_formats.as_deref(),
                     ui: &self.ui,
                     theme_name: &loaded.theme.name,
                     truecolor: self.truecolor,
@@ -302,6 +306,10 @@ impl Tui {
                 },
             ));
         })?;
+        if let Some(grid) = &hit_map {
+            let ranges = grid.conditional_format_ranges(&self.ui.viewport());
+            let _ = runner.request_conditional_formats(&snapshot, sheet, &ranges);
+        }
         *self.last_grid.lock().unwrap_or_else(|p| p.into_inner()) = hit_map;
         Ok(())
     }
