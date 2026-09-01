@@ -48,6 +48,21 @@ struct CompleteArgs {
     prefix: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ImportArgs {
+    plan: serde_json::Value,
+    preview: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FileOpenArgs {
+    path: String,
+    #[serde(default)]
+    plan: Option<serde_json::Value>,
+}
+
 fn register_test_agent(bus: &mut Bus) {
     bus.registry_mut()
         .register::<AgentTurnArgs, _>(
@@ -135,6 +150,31 @@ fn register_test_completion(bus: &mut Bus) {
         .unwrap();
 }
 
+fn register_test_import_assist(bus: &mut Bus) {
+    bus.registry_mut()
+        .register::<ImportArgs, _>(
+            CommandSpec {
+                id: "ai.import.assist",
+                doc: "Recorded import-plan proposal",
+                kind: CommandKind::Query,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, args| {
+                let mut proposed = args.plan.clone();
+                proposed["columns"][0]["name"] = json!("Pressure");
+                let _preview = args.preview;
+                Ok(Effect::query(json!({
+                    "current": args.plan,
+                    "proposed": proposed,
+                    "applied": false,
+                })))
+            },
+        )
+        .unwrap();
+}
+
 fn register_file_lifecycle(bus: &mut Bus) {
     let register_empty =
         |bus: &mut Bus, id: &'static str, doc: &'static str, keys: &'static [&'static str]| {
@@ -178,6 +218,48 @@ fn register_file_lifecycle(bus: &mut Bus) {
         "Close the current workbook window",
         &["Ctrl+W"],
     );
+    bus.registry_mut()
+        .register::<FileOpenArgs, _>(
+            CommandSpec {
+                id: "file.open",
+                doc: "Open a workbook from disk",
+                kind: CommandKind::Mutating,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |ctx, args| {
+                if ctx.is_preflight() {
+                    return Ok(Effect::query(json!({"path": args.path})));
+                }
+                let current = args.plan.unwrap_or_else(|| {
+                    json!({
+                        "delimiter": ",",
+                        "has_header": true,
+                        "columns": [{
+                            "name": "Pressure (psi)",
+                            "ty": {"kind": "auto"}
+                        }]
+                    })
+                });
+                Ok(Effect::query(json!({
+                    "path": args.path,
+                    "import": {
+                        "current": current,
+                        "preview": {
+                            "header": ["Pressure (psi)"],
+                            "rows": [[{
+                                "raw": "14.7",
+                                "would_become": "14.7",
+                                "kind": "number",
+                                "changed": true
+                            }]]
+                        }
+                    }
+                })))
+            },
+        )
+        .unwrap();
     bus.registry_mut()
         .register::<FileSaveAsArgs, _>(
             CommandSpec {
@@ -314,6 +396,7 @@ fn harness_opts_with_script(
     register_test_agent(&mut bus);
     register_test_formula_assist(&mut bus);
     register_test_completion(&mut bus);
+    register_test_import_assist(&mut bus);
     register_file_lifecycle(&mut bus);
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
 

@@ -20,6 +20,7 @@ use omacell_core::error::CoreError;
 use omacell_core::event::Event;
 use omacell_core::graph::CellCoord;
 use omacell_core::storage::{CellFlags, CellSlot, UsedRange};
+use omacell_io::csv::{ImportAssistRequest, ImportPlan, PreviewRows, import_assist_request};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -71,6 +72,9 @@ struct CompleteArgs {
 struct ImportArgs {
     /// Current import plan JSON.
     plan: Value,
+    /// Bounded raw/converted rows from the retained import preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preview: Option<Value>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
@@ -458,7 +462,8 @@ fn run_import(
     if ctx.is_preflight() {
         return Ok(ai_preflight(ctx));
     }
-    let user = fence_data("import plan", &args.plan);
+    let (current, request) = import_request(&args)?;
+    let user = fence_data("import preview", &request);
     let reply = session
         .runtime
         .chat_task(Slot::Default, "import", user, None, vec![])
@@ -466,10 +471,34 @@ fn run_import(
     let value = structured_reply("import", &reply.text)?;
     let proposed = parse_plan_overlay(&value).map_err(CoreError::from)?;
     Ok(Effect::query(json!({
-        "current": args.plan,
+        "current": current,
         "proposed": proposed,
         "applied": false,
     })))
+}
+
+fn import_request(args: &ImportArgs) -> Result<(ImportPlan, Value), CoreError> {
+    let current = parse_plan_overlay(&args.plan).map_err(CoreError::from)?;
+    let request = if let Some(preview) = &args.preview {
+        let preview: PreviewRows = serde_json::from_value(preview.clone()).map_err(|error| {
+            CoreError::new("ai.payload", format!("invalid import preview: {error}"))
+        })?;
+        let request: ImportAssistRequest = import_assist_request(current.clone(), preview);
+        serde_json::to_value(request).map_err(|error| {
+            CoreError::new(
+                "ai.payload",
+                format!("cannot serialize import preview: {error}"),
+            )
+        })?
+    } else {
+        serde_json::to_value(&current).map_err(|error| {
+            CoreError::new(
+                "ai.payload",
+                format!("cannot serialize import plan: {error}"),
+            )
+        })?
+    };
+    Ok((current, request))
 }
 
 fn run_audit(ctx: &mut CommandContext<'_>, session: &AiSession) -> Result<Effect, CoreError> {
@@ -819,5 +848,26 @@ mod tests {
         );
         assert!(live.ok, "{:?}", live.error);
         assert_eq!(runtime.session_stats().requests, 1);
+    }
+
+    #[test]
+    fn import_request_includes_the_bounded_preview() {
+        let (current, payload) = super::import_request(&super::ImportArgs {
+            plan: json!({"delimiter": ",", "has_header": true}),
+            preview: Some(json!({
+                "header": ["sample"],
+                "rows": [[{
+                    "raw": "007",
+                    "would_become": "007",
+                    "kind": "text",
+                    "changed": false
+                }]]
+            })),
+        })
+        .unwrap();
+
+        assert!(current.has_header);
+        assert_eq!(payload["plan"]["has_header"], true);
+        assert_eq!(payload["preview"]["rows"][0][0]["raw"], "007");
     }
 }

@@ -29,9 +29,9 @@ use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
 use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
-    AgentRole, Area, ChangesetReview, ClipboardPayload, ExtendMode, FormulaAssist, KeyCode,
-    KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_local_command, apply_search_result,
-    inject_selection_args,
+    AgentRole, Area, ChangesetReview, ClipboardPayload, ExtendMode, FormulaAssist,
+    ImportPlanReview, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_local_command,
+    apply_search_result, inject_selection_args,
 };
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -91,6 +91,8 @@ pub struct Tui {
     palette_plan_task: Option<TaskId>,
     autopilot: Option<AutopilotPolicy>,
     formula_tasks: BTreeMap<TaskId, FormulaTask>,
+    import_assist_task: Option<TaskId>,
+    import_apply_task: Option<TaskId>,
     completion: InlineCompletion,
     last_grid: Mutex<Option<render::GridHitMap>>,
     graphics: Mutex<Option<ChartGraphics>>,
@@ -112,6 +114,7 @@ pub struct Tui {
 impl Tui {
     /// Wrap a launch. `ipc` starts the in-process socket used by the theme hook.
     pub fn new(launch: Launch, ipc: bool) -> Result<Self, CoreError> {
+        let requested_file = launch.file.clone();
         let loaded = launch.store.snapshot();
         let truecolor = truecolor_enabled(&loaded.config.tui.truecolor);
         let graphics_setting = loaded.config.tui.graphics.clone();
@@ -136,13 +139,21 @@ impl Tui {
             &loaded,
             launch.ai,
         )?;
-        let mut message = scripts.take_messages().into_iter().last();
-        let script_status = message.clone();
-        if launch.file.is_some()
-            && let Err(error) = scripts.emit_open()
-        {
-            message = Some(format!("{}: {}", error.code, error.message));
-        }
+        let startup_message = scripts.take_messages().into_iter().last();
+        let script_status = startup_message.clone();
+        let (message, focused_cancel) = if let Some(path) = requested_file {
+            let (_, cancel) = runner.handle().submit(
+                Origin::User,
+                "file.open",
+                serde_json::json!({"path": path.display().to_string()}),
+            )?;
+            (
+                startup_message.or_else(|| Some("opening…".into())),
+                Some(cancel),
+            )
+        } else {
+            (startup_message, None)
+        };
         let ipc_handle = if ipc {
             let limits = IpcLimits::new(loaded.config.ipc.max_frame_bytes as usize)?;
             Some(serve_runner_with_limits(
@@ -171,6 +182,8 @@ impl Tui {
             palette_plan_task: None,
             autopilot: None,
             formula_tasks: BTreeMap::new(),
+            import_assist_task: None,
+            import_apply_task: None,
             completion: InlineCompletion::default(),
             last_grid: Mutex::new(None),
             graphics: Mutex::new(None),
@@ -182,9 +195,9 @@ impl Tui {
             quit_armed: false,
             quit_requested: false,
             last_queued: None,
-            focused_cancel: None,
+            focused_cancel,
             quit_after: None,
-            file: launch.file,
+            file: None,
             window_focused: None,
             ipc: ipc_handle,
         })
@@ -390,7 +403,7 @@ impl Tui {
         if let Some(id) = self.ui.panel().visible.clone()
             && matches!(
                 id.as_str(),
-                "find" | "goto" | "command" | "changeset" | "agent" | "formula"
+                "find" | "goto" | "command" | "changeset" | "agent" | "formula" | "import"
             )
         {
             if event.code != KeyCode::Enter {
@@ -568,6 +581,10 @@ impl Tui {
         for event in self.runner.handle().drain_events() {
             match event {
                 TaskEvent::Completed { state, outcome } => {
+                    let import_apply = self.import_apply_task == Some(state.id);
+                    if import_apply {
+                        self.import_apply_task = None;
+                    }
                     if self
                         .focused_cancel
                         .as_ref()
@@ -617,6 +634,22 @@ impl Tui {
                             }
                         }
                     }
+                    if state.command == "ai.import.assist" {
+                        self.import_assist_task = None;
+                        let result = outcome
+                            .result
+                            .as_ref()
+                            .ok_or_else(|| {
+                                CoreError::new(
+                                    "ui.import",
+                                    "import assistant returned an empty result",
+                                )
+                            })
+                            .and_then(|value| self.install_import_proposal(value));
+                        if let Err(error) = result {
+                            self.message = Some(format!("{}: {}", error.code, error.message));
+                        }
+                    }
                     if state.command == "ai.agent.turn" {
                         let result = outcome
                             .result
@@ -659,7 +692,20 @@ impl Tui {
                     }
                     if state.command == "file.close" {
                         self.request_quit(false);
-                    } else if matches!(state.command.as_str(), "file.open" | "file.new") {
+                    } else if state.command == "file.open" {
+                        self.adopt_file_snapshot();
+                        if import_apply {
+                            self.ui.set_import_review(None);
+                            let mut panel = self.ui.panel();
+                            panel.dismiss();
+                            self.ui.set_panel(panel);
+                            self.message = Some("import plan applied".into());
+                        } else if let Some(result) = outcome.result.as_ref()
+                            && let Err(error) = self.open_import_review(result)
+                        {
+                            self.message = Some(format!("{}: {}", error.code, error.message));
+                        }
+                    } else if state.command == "file.new" {
                         self.adopt_file_snapshot();
                     } else if matches!(
                         state.command.as_str(),
@@ -686,6 +732,12 @@ impl Tui {
                     }
                 }
                 TaskEvent::Failed { state, message, .. } => {
+                    if self.import_assist_task == Some(state.id) {
+                        self.import_assist_task = None;
+                    }
+                    if self.import_apply_task == Some(state.id) {
+                        self.import_apply_task = None;
+                    }
                     if self
                         .focused_cancel
                         .as_ref()
@@ -939,6 +991,9 @@ impl Tui {
         if id == "agent" {
             return self.step_agent_panel(event);
         }
+        if id == "import" {
+            return self.step_import_review(event);
+        }
         match (event.code, event.ctrl) {
             (KeyCode::Esc, false) => {
                 if id == "command" {
@@ -1137,6 +1192,92 @@ impl Tui {
             let mut panel = self.ui.panel();
             panel.dismiss();
             self.ui.set_panel(panel);
+        }
+        Ok(KeyOutcome::Pending)
+    }
+
+    fn open_import_review(&mut self, value: &serde_json::Value) -> Result<(), CoreError> {
+        let Some(review) = ImportPlanReview::from_open_result(value)? else {
+            return Ok(());
+        };
+        self.ui.set_import_review(Some(review));
+        let mut panel = self.ui.panel();
+        panel.open("import");
+        self.ui.set_panel(panel);
+        Ok(())
+    }
+
+    fn install_import_proposal(&mut self, value: &serde_json::Value) -> Result<(), CoreError> {
+        let mut review = self
+            .ui
+            .import_review()
+            .ok_or_else(|| CoreError::new("ui.import", "no active import preview"))?;
+        review.apply_assistant_result(value)?;
+        self.ui.set_import_review(Some(review));
+        let mut panel = self.ui.panel();
+        panel.open("import");
+        self.ui.set_panel(panel);
+        self.message = Some("import proposal ready for review".into());
+        Ok(())
+    }
+
+    fn step_import_review(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
+        let Some(mut review) = self.ui.import_review() else {
+            let mut panel = self.ui.panel();
+            panel.dismiss();
+            self.ui.set_panel(panel);
+            return Ok(KeyOutcome::Pending);
+        };
+        match (event.code, event.ctrl, event.alt) {
+            (KeyCode::Esc, false, false) => {
+                let mut panel = self.ui.panel();
+                panel.dismiss();
+                self.ui.set_panel(panel);
+            }
+            (KeyCode::Char('a' | 'A'), false, false)
+                if review.proposed.is_none() && self.import_assist_task.is_none() =>
+            {
+                match self.runner.handle().submit(
+                    Origin::User,
+                    "ai.import.assist",
+                    review.assistant_args(),
+                ) {
+                    Ok((id, cancel)) => {
+                        self.import_assist_task = Some(id);
+                        self.focused_cancel = Some(cancel);
+                        self.message = Some("asking AI about the import…".into());
+                    }
+                    Err(error) => {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
+                }
+            }
+            (KeyCode::Char('r' | 'R'), false, false) if review.proposed.is_some() => {
+                review.reject_proposal();
+                self.ui.set_import_review(Some(review));
+                self.message = Some("import proposal rejected".into());
+            }
+            (KeyCode::Enter, false, false) if self.import_apply_task.is_none() => {
+                if let Some(args) = review.accepted_open_args() {
+                    match self.runner.handle().submit(Origin::User, "file.open", args) {
+                        Ok((id, cancel)) => {
+                            self.import_apply_task = Some(id);
+                            self.focused_cancel = Some(cancel);
+                            self.message = Some("applying import plan…".into());
+                        }
+                        Err(error) => {
+                            self.message = Some(format!("{}: {}", error.code, error.message));
+                        }
+                    }
+                } else {
+                    self.ui.set_import_review(None);
+                    let mut panel = self.ui.panel();
+                    panel.dismiss();
+                    self.ui.set_panel(panel);
+                    self.message = Some("kept the sniffed import plan".into());
+                }
+            }
+            _ => {}
         }
         Ok(KeyOutcome::Pending)
     }
@@ -1724,6 +1865,7 @@ impl Tui {
         self.completion = InlineCompletion::default();
         self.ui.set_changeset_review(None);
         self.ui.set_formula_assist(None);
+        self.ui.set_import_review(None);
     }
 
     fn reset_autopilot(&mut self, message: &str) {

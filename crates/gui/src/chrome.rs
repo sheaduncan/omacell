@@ -212,6 +212,9 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
             }
             body
         }
+        "import" => session
+            .import_review()
+            .map_or_else(|| "no active import preview".into(), |review| review.body()),
         "format" => "format panel (WP-18)".into(),
         other => format!("{other} panel"),
     });

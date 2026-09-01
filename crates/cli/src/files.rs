@@ -18,7 +18,7 @@ use omacell_core::event::Event;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::sheet::ViewState;
 use omacell_core::workbook::Workbook;
-use omacell_io::csv::{self, ExportPlan};
+use omacell_io::csv::{self, ExportPlan, ImportPlan, PreviewRows};
 use omacell_io::omc::{self, OmcDocument};
 use omacell_io::xlsx::{self, OpcPackage, SaveOptions, WorksheetExtras, XlsxDocument};
 use omacell_ui::UiSession;
@@ -124,6 +124,9 @@ pub struct EmptyFileArgs {}
 pub struct FileOpenArgs {
     /// Path to open.
     pub path: String,
+    /// Reviewed CSV/TSV import plan. Omitted to use the conservative sniffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<serde_json::Value>,
 }
 
 /// `file.save`
@@ -350,6 +353,11 @@ fn file_open(
     args: FileOpenArgs,
 ) -> Result<Effect, CoreError> {
     let path = PathBuf::from(&args.path);
+    let plan = args
+        .plan
+        .map(serde_json::from_value::<ImportPlan>)
+        .transpose()
+        .map_err(|error| CoreError::new("csv.plan", format!("invalid import plan: {error}")))?;
     if ctx.is_preflight() && !ctx.is_dry_run() {
         std::fs::metadata(&path)
             .map_err(|err| CoreError::new("file.open", format!("{}: {err}", path.display())))?;
@@ -361,7 +369,7 @@ fn file_open(
     if ctx.is_cancelled() {
         return Err(cancelled());
     }
-    let mut opened = open_any_with_cancel(&path, ctx)?;
+    let mut opened = open_any_with_cancel(&path, ctx, plan.as_ref())?;
     if ctx.is_cancelled() {
         return Err(cancelled());
     }
@@ -387,12 +395,19 @@ fn file_open(
     if !ctx.is_preflight() {
         session.attach(&path, &opened);
     }
+    let mut result = serde_json::json!({"path": path.display().to_string()});
+    if let Some(import) = &opened.import {
+        result["import"] = serde_json::json!({
+            "current": import.current,
+            "preview": import.preview,
+        });
+    }
     ctx.install_staged_workbook(opened.workbook);
     Ok(Effect {
         events: vec![Event::WorkbookOpened {
             path: Some(path.display().to_string()),
         }],
-        result: serde_json::json!({"path": path.display().to_string()}),
+        result,
         auto_recalc: false,
         rebuild: false,
         ..Effect::default()
@@ -823,6 +838,12 @@ pub struct Opened {
     kind: FileKind,
     package: Option<OpcPackage>,
     extras: HashMap<String, WorksheetExtras>,
+    import: Option<ImportPreview>,
+}
+
+struct ImportPreview {
+    current: ImportPlan,
+    preview: PreviewRows,
 }
 
 fn cancelled() -> CoreError {
@@ -830,11 +851,15 @@ fn cancelled() -> CoreError {
         .with_hint("the live workbook and destination file were left unchanged")
 }
 
-fn open_any_with_cancel(path: &Path, ctx: &CommandContext<'_>) -> Result<Opened, CoreError> {
+fn open_any_with_cancel(
+    path: &Path,
+    ctx: &CommandContext<'_>,
+    import_plan: Option<&ImportPlan>,
+) -> Result<Opened, CoreError> {
     let cancel = ctx.cancel_flag().cloned();
     let progress = ctx.progress_sink();
     if let Some(kind) = kind_from_path(path) {
-        return open_kind(path, kind, None, cancel, progress, None);
+        return open_kind(path, kind, import_plan, cancel, progress, None);
     }
     if let Ok(opened) = open_kind(
         path,
@@ -856,7 +881,7 @@ fn open_any_with_cancel(path: &Path, ctx: &CommandContext<'_>) -> Result<Opened,
     ) {
         return Ok(opened);
     }
-    open_kind(path, FileKind::Csv, None, cancel, progress, None)
+    open_kind(path, FileKind::Csv, import_plan, cancel, progress, None)
 }
 
 /// Open a workbook by extension, then content sniff.
@@ -875,6 +900,7 @@ pub(crate) fn open_scriptable_bytes(path: &Path, bytes: &[u8]) -> Result<Opened,
                 kind: FileKind::Xlsx,
                 package: Some(doc.package),
                 extras: doc.extras,
+                import: None,
             })
         }
         Some(FileKind::Omc) => {
@@ -884,6 +910,7 @@ pub(crate) fn open_scriptable_bytes(path: &Path, bytes: &[u8]) -> Result<Opened,
                 kind: FileKind::Omc,
                 extras: doc.extras,
                 package: None,
+                import: None,
             })
         }
         _ => Err(CoreError::new(
@@ -943,6 +970,7 @@ fn open_kind(
                 kind,
                 package: Some(doc.package),
                 extras: doc.extras,
+                import: None,
             })
         }
         FileKind::Omc => {
@@ -952,6 +980,7 @@ fn open_kind(
                 kind,
                 extras: doc.extras,
                 package: None,
+                import: None,
             })
         }
         FileKind::Pdf => Err(
@@ -966,6 +995,7 @@ fn open_kind(
                 kind,
                 package: None,
                 extras: HashMap::new(),
+                import: None,
             })
         }
         FileKind::Json => {
@@ -975,6 +1005,7 @@ fn open_kind(
                 kind,
                 package: None,
                 extras: HashMap::new(),
+                import: None,
             })
         }
         FileKind::Parquet => {
@@ -984,6 +1015,7 @@ fn open_kind(
                 kind,
                 package: None,
                 extras: HashMap::new(),
+                import: None,
             })
         }
         FileKind::Html => {
@@ -993,6 +1025,7 @@ fn open_kind(
                 kind,
                 package: None,
                 extras: HashMap::new(),
+                import: None,
             })
         }
         FileKind::Markdown => {
@@ -1002,6 +1035,7 @@ fn open_kind(
                 kind,
                 package: None,
                 extras: HashMap::new(),
+                import: None,
             })
         }
         FileKind::Xls => Ok(Opened {
@@ -1009,16 +1043,16 @@ fn open_kind(
             kind,
             package: None,
             extras: HashMap::new(),
+            import: None,
         }),
         FileKind::Csv => {
-            let sniffed;
-            let plan = if let Some(plan) = import_plan {
-                plan
+            let current = if let Some(plan) = import_plan {
+                plan.clone()
             } else {
-                sniffed = csv::sniff_path(path)?;
-                &sniffed.plan
+                csv::sniff_path(path)?.plan
             };
-            plan.validate()?;
+            current.validate()?;
+            let preview = csv::preview_path(path, &current, 0)?;
             let on_progress = progress.map(|sink| {
                 Arc::new(move |event: csv::LoadProgress| {
                     sink(event.rows_loaded, None, "import");
@@ -1029,12 +1063,13 @@ fn open_kind(
                 on_progress,
                 ..csv::LoadOptions::default()
             };
-            let (workbook, _) = csv::load_path(path, plan, opts)?;
+            let (workbook, _) = csv::load_path(path, &current, opts)?;
             Ok(Opened {
                 workbook,
                 kind,
                 package: None,
                 extras: HashMap::new(),
+                import: Some(ImportPreview { current, preview }),
             })
         }
     }

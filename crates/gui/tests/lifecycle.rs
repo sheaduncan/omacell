@@ -832,6 +832,55 @@ fn formula_assist_opens_a_reviewable_validated_proposal() {
 }
 
 #[test]
+fn csv_import_assist_is_reviewed_before_reopening_with_the_plan() {
+    let parts = launch_theme(None);
+    let open_count = parts.open_count.clone();
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state_mut()
+        .execute_cmd("file.open", serde_json::json!({"path":"readings.csv"}))
+        .unwrap();
+    wait_tasks(&mut harness);
+
+    assert_eq!(
+        harness.state().ui_session().panel().visible.as_deref(),
+        Some("import")
+    );
+    assert!(
+        harness
+            .state()
+            .ui_session()
+            .import_review()
+            .unwrap()
+            .proposed
+            .is_none()
+    );
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Char('a')))
+        .unwrap();
+    wait_tasks(&mut harness);
+    let review = harness.state().ui_session().import_review().unwrap();
+    assert_eq!(
+        review.proposed.unwrap().columns[0].name.as_deref(),
+        Some("Pressure")
+    );
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Enter))
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert_eq!(open_count.load(Ordering::SeqCst), 2);
+    assert!(harness.state().ui_session().panel().visible.is_none());
+    assert!(harness.state().ui_session().import_review().is_none());
+}
+
+#[test]
 fn inline_completion_is_debounced_and_tab_accepts_the_ghost() {
     let parts = launch_theme(None);
     let mut harness = Harness::builder()

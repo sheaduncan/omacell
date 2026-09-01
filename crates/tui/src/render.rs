@@ -1509,6 +1509,9 @@ fn draw_panel(
             }
             body
         }
+        "import" => ui
+            .import_review()
+            .map_or_else(|| "no active import preview".into(), |review| review.body()),
         "comments" => "comments (WP-19)".into(),
         "format" => "format panel (WP-18)".into(),
         "sort" | "filter" => format!("{id} panel (WP-17)"),

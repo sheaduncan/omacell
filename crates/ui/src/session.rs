@@ -14,6 +14,7 @@ use crate::edit::{EditState, EditSurface};
 use crate::error;
 use crate::find::{FindReplace, GoTo};
 use crate::formula_assist::FormulaAssist;
+use crate::import_review::ImportPlanReview;
 use crate::keymap::{Keymap, KeymapRoots};
 use crate::mode::{KeyModel, Mode};
 use crate::palette::{AiPlanProvider, Palette};
@@ -42,6 +43,7 @@ pub(crate) struct UiInner {
     pub changeset_review: Option<ChangesetReview>,
     pub agent_panel: AgentPanel,
     pub formula_assist: Option<FormulaAssist>,
+    pub import_review: Option<ImportPlanReview>,
     pub status: StatusLine,
     pub undo: UndoHistory,
     pub session: SessionState,
@@ -281,6 +283,17 @@ impl UiSession {
     /// Replace or clear the formula-assist result.
     pub fn set_formula_assist(&self, assist: Option<FormulaAssist>) {
         self.lock().formula_assist = assist;
+    }
+
+    /// Active CSV import preview and optional AI plan proposal.
+    #[must_use]
+    pub fn import_review(&self) -> Option<ImportPlanReview> {
+        self.lock().import_review.clone()
+    }
+
+    /// Replace or clear the active CSV import preview.
+    pub fn set_import_review(&self, review: Option<ImportPlanReview>) {
+        self.lock().import_review = review;
     }
 
     /// Current status-line presentation.
@@ -645,6 +658,7 @@ fn load_inner(config: &LoadedConfig, roots: &KeymapRoots) -> Result<UiInner, Cor
         changeset_review: None,
         agent_panel: AgentPanel::default(),
         formula_assist: None,
+        import_review: None,
         status: StatusLine::default(),
         undo: UndoHistory::default(),
         session: SessionState::default(),
