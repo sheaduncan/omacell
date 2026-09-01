@@ -130,6 +130,63 @@ impl ChangesetStore {
         Ok(public)
     }
 
+    pub(crate) fn replace_proposed(
+        &mut self,
+        id: &ChangesetId,
+        forward: Vec<CommandCall>,
+        inverse: Vec<CommandCall>,
+        summary: ChangeSummary,
+    ) -> Result<Changeset, CoreError> {
+        self.ensure_can_retain_forward(&forward)?;
+        let entry = self
+            .entries
+            .get(id.as_str())
+            .ok_or_else(|| error::changeset_not_found(id.as_str()))?;
+        if entry.public.status != ChangesetStatus::Proposed {
+            return Err(error::changeset_state(format!(
+                "changeset {} cannot be revised in status {:?}",
+                id.as_str(),
+                entry.public.status
+            )));
+        }
+        let retained_bytes = entry_size(&forward, &inverse, &summary)?;
+        self.ensure_entry_fits(entry.retained_bytes, retained_bytes)?;
+        let entry = self
+            .entries
+            .get_mut(id.as_str())
+            .ok_or_else(|| error::changeset_not_found(id.as_str()))?;
+        entry.public.forward = forward;
+        entry.public.summary = summary;
+        entry.inverse = inverse;
+        entry.public.validate()?;
+        self.retained_bytes = self
+            .retained_bytes
+            .saturating_sub(entry.retained_bytes)
+            .saturating_add(retained_bytes);
+        entry.retained_bytes = retained_bytes;
+        Ok(entry.public.clone())
+    }
+
+    pub(crate) fn remove_proposed(&mut self, id: &ChangesetId) -> Result<Changeset, CoreError> {
+        let entry = self
+            .entries
+            .get(id.as_str())
+            .ok_or_else(|| error::changeset_not_found(id.as_str()))?;
+        if entry.public.status != ChangesetStatus::Proposed {
+            return Err(error::changeset_state(format!(
+                "changeset {} cannot be discarded in status {:?}",
+                id.as_str(),
+                entry.public.status
+            )));
+        }
+        let entry = self
+            .entries
+            .shift_remove(id.as_str())
+            .ok_or_else(|| error::changeset_not_found(id.as_str()))?;
+        self.retained_bytes = self.retained_bytes.saturating_sub(entry.retained_bytes);
+        Ok(entry.public)
+    }
+
     pub(crate) fn ensure_applied_fits(
         &self,
         id: &ChangesetId,
@@ -142,6 +199,22 @@ impl ChangesetStore {
             .ok_or_else(|| error::changeset_not_found(id.as_str()))?;
         let retained_bytes = entry_size(&entry.public.forward, inverse, summary)?;
         self.ensure_entry_fits(entry.retained_bytes, retained_bytes)
+    }
+
+    fn ensure_can_retain_forward(&self, forward: &[CommandCall]) -> Result<(), CoreError> {
+        if forward.len() > MAX_CHANGESET_COMMANDS {
+            return Err(error::changeset_limit(format!(
+                "proposal has {} commands; maximum is {MAX_CHANGESET_COMMANDS}",
+                forward.len()
+            )));
+        }
+        let bytes = serialized_len(forward)?;
+        if bytes > MAX_CHANGESET_BYTES {
+            return Err(error::changeset_limit(format!(
+                "proposal command payload is {bytes} bytes; maximum retained changeset size is {MAX_CHANGESET_BYTES}"
+            )));
+        }
+        Ok(())
     }
 
     /// Lookup the public record (proposed inverses stay empty).

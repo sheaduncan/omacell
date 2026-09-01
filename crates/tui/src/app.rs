@@ -1,10 +1,10 @@
 //! TUI session over the WP-13 composition objects.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, stdout};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::ExecutableCommand;
 use crossterm::cursor::Show;
@@ -14,19 +14,22 @@ use crossterm::event::{
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use omacell_ai::{AutopilotPolicy, AutopilotScope, Plan, to_calls};
 use omacell_bus::ipc::{IpcHandle, default_runtime_dir};
 use omacell_bus::{
     Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskId, TaskRunner,
+    TaskRunnerHandle,
 };
 use omacell_conf::{ConfigStore, Paths, ReloadEvent};
 use omacell_core::addr::{SheetId, quote_sheet_name};
+use omacell_core::changeset::{ChangesetId, ChangesetStatus};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
 use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
-    Area, ExtendMode, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_local_command,
-    apply_search_result,
+    AgentRole, Area, ChangesetReview, ExtendMode, FormulaAssist, KeyCode, KeyEvent, KeyOutcome,
+    KeymapRoots, UiSession, apply_local_command, apply_search_result,
 };
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -53,6 +56,20 @@ pub struct Launch {
     pub file: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug)]
+struct FormulaTask {
+    command: String,
+    target: String,
+}
+
+#[derive(Default)]
+struct InlineCompletion {
+    observed: Option<String>,
+    due: Option<(Instant, String)>,
+    tasks: BTreeMap<TaskId, String>,
+    active: Option<CancelHandle>,
+}
+
 /// Running TUI. Tests drive [`Self::draw`] / [`Self::step_key`].
 pub struct Tui {
     paths: Paths,
@@ -67,6 +84,9 @@ pub struct Tui {
     palette_index: usize,
     palette_command: Option<String>,
     palette_plan_task: Option<TaskId>,
+    autopilot: Option<AutopilotPolicy>,
+    formula_tasks: BTreeMap<TaskId, FormulaTask>,
+    completion: InlineCompletion,
     last_grid: Mutex<Option<render::GridHitMap>>,
     catalog: Vec<CommandJson>,
     active_sheet: SheetId,
@@ -137,6 +157,9 @@ impl Tui {
             palette_index: 0,
             palette_command: None,
             palette_plan_task: None,
+            autopilot: None,
+            formula_tasks: BTreeMap::new(),
+            completion: InlineCompletion::default(),
             last_grid: Mutex::new(None),
             catalog,
             active_sheet,
@@ -194,9 +217,16 @@ impl Tui {
         self.runner.handle().tracked_tasks() != 0
     }
 
+    /// Single-writer task handle used by integrations and black-box tests.
+    #[must_use]
+    pub fn runner(&self) -> TaskRunnerHandle {
+        self.runner.handle()
+    }
+
     /// Apply pending filesystem/theme reloads without resetting the session.
     pub fn poll_reload(&mut self) -> Result<(), CoreError> {
         self.poll_tasks();
+        self.sync_inline_completion();
         let events = self.store.drain_events();
         if events.is_empty() {
             self.sync_active_sheet();
@@ -219,6 +249,9 @@ impl Tui {
                     }
                     if let Err(error) = self.scripts.tighten(&snapshot) {
                         self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
+                    if matches!(ev, ReloadEvent::Applied { .. }) {
+                        self.reset_autopilot("Autopilot reset after configuration reload.");
                     }
                     self.truecolor = truecolor_enabled(&snapshot.config.tui.truecolor);
                     if let ReloadEvent::ThemeChanged { name } = ev {
@@ -295,7 +328,10 @@ impl Tui {
             return self.step_palette(event);
         }
         if let Some(id) = self.ui.panel().visible.clone()
-            && matches!(id.as_str(), "find" | "goto" | "command")
+            && matches!(
+                id.as_str(),
+                "find" | "goto" | "command" | "changeset" | "agent" | "formula"
+            )
         {
             if event.code != KeyCode::Enter {
                 self.discard_armed = None;
@@ -338,6 +374,7 @@ impl Tui {
         }
         let handle = self.runner.handle();
         self.last_queued = None;
+        let formula_task = formula_task(cmd, &args);
         if let Some(local) = apply_local_command(&self.ui, &handle.snapshot().workbook, cmd, &args)
         {
             if let Err(err) = local {
@@ -363,6 +400,12 @@ impl Tui {
             if cmd == "ai.agent" {
                 self.dispatch_agent();
             }
+            if cmd == "changeset.review"
+                && let Err(error) = self.open_latest_review()
+            {
+                self.message = Some(format!("{}: {}", error.code, error.message));
+                return Ok(Outcome::failure(error));
+            }
             return Ok(Outcome::success(serde_json::json!({"ok": true})));
         }
         if let Err(error) = self.scripts.before_command(cmd) {
@@ -376,6 +419,9 @@ impl Tui {
                 return Ok(Outcome::failure(err));
             }
         };
+        if let Some(task) = formula_task {
+            self.formula_tasks.insert(id, task);
+        }
         self.last_queued = Some(id);
         self.focused_cancel = Some(cancel);
         self.message = Some(if handle.long_ops().contains(cmd) {
@@ -469,19 +515,42 @@ impl Tui {
                     {
                         self.focused_cancel = None;
                     }
+                    if self.finish_inline_completion(state.id, outcome.result.as_ref()) {
+                        continue;
+                    }
                     self.message = None;
+                    if let Some(task) = self.formula_tasks.remove(&state.id)
+                        && let Err(error) =
+                            self.handle_formula_result(&task, outcome.result.as_ref())
+                    {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
                     if self.palette_plan_task == Some(state.id) {
                         self.palette_plan_task = None;
-                        let mut palette = self.ui.palette();
-                        palette.prompt = Some("AI plan".into());
-                        palette.preview = Some(
-                            outcome
-                                .result
-                                .as_ref()
-                                .and_then(|value| serde_json::to_string_pretty(value).ok())
-                                .unwrap_or_else(|| "AI returned an empty plan".into()),
-                        );
-                        self.ui.set_palette(palette);
+                        match outcome
+                            .result
+                            .as_ref()
+                            .ok_or_else(|| CoreError::new("ai.plan", "AI returned an empty plan"))
+                            .and_then(|value| self.open_plan_review(value))
+                        {
+                            Ok(()) => {}
+                            Err(error) => {
+                                self.message = Some(format!("{}: {}", error.code, error.message));
+                            }
+                        }
+                    }
+                    if state.command == "ai.agent.turn" {
+                        let result = outcome
+                            .result
+                            .as_ref()
+                            .ok_or_else(|| {
+                                CoreError::new("ai.agent", "agent returned an empty result")
+                            })
+                            .and_then(|value| self.handle_agent_result(value));
+                        if let Err(error) = result {
+                            self.agent_failed(&error.message);
+                            self.message = Some(format!("{}: {}", error.code, error.message));
+                        }
                     }
                     if matches!(
                         state.command.as_str(),
@@ -526,6 +595,10 @@ impl Tui {
                         {
                             self.message = Some("no matches".into());
                         }
+                    } else if state.command == "changeset.review"
+                        && let Err(error) = self.open_latest_review()
+                    {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
                     } else {
                         self.adopt_snapshot();
                     }
@@ -542,6 +615,9 @@ impl Tui {
                     {
                         self.focused_cancel = None;
                     }
+                    if self.drop_inline_completion(state.id) {
+                        continue;
+                    }
                     if self.palette_plan_task == Some(state.id) {
                         self.palette_plan_task = None;
                         let mut palette = self.ui.palette();
@@ -550,6 +626,22 @@ impl Tui {
                         self.ui.set_palette(palette);
                     } else {
                         self.message = Some(message);
+                    }
+                    if let Some(task) = self.formula_tasks.remove(&state.id) {
+                        self.ui.set_formula_assist(Some(FormulaAssist {
+                            task: task.command,
+                            target: task.target,
+                            explanation: Some(
+                                self.message
+                                    .clone()
+                                    .unwrap_or_else(|| "formula assist failed".into()),
+                            ),
+                            ..FormulaAssist::default()
+                        }));
+                        self.open_formula_panel();
+                    }
+                    if state.command == "ai.agent.turn" {
+                        self.agent_failed(self.message.as_deref().unwrap_or("agent turn failed"));
                     }
                     self.adopt_snapshot();
                     if self.quit_after == Some(state.id) {
@@ -757,6 +849,15 @@ impl Tui {
     }
 
     fn step_panel(&mut self, event: KeyEvent, id: &str) -> Result<KeyOutcome, CoreError> {
+        if id == "changeset" {
+            return self.step_changeset_review(event);
+        }
+        if id == "formula" {
+            return self.step_formula_panel(event);
+        }
+        if id == "agent" {
+            return self.step_agent_panel(event);
+        }
         match (event.code, event.ctrl) {
             (KeyCode::Esc, false) => {
                 if id == "command" {
@@ -836,6 +937,448 @@ impl Tui {
             _ => {}
         }
         Ok(KeyOutcome::Pending)
+    }
+
+    fn open_plan_review(&mut self, value: &serde_json::Value) -> Result<(), CoreError> {
+        let plan: Plan = serde_json::from_value(value.clone())
+            .map_err(|error| CoreError::new("ai.payload", format!("plan JSON: {error}")))?;
+        let calls = to_calls(&plan).map_err(CoreError::from)?;
+        if calls.is_empty() {
+            return Err(CoreError::new("ai.plan", "AI plan contains no commands"));
+        }
+        let proposal = self.runner.handle().propose(Origin::PalettePlan, calls)?;
+        self.close_palette();
+        self.open_review(&proposal.id)
+    }
+
+    fn open_latest_review(&mut self) -> Result<(), CoreError> {
+        let proposal = self
+            .runner
+            .handle()
+            .list_changesets()?
+            .into_iter()
+            .rev()
+            .find(|changeset| changeset.status == ChangesetStatus::Proposed)
+            .ok_or_else(|| CoreError::new("changeset.review", "no proposed changesets"))?;
+        self.open_review(&proposal.id)
+    }
+
+    fn open_review(&mut self, id: &ChangesetId) -> Result<(), CoreError> {
+        let review = ChangesetReview::from(self.runner.handle().preview_changeset(id)?);
+        self.ui.set_changeset_review(Some(review));
+        let mut panel = self.ui.panel();
+        panel.open("changeset");
+        self.ui.set_panel(panel);
+        Ok(())
+    }
+
+    fn step_changeset_review(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
+        let Some(mut review) = self.ui.changeset_review() else {
+            let mut panel = self.ui.panel();
+            panel.dismiss();
+            self.ui.set_panel(panel);
+            return Ok(KeyOutcome::Pending);
+        };
+        match (event.code, event.ctrl, event.alt) {
+            (KeyCode::Esc, false, false) => {
+                let mut panel = self.ui.panel();
+                panel.dismiss();
+                self.ui.set_panel(panel);
+            }
+            (KeyCode::Up, false, false) => {
+                review.move_selection(-1);
+                self.ui.set_changeset_review(Some(review));
+            }
+            (KeyCode::Down, false, false) => {
+                review.move_selection(1);
+                self.ui.set_changeset_review(Some(review));
+            }
+            (KeyCode::Space, false, false) => {
+                review.toggle_selected();
+                self.ui.set_changeset_review(Some(review));
+            }
+            (KeyCode::Char('a' | 'A'), false, false) => {
+                review.accept_all();
+                self.ui.set_changeset_review(Some(review));
+            }
+            (KeyCode::Char('r' | 'R'), false, false) => {
+                self.runner
+                    .handle()
+                    .discard_proposal(Origin::User, &review.id)?;
+                self.ui.set_changeset_review(None);
+                let mut panel = self.ui.panel();
+                if review.origin == Origin::InAppAgent {
+                    panel.open("agent");
+                } else {
+                    panel.dismiss();
+                }
+                self.ui.set_panel(panel);
+                self.message = Some("proposal rejected".into());
+            }
+            (KeyCode::Enter, false, false) => {
+                let accepted = review.accepted_calls();
+                if accepted.is_empty() {
+                    self.runner
+                        .handle()
+                        .discard_proposal(Origin::User, &review.id)?;
+                    self.message = Some("proposal rejected".into());
+                } else {
+                    self.runner
+                        .handle()
+                        .revise_proposal(Origin::User, &review.id, accepted)?;
+                    self.runner.handle().apply(Origin::User, &review.id)?;
+                    self.dirty = true;
+                    self.message = Some("proposal applied as one changeset".into());
+                    self.adopt_snapshot();
+                }
+                self.ui.set_changeset_review(None);
+                let mut panel = self.ui.panel();
+                if review.origin == Origin::InAppAgent {
+                    panel.open("agent");
+                } else {
+                    panel.dismiss();
+                }
+                self.ui.set_panel(panel);
+            }
+            _ => {}
+        }
+        Ok(KeyOutcome::Pending)
+    }
+
+    fn step_formula_panel(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
+        if self.ui.changeset_review().is_some() {
+            return self.step_changeset_review(event);
+        }
+        if matches!(
+            (event.code, event.ctrl, event.alt),
+            (KeyCode::Esc, false, false)
+        ) {
+            let mut panel = self.ui.panel();
+            panel.dismiss();
+            self.ui.set_panel(panel);
+        }
+        Ok(KeyOutcome::Pending)
+    }
+
+    fn handle_agent_result(&mut self, value: &serde_json::Value) -> Result<(), CoreError> {
+        let mut panel_state = self.ui.agent_panel();
+        panel_state.busy = false;
+        if let Some(prompt) = value.get("prompt").and_then(serde_json::Value::as_str)
+            && panel_state
+                .turns
+                .last()
+                .is_none_or(|turn| turn.role != AgentRole::User || turn.text != prompt)
+        {
+            panel_state.push_turn(AgentRole::User, prompt);
+        }
+        let proposed = value
+            .get("proposed")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([]));
+        let plan: Plan = serde_json::from_value(serde_json::json!({"commands": proposed}))
+            .map_err(|error| CoreError::new("ai.payload", format!("agent plan JSON: {error}")))?;
+        let calls = to_calls(&plan).map_err(CoreError::from)?;
+        if calls.is_empty() {
+            panel_state.push_turn(AgentRole::Assistant, "No workbook changes proposed.");
+            self.ui.set_agent_panel(panel_state);
+            self.open_agent_panel();
+            return Ok(());
+        }
+        let proposal = self
+            .runner
+            .handle()
+            .propose(Origin::InAppAgent, calls.clone())?;
+        if let Some(policy) = &self.autopilot {
+            let mut authorized = policy.clone();
+            let snapshot = self.runner.handle().snapshot();
+            match authorized.authorize_and_record(&calls, &snapshot.workbook) {
+                Ok(()) => {
+                    self.runner.handle().apply(Origin::User, &proposal.id)?;
+                    self.autopilot = Some(authorized.clone());
+                    panel_state.set_autopilot(
+                        true,
+                        autopilot_scope_label(authorized.scope(), &snapshot.workbook),
+                        authorized.used_ops(),
+                        authorized.max_ops(),
+                    );
+                    panel_state.push_turn(
+                        AgentRole::Assistant,
+                        format!("Applied {} commands as one changeset.", calls.len()),
+                    );
+                    self.dirty = true;
+                    self.adopt_snapshot();
+                    self.ui.set_agent_panel(panel_state);
+                    self.open_agent_panel();
+                    return Ok(());
+                }
+                Err(error) => {
+                    panel_state.push_turn(
+                        AgentRole::System,
+                        format!("Autopilot stopped: {}. Review required.", error.message),
+                    );
+                }
+            }
+        } else {
+            panel_state.push_turn(
+                AgentRole::Assistant,
+                format!("Proposed {} commands for review.", calls.len()),
+            );
+        }
+        self.ui.set_agent_panel(panel_state);
+        self.open_review(&proposal.id)
+    }
+
+    fn step_agent_panel(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
+        let mut agent = self.ui.agent_panel();
+        match (event.code, event.ctrl, event.alt) {
+            (KeyCode::Esc, false, false) => {
+                let mut panel = self.ui.panel();
+                panel.dismiss();
+                self.ui.set_panel(panel);
+            }
+            (KeyCode::F(8), false, false) => self.toggle_autopilot(),
+            (KeyCode::Backspace, false, false) if !agent.busy => {
+                agent.draft.pop();
+                self.ui.set_agent_panel(agent);
+            }
+            (KeyCode::Space, false, false) if !agent.busy => {
+                agent.draft.push(' ');
+                self.ui.set_agent_panel(agent);
+            }
+            (KeyCode::Char(character), false, false) if !agent.busy => {
+                if agent.draft.len() < 8_192 {
+                    agent.draft.push(character);
+                }
+                self.ui.set_agent_panel(agent);
+            }
+            (KeyCode::Enter, false, false) if !agent.busy => {
+                let prompt = agent.draft.trim().to_string();
+                if !prompt.is_empty() {
+                    agent.draft.clear();
+                    agent.busy = true;
+                    agent.push_turn(AgentRole::User, &prompt);
+                    self.ui.set_agent_panel(agent);
+                    let outcome = self.execute_cmd(
+                        "ai.agent.turn",
+                        serde_json::json!({"prompt": prompt, "apply": false}),
+                    )?;
+                    if !outcome.ok {
+                        self.agent_failed("agent turn could not be queued");
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(KeyOutcome::Pending)
+    }
+
+    fn toggle_autopilot(&mut self) {
+        let config = self.ui.config().ai.agent;
+        let mut agent = self.ui.agent_panel();
+        if self.autopilot.take().is_some() {
+            agent.set_autopilot(
+                false,
+                "review required",
+                0,
+                config.autopilot_max_ops as usize,
+            );
+            agent.push_turn(AgentRole::System, "Autopilot disabled for this session.");
+            self.ui.set_agent_panel(agent);
+            return;
+        }
+        if config.review != "autopilot_opt_in" {
+            agent.push_turn(
+                AgentRole::System,
+                "Autopilot is disabled by ai.agent.review = \"always\".",
+            );
+            self.ui.set_agent_panel(agent);
+            return;
+        }
+        let selection = self.ui.selection();
+        let (min_row, min_col, max_row, max_col) = selection.active().normalized();
+        let scope = match config.autopilot_scope.as_str() {
+            "workbook" => AutopilotScope::Workbook,
+            "range" => AutopilotScope::Range {
+                sheet: selection.sheet,
+                min_row,
+                min_col,
+                max_row,
+                max_col,
+            },
+            _ => AutopilotScope::Sheet(selection.sheet),
+        };
+        let policy = AutopilotPolicy::new(scope, config.autopilot_max_ops);
+        let snapshot = self.runner.handle().snapshot();
+        agent.set_autopilot(
+            true,
+            autopilot_scope_label(policy.scope(), &snapshot.workbook),
+            policy.used_ops(),
+            policy.max_ops(),
+        );
+        agent.push_turn(
+            AgentRole::System,
+            "Autopilot enabled explicitly for this session and scope.",
+        );
+        self.autopilot = Some(policy);
+        self.ui.set_agent_panel(agent);
+    }
+
+    fn open_agent_panel(&self) {
+        if !self.ui.config().ai.agent.panel {
+            return;
+        }
+        let mut panel = self.ui.panel();
+        panel.open("agent");
+        self.ui.set_panel(panel);
+    }
+
+    fn agent_failed(&self, message: &str) {
+        let mut agent = self.ui.agent_panel();
+        agent.busy = false;
+        agent.push_turn(AgentRole::System, message);
+        self.ui.set_agent_panel(agent);
+        self.open_agent_panel();
+    }
+
+    fn handle_formula_result(
+        &mut self,
+        task: &FormulaTask,
+        result: Option<&serde_json::Value>,
+    ) -> Result<(), CoreError> {
+        let result = result
+            .ok_or_else(|| CoreError::new("ai.formula", "formula assistant returned no result"))?;
+        if task.command == "ai.formula.explain" {
+            let explanation = result
+                .get("explanation")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| CoreError::new("ai.payload", "formula explanation is missing"))?;
+            self.ui
+                .set_formula_assist(Some(FormulaAssist::explained(&task.target, explanation)));
+            self.ui.set_changeset_review(None);
+            self.open_formula_panel();
+            return Ok(());
+        }
+        let formula = result
+            .get("formula")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| CoreError::new("ai.payload", "generated formula is missing"))?;
+        let scratch = result
+            .get("scratch")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("validated");
+        self.ui.set_formula_assist(Some(FormulaAssist::generated(
+            &task.command,
+            &task.target,
+            formula,
+            scratch,
+        )));
+        let call = omacell_core::changeset::CommandCall {
+            id: omacell_core::command::CommandId::new("cell.set")?,
+            args: serde_json::json!({"ref": task.target, "input": formula}),
+        };
+        let proposal = self
+            .runner
+            .handle()
+            .propose(Origin::PalettePlan, vec![call])?;
+        let review = ChangesetReview::from(self.runner.handle().preview_changeset(&proposal.id)?);
+        self.ui.set_changeset_review(Some(review));
+        self.open_formula_panel();
+        Ok(())
+    }
+
+    fn open_formula_panel(&self) {
+        let mut panel = self.ui.panel();
+        panel.open("formula");
+        self.ui.set_panel(panel);
+    }
+
+    fn sync_inline_completion(&mut self) {
+        let edit = self.ui.edit();
+        let enabled = self.ui.config().ai.completion.mode != "off"
+            && self
+                .catalog
+                .iter()
+                .any(|command| command.id == "ai.complete");
+        let prefix = (enabled
+            && !edit.is_idle()
+            && edit.cursor == edit.buffer.len()
+            && edit.buffer.starts_with('='))
+        .then(|| edit.buffer.clone());
+        if self.completion.observed != prefix {
+            if let Some(cancel) = self.completion.active.take() {
+                cancel.cancel();
+            }
+            self.completion.observed.clone_from(&prefix);
+            self.completion.due = prefix.map(|prefix| {
+                (
+                    Instant::now() + omacell_ai::runtime::debounce_ms(&self.ui.config()),
+                    prefix,
+                )
+            });
+            if edit.ghost.is_some() {
+                let mut cleared = edit;
+                cleared.ghost = None;
+                self.ui.set_edit(cleared);
+            }
+        }
+        let Some((due, prefix)) = self.completion.due.clone() else {
+            return;
+        };
+        if Instant::now() < due {
+            return;
+        }
+        self.completion.due = None;
+        if let Ok((id, cancel)) = self.runner.handle().submit(
+            Origin::User,
+            "ai.complete",
+            serde_json::json!({"prefix": prefix}),
+        ) {
+            self.completion.tasks.insert(id, prefix);
+            self.completion.active = Some(cancel);
+        }
+    }
+
+    fn finish_inline_completion(&mut self, id: TaskId, result: Option<&serde_json::Value>) -> bool {
+        let Some(prefix) = self.completion.tasks.remove(&id) else {
+            return false;
+        };
+        if self
+            .completion
+            .active
+            .as_ref()
+            .is_some_and(|cancel| cancel.id() == id)
+        {
+            self.completion.active = None;
+        }
+        let Some(result) = result else {
+            return true;
+        };
+        if result.get("prefix").and_then(serde_json::Value::as_str) != Some(prefix.as_str()) {
+            return true;
+        }
+        let Some(text) = result.get("text").and_then(serde_json::Value::as_str) else {
+            return true;
+        };
+        let mut edit = self.ui.edit();
+        if edit.set_ghost(&prefix, text) {
+            self.ui.set_edit(edit);
+        }
+        true
+    }
+
+    fn drop_inline_completion(&mut self, id: TaskId) -> bool {
+        if self.completion.tasks.remove(&id).is_none() {
+            return false;
+        }
+        if self
+            .completion
+            .active
+            .as_ref()
+            .is_some_and(|cancel| cancel.id() == id)
+        {
+            self.completion.active = None;
+        }
+        true
     }
 
     fn execute_command_line(&mut self) -> Result<(), CoreError> {
@@ -1045,10 +1588,35 @@ impl Tui {
     }
 
     fn adopt_file_snapshot(&mut self) {
+        self.reset_ai_workbook_state();
         let snapshot = self.runner.handle().snapshot();
         let sheet = snapshot.workbook.active_sheet();
         apply_sheet_view(&self.ui, &snapshot.workbook, sheet);
         self.active_sheet = sheet;
+    }
+
+    fn reset_ai_workbook_state(&mut self) {
+        self.reset_autopilot("Autopilot reset for the new workbook.");
+        if let Some(cancel) = self.completion.active.take() {
+            cancel.cancel();
+        }
+        self.completion = InlineCompletion::default();
+        self.ui.set_changeset_review(None);
+        self.ui.set_formula_assist(None);
+    }
+
+    fn reset_autopilot(&mut self, message: &str) {
+        if self.autopilot.take().is_some() {
+            let mut agent = self.ui.agent_panel();
+            agent.set_autopilot(
+                false,
+                "review required",
+                0,
+                self.ui.config().ai.agent.autopilot_max_ops as usize,
+            );
+            agent.push_turn(AgentRole::System, message);
+            self.ui.set_agent_panel(agent);
+        }
     }
 
     fn sync_active_sheet(&mut self) {
@@ -1179,6 +1747,33 @@ fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutatin
     true
 }
 
+fn autopilot_scope_label(scope: &AutopilotScope, workbook: &Workbook) -> String {
+    match scope {
+        AutopilotScope::Workbook => "workbook".into(),
+        AutopilotScope::Sheet(sheet) => workbook.sheet(*sheet).map_or_else(
+            || format!("sheet {}", sheet.index()),
+            |sheet| sheet.name.clone(),
+        ),
+        AutopilotScope::Range {
+            sheet,
+            min_row,
+            min_col,
+            max_row,
+            max_col,
+        } => {
+            let name = workbook.sheet(*sheet).map_or_else(
+                || format!("Sheet{}", sheet.index()),
+                |sheet| sheet.name.clone(),
+            );
+            let start = omacell_core::addr::col_to_letters(*min_col)
+                .map_or_else(|_| "?".into(), |col| format!("{col}{}", min_row + 1));
+            let end = omacell_core::addr::col_to_letters(*max_col)
+                .map_or_else(|_| "?".into(), |col| format!("{col}{}", max_row + 1));
+            format!("range {name}!{start}:{end}")
+        }
+    }
+}
+
 fn discard_confirmation(command: &str) -> Outcome {
     Outcome::failure(CoreError::new(
         "file.unsaved",
@@ -1215,7 +1810,27 @@ fn inject_selection_context(
     {
         args["range"] = serde_json::json!(ui.selection().active().to_range().to_a1());
     }
+    if cmd.starts_with("ai.formula.")
+        && args
+            .get("ref")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .is_empty()
+    {
+        args["ref"] = serde_json::json!(ui.selection().cursor.to_a1());
+    }
     args
+}
+
+fn formula_task(command: &str, args: &serde_json::Value) -> Option<FormulaTask> {
+    command.starts_with("ai.formula.").then(|| FormulaTask {
+        command: command.to_string(),
+        target: args
+            .get("ref")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("A1")
+            .to_string(),
+    })
 }
 
 fn apply_sheet_view(ui: &UiSession, workbook: &Workbook, id: SheetId) {

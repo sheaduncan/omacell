@@ -137,6 +137,24 @@ Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply, even
 
 Proposed changesets carry no inverse commands. WP-07a computes inverses from trusted workbook state before moving a changeset to `Applied`; applied and reverted non-empty changesets must carry those inverses. Agent-supplied inverses are not trusted.
 
+WP-23 adds review-only bus models (`ChangePreview`, `ChangePreviewItem`, and
+`CellPreview`) plus `preview_changeset`, `revise_proposal`, and
+`discard_proposal` operations. They dry-run or replace only a still-proposed
+changeset; accepted commands are revalidated before the ordinary user-origin
+apply path creates one undo unit. Frozen `omacell_core::changeset` types are
+unchanged.
+
+## Omacell XLSX custom parts — WP-23
+
+AI cache provenance remains in `xl/omacell/aicache.json`. XLSX exports also
+write `xl/omacell/ai-formulas.json` (schema version 1) for at most 100,000 AI
+formula cells and at most 16 MiB. The worksheet-visible cell contains the cached scalar without
+an unsupported `AI.*` formula, so Excel-compatible readers expose the result;
+Omacell restores the original formula from the bounded custom part when the
+workbook is reopened. Invalid, oversized, missing-sheet, or non-AI records are
+ignored with file warnings. This is an additive Omacell part and does not
+change a frozen core or wire type.
+
 ## Events — `omacell_core::event`
 
 | Type | Source |

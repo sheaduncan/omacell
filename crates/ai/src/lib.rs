@@ -9,6 +9,7 @@ pub mod agent;
 pub mod anthropic;
 pub mod audit;
 pub mod audit_ai;
+pub mod autopilot;
 pub mod budget;
 pub mod cache;
 pub mod card;
@@ -30,6 +31,7 @@ pub mod setup;
 
 pub use agent::{Skill, load_skills, validate_tool};
 pub use audit::{AuditLog, LogRecord, SessionStats, StatusSegment};
+pub use autopilot::{AutopilotPolicy, AutopilotScope};
 pub use budget::{RateLimit, UsageTotals, check_cell_budget};
 pub use card::{CardLevel, CardRequest, estimate_tokens};
 pub use error::AiError;

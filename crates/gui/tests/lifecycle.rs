@@ -9,6 +9,9 @@ use common::{launch_opts, launch_script, launch_theme};
 use egui::{Event, Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use omacell_core::changeset::CommandCall;
+use omacell_core::command::{CommandId, Origin};
+use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_gui::Gui;
 use omacell_ui::{EditSurface, FindScope, KeyCode, KeyEvent};
@@ -396,6 +399,173 @@ fn ai_assist_key_opens_the_formula_workflow_picker_locally() {
     assert_eq!(palette.query, "ai.formula.");
     assert!(palette.prompt.unwrap().contains("AI assist"));
     assert!(!harness.state().runner().is_busy());
+}
+
+#[test]
+fn changeset_review_toggles_one_plan_item_before_apply() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    let call = |cell: &str, input: &str| CommandCall {
+        id: CommandId::new("cell.set").unwrap(),
+        args: serde_json::json!({"ref": cell, "input": input}),
+    };
+    harness
+        .state()
+        .runner()
+        .propose(
+            Origin::PalettePlan,
+            vec![call("D5", "reject"), call("E5", "accept")],
+        )
+        .unwrap();
+    harness
+        .state_mut()
+        .execute_cmd("changeset.review", serde_json::json!({}))
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert_eq!(
+        harness.state().ui_session().panel().visible.as_deref(),
+        Some("changeset")
+    );
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Space))
+        .unwrap();
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Enter))
+        .unwrap();
+
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    assert!(snapshot.workbook.get(sheet, 4, 3).unwrap().is_none());
+    let slot = snapshot.workbook.get(sheet, 4, 4).unwrap().unwrap();
+    let Value::Text(text) = slot.value else {
+        panic!("expected accepted text");
+    };
+    assert_eq!(snapshot.workbook.intern().strings.get(text), Some("accept"));
+    assert!(harness.state().ui_session().panel().visible.is_none());
+}
+
+#[test]
+fn agent_turn_opens_review_and_returns_to_retained_panel() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state_mut()
+        .execute_cmd(
+            "ai.agent.turn",
+            serde_json::json!({"prompt":"set D6", "apply":false}),
+        )
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert_eq!(
+        harness.state().ui_session().panel().visible.as_deref(),
+        Some("changeset")
+    );
+    assert_eq!(
+        harness
+            .state()
+            .ui_session()
+            .changeset_review()
+            .unwrap()
+            .origin,
+        Origin::InAppAgent
+    );
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Enter))
+        .unwrap();
+    assert_eq!(
+        harness.state().ui_session().panel().visible.as_deref(),
+        Some("agent")
+    );
+    assert!(
+        harness
+            .state()
+            .ui_session()
+            .agent_panel()
+            .body()
+            .contains("Proposed 1")
+    );
+}
+
+#[test]
+fn formula_assist_opens_a_reviewable_validated_proposal() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state_mut()
+        .execute_cmd(
+            "ai.formula.generate",
+            serde_json::json!({"prompt":"sum the inputs", "ref":"E5"}),
+        )
+        .unwrap();
+    wait_tasks(&mut harness);
+
+    assert_eq!(
+        harness.state().ui_session().panel().visible.as_deref(),
+        Some("formula")
+    );
+    let assist = harness.state().ui_session().formula_assist().unwrap();
+    assert_eq!(assist.scratch.as_deref(), Some("Number(6)"));
+    assert_eq!(assist.references.len(), 2);
+    assert!(harness.state().ui_session().changeset_review().is_some());
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Enter))
+        .unwrap();
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    let slot = snapshot.workbook.get(sheet, 4, 4).unwrap().unwrap();
+    assert_eq!(
+        snapshot
+            .workbook
+            .intern()
+            .formulas
+            .get(slot.formula.unwrap()),
+        Some("=SUM(B1:C1)+D2")
+    );
+}
+
+#[test]
+fn inline_completion_is_debounced_and_tab_accepts_the_ghost() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state()
+        .ui_session()
+        .begin_edit(omacell_ui::EditSurface::FormulaBar, "=SU");
+    let started = Instant::now();
+    while harness.state().ui_session().edit().ghost.is_none() {
+        harness.step();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        harness.state().ui_session().edit().ghost.as_deref(),
+        Some("M(A1:A3)")
+    );
+    let outcome = harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Tab))
+        .unwrap();
+    assert_eq!(outcome, omacell_ui::KeyOutcome::Pending);
+    let edit = harness.state().ui_session().edit();
+    assert_eq!(edit.buffer, "=SUM(A1:A3)");
+    assert!(!edit.is_idle());
 }
 
 fn wait_tasks(harness: &mut Harness<'_, Gui>) {

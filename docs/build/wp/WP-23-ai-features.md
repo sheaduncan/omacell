@@ -22,7 +22,7 @@ Put models where spreadsheet work happens, entirely through the command bus and 
 - Inline completion provider (`fast` slot; debounce; cancellation; `auto` mode only when local).
 - Import assistant: proposes `ImportPlan` changes (WP-08) as a reviewable diff; never auto-applies.
 - AI audit: takes WP-19 findings plus the card and adds judgments (unit mismatches from headers, suspicious constants) as findings with confidence; fixes are changesets.
-- In-app agent loop: tool calling over the command bus with review mode; autopilot policy (scope, op caps, forbidden tools); conversation persisted in state dir (optionally in the workbook); panel model for WP-16/WP-15 (the panel UI is a follow-up task in those crates).
+- In-app agent loop: tool calling over the command bus with review mode; autopilot policy (scope, op caps, forbidden tools); conversation persisted in state dir (optionally in the workbook); retained panel model consumed by the WP-16/WP-15 frontends.
 - Prompt templates under `default/ai/prompts/` (system + per task), versioned; user overrides in `~/.config/omacell/ai/prompts/`; Lua `omacell.ai.task` and `omacell.ai.fn` hooks; skills loading from `~/.config/omacell/ai/skills/` (ADR-006 format).
 - Evals in `tests/evals/`: NL→plan tasks (≥ 200; scored on exact command match and on effect equivalence after execution), formula-generation tasks executed on fixture sheets, import-assist fixtures, audit precision/recall on seeded defects; the prompt-injection suite; all on recorded responses, with a nightly job against a local small model.
 
@@ -33,10 +33,10 @@ Put models where spreadsheet work happens, entirely through the command bus and 
 
 ## Acceptance criteria
 
-- [ ] All evals run offline in CI with pass rates recorded in the report; injection suite reports zero unexpected commands and zero policy changes.
-- [ ] Changeset invariants (review mode, apply/revert inverse, autopilot scope) hold under property tests.
-- [ ] A workbook with `AI.FILL` results saves to `.xlsx`, reopens in `calamine` and LibreOffice with the cached values, and re-opens in Omacell with formulas and provenance intact.
-- [ ] Budget confirmation triggers at the configured threshold; batching observed in recorded requests.
+- [x] All evals run offline in CI with pass rates recorded in the report; injection suite reports zero unexpected commands and zero policy changes.
+- [x] Changeset invariants (review mode, apply/revert inverse, autopilot scope) hold under property tests.
+- [x] A workbook with `AI.FILL` results saves to `.xlsx`, reopens in `calamine` and LibreOffice with the cached values, and re-opens in Omacell with formulas and provenance intact.
+- [x] Budget confirmation triggers at the configured threshold; batching observed in recorded requests.
 
 ## Tests
 

@@ -16,6 +16,7 @@ use omacell_core::event::Event;
 use crate::args::EmptyArgs;
 use crate::error;
 use crate::handler::TaskCtl;
+use crate::preview::ChangePreview;
 #[cfg(feature = "test-util")]
 use crate::registry::CommandSpec;
 use crate::registry::{CommandKind, Exposure};
@@ -38,6 +39,21 @@ enum WorkerMsg {
         origin: Origin,
         forward: Vec<CommandCall>,
         reply: SyncSender<Result<Changeset, CoreError>>,
+    },
+    ReviseProposal {
+        origin: Origin,
+        id: ChangesetId,
+        forward: Vec<CommandCall>,
+        reply: SyncSender<Result<Changeset, CoreError>>,
+    },
+    DiscardProposal {
+        origin: Origin,
+        id: ChangesetId,
+        reply: SyncSender<Result<Changeset, CoreError>>,
+    },
+    PreviewChangeset {
+        id: ChangesetId,
+        reply: SyncSender<Result<ChangePreview, CoreError>>,
     },
     Apply {
         origin: Origin,
@@ -473,6 +489,54 @@ impl TaskRunnerHandle {
         rx.recv().map_err(|_| error::task_shutdown())?
     }
 
+    /// Replace the accepted command subset of a proposal through the writer.
+    pub fn revise_proposal(
+        &self,
+        origin: Origin,
+        id: &ChangesetId,
+        forward: Vec<CommandCall>,
+    ) -> Result<Changeset, CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::ReviseProposal {
+                origin,
+                id: id.clone(),
+                forward,
+                reply: tx,
+            })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
+    /// Reject and remove a proposal through the writer.
+    pub fn discard_proposal(
+        &self,
+        origin: Origin,
+        id: &ChangesetId,
+    ) -> Result<Changeset, CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::DiscardProposal {
+                origin,
+                id: id.clone(),
+                reply: tx,
+            })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
+    /// Build command-local before/after data for a proposal through the writer.
+    pub fn preview_changeset(&self, id: &ChangesetId) -> Result<ChangePreview, CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::PreviewChangeset {
+                id: id.clone(),
+                reply: tx,
+            })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
     /// Apply a changeset through the writer.
     pub fn apply(&self, origin: Origin, id: &ChangesetId) -> Result<Changeset, CoreError> {
         let (tx, rx) = mpsc::sync_channel(1);
@@ -698,6 +762,23 @@ fn worker_loop(
                 publish_bus_events(&shared, &mut bus, bus_event_subscriber);
                 let _ = reply.send(result);
             }
+            WorkerMsg::ReviseProposal {
+                origin,
+                id,
+                forward,
+                reply,
+            } => {
+                let result = bus.revise_proposal(origin, &id, forward);
+                publish_bus_events(&shared, &mut bus, bus_event_subscriber);
+                let _ = reply.send(result);
+            }
+            WorkerMsg::DiscardProposal { origin, id, reply } => {
+                let result = bus.discard_proposal(origin, &id);
+                let _ = reply.send(result);
+            }
+            WorkerMsg::PreviewChangeset { id, reply } => {
+                let _ = reply.send(bus.preview_changeset(&id));
+            }
             WorkerMsg::Apply { origin, id, reply } => {
                 let result = bus.apply(origin, &id);
                 if result.is_ok() {
@@ -826,12 +907,17 @@ fn fail_pending(rx: &Receiver<WorkerMsg>, shared: &Shared) {
                 }
             }
             WorkerMsg::Propose { reply, .. }
+            | WorkerMsg::ReviseProposal { reply, .. }
+            | WorkerMsg::DiscardProposal { reply, .. }
             | WorkerMsg::Apply { reply, .. }
             | WorkerMsg::Revert { reply, .. }
             | WorkerMsg::GetChangeset { reply, .. } => {
                 let _ = reply.send(Err(error::task_shutdown()));
             }
             WorkerMsg::ListChangesets { reply } => {
+                let _ = reply.send(Err(error::task_shutdown()));
+            }
+            WorkerMsg::PreviewChangeset { reply, .. } => {
                 let _ = reply.send(Err(error::task_shutdown()));
             }
             WorkerMsg::DryRun { reply, .. } => {

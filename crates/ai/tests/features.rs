@@ -419,6 +419,25 @@ fn fill_round_trip_custom_part_and_xlsx() {
             .custom_parts
             .contains_key(omacell_ai::cache::AICACHE_PART)
     );
+    let reopened_slot = again.workbook.get(sheet, 0, 0).unwrap().unwrap();
+    let reopened_formula = reopened_slot
+        .formula
+        .and_then(|id| again.workbook.intern().formulas.get(id));
+    assert!(reopened_formula.is_some_and(is_ai_formula));
+    let cache = omacell_ai::cache::AiCache::from_bytes(
+        again
+            .workbook
+            .custom_parts
+            .get(omacell_ai::cache::AICACHE_PART)
+            .unwrap(),
+    );
+    assert_eq!(cache.entries.len(), 1);
+    let provenance = cache.entries.values().next().unwrap();
+    assert_eq!(provenance.provider, "ollama");
+    assert_eq!(provenance.model, "qwen");
+    assert!(!provenance.prompt_hash.is_empty());
+    assert!(!provenance.input_hash.is_empty());
+    assert!(provenance.ts > 0);
     if let Some(soffice) = ["soffice", "libreoffice"].into_iter().find(|bin| {
         std::process::Command::new(bin)
             .arg("--version")
@@ -427,17 +446,36 @@ fn fill_round_trip_custom_part_and_xlsx() {
     }) {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("fill.xlsx");
+        let profile = dir.path().join("profile");
+        let output_dir = dir.path().join("output");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&output_dir).unwrap();
         std::fs::write(&path, &bytes).unwrap();
-        let status = std::process::Command::new(soffice)
+        let output = std::process::Command::new(soffice)
             .arg(format!(
                 "-env:UserInstallation=file://{}",
-                dir.path().join("profile").display()
+                profile.display()
             ))
+            .env("HOME", dir.path())
+            .env("XDG_CACHE_HOME", dir.path().join("cache"))
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
+            .env("SAL_USE_VCLPLUGIN", "svp")
             .args(["--headless", "--convert-to", "csv", "--outdir"])
-            .arg(dir.path())
+            .arg(&output_dir)
             .arg(&path)
-            .status();
-        let _ = status;
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "LibreOffice could not reopen fill.xlsx: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let csv = std::fs::read_to_string(output_dir.join("fill.csv")).unwrap();
+        assert!(
+            csv.contains("Ada"),
+            "LibreOffice did not expose the cached value: {csv:?}"
+        );
     }
 }
 

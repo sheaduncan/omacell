@@ -26,6 +26,7 @@ pub mod ipc;
 mod logical;
 pub mod mcp;
 mod policy;
+mod preview;
 mod registry;
 mod resolve;
 mod restore;
@@ -48,6 +49,7 @@ pub use error::codes;
 pub use event::{EventBus, SubscriberId};
 pub use handler::{CommandContext, Effect, TaskCtl};
 pub use policy::MutationPolicy;
+pub use preview::{CellPreview, ChangePreview, ChangePreviewItem};
 pub use registry::{CommandKind, CommandRegistry, CommandSpec, Exposure, RegisteredCommand};
 pub use resolve::MAX_RANGE_CELLS;
 #[cfg(feature = "test-util")]

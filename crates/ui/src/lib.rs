@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod agent_panel;
 mod assist;
 mod clipboard;
 mod complete;
@@ -14,6 +15,7 @@ mod error;
 mod event;
 mod fill;
 mod find;
+mod formula_assist;
 mod keymap;
 mod local;
 mod mode;
@@ -21,6 +23,7 @@ mod name;
 mod palette;
 mod panel;
 mod persist;
+mod review;
 mod selection;
 mod session;
 mod status;
@@ -28,6 +31,7 @@ mod undo;
 mod view;
 mod viewport;
 
+pub use agent_panel::{AgentPanel, AgentRole, AgentTurn};
 pub use clipboard::{ClipboardPayload, INTERNAL_MIME};
 pub use complete::{Completion, CompletionSource, complete_functions};
 pub use deferred::{
@@ -38,12 +42,14 @@ pub use edit::{EditState, EditSurface, canonicalize_entry};
 pub use event::{KeyCode, KeyEvent};
 pub use fill::{FillKind, detect_series, extend_series};
 pub use find::{FindReplace, FindScope, GoTo, apply_search_result};
+pub use formula_assist::{FormulaAssist, FormulaReference};
 pub use keymap::{Binding, KeyOutcome, Keymap, KeymapRoots, command_is_known, resolve_keymap_path};
 pub use local::{apply_local_command, is_local_command};
 pub use mode::{KeyModel, Mode};
 pub use palette::{AiPlanProvider, Palette, PaletteHit};
 pub use panel::PanelState;
 pub use persist::SessionState;
+pub use review::{ChangesetReview, ReviewCellMark, ReviewItem};
 pub use selection::{Area, ExtendMode, Selection, SelectionStats, SelectionStatsProvider};
 pub use session::{AgentHandoff, UiSession};
 pub use status::{StatusLine, StatusSegment, ai_status_text, diagnose_offer};

@@ -235,7 +235,12 @@ pub(crate) fn encode(
     for sheet in &sheets {
         for (_, _, slot) in sheet.store.iter() {
             if let Value::Text(id) = slot.value
-                && slot.formula.is_none()
+                && slot.formula.is_none_or(|formula| {
+                    intern
+                        .formulas
+                        .get(formula)
+                        .is_some_and(super::ai_formula::is_ai_formula)
+                })
             {
                 sst_count = sst_count.saturating_add(1);
                 if !sst.contains_key(&id) {
@@ -448,7 +453,18 @@ pub(crate) fn encode(
     overrides.push(("/xl/workbook.xml".into(), workbook_content_type));
     parts.insert("xl/_rels/workbook.xml.rels".into(), rels_xml(&wb_rels));
 
+    if let Some(bytes) = super::ai_formula::encode(wb)? {
+        parts.insert(super::ai_formula::PART.into(), bytes);
+        overrides.push((
+            format!("/{}", super::ai_formula::PART),
+            "application/json".into(),
+        ));
+    }
+
     for (name, bytes) in &wb.custom_parts {
+        if name.eq_ignore_ascii_case(super::ai_formula::PART) {
+            continue;
+        }
         let name = custom_part_name(name)?;
         if contains_part(&parts, &name) {
             return Err(error::xlsx_write(format!(
@@ -1916,9 +1932,11 @@ fn cell_xml(
         attrs.push_str(&format!(r#" s="{i}""#));
     }
     let mut inner = String::new();
-    if let Some(fid) = slot.formula
-        && let Some(src) = intern.formulas.get(fid)
-    {
+    let formula = slot
+        .formula
+        .and_then(|id| intern.formulas.get(id))
+        .filter(|source| !super::ai_formula::is_ai_formula(source));
+    if let Some(src) = formula {
         let body = src.strip_prefix('=').unwrap_or(src);
         inner.push_str(&format!("<f>{}</f>", xml::escape(body)));
     }
@@ -1941,7 +1959,7 @@ fn cell_xml(
         }
         Value::Text(id) => {
             if let Some(text) = intern.strings.get(id) {
-                if slot.formula.is_some() {
+                if formula.is_some() {
                     attrs.push_str(r#" t="str""#);
                     inner.push_str(&format!("<v>{}</v>", xml::escape_ooxml_text(text)));
                 } else if let Some(idx) = sst.get(&id) {

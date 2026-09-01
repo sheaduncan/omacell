@@ -32,6 +32,8 @@ pub struct EditState {
     pub origin: Option<CellRef>,
     /// True when the next navigation inserts a reference.
     pub point: bool,
+    /// Model-proposed suffix rendered as ghost text and accepted with `Tab`.
+    pub ghost: Option<String>,
 }
 
 /// Convert localized numeric and formula separators to canonical entry text.
@@ -144,6 +146,7 @@ impl EditState {
         self.cursor = self.buffer.len();
         self.origin = Some(origin);
         self.point = looks_like_formula(&self.buffer) && point_ready(&self.buffer);
+        self.ghost = None;
     }
 
     /// Idle?
@@ -154,6 +157,7 @@ impl EditState {
 
     /// Insert a character at the cursor.
     pub fn insert_char(&mut self, c: char) {
+        self.ghost = None;
         self.clamp_cursor();
         self.buffer.insert(self.cursor, c);
         self.cursor += c.len_utf8();
@@ -162,6 +166,7 @@ impl EditState {
 
     /// Insert text at the cursor.
     pub fn insert_text(&mut self, text: &str) {
+        self.ghost = None;
         self.clamp_cursor();
         self.buffer.insert_str(self.cursor, text);
         self.cursor += text.len();
@@ -170,6 +175,7 @@ impl EditState {
 
     /// Remove the character immediately before the cursor.
     pub fn backspace(&mut self) {
+        self.ghost = None;
         self.clamp_cursor();
         let Some((start, _)) = self.buffer[..self.cursor].char_indices().next_back() else {
             return;
@@ -181,6 +187,7 @@ impl EditState {
 
     /// Remove the character at the cursor.
     pub fn delete_forward(&mut self) {
+        self.ghost = None;
         self.clamp_cursor();
         let Some(ch) = self.buffer[self.cursor..].chars().next() else {
             return;
@@ -192,6 +199,7 @@ impl EditState {
 
     /// Move the caret one Unicode scalar to the left.
     pub fn move_left(&mut self) {
+        self.ghost = None;
         self.clamp_cursor();
         if let Some((start, _)) = self.buffer[..self.cursor].char_indices().next_back() {
             self.cursor = start;
@@ -200,6 +208,7 @@ impl EditState {
 
     /// Move the caret one Unicode scalar to the right.
     pub fn move_right(&mut self) {
+        self.ghost = None;
         self.clamp_cursor();
         if let Some(ch) = self.buffer[self.cursor..].chars().next() {
             self.cursor += ch.len_utf8();
@@ -208,6 +217,7 @@ impl EditState {
 
     /// Move the caret to the same character column on the previous line.
     pub fn move_up(&mut self) {
+        self.ghost = None;
         self.clamp_cursor();
         let line_start = self.buffer[..self.cursor]
             .rfind('\n')
@@ -225,6 +235,7 @@ impl EditState {
 
     /// Move the caret to the same character column on the next line.
     pub fn move_down(&mut self) {
+        self.ghost = None;
         self.clamp_cursor();
         let line_start = self.buffer[..self.cursor]
             .rfind('\n')
@@ -244,12 +255,50 @@ impl EditState {
 
     /// Move the caret to the start of the edit buffer.
     pub fn move_home(&mut self) {
+        self.ghost = None;
         self.cursor = 0;
     }
 
     /// Move the caret to the end of the edit buffer.
     pub fn move_end(&mut self) {
+        self.ghost = None;
         self.cursor = self.buffer.len();
+    }
+
+    /// Replace text supplied by a toolkit editor and reset completion state.
+    pub fn replace_from_toolkit(&mut self, text: String) {
+        self.buffer = text;
+        self.cursor = self.buffer.len();
+        self.ghost = None;
+        self.update_point();
+    }
+
+    /// Retain a completion only when it still matches the current edit prefix.
+    pub fn set_ghost(&mut self, prefix: &str, completion: &str) -> bool {
+        self.ghost = None;
+        if self.is_idle()
+            || self.buffer != prefix
+            || self.cursor != self.buffer.len()
+            || completion.len() > 4_096
+            || completion.chars().any(char::is_control)
+        {
+            return false;
+        }
+        let suffix = completion.strip_prefix(prefix).unwrap_or(completion);
+        if suffix.is_empty() {
+            return false;
+        }
+        self.ghost = Some(suffix.to_string());
+        true
+    }
+
+    /// Insert the retained ghost suffix without committing the cell.
+    pub fn accept_ghost(&mut self) -> bool {
+        let Some(ghost) = self.ghost.take() else {
+            return false;
+        };
+        self.insert_text(&ghost);
+        true
     }
 
     /// Cancel and return to idle, restoring nothing (caller still holds the cell).
@@ -270,6 +319,7 @@ impl EditState {
             return Err(error::edit("not in point mode"));
         }
         self.clamp_cursor();
+        self.ghost = None;
         let text = a1(&cell)?;
         self.buffer.insert_str(self.cursor, &text);
         self.cursor += text.len();
@@ -282,6 +332,7 @@ impl EditState {
         if self.is_idle() {
             return Err(error::edit("F4 requires an active edit"));
         }
+        self.ghost = None;
         let parsed = parse_editor(&self.buffer);
         let Some(expr) = parsed.expr else {
             return Ok(());

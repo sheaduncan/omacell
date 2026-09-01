@@ -13,6 +13,7 @@
 //! assert!(diff(&doc, &again).empty);
 //! ```
 
+mod ai_formula;
 mod atomic;
 pub(crate) mod data;
 mod diff;

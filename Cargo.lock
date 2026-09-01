@@ -3885,6 +3885,7 @@ dependencies = [
  "calamine",
  "criterion",
  "insta",
+ "omacell-bus",
  "omacell-conf",
  "omacell-core",
  "omacell-fn",
