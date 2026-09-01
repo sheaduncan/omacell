@@ -89,8 +89,12 @@ All P1 engine/file-fidelity items from this audit are complete.
    the source-compatible `DynamicFnBody::async_node()` default method. GUI/TUI
    settle new pending generations off-thread and queue the normal full recalc on
    the single writer. Embedded scripts retain no AI extension capability.
-2. Feed `ai.import.assist` output into the retained import-plan review UI; keep
-   application explicit and reviewable.
+2. **Complete:** CSV/TSV opens retain the sniffed `ImportPlan` and bounded
+   preview in GUI/TUI. `A` explicitly sends a provider-policy-filtered preview
+   to `ai.import.assist`; the proposal remains unapplied until Enter atomically
+   reopens the source with the reviewed plan. Schema policy strips sample
+   values, detector redaction precedes hooks/providers, and stale results fail
+   closed.
 3. Wire `[ai.functions] refresh_on_full_recalc` and AI-function `auto` through
    the retained hosts without weakening budget confirmation or autopilot scope.
 
