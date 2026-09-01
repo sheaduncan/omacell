@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use crossterm::ExecutableCommand;
 use crossterm::cursor::Show;
 use crossterm::event::{
-    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
-    Event as CEvent, KeyEventKind,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, Event as CEvent, KeyEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -29,8 +29,9 @@ use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
 use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
-    AgentRole, Area, ChangesetReview, ExtendMode, FormulaAssist, KeyCode, KeyEvent, KeyOutcome,
-    KeymapRoots, UiSession, apply_local_command, apply_search_result,
+    AgentRole, Area, ChangesetReview, ClipboardPayload, ExtendMode, FormulaAssist, KeyCode,
+    KeyEvent, KeyOutcome, KeymapRoots, UiSession, apply_local_command, apply_search_result,
+    inject_selection_args,
 };
 use ratatui::Terminal;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -356,7 +357,7 @@ impl Tui {
         cmd: &str,
         args: serde_json::Value,
     ) -> Result<Outcome, CoreError> {
-        let args = inject_selection_context(&self.ui, cmd, args);
+        let args = inject_selection_args(&self.ui, cmd, args);
         if self.prompt_command_args(cmd, &args) {
             return Ok(Outcome::success(serde_json::json!({"prompt": true})));
         }
@@ -522,6 +523,24 @@ impl Tui {
                         continue;
                     }
                     self.message = None;
+                    if matches!(
+                        state.command.as_str(),
+                        "edit.copy" | "edit.cut" | "edit.yank"
+                    ) {
+                        match outcome
+                            .result
+                            .as_ref()
+                            .ok_or_else(|| {
+                                CoreError::new("ui.clipboard", "copy returned no clipboard payload")
+                            })
+                            .and_then(ClipboardPayload::from_bus_result)
+                        {
+                            Ok(clipboard) => self.ui.set_clipboard(Some(clipboard)),
+                            Err(error) => {
+                                self.message = Some(format!("{}: {}", error.code, error.message));
+                            }
+                        }
+                    }
                     if let Some(task) = self.formula_tasks.remove(&state.id)
                         && let Err(error) =
                             self.handle_formula_result(&task, outcome.result.as_ref())
@@ -693,7 +712,7 @@ impl Tui {
                 }
                 if let Some(hit) = palette.hits.get(self.palette_index) {
                     let id = hit.id.clone();
-                    let args = inject_selection_context(&self.ui, &id, serde_json::json!({}));
+                    let args = inject_selection_args(&self.ui, &id, serde_json::json!({}));
                     if !self.prompt_command_args(&id, &args) {
                         let result = self.execute_cmd(&id, args)?;
                         if result.ok {
@@ -1431,6 +1450,12 @@ impl Tui {
         self.step_mouse_with_modifiers(col, row, false, false);
     }
 
+    /// Paste terminal-provided bracketed text at the active cell.
+    pub fn paste_text(&mut self, text: &str) -> Result<Outcome, CoreError> {
+        let args = ClipboardPayload::text_paste_args(text, self.ui.selection().cursor)?;
+        self.execute_cmd("range.set", args)
+    }
+
     /// Mouse selection with Ctrl-add and drag-extension semantics.
     pub fn step_mouse_with_modifiers(&mut self, col: u16, row: u16, ctrl: bool, drag: bool) {
         if !self.store.snapshot().config.tui.mouse {
@@ -1516,6 +1541,7 @@ impl Tui {
             alternate: false,
             mouse: false,
             focus: false,
+            bracketed_paste: false,
         };
         let mouse = self.store.snapshot().config.tui.mouse;
         stdout()
@@ -1532,6 +1558,10 @@ impl Tui {
             .execute(EnableFocusChange)
             .map_err(|e| CoreError::new("tui.tty", e.to_string()))?;
         restore.focus = true;
+        stdout()
+            .execute(EnableBracketedPaste)
+            .map_err(|e| CoreError::new("tui.tty", e.to_string()))?;
+        restore.bracketed_paste = true;
         self.sync_ipc_focus(true)?;
         let backend = CrosstermBackend::new(stdout());
         let mut terminal =
@@ -1583,7 +1613,15 @@ impl Tui {
                 CEvent::Resize(_, _) => {}
                 CEvent::FocusGained => self.sync_ipc_focus(true)?,
                 CEvent::FocusLost => self.sync_ipc_focus(false)?,
-                _ => {}
+                CEvent::Paste(text) => {
+                    if self.ui.edit().is_idle()
+                        && !self.ui.palette().open
+                        && self.ui.panel().visible.is_none()
+                        && let Err(error) = self.paste_text(&text)
+                    {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
+                }
             }
         }
         Ok(())
@@ -1673,10 +1711,14 @@ struct TerminalRestore {
     alternate: bool,
     mouse: bool,
     focus: bool,
+    bracketed_paste: bool,
 }
 
 impl Drop for TerminalRestore {
     fn drop(&mut self) {
+        if self.bracketed_paste {
+            let _ = stdout().execute(DisableBracketedPaste);
+        }
         if self.focus {
             let _ = stdout().execute(DisableFocusChange);
         }
@@ -1820,32 +1862,6 @@ impl InteractiveUi for FrontendScriptUi {
     fn clear_keymap(&self) {
         self.ui.clear_script_bindings();
     }
-}
-
-fn inject_selection_context(
-    ui: &UiSession,
-    cmd: &str,
-    mut args: serde_json::Value,
-) -> serde_json::Value {
-    if matches!(cmd, "chart.fromselection" | "name.createfrom")
-        && args
-            .get("range")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .is_empty()
-    {
-        args["range"] = serde_json::json!(ui.selection().active().to_range().to_a1());
-    }
-    if cmd.starts_with("ai.formula.")
-        && args
-            .get("ref")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .is_empty()
-    {
-        args["ref"] = serde_json::json!(ui.selection().cursor.to_a1());
-    }
-    args
 }
 
 fn formula_task(command: &str, args: &serde_json::Value) -> Option<FormulaTask> {

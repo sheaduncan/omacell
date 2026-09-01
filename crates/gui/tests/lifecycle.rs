@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use common::{launch_opts, launch_script, launch_theme};
-use egui::{Event, Key, Modifiers};
+use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 #[cfg(unix)]
@@ -158,6 +158,211 @@ fn key_and_text_events_insert_one_character_in_cell() {
     harness.step();
 
     assert_eq!(harness.state().ui_session().edit().buffer, "a");
+}
+
+#[test]
+fn toolkit_clipboard_events_copy_internal_cells_and_paste_external_tables() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness.input_mut().events.push(Event::Copy);
+    harness.step();
+    wait_tasks(&mut harness);
+    let clipboard = harness
+        .state()
+        .ui_session()
+        .clipboard()
+        .expect("copy should retain the rich clipboard payload");
+    assert_eq!(clipboard.tsv, "Hello");
+
+    harness
+        .state_mut()
+        .execute_cmd("view.select", serde_json::json!({"range": "B2"}))
+        .unwrap();
+    harness
+        .input_mut()
+        .events
+        .push(Event::Paste("7\t8\n9\t10".into()));
+    harness.step();
+    wait_tasks(&mut harness);
+
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    assert_eq!(
+        snapshot.workbook.get(sheet, 1, 1).unwrap().unwrap().value,
+        Value::Number(7.0)
+    );
+    assert_eq!(
+        snapshot.workbook.get(sheet, 2, 2).unwrap().unwrap().value,
+        Value::Number(10.0)
+    );
+}
+
+#[test]
+fn fill_handle_and_drag_move_execute_atomic_edit_commands() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    let a1 = harness.get_by_label_contains("cell A1").rect();
+    let handle = egui::pos2(a1.right() - 2.0, a1.bottom() - 2.0);
+    let a3 = egui::pos2(a1.center().x, a1.center().y + a1.height() * 2.0);
+    harness.input_mut().events.extend([
+        Event::PointerButton {
+            pos: handle,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        },
+        Event::PointerMoved(a3),
+        Event::PointerButton {
+            pos: a3,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    harness.step();
+    wait_tasks(&mut harness);
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    for row in 0..=2 {
+        let slot = snapshot.workbook.get(sheet, row, 0).unwrap().unwrap();
+        let Value::Text(id) = slot.value else {
+            panic!("expected filled text in A{}, got {:?}", row + 1, slot.value);
+        };
+        assert_eq!(snapshot.workbook.intern().strings.get(id), Some("Hello"));
+    }
+
+    harness
+        .state_mut()
+        .execute_cmd("view.select", serde_json::json!({"range": "A1:B1"}))
+        .unwrap();
+    harness.step();
+    let a1 = harness.get_by_label_contains("cell A1").rect();
+    let press = a1.center();
+    let c3 = press + egui::vec2(a1.width() * 2.0, a1.height() * 2.0);
+    harness.input_mut().events.extend([
+        Event::PointerButton {
+            pos: press,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        },
+        Event::PointerMoved(c3),
+        Event::PointerButton {
+            pos: c3,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    harness.step();
+    wait_tasks(&mut harness);
+    let snapshot = harness.state().runner().snapshot();
+    assert!(snapshot.workbook.get(sheet, 0, 0).unwrap().is_none());
+    assert!(snapshot.workbook.get(sheet, 0, 1).unwrap().is_none());
+    assert!(snapshot.workbook.get(sheet, 2, 2).unwrap().is_some());
+    assert!(snapshot.workbook.get(sheet, 2, 3).unwrap().is_some());
+}
+
+#[test]
+fn ctrl_drag_copies_the_selected_range_without_clearing_it() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state_mut()
+        .execute_cmd("view.select", serde_json::json!({"range": "A1:B1"}))
+        .unwrap();
+    harness.step();
+    let a1 = harness.get_by_label_contains("cell A1").rect();
+    let press = a1.center();
+    let c3 = press + egui::vec2(a1.width() * 2.0, a1.height() * 2.0);
+    harness.input_mut().events.extend([
+        Event::PointerButton {
+            pos: press,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::CTRL,
+        },
+        Event::PointerMoved(c3),
+        Event::PointerButton {
+            pos: c3,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::CTRL,
+        },
+    ]);
+    harness.step();
+    wait_tasks(&mut harness);
+
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    assert!(snapshot.workbook.get(sheet, 0, 0).unwrap().is_some());
+    assert!(snapshot.workbook.get(sheet, 0, 1).unwrap().is_some());
+    assert!(snapshot.workbook.get(sheet, 2, 2).unwrap().is_some());
+    assert!(snapshot.workbook.get(sheet, 2, 3).unwrap().is_some());
+}
+
+#[test]
+fn multi_cell_fill_handle_extends_the_selected_series_from_its_bottom_right() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state_mut()
+        .execute_cmd("cell.set", serde_json::json!({"ref": "A1", "input": "1"}))
+        .unwrap();
+    harness
+        .state_mut()
+        .execute_cmd("cell.set", serde_json::json!({"ref": "A2", "input": "2"}))
+        .unwrap();
+    wait_tasks(&mut harness);
+    harness
+        .state_mut()
+        .execute_cmd("view.select", serde_json::json!({"range": "A1:A2"}))
+        .unwrap();
+    harness.step();
+    let a1 = harness.get_by_label_contains("cell A1").rect();
+    let handle = egui::pos2(a1.right() - 2.0, a1.bottom() + a1.height() - 2.0);
+    let a4 = egui::pos2(a1.center().x, a1.center().y + a1.height() * 3.0);
+    harness.input_mut().events.extend([
+        Event::PointerButton {
+            pos: handle,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        },
+        Event::PointerMoved(a4),
+        Event::PointerButton {
+            pos: a4,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    harness.step();
+    wait_tasks(&mut harness);
+
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    assert_eq!(
+        snapshot.workbook.get(sheet, 2, 0).unwrap().unwrap().value,
+        Value::Number(3.0)
+    );
+    assert_eq!(
+        snapshot.workbook.get(sheet, 3, 0).unwrap().unwrap().value,
+        Value::Number(4.0)
+    );
 }
 
 #[test]
