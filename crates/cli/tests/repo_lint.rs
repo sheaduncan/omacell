@@ -151,3 +151,77 @@ fn design_spec_bundle_copy_matches_docs_spec() {
         &root.join("docs/build/spec/omacell-design-spec.md"),
     );
 }
+
+fn underscore_command_candidate(token: &str) -> bool {
+    let Some((namespace, command)) = token.split_once('.') else {
+        return false;
+    };
+    if namespace.is_empty()
+        || command.is_empty()
+        || command.contains('.')
+        || !namespace.contains('_')
+        || !namespace
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        || !command.bytes().all(|byte| byte.is_ascii_lowercase())
+    {
+        return false;
+    }
+    // These exact two-segment shapes are documentation filenames, not command
+    // ids. Keep the exemption about the suffix rather than individual files.
+    !matches!(
+        command,
+        "csv"
+            | "html"
+            | "json"
+            | "lua"
+            | "md"
+            | "ods"
+            | "pdf"
+            | "png"
+            | "py"
+            | "rs"
+            | "svg"
+            | "toml"
+            | "tsv"
+            | "txt"
+            | "xls"
+            | "xlsx"
+            | "xml"
+            | "yaml"
+            | "yml"
+    )
+}
+
+#[test]
+fn docs_do_not_spell_command_ids_with_underscores() {
+    assert!(underscore_command_candidate("file_open.run"));
+    assert!(!underscore_command_candidate("file.open"));
+    assert!(!underscore_command_candidate("date_system.rs"));
+
+    let root = workspace_root();
+    let docs = root.join("docs");
+    let mut files = Vec::new();
+    walk(&docs, &mut files);
+    let mut violations = Vec::new();
+    for path in &files {
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+        for (line_index, line) in text.lines().enumerate() {
+            for token in line.split(|character: char| {
+                !(character.is_ascii_lowercase() || matches!(character, '_' | '.'))
+            }) {
+                if underscore_command_candidate(token) {
+                    let rel = path.strip_prefix(&root).unwrap_or(path);
+                    violations.push(format!("{}:{}: {token}", rel.display(), line_index + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "command ids use lowercase dotted segments, never underscores:\n{}",
+        violations.join("\n")
+    );
+}
