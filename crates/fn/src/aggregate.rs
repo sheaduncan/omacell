@@ -163,6 +163,14 @@ fn crit_of(ctx: &EvalCtx<'_>, arg: &ArgVal) -> Result<Criteria, ErrorKind> {
     parse_criteria(&s)
 }
 
+fn require_reference(arg: &ArgVal) -> Result<(), ErrorKind> {
+    match &arg.value {
+        RuntimeValue::Ref(_) => Ok(()),
+        RuntimeValue::Scalar(Scalar::Error(error)) => Err(*error),
+        _ => Err(ErrorKind::Value),
+    }
+}
+
 fn if_fold(
     ctx: &EvalCtx<'_>,
     range: &ArgVal,
@@ -199,6 +207,9 @@ fn sumif_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         return RuntimeValue::error(ErrorKind::Value);
     };
     let values = args.get(2).unwrap_or(range);
+    if let Err(error) = require_reference(range).and_then(|()| require_reference(values)) {
+        return RuntimeValue::error(error);
+    }
     let mut sum = 0.0;
     match if_fold(ctx, range, criteria, values, |x| sum += x) {
         Ok(_) => rt_num(sum),
@@ -210,6 +221,9 @@ fn countif_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     let (Some(range), Some(criteria)) = (args.first(), args.get(1)) else {
         return RuntimeValue::error(ErrorKind::Value);
     };
+    if let Err(error) = require_reference(range) {
+        return RuntimeValue::error(error);
+    }
     let crit = match crit_of(ctx, criteria) {
         Ok(c) => c,
         Err(e) => return RuntimeValue::error(e),
@@ -226,6 +240,9 @@ fn averageif_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         return RuntimeValue::error(ErrorKind::Value);
     };
     let values = args.get(2).unwrap_or(range);
+    if let Err(error) = require_reference(range).and_then(|()| require_reference(values)) {
+        return RuntimeValue::error(error);
+    }
     let mut sum = 0.0;
     match if_fold(ctx, range, criteria, values, |x| sum += x) {
         Ok(0) => RuntimeValue::error(ErrorKind::Div0),
@@ -244,9 +261,11 @@ fn parse_ifs(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<(Vec<Scalar>, Vec<Ifs
         return Err(ErrorKind::Value);
     }
     let first = args.first().ok_or(ErrorKind::Value)?;
+    require_reference(first)?;
     let values = flatten(ctx, &first.value)?;
     let mut pairs = Vec::new();
     for chunk in args.get(1..).unwrap_or(&[]).as_chunks::<2>().0 {
+        require_reference(&chunk[0])?;
         let tests = flatten(ctx, &chunk[0].value)?;
         if tests.len() != values.len() {
             return Err(ErrorKind::Value);
@@ -266,6 +285,7 @@ fn countifs_pairs(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<(usize, Vec<IfsP
     let mut pairs = Vec::new();
     let mut len = None;
     for chunk in args.as_chunks::<2>().0 {
+        require_reference(&chunk[0])?;
         let tests = flatten(ctx, &chunk[0].value)?;
         match len {
             None => len = Some(tests.len()),

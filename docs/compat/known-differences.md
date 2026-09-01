@@ -11,7 +11,6 @@ encode.
 | Numeric-text comparison | Does not coerce in `=` | Same (WP-04 coerce) | WP-04 |
 | `CELL` without a reference | Tracks the last changed cell | Uses the formula cell | WP-05a |
 | `PERMUTATIONA(0,0)` | Excel `#NUM!` | `1` (`0^0` as combinatoric empty product) | WP-05a |
-| `*IF` over array constants | Excel often `#VALUE!` (range required) | Walks array constants like ranges | WP-05a |
 | LibreOffice CSV error tokens | `#NUM!` / `#VALUE!` / `#N/A` | `Err:502` / `Err:504` / `Err:511` / `Err:539` in headless CSV | WP-05a |
 | LibreOffice dotted / post-2007 names | Excel evaluates `STDEV.S`, `SWITCH`, `XOR`, `ACOT`, … | XLSX importer needs `_xlfn.` and still `#NAME?`s some names (`ISO.CEILING`, `ISOMITTED`) | WP-05a |
 | LibreOffice `TYPE(TRUE)` | `4` (logical) | `1` (number) | WP-05a |

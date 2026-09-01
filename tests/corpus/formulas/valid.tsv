@@ -648,7 +648,12 @@ SUM(A1)	=SUM(A1)	a1	bare call; print adds =
 =LET(x,A1#,SUM(x))	=LET(x,A1#,SUM(x))	a1	LET binding a spill
 =LAMBDA(x,y,x/y)(A1,B1)	=LAMBDA(x,y,x/y)(A1,B1)	a1	immediately-invoked LAMBDA
 =(LAMBDA(x,x+1))(2)	=(LAMBDA(x,x+1))(2)	a1	parenthesized LAMBDA then call
-=LET(f,LAMBDA(x,x+1),f(2))	=LET(f,LAMBDA(x,x+1),F(2))	a1	named LAMBDA invoked as f(2); call names are upper-cased in canonical print
+=LET(f,LAMBDA(x,x+1),f(2))	=LET(f,LAMBDA(x,x+1),f(2))	a1	LET-bound callable preserves definition-site case
+=LET(Foo,LAMBDA(x,x+1),foo(2))	=LET(Foo,LAMBDA(x,x+1),Foo(2))	a1	LET call adopts the binding's exact spelling
+=LAMBDA(MyFn,MyFn(1))	=LAMBDA(MyFn,MyFn(1))	a1	LAMBDA callable parameter preserves definition-site case
+=LET(f,LAMBDA(x,x),LET(F,LAMBDA(x,x+1),f(2)))	=LET(f,LAMBDA(x,x),LET(F,LAMBDA(x,x+1),F(2)))	a1	inner binding spelling shadows the outer binding
+=LET(Foo,1,foo+FOO)	=LET(Foo,1,Foo+Foo)	a1	LET value references adopt definition-site case
+=LAMBDA(MyValue,myvalue)(1)	=LAMBDA(MyValue,MyValue)(1)	a1	LAMBDA body references adopt definition-site case
 =A1+1	=A1+1	a1	cell A1 plus 1 (F-3.2 relative)
 =SUM(A:A)	=SUM(A:A)	a1	SUM whole column A
 =B1+1	=B1+1	a1	cell B1 plus 1 (F-3.2 relative)
