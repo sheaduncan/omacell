@@ -15,6 +15,8 @@ use crate::value::Value;
 use crate::workbook::Workbook;
 
 const MAX_PIVOT_OUTPUT_CELLS: usize = 1_000_000;
+const MAX_PIVOT_CALC_FORMULA_BYTES: usize = 8_192;
+const MAX_PIVOT_CALC_PARSE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Handle for a pivot table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -858,7 +860,7 @@ pub fn materialize_from_cache(
             for (i, part) in rk.iter().enumerate() {
                 let text = if matches!(pivot.layout, PivotLayout::Outline)
                     && i + 1 < rk.len()
-                    && prev_key.is_some_and(|prev| prev.get(i) == Some(part))
+                    && prev_key.is_some_and(|prev| same_key_prefix(prev, rk, i))
                 {
                     ""
                 } else {
@@ -868,7 +870,7 @@ pub fn materialize_from_cache(
             }
         } else if rk.len() > 1 {
             for depth in 0..rk.len().saturating_sub(1) {
-                let changed = prev_key.is_none_or(|prev| prev.get(depth) != rk.get(depth));
+                let changed = prev_key.is_none_or(|prev| !same_key_prefix(prev, rk, depth));
                 if changed {
                     cells.push(label(r, 0, &compact_label(depth, &rk[depth])));
                     r += 1;
@@ -1153,6 +1155,7 @@ pub fn cache_table(
     }
     let mut rows = Vec::new();
     if r1 == r0 {
+        apply_calc_fields(pivot, &mut headers, &mut rows)?;
         return Ok((headers, rows));
     }
     for r in r0 + 1..=r1 {
@@ -1171,6 +1174,7 @@ fn apply_calc_fields(
     headers: &mut Vec<String>,
     rows: &mut [Vec<CacheValue>],
 ) -> Result<(), CoreError> {
+    let mut parse_bytes = 0usize;
     for field in &pivot.calc_fields {
         if field.name.is_empty() {
             return Err(CoreError::new(
@@ -1179,7 +1183,32 @@ fn apply_calc_fields(
             ));
         }
         if headers.iter().any(|header| header == &field.name) {
-            continue;
+            return Err(CoreError::new(
+                "pivot.field",
+                format!("calculated field name {:?} is duplicated", field.name),
+            ));
+        }
+        if field.formula.len() > MAX_PIVOT_CALC_FORMULA_BYTES {
+            return Err(CoreError::new(
+                "pivot.field",
+                format!(
+                    "calculated field formula is longer than {MAX_PIVOT_CALC_FORMULA_BYTES} bytes"
+                ),
+            ));
+        }
+        let field_parse_bytes = field
+            .formula
+            .len()
+            .checked_mul(rows.len().max(1))
+            .ok_or_else(|| CoreError::new("pivot.field", "calculated-field work overflows"))?;
+        parse_bytes = parse_bytes
+            .checked_add(field_parse_bytes)
+            .ok_or_else(|| CoreError::new("pivot.field", "calculated-field work overflows"))?;
+        if parse_bytes > MAX_PIVOT_CALC_PARSE_BYTES {
+            return Err(CoreError::new(
+                "pivot.field",
+                "calculated fields exceed the refresh parse budget",
+            ));
         }
         if headers.len() >= usize::from(MAX_COLS) {
             return Err(CoreError::new(
@@ -1303,9 +1332,8 @@ fn parse_calc_atom<'a>(
         return Ok((value.map(|n| -n), rest));
     }
     if let Some(tail) = input.strip_prefix('\'') {
-        let end = tail.find('\'').ok_or(())?;
-        let name = &tail[..end];
-        return Ok((lookup_calc_number(ctx, name), &tail[end + 1..]));
+        let (name, rest) = parse_quoted_calc_name(tail)?;
+        return Ok((lookup_calc_number(ctx, name.as_ref()), rest));
     }
     if input.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
         let bytes = input.as_bytes();
@@ -1333,6 +1361,28 @@ fn parse_calc_atom<'a>(
         return Ok((lookup_calc_number(ctx, name), &input[end..]));
     }
     Err(())
+}
+
+fn parse_quoted_calc_name(input: &str) -> Result<(std::borrow::Cow<'_, str>, &str), ()> {
+    let end = input.find('\'').ok_or(())?;
+    let prefix = &input[..end];
+    let rest = &input[end + 1..];
+    let Some(mut input) = rest.strip_prefix('\'') else {
+        return Ok((prefix.into(), rest));
+    };
+    let mut name = prefix.to_string();
+    name.push('\'');
+    loop {
+        let end = input.find('\'').ok_or(())?;
+        name.push_str(&input[..end]);
+        let rest = &input[end + 1..];
+        if let Some(after_escape) = rest.strip_prefix('\'') {
+            name.push('\'');
+            input = after_escape;
+        } else {
+            return Ok((name.into(), rest));
+        }
+    }
 }
 
 fn lookup_calc_number(ctx: &CalcCtx<'_>, name: &str) -> Option<f64> {
@@ -1642,6 +1692,10 @@ fn compact_label(depth: usize, text: &str) -> String {
     format!("{}{text}", "  ".repeat(depth))
 }
 
+fn same_key_prefix(left: &[String], right: &[String], depth: usize) -> bool {
+    left.get(..=depth) == right.get(..=depth)
+}
+
 fn compact_group_header_count(row_keys: &[Vec<String>], pivot: &PivotTable) -> usize {
     if !matches!(pivot.layout, PivotLayout::Compact) || pivot.rows.len() <= 1 {
         return 0;
@@ -1653,7 +1707,7 @@ fn compact_group_header_count(row_keys: &[Vec<String>], pivot: &PivotTable) -> u
             continue;
         }
         for depth in 0..rk.len().saturating_sub(1) {
-            if prev.is_none_or(|p| p.get(depth) != rk.get(depth)) {
+            if prev.is_none_or(|p| !same_key_prefix(p, rk, depth)) {
                 count += 1;
             }
         }
@@ -2000,12 +2054,12 @@ pub(crate) enum BandAction {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn row_band_action(
-    r0: u32,
+    _r0: u32,
     c0: u16,
     r1: u32,
     c1: u16,
     at: u32,
-    count: i32,
+    _count: i32,
     bc0: u16,
     bc1: u16,
 ) -> BandAction {
@@ -2013,14 +2067,9 @@ pub(crate) fn row_band_action(
     if !cols_overlap {
         return BandAction::None;
     }
-    let mag = count.unsigned_abs();
-    let rows_overlap = if count >= 0 {
-        r1 >= at
-    } else {
-        let deleted_end = at.saturating_add(mag).saturating_sub(1);
-        r0 <= deleted_end && at <= r1
-    };
-    if !rows_overlap {
+    // Both insertion and deletion move covered-band cells after the anchor.
+    // A deletion wholly before the rectangle therefore still rewrites it.
+    if r1 < at {
         return BandAction::None;
     }
     if band_covers_cols(bc0, bc1, c0, c1) {
@@ -2033,11 +2082,11 @@ pub(crate) fn row_band_action(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn col_band_action(
     r0: u32,
-    c0: u16,
+    _c0: u16,
     r1: u32,
     c1: u16,
     at: u16,
-    count: i32,
+    _count: i32,
     br0: u32,
     br1: u32,
 ) -> BandAction {
@@ -2045,14 +2094,7 @@ pub(crate) fn col_band_action(
     if !rows_overlap {
         return BandAction::None;
     }
-    let mag = count.unsigned_abs() as u16;
-    let cols_overlap = if count >= 0 {
-        c1 >= at
-    } else {
-        let deleted_end = at.saturating_add(mag).saturating_sub(1);
-        c0 <= deleted_end && at <= c1
-    };
-    if !cols_overlap {
+    if c1 < at {
         return BandAction::None;
     }
     if band_covers_rows(br0, br1, r0, r1) {

@@ -283,7 +283,7 @@ fn excel_authored_pivot(calc: bool, distinct: bool, extra_ext: bool) -> Vec<u8> 
         (
             "xl/workbook.xml",
             &format!(
-                r#"<?xml version="1.0"?><workbook xmlns="{NS}" xmlns:r="{NS_R}"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets><pivotCaches count="1"><pivotCache cacheId="1" r:id="rId2"/></pivotCaches></workbook>"#
+                r#"<?xml version="1.0"?><workbook xmlns="{NS}" xmlns:r="{NS_R}"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets><pivotCaches count="1"><pivotCache cacheId="2" r:id="rId2"/></pivotCaches></workbook>"#
             ),
         ),
         (
@@ -327,7 +327,7 @@ fn excel_authored_pivot(calc: bool, distinct: bool, extra_ext: bool) -> Vec<u8> 
         (
             "xl/pivotTables/pivotTable1.xml",
             &format!(
-                r#"<?xml version="1.0"?><pivotTableDefinition xmlns="{NS}"{x14_ns} name="Sales" cacheId="1" dataCaption="Values"><location ref="E1:F4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="{field_count}"><pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField showAll="0"/>{calc_axis}</pivotFields><rowFields count="1"><field x="0"/></rowFields><dataFields count="1">{data_field}</dataFields></pivotTableDefinition>"#,
+                r#"<?xml version="1.0"?><pivotTableDefinition xmlns="{NS}"{x14_ns} name="Sales" cacheId="2" dataCaption="Values"><location ref="E1:F4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/><pivotFields count="{field_count}"><pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField showAll="0"/>{calc_axis}</pivotFields><rowFields count="1"><field x="0"/></rowFields><dataFields count="1">{data_field}</dataFields></pivotTableDefinition>"#,
                 calc_axis = if calc {
                     r#"<pivotField dataField="1" showAll="0"/>"#
                 } else {
@@ -355,6 +355,33 @@ fn unchanged_pivot_preserves_opaque_extension_bytes() {
     let saved_table = zip_part(&saved, "xl/pivotTables/pivotTable1.xml");
     let original_table = zip_part(&original, "xl/pivotTables/pivotTable1.xml");
     assert_eq!(saved_table, original_table);
+}
+
+#[test]
+fn adding_a_pivot_does_not_reuse_an_imported_cache_id_or_part_name() {
+    let original = excel_authored_pivot(false, false, false);
+    let mut doc = open_bytes(&original).unwrap();
+    let sheet = doc.workbook.active_sheet();
+    let mut added = PivotTable::new(
+        "Added",
+        sheet,
+        RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(2, 1).unwrap()),
+        sheet,
+        10,
+        0,
+    );
+    added.rows = vec!["Region".into()];
+    added.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    doc.workbook.add_pivot(added).unwrap();
+
+    let saved = save_bytes(&doc).unwrap();
+    let cache_defs: Vec<_> = zip_names(&saved)
+        .into_iter()
+        .filter(|name| name.contains("pivotCacheDefinition") && name.ends_with(".xml"))
+        .collect();
+    assert_eq!(cache_defs.len(), 2, "{cache_defs:?}");
+    let reopened = open_bytes(&saved).unwrap();
+    assert_eq!(reopened.workbook.pivots().len(), 2);
 }
 
 #[test]

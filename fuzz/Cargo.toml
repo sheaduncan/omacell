@@ -60,6 +60,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "pivot_calc"
+path = "fuzz_targets/pivot_calc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fn_eager"
 path = "fuzz_targets/fn_eager.rs"
 test = false

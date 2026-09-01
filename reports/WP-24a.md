@@ -35,8 +35,10 @@ Closed the WP-24 fidelity deferrals.
 - Distinct Count writes Excel 2013+ x14 metadata on both the cache definition and the data field, and reads `pivotShowAs="distinctCount"` back as `PivotAgg::DistinctCount`.
 - Unchanged imported pivots re-emit original cache/table parts (and relationship-reachable extras) byte-for-byte. `pivot.refresh` and structural reference rewrites mark the pivot dirty so those parts regenerate.
 - Row/column insert/delete and covering cell shifts rewrite pivot source and output ranges in the same undo transaction. Partial bands that would split a managed range still fail with `pivot.struct`.
+- Save-time cache IDs and cache/table part names are allocated without colliding with imported package identities; a dirty member of a shared cache group controls regeneration.
+- Calculated-field parsing has explicit formula/work limits, a dedicated `pivot_calc` fuzz target, and accepts Excel's doubled-apostrophe escaping in quoted field names.
 
-Key tests: `crates/core/tests/pivot.rs` (corpus + structural + compact + calc field) and `crates/io/tests/pivot_roundtrip.rs` (preserve, dirty regenerate, Distinct Count, calculated field, LibreOffice structure check).
+Key tests: `crates/core/tests/pivot.rs` (corpus + structural + compact + calc field), `crates/io/tests/pivot_roundtrip.rs` (preserve, identity allocation, dirty regenerate, Distinct Count, calculated field, LibreOffice structure check), and `fuzz/fuzz_targets/pivot_calc.rs`.
 
 ## Interfaces exposed (for dependents)
 
@@ -58,8 +60,9 @@ Command ids and schemas are unchanged.
 
 ## Measurements
 
-- Core pivot suite: 15 passed (`cargo test -p omacell-core --test pivot`), including 13 corpus cases (9 from WP-24 plus compact/outline/tabular/calc-field).
-- IO pivot suite: 11 passed (`cargo test -p omacell-io --test pivot_roundtrip`), including LibreOffice headless conversion of calculated-field and Distinct Count fixtures (present on this machine).
+- Core pivot suite: 21 passed (`cargo test -p omacell-core --test pivot`), including 13 corpus cases (9 from WP-24 plus compact/outline/tabular/calc-field).
+- IO pivot suite: 12 passed (`cargo test -p omacell-io --test pivot_roundtrip`), including LibreOffice headless conversion of calculated-field and Distinct Count fixtures (present on this machine).
+- `pivot_calc` fuzz smoke: 119,040 executions with no crash (`ASAN_OPTIONS=detect_leaks=0 cargo +nightly fuzz run pivot_calc -- -max_total_time=5`).
 - No new Criterion gate; WP-24's 100k-row baseline is unchanged.
 
 ## Open questions / decisions needed
@@ -87,5 +90,5 @@ Additive only; no existing command id, schema, event variant, or catalog envelop
 
 - [x] An Excel-authored pivot with unsupported extensions survives open/save with its opaque parts and relationships unchanged. Evidence: `unchanged_pivot_preserves_opaque_extension_bytes`.
 - [x] Calculated-field and Distinct Count fixtures reopen as live pivots in Excel/LibreOffice without semantic downgrade. Evidence: round-trip tests plus `libreoffice_opens_calc_and_distinct_fixtures_if_present` (LibreOffice present); generated Distinct Count writes `pivotShowAs="distinctCount"`.
-- [x] Structural edits before, inside, and after pivot source/output ranges rewrite references and remain one undo unit. Evidence: `pivot_structural_edits_rewrite_source_and_output_as_one_undo` and `pivot_cell_shift_refuses_to_split_and_rewrites_full_bands`.
-- [x] Compact, outline, and tabular golden tables match their documented layouts. Evidence: corpus cases `compact_nested_rows`, `outline_nested_rows`, `tabular_nested_rows` and `pivot_compact_layout_indents_nested_row_fields`.
+- [x] Structural edits before, inside, and after pivot source/output ranges rewrite references and remain one undo unit. Evidence: `pivot_structural_edits_rewrite_source_and_output_as_one_undo`, `pivot_deletion_before_ranges_rewrites_them_and_undoes`, `pivot_column_deletion_before_ranges_rewrites_them_and_undoes`, and `pivot_cell_shift_refuses_to_split_and_rewrites_full_bands`.
+- [x] Compact, outline, and tabular golden tables match their documented layouts. Evidence: corpus cases `compact_nested_rows`, `outline_nested_rows`, `tabular_nested_rows`, `pivot_compact_layout_indents_nested_row_fields`, and `pivot_hierarchy_restarts_child_labels_when_parent_changes`.
