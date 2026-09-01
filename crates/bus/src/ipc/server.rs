@@ -18,8 +18,8 @@ use super::discover::{
 };
 use super::dispatch::{Dispatch, dispatch_bus_request, dispatch_runner_request};
 use super::protocol::{
-    FrameBuf, MAX_CONNECTIONS, MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, Reply, Request,
-    ServerRecord, encode_line, event_type_name,
+    FrameBuf, IpcLimits, MAX_CONNECTIONS, MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, Reply, Request,
+    ServerRecord, encode_line_with_limits, encode_reply_with_limits, event_type_name,
 };
 use crate::error;
 use crate::event::SubscriberId;
@@ -90,7 +90,16 @@ impl Drop for IpcHandle {
 
 /// Bind `{dir}/{pid}.sock` and serve `bus` on std threads.
 pub fn serve(dir: PathBuf, bus: Bus) -> Result<IpcHandle, CoreError> {
-    serve_shared(dir, Arc::new(Mutex::new(bus)))
+    serve_with_limits(dir, bus, IpcLimits::default())
+}
+
+/// Bind with a validated runtime frame limit.
+pub fn serve_with_limits(
+    dir: PathBuf,
+    bus: Bus,
+    limits: IpcLimits,
+) -> Result<IpcHandle, CoreError> {
+    serve_shared_with_limits(dir, Arc::new(Mutex::new(bus)), limits)
 }
 
 /// Bind `{dir}/{pid}.sock` and serve an existing shared bus on std threads.
@@ -98,6 +107,15 @@ pub fn serve(dir: PathBuf, bus: Bus) -> Result<IpcHandle, CoreError> {
 /// Callers that also host MCP or need direct inspection retain their own
 /// [`Arc`] instead of reaching back through the server handle.
 pub fn serve_shared(dir: PathBuf, bus: Arc<Mutex<Bus>>) -> Result<IpcHandle, CoreError> {
+    serve_shared_with_limits(dir, bus, IpcLimits::default())
+}
+
+/// Bind a shared bus with a validated runtime frame limit.
+pub fn serve_shared_with_limits(
+    dir: PathBuf,
+    bus: Arc<Mutex<Bus>>,
+    limits: IpcLimits,
+) -> Result<IpcHandle, CoreError> {
     prepare_runtime_dir(&dir)?;
     let pid = std::process::id();
     remove_stale_socket(&dir, pid)?;
@@ -139,6 +157,7 @@ pub fn serve_shared(dir: PathBuf, bus: Arc<Mutex<Bus>>) -> Result<IpcHandle, Cor
                 accept_shutdown,
                 connections,
                 accept_clients,
+                limits,
             );
         })
         .map_err(|err| error::ipc_socket(format!("spawn accept: {err}")))?;
@@ -155,6 +174,15 @@ pub fn serve_shared(dir: PathBuf, bus: Arc<Mutex<Bus>>) -> Result<IpcHandle, Cor
 
 /// Serve IPC by submitting to the single-writer task runner.
 pub fn serve_runner(dir: PathBuf, runner: TaskRunnerHandle) -> Result<IpcHandle, CoreError> {
+    serve_runner_with_limits(dir, runner, IpcLimits::default())
+}
+
+/// Serve a task runner with a validated runtime frame limit.
+pub fn serve_runner_with_limits(
+    dir: PathBuf,
+    runner: TaskRunnerHandle,
+    limits: IpcLimits,
+) -> Result<IpcHandle, CoreError> {
     prepare_runtime_dir(&dir)?;
     let pid = std::process::id();
     remove_stale_socket(&dir, pid)?;
@@ -196,6 +224,7 @@ pub fn serve_runner(dir: PathBuf, runner: TaskRunnerHandle) -> Result<IpcHandle,
                 accept_shutdown,
                 connections,
                 accept_clients,
+                limits,
             );
         })
         .map_err(|err| error::ipc_socket(format!("spawn accept: {err}")))?;
@@ -216,6 +245,7 @@ fn accept_loop(
     shutdown: Arc<AtomicBool>,
     connections: Arc<AtomicUsize>,
     clients: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    limits: IpcLimits,
 ) {
     while !shutdown.load(Ordering::SeqCst) {
         reap_finished_clients(&clients);
@@ -230,6 +260,7 @@ fn accept_loop(
                     let _ = write_error_and_close(
                         stream,
                         error::ipc_limit(format!("at most {MAX_CONNECTIONS} IPC clients")),
+                        limits,
                     );
                     continue;
                 }
@@ -239,7 +270,7 @@ fn accept_loop(
                 match thread::Builder::new()
                     .name("omacell-ipc-client".into())
                     .spawn(move || {
-                        client_loop(stream, bus, client_shutdown);
+                        client_loop(stream, bus, client_shutdown, limits);
                         client_connections.fetch_sub(1, Ordering::SeqCst);
                     }) {
                     Ok(handle) => lock_clients(&clients).push(handle),
@@ -263,6 +294,7 @@ fn accept_loop_runner(
     shutdown: Arc<AtomicBool>,
     connections: Arc<AtomicUsize>,
     clients: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    limits: IpcLimits,
 ) {
     while !shutdown.load(Ordering::SeqCst) {
         reap_finished_clients(&clients);
@@ -277,6 +309,7 @@ fn accept_loop_runner(
                     let _ = write_error_and_close(
                         stream,
                         error::ipc_limit(format!("at most {MAX_CONNECTIONS} IPC clients")),
+                        limits,
                     );
                     continue;
                 }
@@ -286,7 +319,7 @@ fn accept_loop_runner(
                 match thread::Builder::new()
                     .name("omacell-ipc-client".into())
                     .spawn(move || {
-                        client_loop_runner(stream, runner, client_shutdown);
+                        client_loop_runner(stream, runner, client_shutdown, limits);
                         client_connections.fetch_sub(1, Ordering::SeqCst);
                     }) {
                     Ok(handle) => lock_clients(&clients).push(handle),
@@ -304,7 +337,12 @@ fn accept_loop_runner(
     reap_finished_clients(&clients);
 }
 
-fn client_loop_runner(stream: UnixStream, runner: TaskRunnerHandle, shutdown: Arc<AtomicBool>) {
+fn client_loop_runner(
+    stream: UnixStream,
+    runner: TaskRunnerHandle,
+    shutdown: Arc<AtomicBool>,
+    limits: IpcLimits,
+) {
     let _ = stream.set_read_timeout(Some(READ_TICK));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let mut writer = match stream.try_clone() {
@@ -312,7 +350,7 @@ fn client_loop_runner(stream: UnixStream, runner: TaskRunnerHandle, shutdown: Ar
         Err(_) => return,
     };
     let mut reader = stream;
-    let mut frames = FrameBuf::new();
+    let mut frames = FrameBuf::with_limits(limits);
     let mut chunk = [0u8; 8192];
     let mut sub: Option<SubscriberId> = None;
     let mut filter: Vec<String> = Vec::new();
@@ -322,20 +360,27 @@ fn client_loop_runner(stream: UnixStream, runner: TaskRunnerHandle, shutdown: Ar
             Ok(n) => match frames.push(&chunk[..n]) {
                 Ok(lines) => {
                     for line in lines {
-                        if !handle_line_runner(&mut writer, &runner, &mut sub, &mut filter, &line) {
+                        if !handle_line_runner(
+                            &mut writer,
+                            &runner,
+                            &mut sub,
+                            &mut filter,
+                            &line,
+                            limits,
+                        ) {
                             break 'client;
                         }
                     }
                 }
                 Err(err) => {
-                    let _ = write_reply(&mut writer, Reply::err(0, err));
+                    let _ = write_reply(&mut writer, Reply::err(0, err), limits);
                     break 'client;
                 }
             },
             Err(err)
                 if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut =>
             {
-                if !flush_runner_events(&mut writer, &runner, &mut sub) {
+                if !flush_runner_events(&mut writer, &runner, &mut sub, limits) {
                     break 'client;
                 }
             }
@@ -354,19 +399,20 @@ fn handle_line_runner(
     sub: &mut Option<SubscriberId>,
     filter: &mut Vec<String>,
     line: &[u8],
+    limits: IpcLimits,
 ) -> bool {
-    let request = match super::protocol::decode_request_bytes(line) {
+    let request = match super::protocol::decode_request_bytes_with_limits(line, limits) {
         Ok(request) => request,
         Err(err) => {
-            let _ = write_reply(writer, Reply::err(0, err));
+            let _ = write_reply(writer, Reply::err(0, err), limits);
             return true;
         }
     };
     let reply = dispatch_runner(runner, sub, filter, request);
-    if write_reply(writer, reply).is_err() {
+    if write_reply(writer, reply, limits).is_err() {
         return false;
     }
-    flush_runner_events(writer, runner, sub)
+    flush_runner_events(writer, runner, sub, limits)
 }
 
 fn dispatch_runner(
@@ -399,13 +445,14 @@ fn flush_runner_events(
     writer: &mut UnixStream,
     runner: &TaskRunnerHandle,
     sub: &mut Option<SubscriberId>,
+    limits: IpcLimits,
 ) -> bool {
     let Some(id) = *sub else {
         return true;
     };
     let (dropped, events) = runner.drain_ipc_events(id);
     if dropped > 0 {
-        let _ = write_record(writer, &ServerRecord::overflow(dropped));
+        let _ = write_record(writer, &ServerRecord::overflow(dropped), limits);
         if let Some(id) = sub.take() {
             runner.unsubscribe_ipc(id);
         }
@@ -414,11 +461,11 @@ fn flush_runner_events(
     let mut queued_bytes = 0usize;
     for event in events {
         let record = ServerRecord::event(event);
-        match encode_line(&record) {
+        match encode_line_with_limits(&record, limits) {
             Ok(line) => {
                 queued_bytes = queued_bytes.saturating_add(line.len());
                 if queued_bytes > MAX_EVENT_QUEUE_BYTES {
-                    let _ = write_record(writer, &ServerRecord::overflow(1));
+                    let _ = write_record(writer, &ServerRecord::overflow(1), limits);
                     if let Some(id) = sub.take() {
                         runner.unsubscribe_ipc(id);
                     }
@@ -428,20 +475,35 @@ fn flush_runner_events(
                     return false;
                 }
             }
-            Err(_) => return false,
+            Err(_) => {
+                let _ = write_record(writer, &ServerRecord::overflow(1), limits);
+                if let Some(id) = sub.take() {
+                    runner.unsubscribe_ipc(id);
+                }
+                return false;
+            }
         }
     }
     true
 }
 
-fn write_error_and_close(mut stream: UnixStream, err: CoreError) -> Result<(), CoreError> {
+fn write_error_and_close(
+    mut stream: UnixStream,
+    err: CoreError,
+    limits: IpcLimits,
+) -> Result<(), CoreError> {
     let reply = Reply::err(0, err);
-    let line = encode_line(&reply)?;
+    let line = encode_line_with_limits(&reply, limits)?;
     let _ = stream.write_all(line.as_bytes());
     Ok(())
 }
 
-fn client_loop(stream: UnixStream, bus: Arc<Mutex<Bus>>, shutdown: Arc<AtomicBool>) {
+fn client_loop(
+    stream: UnixStream,
+    bus: Arc<Mutex<Bus>>,
+    shutdown: Arc<AtomicBool>,
+    limits: IpcLimits,
+) {
     let _ = stream.set_read_timeout(Some(READ_TICK));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let mut writer = match stream.try_clone() {
@@ -449,7 +511,7 @@ fn client_loop(stream: UnixStream, bus: Arc<Mutex<Bus>>, shutdown: Arc<AtomicBoo
         Err(_) => return,
     };
     let mut reader = stream;
-    let mut frames = FrameBuf::new();
+    let mut frames = FrameBuf::with_limits(limits);
     let mut chunk = [0u8; 8192];
     let mut sub: Option<SubscriberId> = None;
     let mut filter: Vec<String> = Vec::new();
@@ -459,20 +521,20 @@ fn client_loop(stream: UnixStream, bus: Arc<Mutex<Bus>>, shutdown: Arc<AtomicBoo
             Ok(n) => match frames.push(&chunk[..n]) {
                 Ok(lines) => {
                     for line in lines {
-                        if !handle_line(&mut writer, &bus, &mut sub, &mut filter, &line) {
+                        if !handle_line(&mut writer, &bus, &mut sub, &mut filter, &line, limits) {
                             break 'client;
                         }
                     }
                 }
                 Err(err) => {
-                    let _ = write_reply(&mut writer, Reply::err(0, err));
+                    let _ = write_reply(&mut writer, Reply::err(0, err), limits);
                     break 'client;
                 }
             },
             Err(err)
                 if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut =>
             {
-                if !flush_events(&mut writer, &bus, &mut sub, &filter) {
+                if !flush_events(&mut writer, &bus, &mut sub, &filter, limits) {
                     break 'client;
                 }
             }
@@ -491,19 +553,20 @@ fn handle_line(
     sub: &mut Option<SubscriberId>,
     filter: &mut Vec<String>,
     line: &[u8],
+    limits: IpcLimits,
 ) -> bool {
-    let request = match super::protocol::decode_request_bytes(line) {
+    let request = match super::protocol::decode_request_bytes_with_limits(line, limits) {
         Ok(r) => r,
         Err(err) => {
-            let _ = write_reply(writer, Reply::err(0, err));
+            let _ = write_reply(writer, Reply::err(0, err), limits);
             return true;
         }
     };
     let reply = dispatch(bus, sub, filter, request);
-    if write_reply(writer, reply).is_err() {
+    if write_reply(writer, reply, limits).is_err() {
         return false;
     }
-    flush_events(writer, bus, sub, filter)
+    flush_events(writer, bus, sub, filter, limits)
 }
 
 fn dispatch(
@@ -538,6 +601,7 @@ fn flush_events(
     bus: &Arc<Mutex<Bus>>,
     sub: &mut Option<SubscriberId>,
     filter: &[String],
+    limits: IpcLimits,
 ) -> bool {
     let Some(id) = *sub else {
         return true;
@@ -549,7 +613,7 @@ fn flush_events(
         (dropped, events)
     };
     if dropped > 0 {
-        let _ = write_record(writer, &ServerRecord::overflow(dropped));
+        let _ = write_record(writer, &ServerRecord::overflow(dropped), limits);
         if let Some(id) = sub.take() {
             lock_bus(bus).unsubscribe(id);
         }
@@ -561,11 +625,11 @@ fn flush_events(
             continue;
         }
         let record = ServerRecord::event(event);
-        match encode_line(&record) {
+        match encode_line_with_limits(&record, limits) {
             Ok(line) => {
                 queued_bytes = queued_bytes.saturating_add(line.len());
                 if queued_bytes > super::protocol::MAX_EVENT_QUEUE_BYTES {
-                    let _ = write_record(writer, &ServerRecord::overflow(1));
+                    let _ = write_record(writer, &ServerRecord::overflow(1), limits);
                     if let Some(id) = sub.take() {
                         lock_bus(bus).unsubscribe(id);
                     }
@@ -575,22 +639,32 @@ fn flush_events(
                     return false;
                 }
             }
-            Err(_) => return false,
+            Err(_) => {
+                let _ = write_record(writer, &ServerRecord::overflow(1), limits);
+                if let Some(id) = sub.take() {
+                    lock_bus(bus).unsubscribe(id);
+                }
+                return false;
+            }
         }
     }
     true
 }
 
-fn write_reply(writer: &mut UnixStream, reply: Reply) -> Result<(), CoreError> {
-    let line = encode_line(&reply)?;
+fn write_reply(writer: &mut UnixStream, reply: Reply, limits: IpcLimits) -> Result<(), CoreError> {
+    let line = encode_reply_with_limits(&reply, limits)?;
     writer
         .write_all(line.as_bytes())
         .map_err(|_| error::ipc_disconnected())?;
     Ok(())
 }
 
-fn write_record(writer: &mut UnixStream, record: &ServerRecord) -> Result<(), CoreError> {
-    let line = encode_line(record)?;
+fn write_record(
+    writer: &mut UnixStream,
+    record: &ServerRecord,
+    limits: IpcLimits,
+) -> Result<(), CoreError> {
+    let line = encode_line_with_limits(record, limits)?;
     writer
         .write_all(line.as_bytes())
         .map_err(|_| error::ipc_disconnected())?;

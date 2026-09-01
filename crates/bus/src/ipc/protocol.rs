@@ -12,8 +12,8 @@ use crate::error;
 /// Envelope version frozen by this package.
 pub const VERSION: u32 = 1;
 
-/// Maximum JSON-line size including the trailing newline.
-pub const MAX_FRAME_BYTES: usize = 1_048_576;
+/// Hard maximum JSON-line size including the trailing newline.
+pub const MAX_FRAME_BYTES: usize = 16 * 1_048_576;
 
 /// Maximum nesting of `{` / `[` outside strings.
 pub const MAX_JSON_DEPTH: u32 = 32;
@@ -29,6 +29,38 @@ pub const MAX_EVENT_QUEUE: usize = 64;
 
 /// Maximum queued event payload bytes per client.
 pub const MAX_EVENT_QUEUE_BYTES: usize = 262_144;
+
+/// Validated per-server/client frame limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IpcLimits {
+    max_frame_bytes: usize,
+}
+
+impl IpcLimits {
+    /// Build limits up to the hard 16 MiB protocol ceiling.
+    pub fn new(max_frame_bytes: usize) -> Result<Self, CoreError> {
+        if max_frame_bytes == 0 || max_frame_bytes > MAX_FRAME_BYTES {
+            return Err(error::ipc_limit(format!(
+                "IPC frame limit must be in 1..={MAX_FRAME_BYTES} bytes"
+            )));
+        }
+        Ok(Self { max_frame_bytes })
+    }
+
+    /// Maximum bytes including the trailing newline.
+    #[must_use]
+    pub const fn max_frame_bytes(self) -> usize {
+        self.max_frame_bytes
+    }
+}
+
+impl Default for IpcLimits {
+    fn default() -> Self {
+        Self {
+            max_frame_bytes: MAX_FRAME_BYTES,
+        }
+    }
+}
 
 /// Allowed subscribe/filter names (frozen `Event` `type` field).
 pub const EVENT_TYPES: &[&str] = &[
@@ -286,13 +318,23 @@ pub struct Discovery {
 #[derive(Clone, Debug, Default)]
 pub struct FrameBuf {
     buf: Vec<u8>,
+    limits: IpcLimits,
 }
 
 impl FrameBuf {
     /// Empty buffer.
     #[must_use]
     pub fn new() -> Self {
-        Self { buf: Vec::new() }
+        Self::with_limits(IpcLimits::default())
+    }
+
+    /// Empty buffer using a validated runtime frame limit.
+    #[must_use]
+    pub fn with_limits(limits: IpcLimits) -> Self {
+        Self {
+            buf: Vec::new(),
+            limits,
+        }
     }
 
     /// Append bytes and return every complete line (without the newline).
@@ -300,9 +342,9 @@ impl FrameBuf {
         let mut lines = Vec::new();
         let mut rest = bytes;
         while let Some(idx) = rest.iter().position(|b| *b == b'\n') {
-            if self.buf.len().saturating_add(idx).saturating_add(1) > MAX_FRAME_BYTES {
+            if self.buf.len().saturating_add(idx).saturating_add(1) > self.limits.max_frame_bytes {
                 self.buf.clear();
-                return Err(error::ipc_frame("IPC frame exceeds 1 MiB"));
+                return Err(frame_limit_error(self.limits, "IPC frame"));
             }
             self.buf.extend_from_slice(&rest[..idx]);
             let mut line = std::mem::take(&mut self.buf);
@@ -312,10 +354,11 @@ impl FrameBuf {
             lines.push(line);
             rest = &rest[idx + 1..];
         }
-        if self.buf.len().saturating_add(rest.len()) >= MAX_FRAME_BYTES {
+        if self.buf.len().saturating_add(rest.len()) >= self.limits.max_frame_bytes {
             self.buf.clear();
-            return Err(error::ipc_frame(
-                "IPC frame exceeds 1 MiB without a newline",
+            return Err(frame_limit_error(
+                self.limits,
+                "IPC frame without a newline",
             ));
         }
         self.buf.extend_from_slice(rest);
@@ -325,12 +368,17 @@ impl FrameBuf {
 
 /// Decode one UTF-8 JSON object as a v1 request.
 pub fn decode_request(text: &str) -> Result<Request, CoreError> {
+    decode_request_with_limits(text, IpcLimits::default())
+}
+
+/// Decode one request under a validated runtime frame limit.
+pub fn decode_request_with_limits(text: &str, limits: IpcLimits) -> Result<Request, CoreError> {
+    if text.len() >= limits.max_frame_bytes {
+        return Err(frame_limit_error(limits, "IPC frame"));
+    }
     let text = text.trim();
     if text.is_empty() {
         return Err(error::ipc_frame("empty IPC frame"));
-    }
-    if text.len() >= MAX_FRAME_BYTES {
-        return Err(error::ipc_frame("IPC frame exceeds 1 MiB"));
     }
     check_json_depth(text)?;
     let value: Value = serde_json::from_str(text)
@@ -343,14 +391,22 @@ pub fn decode_request(text: &str) -> Result<Request, CoreError> {
 
 /// Decode bytes as a request (optional trailing newline).
 pub fn decode_request_bytes(data: &[u8]) -> Result<Request, CoreError> {
-    if data.len() > MAX_FRAME_BYTES
-        || (data.len() == MAX_FRAME_BYTES && data.last().copied() != Some(b'\n'))
+    decode_request_bytes_with_limits(data, IpcLimits::default())
+}
+
+/// Decode request bytes under a validated runtime frame limit.
+pub fn decode_request_bytes_with_limits(
+    data: &[u8],
+    limits: IpcLimits,
+) -> Result<Request, CoreError> {
+    if data.len() > limits.max_frame_bytes
+        || (data.len() == limits.max_frame_bytes && data.last().copied() != Some(b'\n'))
     {
-        return Err(error::ipc_frame("IPC frame exceeds 1 MiB"));
+        return Err(frame_limit_error(limits, "IPC frame"));
     }
     let text = std::str::from_utf8(data).map_err(|_| error::ipc_frame("IPC frame is not UTF-8"))?;
     let text = text.trim_end_matches(['\n', '\r']);
-    decode_request(text)
+    decode_request_with_limits(text, limits)
 }
 
 fn decode_request_object(obj: &Map<String, Value>) -> Result<Request, CoreError> {
@@ -557,13 +613,39 @@ pub fn event_type_name(event: &Event) -> &'static str {
 
 /// Encode a value as a JSON line (trailing newline).
 pub fn encode_line<T: Serialize>(value: &T) -> Result<String, CoreError> {
+    encode_line_with_limits(value, IpcLimits::default())
+}
+
+/// Encode one JSON line under a validated runtime frame limit.
+pub fn encode_line_with_limits<T: Serialize>(
+    value: &T,
+    limits: IpcLimits,
+) -> Result<String, CoreError> {
     let mut text = serde_json::to_string(value)
         .map_err(|err| error::ipc_frame(format!("serialize IPC record: {err}")))?;
     text.push('\n');
-    if text.len() > MAX_FRAME_BYTES {
-        return Err(error::ipc_frame("encoded IPC frame exceeds 1 MiB"));
+    if text.len() > limits.max_frame_bytes {
+        return Err(frame_limit_error(limits, "encoded IPC frame"));
     }
     Ok(text)
+}
+
+/// Encode a reply, replacing an oversized result with a correlated frame error.
+pub fn encode_reply_with_limits(reply: &Reply, limits: IpcLimits) -> Result<String, CoreError> {
+    match encode_line_with_limits(reply, limits) {
+        Ok(line) => Ok(line),
+        Err(err) if err.code == error::codes::IPC_FRAME => {
+            encode_line_with_limits(&Reply::err(reply.id, err), limits)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn frame_limit_error(limits: IpcLimits, label: &str) -> CoreError {
+    error::ipc_frame(format!(
+        "{label} exceeds the configured {}-byte limit",
+        limits.max_frame_bytes
+    ))
 }
 
 /// Encode a command request as a JSON line.
@@ -572,6 +654,17 @@ pub fn encode_command(
     cmd: &str,
     args: &Value,
     mode: Option<Mode>,
+) -> Result<String, CoreError> {
+    encode_command_with_limits(id, cmd, args, mode, IpcLimits::default())
+}
+
+/// Encode a command request under a validated runtime frame limit.
+pub fn encode_command_with_limits(
+    id: u64,
+    cmd: &str,
+    args: &Value,
+    mode: Option<Mode>,
+    limits: IpcLimits,
 ) -> Result<String, CoreError> {
     let mut map = Map::new();
     map.insert("v".into(), Value::from(VERSION));
@@ -586,7 +679,7 @@ pub fn encode_command(
         };
         map.insert("mode".into(), Value::from(label));
     }
-    encode_line(&Value::Object(map))
+    encode_line_with_limits(&Value::Object(map), limits)
 }
 
 /// Encode a control request as a JSON line.
@@ -595,6 +688,17 @@ pub fn encode_control(
     op: ControlOp,
     events: &[String],
     changeset: Option<&str>,
+) -> Result<String, CoreError> {
+    encode_control_with_limits(id, op, events, changeset, IpcLimits::default())
+}
+
+/// Encode a control request under a validated runtime frame limit.
+pub fn encode_control_with_limits(
+    id: u64,
+    op: ControlOp,
+    events: &[String],
+    changeset: Option<&str>,
+    limits: IpcLimits,
 ) -> Result<String, CoreError> {
     let mut map = Map::new();
     map.insert("v".into(), Value::from(VERSION));
@@ -618,5 +722,5 @@ pub fn encode_control(
     if let Some(cs) = changeset {
         map.insert("changeset".into(), Value::from(cs));
     }
-    encode_line(&Value::Object(map))
+    encode_line_with_limits(&Value::Object(map), limits)
 }

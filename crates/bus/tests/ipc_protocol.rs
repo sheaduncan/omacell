@@ -3,8 +3,9 @@
 #![cfg(unix)]
 
 use omacell_bus::ipc::{
-    ControlOp, MAX_FRAME_BYTES, MAX_JSON_DEPTH, Mode, Reply, Request, check_json_depth,
-    decode_request, decode_request_bytes,
+    ControlOp, IpcLimits, MAX_FRAME_BYTES, MAX_JSON_DEPTH, Mode, Reply, Request, check_json_depth,
+    decode_request, decode_request_bytes, decode_request_bytes_with_limits, encode_command,
+    encode_line_with_limits,
 };
 use std::path::PathBuf;
 
@@ -216,30 +217,77 @@ fn malformed_partial_nested_and_oversized_frames_fail_closed() {
     );
     let err = check_json_depth(&nested).unwrap_err();
     assert_eq!(err.code, omacell_bus::codes::IPC_LIMIT);
-    let huge = "x".repeat(MAX_FRAME_BYTES + 8);
-    let err = decode_request_bytes(huge.as_bytes()).unwrap_err();
+    let limits = IpcLimits::new(1_024).unwrap();
+    let huge = "x".repeat(1_032);
+    let err = decode_request_bytes_with_limits(huge.as_bytes(), limits).unwrap_err();
     assert_eq!(err.code, omacell_bus::codes::IPC_FRAME);
 }
 
 #[test]
 fn frame_buf_rejects_a_line_without_newline_past_the_cap() {
-    let mut buf = omacell_bus::ipc::FrameBuf::new();
-    let chunk = vec![b'a'; MAX_FRAME_BYTES + 1];
+    let limits = IpcLimits::new(1_024).unwrap();
+    let mut buf = omacell_bus::ipc::FrameBuf::with_limits(limits);
+    let chunk = vec![b'a'; 1_025];
     let err = buf.push(&chunk).unwrap_err();
     assert_eq!(err.code, omacell_bus::codes::IPC_FRAME);
 }
 
 #[test]
 fn frame_cap_includes_the_trailing_newline() {
-    let mut allowed = vec![b'a'; MAX_FRAME_BYTES - 1];
+    let limits = IpcLimits::new(1_024).unwrap();
+    let mut allowed = vec![b'a'; 1_023];
     allowed.push(b'\n');
-    let mut buf = omacell_bus::ipc::FrameBuf::new();
-    assert_eq!(buf.push(&allowed).unwrap()[0].len(), MAX_FRAME_BYTES - 1);
+    let mut buf = omacell_bus::ipc::FrameBuf::with_limits(limits);
+    assert_eq!(buf.push(&allowed).unwrap()[0].len(), 1_023);
 
-    let mut oversized = vec![b'a'; MAX_FRAME_BYTES];
+    let mut oversized = vec![b'a'; 1_024];
     oversized.push(b'\n');
     let err = buf.push(&oversized).unwrap_err();
     assert_eq!(err.code, omacell_bus::codes::IPC_FRAME);
+}
+
+#[test]
+fn default_ceiling_accepts_a_request_larger_than_one_mib() {
+    assert_eq!(MAX_FRAME_BYTES, 16_777_216);
+    let input = "x".repeat(1_100_000);
+    let line = encode_command(
+        1,
+        "cell.set",
+        &serde_json::json!({"ref":"A1","input":input}),
+        Some(Mode::Propose),
+    )
+    .unwrap();
+    assert!(line.len() > 1_048_576);
+    let request = decode_request_bytes(line.as_bytes()).unwrap();
+    let Request::Command { args, .. } = request else {
+        panic!("expected command request");
+    };
+    assert_eq!(args["input"].as_str().unwrap().len(), 1_100_000);
+}
+
+#[test]
+fn configured_limit_is_enforced_for_decode_buffer_and_encode() {
+    let limits = IpcLimits::new(256).unwrap();
+    let oversized = serde_json::json!({"payload": "x".repeat(256)});
+    let encoded = encode_line_with_limits(&oversized, limits).unwrap_err();
+    assert_eq!(encoded.code, omacell_bus::codes::IPC_FRAME);
+    assert!(
+        encoded
+            .hint
+            .as_deref()
+            .unwrap()
+            .contains("split large ranges")
+    );
+
+    let bytes = serde_json::to_vec(&oversized).unwrap();
+    let decoded = decode_request_bytes_with_limits(&bytes, limits).unwrap_err();
+    assert_eq!(decoded.code, omacell_bus::codes::IPC_FRAME);
+    let mut frames = omacell_bus::ipc::FrameBuf::with_limits(limits);
+    let buffered = frames.push(&bytes).unwrap_err();
+    assert_eq!(buffered.code, omacell_bus::codes::IPC_FRAME);
+
+    let invalid = IpcLimits::new(MAX_FRAME_BYTES + 1).unwrap_err();
+    assert_eq!(invalid.code, omacell_bus::codes::IPC_LIMIT);
 }
 
 #[test]

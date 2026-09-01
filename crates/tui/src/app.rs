@@ -16,7 +16,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use omacell_ai::{AutopilotPolicy, AutopilotScope, Plan, to_calls};
-use omacell_bus::ipc::{IpcHandle, default_runtime_dir};
+use omacell_bus::ipc::{IpcHandle, IpcLimits, default_runtime_dir, serve_runner_with_limits};
 use omacell_bus::{
     Bus, CancelHandle, CommandJson, CommandsEnvelope, LongOps, TaskEvent, TaskId, TaskRunner,
     TaskRunnerHandle,
@@ -137,9 +137,11 @@ impl Tui {
             message = Some(format!("{}: {}", error.code, error.message));
         }
         let ipc_handle = if ipc {
-            Some(omacell_bus::ipc::serve_runner(
+            let limits = IpcLimits::new(loaded.config.ipc.max_frame_bytes as usize)?;
+            Some(serve_runner_with_limits(
                 default_runtime_dir(),
                 runner.handle(),
+                limits,
             )?)
         } else {
             None

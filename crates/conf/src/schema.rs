@@ -46,6 +46,8 @@ pub struct Config {
     pub layout: Layout,
     /// Host integrations.
     pub integrations: Integrations,
+    /// Local IPC transport.
+    pub ipc: Ipc,
     /// Network gate.
     pub network: Network,
     /// Lua.
@@ -307,6 +309,15 @@ pub struct Integrations {
     pub libreoffice_fallback: bool,
     /// OCR paste.
     pub ocr_paste: bool,
+}
+
+/// `[ipc]` local transport limits.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Ipc {
+    /// Maximum JSON-line bytes including the trailing newline.
+    #[schemars(range(min = 1_048_576, max = 16_777_216))]
+    pub max_frame_bytes: u64,
 }
 
 /// `[network]`.

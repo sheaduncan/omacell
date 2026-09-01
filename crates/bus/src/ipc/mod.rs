@@ -28,10 +28,15 @@ pub use discover::{
 pub use dispatch::{Dispatch, dispatch_bus_request};
 #[cfg(unix)]
 pub use protocol::{
-    ControlOp, Discovery, EVENT_TYPES, FrameBuf, MAX_CONNECTIONS, MAX_EVENT_FILTERS,
+    ControlOp, Discovery, EVENT_TYPES, FrameBuf, IpcLimits, MAX_CONNECTIONS, MAX_EVENT_FILTERS,
     MAX_EVENT_QUEUE, MAX_EVENT_QUEUE_BYTES, MAX_FRAME_BYTES, MAX_JSON_DEPTH, Mode, Reply, Request,
-    ServerRecord, VERSION, check_json_depth, decode_request, decode_request_bytes, encode_command,
-    encode_control, encode_line, event_type_name,
+    ServerRecord, VERSION, check_json_depth, decode_request, decode_request_bytes,
+    decode_request_bytes_with_limits, decode_request_with_limits, encode_command,
+    encode_command_with_limits, encode_control, encode_control_with_limits, encode_line,
+    encode_line_with_limits, encode_reply_with_limits, event_type_name,
 };
 #[cfg(unix)]
-pub use server::{IpcHandle, serve, serve_runner, serve_shared};
+pub use server::{
+    IpcHandle, serve, serve_runner, serve_runner_with_limits, serve_shared,
+    serve_shared_with_limits, serve_with_limits,
+};

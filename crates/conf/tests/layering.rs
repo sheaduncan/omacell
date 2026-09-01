@@ -20,6 +20,7 @@ fn package_defaults_parse() {
     let c = package_defaults().unwrap();
     assert_eq!(c.schema, 1);
     assert!(c.appearance.grid_lines);
+    assert_eq!(c.ipc.max_frame_bytes, 16_777_216);
     assert!(!c.network.enabled);
     assert!(!c.ai.enabled);
 }
@@ -117,6 +118,27 @@ fn invalid_enums_and_ranges_are_rejected() {
     let err = load(&paths, &[], None).unwrap_err();
     assert_eq!(err.code, omacell_conf::error::codes::CONFIG_SCHEMA);
     assert!(err.message.contains("calc.mode"), "{err}");
+}
+
+#[test]
+fn ipc_frame_limit_is_tunable_within_the_hard_ceiling() {
+    let (_t, paths) = temp_paths();
+    std::fs::write(
+        paths.user_config_toml(),
+        "[ipc]\nmax_frame_bytes = 1048576\n",
+    )
+    .unwrap();
+    let loaded = load(&paths, &[], None).unwrap();
+    assert_eq!(loaded.config.ipc.max_frame_bytes, 1_048_576);
+
+    std::fs::write(
+        paths.user_config_toml(),
+        "[ipc]\nmax_frame_bytes = 16777217\n",
+    )
+    .unwrap();
+    let err = load(&paths, &[], None).unwrap_err();
+    assert_eq!(err.code, omacell_conf::error::codes::CONFIG_SCHEMA);
+    assert!(err.message.contains("ipc.max_frame_bytes"), "{err}");
 }
 
 #[test]

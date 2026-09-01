@@ -169,7 +169,7 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 `AGENT` · **Decision: don't hide; scope by origin.** A script driving a live TUI may legitimately undo. Allow for `Origin::Ipc`/`Script`, refuse for agent origins, document. **L**
 
 ### WP-07b.2 1 MiB frame / 32 connections
-`AGENT` · **Decision: raise the frame cap to 16 MiB (config-tunable), keep 32 connections.** A 100k-cell `range.set` or `edit.findall` result exceeds 1 MiB as JSON. Keep the `ipc.limit` error and add a hint to chunk. **M**
+`CLOSED` · **Decision implemented: raise the frame cap to 16 MiB (config-tunable), keep 32 connections.** A 100k-cell `range.set` or `edit.findall` result exceeds 1 MiB as JSON. `[ipc].max_frame_bytes` accepts 1–16 MiB and is enforced by servers, CLI clients, and the Python bridge after restart. Invalid configured/programmatic limits use `ipc.limit`; oversized wire frames preserve the frozen `ipc.frame` classification and add a hint to chunk. **M**
 
 ---
 

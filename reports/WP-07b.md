@@ -80,7 +80,8 @@ Discovery record (`<pid>.instance`):
 
 | Limit | Value |
 |---|---|
-| `MAX_FRAME_BYTES` | 1,048,576 |
+| `MAX_FRAME_BYTES` | 16,777,216 hard ceiling and default |
+| `[ipc].max_frame_bytes` | 1,048,576–16,777,216; restart to apply |
 | `MAX_JSON_DEPTH` | 32 |
 | `MAX_CONNECTIONS` | 32 |
 | `MAX_EVENT_FILTERS` | 16 |
@@ -111,7 +112,8 @@ Review hardening added before merge:
 - Subscription filters and the 256 KiB budget are enforced before events enter a client queue; unrelated events cannot force a filtered subscriber to overflow.
 - Client-side unsolicited events remain FIFO. Reply/event envelopes reject unknown fields and unsupported versions, while a valid JSON `null` result remains distinguishable from a missing result.
 - Discovery treats metadata as untrusted: socket paths are reconstructed from the validated pid, instance files are size/type/owner checked, and failed startup removes a newly bound socket without following or deleting a pre-existing symlink.
-- The 1 MiB limit now includes the newline without transiently buffering an oversized frame, and control-op schemas exactly match the decoder's op-specific fields.
+- The active frame limit includes the newline without transiently buffering an oversized frame, and control-op schemas exactly match the decoder's op-specific fields.
+- The hard/default limit is now 16 MiB and `[ipc].max_frame_bytes` can lower it to 1–16 MiB. Server decode/encode, clients, MCP, and the Python stdio bridge use the same validated limit within each process.
 
 The post-WP-16 integration adds focused-instance routing without changing IPC
 v1. `IpcHandle::set_focused` maintains a zero-byte, owned mode-0600
@@ -124,10 +126,10 @@ recycled markers, and marker symlinks are refused without touching their target.
 
 | Item | Where |
 |---|---|
-| `ipc::serve`, `IpcHandle` | bind `{runtime_dir}/{pid}.sock`; `set_focused` publishes frontend focus |
-| `ipc::IpcClient` | `connect` / `connect_focused` / `connect_newest` / `connect_default` / `command` / `control` / `apply` / `revert` / `subscribe` / `poll_record` |
+| `ipc::serve`, `ipc::serve_with_limits`, `IpcHandle` | bind `{runtime_dir}/{pid}.sock`; configured variants enforce `IpcLimits`; `set_focused` publishes frontend focus |
+| `ipc::IpcClient` | `connect` / `connect_with_limits` / `connect_focused` / `connect_newest` / `connect_default` / `connect_default_with_limits` / `command` / `control` / `apply` / `revert` / `subscribe` / `poll_record` |
 | `ipc::{Request, Reply, ServerRecord, Discovery, Mode, ControlOp}` | v1 envelopes |
-| `ipc::{decode_request, decode_request_bytes, MAX_*}` | decoder + limits |
+| `ipc::{decode_request, decode_request_bytes, IpcLimits, MAX_*}` | decoder + hard/runtime limits |
 | `ipc::{discover_focused, discover_default, discover_newest, default_runtime_dir}` | focused/default/newest live owned instance selection |
 | Error codes | `ipc.version`, `ipc.frame`, `ipc.protocol`, `ipc.mode`, `ipc.limit`, `ipc.socket`, `ipc.timeout`, `ipc.disconnected`, `ipc.overflow` |
 | Schemas | `docs/schemas/ipc/*.schema.json` |
@@ -157,6 +159,12 @@ Host: local Linux.
   synthetically newer live instance, startup/shutdown cleanup, and symlink
   refusal; the black-box CLI test reaches that focused instance by default;
   the GUI lifecycle test publishes and clears native focus.
+- Frame-limit integration: `just check` is green, including strict workspace
+  Clippy, all workspace tests, and rustdoc. Focused suites pass with 10 protocol
+  tests, 21 server/client tests, 15 configuration-layering tests, and 3 CLI
+  scripting tests. Coverage includes >1 MiB default requests, a lowered 1 MiB
+  setting, client and server rejection, and oversized replies converted into a
+  correlated `ipc.frame` response.
 
 No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-approved). `libfuzzer-sys` remains fuzz-workspace only.
 
@@ -164,13 +172,26 @@ No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-a
 
 1. **Resolved:** do not hide undo/redo from same-user IPC or script origins;
    agent origins remain changeset-only.
-2. **Pre-WP-28 integration / RFC:** keep 32 connections, but resolve the frozen
-   1 MiB frame limit by adopting the triaged configurable 16 MiB cap or a tested
-   chunking contract for 100k-cell operations.
+2. **Resolved:** keep 32 connections and raise the hard/default frame limit to
+   16 MiB, with `[ipc].max_frame_bytes` able to lower it to 1–16 MiB. Large
+   operations that exceed the active limit must be split into multiple range
+   commands.
 
 ## RFC (only if a frozen contract changed)
 
-None. Frozen WP-01 types are unchanged. IPC v1 is a new freeze point, recorded in `docs/contracts.md`.
+The owner-provided WP-07b.2 decision and instruction to complete the pre-WP-28
+integration queue approve raising the frozen frame limit from 1 MiB to a 16 MiB
+hard/default ceiling. The additive `[ipc].max_frame_bytes` key may lower the
+active limit to 1–16 MiB and is read at process startup; changing it requires a
+restart. The 32-connection cap, JSON-lines envelopes, version 1, nesting cap,
+mutation policy, and error-code taxonomy do not change. Existing peers that
+still enforce 1 MiB can reject larger frames, so the failure hint tells callers
+to split large ranges into multiple commands. Oversized frames remain
+`ipc.frame`; `ipc.limit` continues to identify invalid limit configuration and
+other resource-limit failures. With 32 simultaneously incomplete maximum-size
+frames, receive buffers are bounded at roughly 512 MiB plus connection and JSON
+overhead; operators can retain the old 1 MiB limit where that tradeoff is
+preferable.
 
 ## Checklist
 

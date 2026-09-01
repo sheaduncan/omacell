@@ -7,8 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use omacell_bus::ipc::{
-    ControlOp, Dispatch, IpcClient, MAX_FRAME_BYTES, Mode, Reply, Request, decode_request_bytes,
-    default_runtime_dir, discovered_socket, dispatch_bus_request, encode_line, list_live_instances,
+    ControlOp, Dispatch, IpcClient, IpcLimits, Mode, Reply, Request,
+    decode_request_bytes_with_limits, default_runtime_dir, discovered_socket, dispatch_bus_request,
+    encode_reply_with_limits, list_live_instances, serve_shared_with_limits,
 };
 use omacell_conf::schema::package_defaults;
 use omacell_conf::{
@@ -127,15 +128,15 @@ fn run_command(cli: &Cli, cmd: &Commands, output: Output) -> Result<(), CliError
             quiet,
             socket,
         } => cmd_ipc(
+            cli,
             command,
             payload.as_deref(),
             *all,
             *quiet || cli.quiet,
             socket.as_ref(),
-            cli.dry_run,
             output,
         ),
-        Commands::Changeset { cmd } => cmd_changeset(cmd, cli.dry_run, output),
+        Commands::Changeset { cmd } => cmd_changeset(cli, cmd, output),
         Commands::Diff { a, b } => cmd_diff(a, b, output),
         Commands::Convert {
             input,
@@ -1029,6 +1030,7 @@ fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), 
         );
     }
     let app = App::bootstrap_live(cli, book)?;
+    let ipc_limits = IpcLimits::new(app.loaded().config.ipc.max_frame_bytes as usize)?;
     crate::log::init(&app.paths, cli.verbose, cli.quiet, true);
     let reload = app.reload_handle();
     let crate::app::App {
@@ -1048,7 +1050,7 @@ fn cmd_mcp(cli: &Cli, socket: Option<&Path>, book: Option<&Path>) -> Result<(), 
     );
     let runtime = omacell_bus::ipc::default_runtime_dir();
     let bus = std::sync::Arc::new(std::sync::Mutex::new(bus));
-    let ipc = omacell_bus::ipc::serve_shared(runtime, std::sync::Arc::clone(&bus))?;
+    let ipc = serve_shared_with_limits(runtime, std::sync::Arc::clone(&bus), ipc_limits)?;
     let handler = crate::mcp::OmacellMcp::new(bus, std::sync::Arc::new(std::sync::Mutex::new(ctx)));
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1074,14 +1076,16 @@ fn cmd_diff(a: &Path, b: &Path, output: Output) -> Result<(), CliError> {
 }
 
 fn cmd_ipc(
+    cli: &Cli,
     command: &str,
     json: Option<&str>,
     all: bool,
     quiet: bool,
     socket: Option<&PathBuf>,
-    dry_run: bool,
     output: Output,
 ) -> Result<(), CliError> {
+    let limits = ipc_limits_for_cli(cli)?;
+    let dry_run = cli.dry_run;
     let args = match json {
         Some(text) => serde_json::from_str(text)
             .map_err(|e| CliError::new("cli.json", e.to_string()).exit(EXIT_USAGE))?,
@@ -1113,7 +1117,7 @@ fn cmd_ipc(
         let mut first_error = None;
         for inst in &instances {
             let path = discovered_socket(&dir, inst);
-            let reply = ipc_one(&path, command, &args, dry_run)?;
+            let reply = ipc_one(&path, command, &args, dry_run, limits)?;
             if !reply.ok {
                 failed += 1;
                 if first_error.is_none() {
@@ -1148,9 +1152,9 @@ fn cmd_ipc(
         return Ok(());
     }
     let mut client = if let Some(socket) = socket {
-        IpcClient::connect(socket)?
+        IpcClient::connect_with_limits(socket, limits)?
     } else {
-        IpcClient::connect_default()?
+        IpcClient::connect_default_with_limits(limits)?
     };
     let reply = ipc_command(&mut client, command, args, dry_run)?;
     if !reply.ok {
@@ -1172,9 +1176,20 @@ fn ipc_one(
     command: &str,
     args: &serde_json::Value,
     dry_run: bool,
+    limits: IpcLimits,
 ) -> Result<omacell_bus::ipc::Reply, CliError> {
-    let mut client = IpcClient::connect(path)?;
+    let mut client = IpcClient::connect_with_limits(path, limits)?;
     ipc_command(&mut client, command, args.clone(), dry_run)
+}
+
+fn ipc_limits_for_cli(cli: &Cli) -> Result<IpcLimits, CliError> {
+    let paths = Paths::from_env()?;
+    let mut options = LoadOptions::from_process();
+    options.config_file = cli.config.clone();
+    options.theme_override = cli.theme.clone();
+    options.cli_sets = cli.sets.clone();
+    let loaded = load_with_options(&paths, &options)?;
+    Ok(IpcLimits::new(loaded.config.ipc.max_frame_bytes as usize)?)
 }
 
 fn ipc_command(
@@ -1203,8 +1218,8 @@ fn control_op(command: &str) -> Option<ControlOp> {
     }
 }
 
-fn cmd_changeset(cmd: &ChangesetCmd, dry_run: bool, output: Output) -> Result<(), CliError> {
-    if dry_run
+fn cmd_changeset(cli: &Cli, cmd: &ChangesetCmd, output: Output) -> Result<(), CliError> {
+    if cli.dry_run
         && matches!(
             cmd,
             ChangesetCmd::Apply { .. } | ChangesetCmd::Revert { .. } | ChangesetCmd::Export { .. }
@@ -1214,36 +1229,36 @@ fn cmd_changeset(cmd: &ChangesetCmd, dry_run: bool, output: Output) -> Result<()
         return Ok(());
     }
     match cmd {
-        ChangesetCmd::List => cmd_ipc("changeset.list", None, false, true, None, false, output),
+        ChangesetCmd::List => cmd_ipc(cli, "changeset.list", None, false, true, None, output),
         ChangesetCmd::Show { id } => cmd_ipc(
+            cli,
             "changeset.get",
             Some(&serde_json::json!({"id": id}).to_string()),
             false,
             true,
             None,
-            false,
             output,
         ),
         ChangesetCmd::Apply { id } => cmd_ipc(
+            cli,
             "changeset.apply",
             Some(&serde_json::json!({"id": id}).to_string()),
             false,
             true,
             None,
-            false,
             output,
         ),
         ChangesetCmd::Revert { id } => cmd_ipc(
+            cli,
             "changeset.revert",
             Some(&serde_json::json!({"id": id}).to_string()),
             false,
             true,
             None,
-            false,
             output,
         ),
         ChangesetCmd::Export { id, omc } => {
-            let mut client = IpcClient::connect_default()?;
+            let mut client = IpcClient::connect_default_with_limits(ipc_limits_for_cli(cli)?)?;
             let reply = client.control(ControlOp::ChangesetGet, &[], Some(id))?;
             if !reply.ok {
                 let err = reply
@@ -1465,6 +1480,7 @@ fn cmd_run_python(
     if !app.loaded().config.scripting.enabled {
         return Err(CliError::new("lua.disabled", "scripting is disabled"));
     }
+    let ipc_limits = IpcLimits::new(app.loaded().config.ipc.max_frame_bytes as usize)?;
     let mut child = std::process::Command::new("python3")
         .arg("-u")
         .arg("--")
@@ -1488,15 +1504,17 @@ fn cmd_run_python(
     let bridge_result = (|| -> Result<(), CliError> {
         loop {
             let mut frame = Vec::new();
-            let mut limited = child_out.by_ref().take((MAX_FRAME_BYTES + 1) as u64);
+            let mut limited = child_out
+                .by_ref()
+                .take((ipc_limits.max_frame_bytes() + 1) as u64);
             let n = std::io::BufRead::read_until(&mut limited, b'\n', &mut frame)
                 .map_err(|e| CliError::new("lua.python", e.to_string()))?;
             if n == 0 {
                 break;
             }
-            let request = decode_request_bytes(&frame)?;
+            let request = decode_request_bytes_with_limits(&frame, ipc_limits)?;
             let reply = dispatch_python_request(&mut app, request);
-            let line = encode_line(&reply)?;
+            let line = encode_reply_with_limits(&reply, ipc_limits)?;
             child_in
                 .write_all(line.as_bytes())
                 .map_err(|e| CliError::new("lua.python", e.to_string()))?;

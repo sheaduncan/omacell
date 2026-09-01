@@ -106,6 +106,12 @@ import sys
 print(json.dumps({"v": 1, "id": 7, "op": "ping"}), flush=True)
 reply = json.loads(sys.stdin.readline())
 assert reply == {"v": 1, "id": 7, "ok": True, "result": {"pong": True}}
+
+print(json.dumps({"v": 1, "id": 8, "cmd": "cell.set", "args": {"ref": "A1", "input": "x" * 1100000}, "mode": "propose"}), flush=True)
+reply = json.loads(sys.stdin.readline())
+assert reply["id"] == 8
+assert reply["ok"] is False
+assert reply["error"]["code"] != "ipc.frame"
 "#,
     )
     .unwrap();
@@ -115,4 +121,16 @@ assert reply == {"v": 1, "id": 7, "ok": True, "result": {"pong": True}}
         .assert()
         .success()
         .stdout(predicate::str::contains("ok"));
+
+    command(dir.path())
+        .args([
+            "--set",
+            "ipc.max_frame_bytes=1048576",
+            "run",
+            "--python",
+            script.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ipc.frame"));
 }
