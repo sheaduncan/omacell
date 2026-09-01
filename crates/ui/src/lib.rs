@@ -28,7 +28,10 @@ mod viewport;
 
 pub use clipboard::{ClipboardPayload, INTERNAL_MIME};
 pub use complete::{Completion, CompletionSource, complete_functions};
-pub use deferred::{DEFERRED_COMMANDS, DeferredCommand, owner as deferred_owner};
+pub use deferred::{
+    COMPOSITION_COMMANDS, DEFERRED_COMMANDS, DeferredCommand, is_composition_command,
+    owner as deferred_owner,
+};
 pub use edit::{EditState, EditSurface, canonicalize_entry};
 pub use event::{KeyCode, KeyEvent};
 pub use fill::{FillKind, detect_series, extend_series};
