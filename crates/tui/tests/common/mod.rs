@@ -1,7 +1,7 @@
 //! Shared TUI test harness (no second config load; no watcher).
 #![allow(dead_code)]
 
-use omacell_bus::{Bus, LongOps};
+use omacell_bus::{Bus, CommandKind, CommandSpec, Effect, Exposure, LongOps};
 use omacell_conf::{ConfigStore, LoadOptions, Paths};
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
@@ -11,7 +11,77 @@ use omacell_tui::{Launch, Tui};
 use omacell_ui::{KeymapRoots, UiSession, register_ui_commands};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EmptyArgs {}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FileSaveAsArgs {
+    path: String,
+}
+
+fn register_file_lifecycle(bus: &mut Bus) {
+    let register_empty =
+        |bus: &mut Bus, id: &'static str, doc: &'static str, keys: &'static [&'static str]| {
+            bus.registry_mut()
+                .register::<EmptyArgs, _>(
+                    CommandSpec {
+                        id,
+                        doc,
+                        kind: CommandKind::Mutating,
+                        changeset_eligible: false,
+                        exposure: Exposure::Public,
+                        default_keys: keys,
+                    },
+                    move |ctx, _args| {
+                        if ctx.is_preflight() {
+                            return Ok(Effect::query(json!({})));
+                        }
+                        match id {
+                            "file.new" => {
+                                *ctx.workbook() = Workbook::new();
+                                Ok(Effect {
+                                    events: vec![omacell_core::event::Event::WorkbookOpened {
+                                        path: None,
+                                    }],
+                                    result: json!({"path": null}),
+                                    auto_recalc: false,
+                                    ..Effect::default()
+                                })
+                            }
+                            "file.close" => Ok(Effect::query(json!({"close": true}))),
+                            _ => unreachable!(),
+                        }
+                    },
+                )
+                .unwrap();
+        };
+    register_empty(bus, "file.new", "Create a new workbook", &["Ctrl+N"]);
+    register_empty(
+        bus,
+        "file.close",
+        "Close the current workbook window",
+        &["Ctrl+W"],
+    );
+    bus.registry_mut()
+        .register::<FileSaveAsArgs, _>(
+            CommandSpec {
+                id: "file.saveas",
+                doc: "Save the workbook to a new path",
+                kind: CommandKind::Mutating,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &["F12"],
+            },
+            |_ctx, args| Ok(Effect::query(json!({"path": args.path}))),
+        )
+        .unwrap();
+}
 
 pub struct Harness {
     pub _dir: tempfile::TempDir,
@@ -98,6 +168,7 @@ fn harness_opts_with_workbook(
     omacell_bus::register_analysis_commands(bus.registry_mut()).unwrap();
     omacell_lua::register_script_commands(bus.registry_mut(), omacell_lua::ScriptGate::default())
         .unwrap();
+    register_file_lifecycle(&mut bus);
     register_ui_commands(bus.registry_mut(), &ui).unwrap();
 
     let tui = Tui::new(

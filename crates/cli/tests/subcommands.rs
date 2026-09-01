@@ -142,8 +142,11 @@ fn commands_json_includes_file_and_theme() {
     cmd.args(["--json", "commands"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("file.new"))
         .stdout(predicate::str::contains("file.open"))
         .stdout(predicate::str::contains("file.save"))
+        .stdout(predicate::str::contains("file.saveas"))
+        .stdout(predicate::str::contains("file.close"))
         .stdout(predicate::str::contains("file.export"))
         .stdout(predicate::str::contains("file.print"))
         .stdout(predicate::str::contains("theme.reload"));

@@ -28,6 +28,8 @@ omacell-lua = { path = "../lua", version = "0.0.0" }
 omacell-io = { path = "../io", version = "0.0.0" }
 criterion = { workspace = true }
 insta = "1"
+schemars = { workspace = true }
+serde = { workspace = true }
 tempfile = "3"
 
 [[bench]]

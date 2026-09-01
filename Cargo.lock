@@ -4077,6 +4077,8 @@ dependencies = [
  "omacell-lua",
  "omacell-ui",
  "ratatui",
+ "schemars",
+ "serde",
  "serde_json",
  "tempfile",
 ]

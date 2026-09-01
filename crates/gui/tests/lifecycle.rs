@@ -178,3 +178,96 @@ fn clicking_a_sheet_tab_updates_the_saved_workbook_active_sheet() {
     );
     assert_eq!(harness.state().ui_session().selection().sheet, data);
 }
+
+#[test]
+fn file_lifecycle_commands_confirm_discard_and_reconcile_frontend_state() {
+    let parts = launch_theme(None);
+    let save_as = parts._dir.path().join("renamed.csv");
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .execute_cmd(
+            "cell.set",
+            serde_json::json!({"ref": "A1", "input": "changed"}),
+        )
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert!(harness.state().title().starts_with('•'));
+
+    harness
+        .state_mut()
+        .execute_cmd("file.new", serde_json::json!({}))
+        .unwrap();
+    assert!(harness.state().message().unwrap().contains("unsaved"));
+    assert!(!harness.state().runner().is_busy());
+    harness
+        .state_mut()
+        .execute_cmd("file.new", serde_json::json!({}))
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert_eq!(harness.state().title(), "untitled — Omacell");
+    let snapshot = harness.state().runner().snapshot();
+    assert!(
+        snapshot
+            .workbook
+            .get(snapshot.workbook.active_sheet(), 0, 0)
+            .unwrap()
+            .is_none()
+    );
+
+    harness
+        .state_mut()
+        .execute_cmd(
+            "cell.set",
+            serde_json::json!({"ref": "A1", "input": "saved"}),
+        )
+        .unwrap();
+    wait_tasks(&mut harness);
+    harness
+        .state_mut()
+        .execute_cmd(
+            "file.saveas",
+            serde_json::json!({"path": save_as.display().to_string()}),
+        )
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert_eq!(harness.state().title(), "renamed.csv — Omacell");
+
+    harness
+        .state_mut()
+        .execute_cmd("file.close", serde_json::json!({}))
+        .unwrap();
+    assert!(harness.state().close_requested());
+}
+
+#[test]
+fn required_argument_key_opens_the_schema_prompt() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::F(12)))
+        .unwrap();
+
+    let palette = harness.state().ui_session().palette();
+    assert!(palette.open);
+    assert!(palette.prompt.unwrap().contains("path"));
+    assert!(!harness.state().runner().is_busy());
+}
+
+fn wait_tasks(harness: &mut Harness<'_, Gui>) {
+    let started = Instant::now();
+    while harness.state().runner().tracked_tasks() != 0 {
+        harness.step();
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+    harness.step();
+}

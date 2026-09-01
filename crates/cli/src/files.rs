@@ -1,4 +1,4 @@
-//! `file.open` / `file.save` / `file.export` / `file.print` adapters over `omacell-io`.
+//! File lifecycle, save/export, and print adapters over `omacell-io`.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use omacell_bus::{Bus, CommandContext, CommandKind, CommandSpec, Effect, Exposure};
 use omacell_conf::ReloadHandle;
+use omacell_core::date_system::DateSystem;
 use omacell_core::error::CoreError;
 use omacell_core::event::Event;
 use omacell_core::workbook::Workbook;
@@ -86,7 +87,26 @@ impl FileSession {
     pub fn current_path(&self) -> Option<PathBuf> {
         self.lock().path.clone()
     }
+
+    fn detach_workbook(&self) {
+        let ai = {
+            let mut state = self.lock();
+            state.path = None;
+            state.kind = None;
+            state.package = None;
+            state.extras.clear();
+            state.ai.clone()
+        };
+        if let Some(runtime) = ai {
+            runtime.replace_workbook_cache(omacell_ai::cache::AiCache::default());
+        }
+    }
 }
+
+/// `file.new` / `file.close`
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyFileArgs {}
 
 /// `file.open`
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -103,6 +123,14 @@ pub struct FileSaveArgs {
     /// Destination; default is the path from `file.open`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+}
+
+/// `file.saveas`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileSaveAsArgs {
+    /// New destination path (extension selects the file format).
+    pub path: String,
 }
 
 /// `file.export`
@@ -133,6 +161,18 @@ pub struct FilePrintArgs {
 
 /// Register file adapters on an existing bus.
 pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(), CoreError> {
+    let new_session = session.clone();
+    bus.registry_mut().register::<EmptyFileArgs, _>(
+        CommandSpec {
+            id: "file.new",
+            doc: "Create a new workbook",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+N"],
+        },
+        move |ctx, _args| file_new(ctx, &new_session),
+    )?;
     let open_session = session.clone();
     bus.registry_mut().register::<FileOpenArgs, _>(
         CommandSpec {
@@ -156,6 +196,37 @@ pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(),
             default_keys: &["Ctrl+S"],
         },
         move |ctx, args| file_save(ctx, &save_session, args),
+    )?;
+    let save_as_session = session.clone();
+    bus.registry_mut().register::<FileSaveAsArgs, _>(
+        CommandSpec {
+            id: "file.saveas",
+            doc: "Save the workbook to a new path",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["F12"],
+        },
+        move |ctx, args| {
+            file_save(
+                ctx,
+                &save_as_session,
+                FileSaveArgs {
+                    path: Some(args.path),
+                },
+            )
+        },
+    )?;
+    bus.registry_mut().register::<EmptyFileArgs, _>(
+        CommandSpec {
+            id: "file.close",
+            doc: "Close the current workbook window",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+W"],
+        },
+        file_close,
     )?;
     let export_session = session.clone();
     bus.registry_mut().register::<FileExportArgs, _>(
@@ -182,6 +253,45 @@ pub fn register_file_commands(bus: &mut Bus, session: FileSession) -> Result<(),
         move |ctx, args| file_print(ctx, &print_session, args),
     )?;
     Ok(())
+}
+
+fn file_new(ctx: &mut CommandContext<'_>, session: &FileSession) -> Result<Effect, CoreError> {
+    if ctx.is_preflight() {
+        return Ok(Effect::query(serde_json::json!({"path": null})));
+    }
+    let behavior = session
+        .lock()
+        .config
+        .as_ref()
+        .map(|config| config.snapshot().config.behavior.clone());
+    let mut workbook = Workbook::new();
+    if let Some(behavior) = behavior {
+        workbook.settings_mut().date_system = match behavior.date_system {
+            1904 => DateSystem::Excel1904,
+            _ => DateSystem::Excel1900,
+        };
+        workbook.settings_mut().precision_as_displayed = behavior.precision_as_displayed;
+        for sheet in 2..=behavior.default_sheets {
+            workbook.add_sheet(format!("Sheet{sheet}"))?;
+        }
+    }
+    let recalc = ctx.recalc_staged(&mut workbook);
+    if recalc.cancelled || ctx.is_cancelled() {
+        return Err(cancelled());
+    }
+    session.detach_workbook();
+    *ctx.workbook() = workbook;
+    Ok(Effect {
+        events: vec![Event::WorkbookOpened { path: None }],
+        result: serde_json::json!({"path": null}),
+        auto_recalc: false,
+        rebuild: false,
+        ..Effect::default()
+    })
+}
+
+fn file_close(_ctx: &mut CommandContext<'_>, _args: EmptyFileArgs) -> Result<Effect, CoreError> {
+    Ok(Effect::query(serde_json::json!({"close": true})))
 }
 
 fn file_open(

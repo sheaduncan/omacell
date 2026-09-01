@@ -93,6 +93,15 @@ eligible. Search results return `{count, sheet, row, col}` when a match is
 selected; error explanation returns the existing optional
 `ErrorExplanation` JSON representation.
 
+The WP-16 file-lifecycle completion adds public `file.new`, `file.close`, and
+`file.saveas` commands. New and close use the closed empty-object schema;
+save-as requires one string `path`. All three are non-changeset-eligible
+mutating commands. `file.new` replaces the workbook, detaches its path, and
+emits `WorkbookOpened { path: None }`; `file.close` returns the frontend control
+result `{close: true}`; `file.saveas` uses the existing save pipeline and makes
+the destination the active path. The catalog envelope remains schema version 1
+and existing command ids and schemas are unchanged.
+
 ## IPC v1 — `docs/schemas/ipc/` (WP-07b)
 
 Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply, event/overflow, and discovery records. Mutating changeset-eligible commands default to `propose`; internal command ids are never addressable on the socket. Limits (`MAX_FRAME_BYTES` 1 MiB, `MAX_JSON_DEPTH` 32, `MAX_CONNECTIONS` 32) are part of the freeze.

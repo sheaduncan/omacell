@@ -47,6 +47,16 @@ struct FileOpenArgs {
     path: String,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EmptyArgs {}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FileSaveAsArgs {
+    path: String,
+}
+
 fn register_theme_reload(
     bus: &mut Bus,
     handle: omacell_conf::ReloadHandle,
@@ -102,6 +112,54 @@ fn register_file_open(
     )
 }
 
+fn register_file_lifecycle(bus: &mut Bus) -> Result<(), omacell_core::error::CoreError> {
+    bus.registry_mut().register::<EmptyArgs, _>(
+        CommandSpec {
+            id: "file.new",
+            doc: "Create a new workbook",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+N"],
+        },
+        |ctx, _args| {
+            if ctx.is_preflight() {
+                return Ok(Effect::query(json!({"path": null})));
+            }
+            *ctx.workbook() = Workbook::new();
+            Ok(Effect {
+                events: vec![Event::WorkbookOpened { path: None }],
+                result: json!({"path": null}),
+                auto_recalc: false,
+                ..Effect::default()
+            })
+        },
+    )?;
+    bus.registry_mut().register::<EmptyArgs, _>(
+        CommandSpec {
+            id: "file.close",
+            doc: "Close the current workbook window",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+W"],
+        },
+        |_ctx, _args| Ok(Effect::query(json!({"close": true}))),
+    )?;
+    bus.registry_mut().register::<FileSaveAsArgs, _>(
+        CommandSpec {
+            id: "file.saveas",
+            doc: "Save the workbook to a new path",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["F12"],
+        },
+        |_ctx, args| Ok(Effect::query(json!({"path": args.path}))),
+    )?;
+    Ok(())
+}
+
 pub fn launch_theme(theme: Option<&str>) -> HarnessParts {
     launch_opts(theme, Workbook::new(), false)
 }
@@ -139,6 +197,7 @@ pub fn launch_opts(theme: Option<&str>, workbook: Workbook, watch: bool) -> Harn
     register_theme_reload(&mut bus, store.handle()).unwrap();
     let open_count = Arc::new(AtomicUsize::new(0));
     register_file_open(&mut bus, Arc::clone(&open_count)).unwrap();
+    register_file_lifecycle(&mut bus).unwrap();
     for (cell, input) in [
         ("A1", "Hello"),
         ("B1", "1234.5"),
