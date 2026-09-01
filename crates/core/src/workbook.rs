@@ -2741,7 +2741,11 @@ impl Workbook {
         }
     }
 
-    /// Insert rows. Formula rewrite is TODO(WP-03)/TODO(WP-17).
+    /// Shift row storage down without rewriting formulas or side tables.
+    ///
+    /// Interactive structural edits use [`crate::ops::insert_rows`], which
+    /// performs the workbook-wide formula and side-table rewrite around this
+    /// low-level storage operation.
     pub fn insert_rows(&mut self, id: SheetId, at: u32, count: u32) -> Result<(), CoreError> {
         if count == 0 {
             return Ok(());
@@ -2759,7 +2763,11 @@ impl Workbook {
         Ok(())
     }
 
-    /// Delete rows. Formula rewrite is TODO(WP-03)/TODO(WP-17).
+    /// Shift row storage up without rewriting formulas or side tables.
+    ///
+    /// Interactive structural edits use [`crate::ops::delete_rows`], which
+    /// performs the workbook-wide formula and side-table rewrite around this
+    /// low-level storage operation.
     pub fn delete_rows(&mut self, id: SheetId, at: u32, count: u32) -> Result<(), CoreError> {
         if count == 0 {
             return Ok(());

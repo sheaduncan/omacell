@@ -19,7 +19,7 @@ mod reload;
 mod run;
 
 pub use cli::command;
-pub use error::{EXIT_ERROR, EXIT_NYI, EXIT_OK, EXIT_USAGE};
+pub use error::{EXIT_ERROR, EXIT_OK, EXIT_USAGE};
 pub use files::{FileSession, register_file_commands};
 pub use reload::{register_theme_reload, spawn_sigusr1_reloader};
 pub use run::{run, write_dist};

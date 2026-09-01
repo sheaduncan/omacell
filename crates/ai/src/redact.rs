@@ -56,30 +56,36 @@ pub struct Suggestion {
 
 fn email_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}").expect("email"))
+    RE.get_or_init(|| compile_static(r"(?i)[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}"))
 }
 
 fn national_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").expect("nid"))
+    RE.get_or_init(|| compile_static(r"\b\d{3}-\d{2}-\d{4}\b"))
 }
 
 fn iban_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b").expect("iban"))
+    RE.get_or_init(|| compile_static(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b"))
 }
 
 fn card_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b(?:\d[ \-]?){13,19}\b").expect("card"))
+    RE.get_or_init(|| compile_static(r"\b(?:\d[ \-]?){13,19}\b"))
 }
 
 fn phone_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?:\+\d{1,3}[\s\-.]?)?(?:\(?\d{2,4}\)?[\s\-.]?)?\d{3,4}[\s\-.]?\d{4}")
-            .expect("phone")
+        compile_static(r"(?:\+\d{1,3}[\s\-.]?)?(?:\(?\d{2,4}\)?[\s\-.]?)?\d{3,4}[\s\-.]?\d{4}")
     })
+}
+
+fn compile_static(pattern: &'static str) -> Regex {
+    match Regex::new(pattern) {
+        Ok(regex) => regex,
+        Err(error) => unreachable!("invalid built-in redaction pattern {pattern:?}: {error}"),
+    }
 }
 
 /// Redact detected secrets in `text`.

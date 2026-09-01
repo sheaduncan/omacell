@@ -1,4 +1,4 @@
-//! `assert_cmd` coverage for every subcommand, including stubs.
+//! `assert_cmd` coverage for every subcommand.
 
 use std::path::PathBuf;
 

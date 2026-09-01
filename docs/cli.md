@@ -9,7 +9,6 @@ The `omacell` binary is a thin adapter over the command bus, file I/O, and confi
 | 0 | Success, or `--help` / `--version` |
 | 1 | Operational error (I/O, config, command, IPC) |
 | 2 | Usage error (unknown flag, missing argument) |
-| 3 | Stub: the subcommand arrives in a later work package |
 
 `--json` does not change the exit code. On failure it writes `{code, message, hint}` to stderr.
 
@@ -24,10 +23,6 @@ The `omacell` binary is a thin adapter over the command bus, file I/O, and confi
 ## Commands
 
 See `omacell --help` and the per-command help snapshots. `omacell --tui [file]` launches the terminal UI (WP-15). Without a TTY it exits 1 with `tui.tty` rather than hanging. Bare `omacell [file]` launches the GUI (WP-16). Without `WAYLAND_DISPLAY`/`DISPLAY` it exits 1 with `gui.display`.
-
-Stubs that exit 3:
-
-- `omacell ai` (WP-22)
 
 `omacell mcp [--socket PATH] [--book FILE]` serves the MCP tool catalog over stdio or a Unix socket and also binds the WP-07b IPC socket so `omacell changeset list` can see proposals. `omacell agent "<prompt>"` hands off to `omarchy agent prompt` when a default agent is set; otherwise it prints the equivalent command and JSON `{hidden: true}`. `omacell agent diagnose [--pid] [--book]` builds the WP-19 diagnostic bundle. `omacell recalc --wait` is accepted for the skill done-checklist (async AI settle is WP-22).
 
