@@ -17,12 +17,14 @@ use omacell_core::addr::{SheetId, col_to_letters, parse_a1_cell, quote_sheet_nam
 use omacell_core::changeset::{ChangesetId, ChangesetStatus};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::print::paginate;
 use omacell_core::{PRODUCT_DISPLAY_NAME, PRODUCT_NAME};
 use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
-    AgentRole, Area, ChangesetReview, EditSurface, FormulaAssist, KeyCode, KeyEvent, KeyOutcome,
-    KeymapRoots, SessionState, UiSession, apply_local_command, apply_search_result,
+    AgentRole, Area, ChangesetReview, ClipboardPayload, EditSurface, FormulaAssist, KeyCode,
+    KeyEvent, KeyOutcome, KeymapRoots, SessionState, UiSession, apply_local_command,
+    apply_search_result, inject_selection_args,
 };
 use serde_json::json;
 
@@ -53,8 +55,8 @@ pub struct Launch {
 
 enum PointerDrag {
     Select { start: (u32, u16) },
-    Move { press: (u32, u16) },
-    Fill { start: (u32, u16) },
+    Move { press: (u32, u16), source: Area },
+    Fill { source: Area },
     ColResize { col: u16, start_x: f32, orig: u32 },
     RowResize { row: u32, start_y: f32, orig: u32 },
 }
@@ -96,6 +98,7 @@ pub struct Gui {
     autopilot: Option<AutopilotPolicy>,
     formula_tasks: BTreeMap<TaskId, FormulaTask>,
     completion: InlineCompletion,
+    clipboard_export: Option<String>,
     context_menu: Option<egui::Pos2>,
     file: Option<PathBuf>,
     use_shell_font: bool,
@@ -190,6 +193,7 @@ impl Gui {
             autopilot: None,
             formula_tasks: BTreeMap::new(),
             completion: InlineCompletion::default(),
+            clipboard_export: None,
             context_menu: None,
             file: None,
             use_shell_font: launch.use_shell_font,
@@ -269,6 +273,9 @@ impl Gui {
     /// Apply pending config/task events without resetting the session.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.poll_tasks();
+        if let Some(text) = self.clipboard_export.take() {
+            ctx.copy_text(text);
+        }
         let events = self.store.drain_events();
         if events.is_empty() {
             return;
@@ -329,6 +336,27 @@ impl Gui {
                         continue;
                     }
                     self.message = None;
+                    if matches!(
+                        state.command.as_str(),
+                        "edit.copy" | "edit.cut" | "edit.yank"
+                    ) {
+                        match outcome
+                            .result
+                            .as_ref()
+                            .ok_or_else(|| {
+                                CoreError::new("ui.clipboard", "copy returned no clipboard payload")
+                            })
+                            .and_then(ClipboardPayload::from_bus_result)
+                        {
+                            Ok(clipboard) => {
+                                self.clipboard_export = Some(clipboard.tsv.clone());
+                                self.ui.set_clipboard(Some(clipboard));
+                            }
+                            Err(error) => {
+                                self.message = Some(format!("{}: {}", error.code, error.message));
+                            }
+                        }
+                    }
                     if let Some(task) = self.formula_tasks.remove(&state.id)
                         && let Err(error) =
                             self.handle_formula_result(&task, outcome.result.as_ref())
@@ -1054,7 +1082,7 @@ impl Gui {
         cmd: &str,
         args: serde_json::Value,
     ) -> Result<Outcome, CoreError> {
-        let args = inject_selection_context(&self.ui, cmd, args);
+        let args = inject_selection_args(&self.ui, cmd, args);
         if self.prompt_command_args(cmd, &args) {
             return Ok(Outcome::success(json!({"prompt": true})));
         }
@@ -1292,7 +1320,7 @@ impl Gui {
     }
 
     fn choose_palette(&mut self, id: &str) -> Result<(), CoreError> {
-        let args = inject_selection_context(&self.ui, id, json!({}));
+        let args = inject_selection_args(&self.ui, id, json!({}));
         if self.prompt_command_args(id, &args) {
             return Ok(());
         }
@@ -1398,7 +1426,31 @@ impl Gui {
         let edit = self.ui.edit();
         let find_panel_open = self.ui.panel().visible.as_deref() == Some("find");
         let input = ctx.input(|i| i.clone());
+        let grid_owns_clipboard =
+            edit.is_idle() && !self.ui.palette().open && self.ui.panel().visible.is_none();
+        let clipboard_copy = grid_owns_clipboard && input::copy_requested(&input.events);
+        let clipboard_cut = grid_owns_clipboard && input::cut_requested(&input.events);
+        let clipboard_paste = grid_owns_clipboard
+            .then(|| input::pasted_text(&input.events).map(str::to_owned))
+            .flatten();
+        if clipboard_copy {
+            let _ = self.execute_cmd("edit.copy", json!({}));
+        }
+        if clipboard_cut {
+            let _ = self.execute_cmd("edit.cut", json!({}));
+        }
+        if let Some(text) = clipboard_paste.as_deref()
+            && let Err(error) = self.paste_text(text)
+        {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+        }
         for key in input::pressed_keys(&input.events) {
+            if (clipboard_copy && key.ctrl && key.code == KeyCode::Char('c'))
+                || (clipboard_cut && key.ctrl && key.code == KeyCode::Char('x'))
+                || (clipboard_paste.is_some() && key.ctrl && key.code == KeyCode::Char('v'))
+            {
+                continue;
+            }
             if toolkit_owns_key(&edit, &key)
                 || find_panel_open
                     && !key.ctrl
@@ -1454,11 +1506,7 @@ impl Gui {
                 picked = chrome::menu_bar(ui);
             });
             if let Some(cmd) = picked {
-                if cmd == "edit.copy" {
-                    self.execute_if_available(cmd, "WP-17");
-                } else {
-                    let _ = self.execute_cmd(cmd, json!({}));
-                }
+                let _ = self.execute_cmd(cmd, json!({}));
             }
         }
 
@@ -1578,11 +1626,11 @@ impl Gui {
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         if ui.button("Copy").clicked() {
-                            self.execute_if_available("edit.copy", "WP-17");
+                            let _ = self.execute_cmd("edit.copy", json!({}));
                             close = true;
                         }
                         if ui.button("Paste").clicked() {
-                            self.execute_if_available("edit.paste", "WP-17");
+                            let _ = self.execute_cmd("edit.paste", json!({}));
                             close = true;
                         }
                     });
@@ -1637,12 +1685,9 @@ impl Gui {
         }
     }
 
-    fn execute_if_available(&mut self, command: &str, owner: &str) {
-        if self.catalog.iter().any(|entry| entry.id == command) {
-            let _ = self.execute_cmd(command, json!({}));
-        } else {
-            self.message = Some(format!("{command} arrives in {owner}"));
-        }
+    fn paste_text(&mut self, text: &str) -> Result<Outcome, CoreError> {
+        let args = ClipboardPayload::text_paste_args(text, self.ui.selection().cursor)?;
+        self.execute_cmd("range.set", args)
     }
 
     fn activate_sheet(&mut self, workbook: &omacell_core::workbook::Workbook, id: SheetId) {
@@ -1671,7 +1716,7 @@ impl Gui {
         if self.grid.in_fill_handle(pos) {
             let sel = self.ui.selection();
             self.drag = Some(PointerDrag::Fill {
-                start: (sel.cursor.row, sel.cursor.col),
+                source: sel.active(),
             });
             return;
         }
@@ -1732,7 +1777,10 @@ impl Gui {
         let (r0, c0, r1, c1) = sel.active().normalized();
         let inside = row >= r0 && row <= r1 && col >= c0 && col <= c1 && (r1 > r0 || c1 > c0);
         if inside && !shift {
-            self.drag = Some(PointerDrag::Move { press: (row, col) });
+            self.drag = Some(PointerDrag::Move {
+                press: (row, col),
+                source: sel.active(),
+            });
             return;
         }
         let mut sel = sel;
@@ -1764,7 +1812,7 @@ impl Gui {
             return;
         };
         match *drag {
-            PointerDrag::Select { start } | PointerDrag::Fill { start } => {
+            PointerDrag::Select { start } => {
                 let vp = self.ui.viewport();
                 let Some((row, col)) = self.grid.hit(pos, &vp) else {
                     return;
@@ -1779,6 +1827,24 @@ impl Gui {
                     active.end.row = row;
                     active.end.col = col;
                 }
+                sel.cursor.row = row;
+                sel.cursor.col = col;
+                self.ui.set_selection(sel);
+            }
+            PointerDrag::Fill { source } => {
+                let vp = self.ui.viewport();
+                let Some((row, col)) = self.grid.hit(pos, &vp) else {
+                    return;
+                };
+                let (r0, c0, r1, c1) = source.normalized();
+                let mut start = source.start;
+                start.row = r0.min(row);
+                start.col = c0.min(col);
+                let mut end = source.end;
+                end.row = r1.max(row);
+                end.col = c1.max(col);
+                let mut sel = self.ui.selection();
+                sel.replace(Area { start, end });
                 sel.cursor.row = row;
                 sel.cursor.col = col;
                 self.ui.set_selection(sel);
@@ -1804,10 +1870,17 @@ impl Gui {
     fn handle_release(&mut self, pos: egui::Pos2, ctrl: bool) {
         let drag = self.drag.take();
         match drag {
-            Some(PointerDrag::Fill { .. }) => {
-                self.execute_if_available("edit.fillselection", "WP-17");
+            Some(PointerDrag::Fill { source }) => {
+                let dest = self.ui.selection().active();
+                let _ = self.execute_cmd(
+                    "edit.fillselection",
+                    json!({
+                        "src": source.to_range().to_a1(),
+                        "dest": dest.to_range().to_a1(),
+                    }),
+                );
             }
-            Some(PointerDrag::Move { press }) => {
+            Some(PointerDrag::Move { press, source }) => {
                 let vp = self.ui.viewport();
                 let Some((row, col)) = self.grid.hit(pos, &vp) else {
                     return;
@@ -1820,8 +1893,43 @@ impl Gui {
                     self.ui.set_selection(selection);
                     return;
                 }
-                let operation = if ctrl { "copy" } else { "move" };
-                self.message = Some(format!("drag {operation} arrives in WP-17"));
+                let (r0, c0, r1, c1) = source.normalized();
+                let dest_row = row.saturating_sub(press.0 - r0);
+                let dest_col = col.saturating_sub(press.1 - c0);
+                let Some(dest_end_row) =
+                    dest_row.checked_add(r1 - r0).filter(|row| *row < MAX_ROWS)
+                else {
+                    self.message = Some("drag destination exceeds the worksheet".into());
+                    return;
+                };
+                let Some(dest_end_col) =
+                    dest_col.checked_add(c1 - c0).filter(|col| *col < MAX_COLS)
+                else {
+                    self.message = Some("drag destination exceeds the worksheet".into());
+                    return;
+                };
+                let mut dest_start = source.start;
+                dest_start.row = dest_row;
+                dest_start.col = dest_col;
+                let mut dest_end = source.end;
+                dest_end.row = dest_end_row;
+                dest_end.col = dest_end_col;
+                let outcome = self.execute_cmd(
+                    "edit.move",
+                    json!({
+                        "src": source.to_range().to_a1(),
+                        "dest": dest_start.to_a1(),
+                        "copy": ctrl,
+                    }),
+                );
+                if outcome.as_ref().is_ok_and(|outcome| outcome.ok) {
+                    let mut selection = self.ui.selection();
+                    selection.replace(Area {
+                        start: dest_start,
+                        end: dest_end,
+                    });
+                    self.ui.set_selection(selection);
+                }
             }
             _ => {}
         }
@@ -1888,33 +1996,6 @@ impl Drop for Gui {
 }
 
 const DEFAULT_FIT_ROW: u32 = 20;
-
-fn inject_selection_context(
-    ui: &UiSession,
-    cmd: &str,
-    mut args: serde_json::Value,
-) -> serde_json::Value {
-    if matches!(cmd, "chart.fromselection" | "name.createfrom")
-        && args
-            .get("range")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .is_empty()
-    {
-        let sel = ui.selection();
-        args["range"] = json!(sel.active().to_range().to_a1());
-    }
-    if cmd.starts_with("ai.formula.")
-        && args
-            .get("ref")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .is_empty()
-    {
-        args["ref"] = json!(ui.selection().cursor.to_a1());
-    }
-    args
-}
 
 fn formula_task(command: &str, args: &serde_json::Value) -> Option<FormulaTask> {
     command.starts_with("ai.formula.").then(|| FormulaTask {

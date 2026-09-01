@@ -119,6 +119,11 @@ fn ctrl_c_remains_copy_and_ctrl_q_guards_unsaved_work() {
         outcome,
         KeyOutcome::Command { ref cmd, .. } if cmd == "edit.copy"
     ));
+    wait_tasks(&mut h.tui);
+    assert_eq!(
+        h.tui.ui().clipboard().map(|clipboard| clipboard.tsv),
+        Some("Hello".into())
+    );
     assert!(!h.tui.quit_requested());
 
     let quit = KeyEvent {
@@ -137,6 +142,127 @@ fn ctrl_c_remains_copy_and_ctrl_q_guards_unsaved_work() {
     );
     h.tui.step_key(quit).unwrap();
     assert!(h.tui.quit_requested());
+}
+
+#[test]
+fn internal_and_bracketed_text_paste_flow_through_the_bus() {
+    let mut h = harness();
+    seed_demo(&mut h.tui);
+    h.tui
+        .execute_cmd("view.select", serde_json::json!({"range": "A2"}))
+        .unwrap();
+    h.tui
+        .step_key(KeyEvent {
+            code: KeyCode::Char('c'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        })
+        .unwrap();
+    wait_tasks(&mut h.tui);
+    h.tui
+        .execute_cmd("view.select", serde_json::json!({"range": "C3"}))
+        .unwrap();
+    h.tui
+        .step_key(KeyEvent {
+            code: KeyCode::Char('v'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        })
+        .unwrap();
+    wait_tasks(&mut h.tui);
+    let snapshot = h.tui.runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    let copied = snapshot.workbook.get(sheet, 2, 2).unwrap().unwrap();
+    assert_eq!(
+        copied
+            .formula
+            .and_then(|id| snapshot.workbook.intern().formulas.get(id)),
+        Some("=D2*2")
+    );
+
+    h.tui
+        .execute_cmd("view.select", serde_json::json!({"range": "E5"}))
+        .unwrap();
+    h.tui.paste_text("7\t8\n9\t10").unwrap();
+    wait_tasks(&mut h.tui);
+    let snapshot = h.tui.runner().snapshot();
+    assert_eq!(
+        snapshot.workbook.get(sheet, 4, 4).unwrap().unwrap().value,
+        omacell_core::value::Value::Number(7.0)
+    );
+    assert_eq!(
+        snapshot.workbook.get(sheet, 5, 5).unwrap().unwrap().value,
+        omacell_core::value::Value::Number(10.0)
+    );
+}
+
+#[test]
+fn ctrl_enter_fills_the_active_selection_from_its_cursor() {
+    let mut h = harness();
+    seed_demo(&mut h.tui);
+    h.tui
+        .execute_cmd("view.select", serde_json::json!({"range": "A1:A3"}))
+        .unwrap();
+    h.tui
+        .step_key(KeyEvent {
+            code: KeyCode::Enter,
+            ctrl: true,
+            alt: false,
+            shift: false,
+        })
+        .unwrap();
+    wait_tasks(&mut h.tui);
+
+    let snapshot = h.tui.runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    for row in 0..=2 {
+        let slot = snapshot.workbook.get(sheet, row, 0).unwrap().unwrap();
+        let omacell_core::value::Value::Text(id) = slot.value else {
+            panic!("expected filled text in A{}, got {:?}", row + 1, slot.value);
+        };
+        assert_eq!(snapshot.workbook.intern().strings.get(id), Some("Hello"));
+    }
+}
+
+#[test]
+fn keyboard_cut_payload_moves_only_when_it_is_pasted() {
+    let mut h = harness();
+    seed_demo(&mut h.tui);
+    h.tui
+        .step_key(KeyEvent {
+            code: KeyCode::Char('x'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        })
+        .unwrap();
+    wait_tasks(&mut h.tui);
+    let before_paste = h.tui.runner().snapshot();
+    let sheet = before_paste.workbook.active_sheet();
+    assert!(before_paste.workbook.get(sheet, 0, 0).unwrap().is_some());
+
+    h.tui
+        .execute_cmd("view.select", serde_json::json!({"range": "B2"}))
+        .unwrap();
+    h.tui
+        .step_key(KeyEvent {
+            code: KeyCode::Char('v'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        })
+        .unwrap();
+    wait_tasks(&mut h.tui);
+
+    let snapshot = h.tui.runner().snapshot();
+    assert!(snapshot.workbook.get(sheet, 0, 0).unwrap().is_none());
+    let moved = snapshot.workbook.get(sheet, 1, 1).unwrap().unwrap();
+    let omacell_core::value::Value::Text(id) = moved.value else {
+        panic!("expected moved text, got {:?}", moved.value);
+    };
+    assert_eq!(snapshot.workbook.intern().strings.get(id), Some("Hello"));
 }
 
 #[test]

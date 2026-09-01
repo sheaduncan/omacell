@@ -446,13 +446,15 @@ pub fn paint(
                     Stroke::new(2.0_f32, theme.cursor),
                     egui::StrokeKind::Inside,
                 );
+                cursor_rect = Some(cell_rect);
+            }
+            if row == r1 && *col == c1 {
                 let handle = Rect::from_min_size(
                     pos2(cell_rect.right() - 5.0, cell_rect.bottom() - 5.0),
                     Vec2::splat(6.0),
                 );
                 painter.rect_filled(handle, 0.0, theme.cursor);
                 fill_handle = Some(handle);
-                cursor_rect = Some(cell_rect);
             }
         }
         if vp.freeze.rows > 0 && row + 1 == vp.freeze.rows {

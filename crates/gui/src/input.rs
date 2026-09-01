@@ -78,6 +78,27 @@ pub fn text_events(events: &[Event]) -> impl Iterator<Item = &str> + '_ {
     })
 }
 
+/// Whether the toolkit requested a clipboard copy this frame.
+#[must_use]
+pub fn copy_requested(events: &[Event]) -> bool {
+    events.iter().any(|event| matches!(event, Event::Copy))
+}
+
+/// Whether the toolkit requested a clipboard cut this frame.
+#[must_use]
+pub fn cut_requested(events: &[Event]) -> bool {
+    events.iter().any(|event| matches!(event, Event::Cut))
+}
+
+/// Latest toolkit-provided external clipboard text this frame.
+#[must_use]
+pub fn pasted_text(events: &[Event]) -> Option<&str> {
+    events.iter().rev().find_map(|event| match event {
+        Event::Paste(text) => Some(text.as_str()),
+        _ => None,
+    })
+}
+
 /// Primary pointer press in screen coordinates.
 #[must_use]
 pub fn pointer_press(events: &[Event]) -> Option<(egui::Pos2, bool, bool)> {

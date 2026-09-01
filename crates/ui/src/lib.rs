@@ -8,6 +8,7 @@
 mod agent_panel;
 mod assist;
 mod clipboard;
+mod command_args;
 mod complete;
 mod deferred;
 mod edit;
@@ -33,6 +34,7 @@ mod viewport;
 
 pub use agent_panel::{AgentPanel, AgentRole, AgentTurn};
 pub use clipboard::{ClipboardPayload, INTERNAL_MIME};
+pub use command_args::inject_selection_args;
 pub use complete::{Completion, CompletionSource, complete_functions};
 pub use deferred::{
     COMPOSITION_COMMANDS, DEFERRED_COMMANDS, DeferredCommand, is_composition_command,
