@@ -9,6 +9,8 @@ use std::thread::{self, JoinHandle};
 use omacell_core::changeset::{Changeset, ChangesetId, CommandCall};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
+use omacell_core::eval::{DynamicFn, FnRegistry};
+use omacell_core::event::Event;
 
 #[cfg(feature = "test-util")]
 use crate::args::EmptyArgs;
@@ -60,6 +62,18 @@ enum WorkerMsg {
         args: serde_json::Value,
         reply: SyncSender<Result<DryRun, CoreError>>,
     },
+    RegisterFunction {
+        def: DynamicFn,
+        reply: SyncSender<Result<(), CoreError>>,
+    },
+    RefreshFunctions {
+        reply: SyncSender<Result<(), CoreError>>,
+    },
+    ReplaceFunctions {
+        previous: BTreeSet<String>,
+        current: Vec<DynamicFn>,
+        reply: SyncSender<Result<(), CoreError>>,
+    },
     Shutdown,
 }
 
@@ -68,6 +82,7 @@ struct Shared {
     tasks: Mutex<BTreeMap<TaskId, TaskState>>,
     cancels: Mutex<BTreeMap<TaskId, Arc<AtomicBool>>>,
     events: Mutex<VecDeque<TaskEvent>>,
+    bus_events: Mutex<VecDeque<Event>>,
     event_waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     dropped: AtomicU64,
     task_slots: AtomicUsize,
@@ -95,7 +110,7 @@ pub struct TaskRunner {
 
 impl TaskRunner {
     /// Spawn a worker that exclusively owns `bus`.
-    pub fn spawn(bus: Bus, long_ops: LongOps) -> Result<Self, CoreError> {
+    pub fn spawn(mut bus: Bus, long_ops: LongOps) -> Result<Self, CoreError> {
         let snapshot = Arc::new(ReaderSnapshot {
             workbook: bus.workbook().clone(),
             spill: bus.engine().spill().clone(),
@@ -115,11 +130,13 @@ impl TaskRunner {
                 )
             })
             .collect();
+        let bus_event_subscriber = bus.subscribe(crate::changeset::MAX_EFFECT_RECORDS + 1);
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(snapshot),
             tasks: Mutex::new(BTreeMap::new()),
             cancels: Mutex::new(BTreeMap::new()),
             events: Mutex::new(VecDeque::new()),
+            bus_events: Mutex::new(VecDeque::new()),
             event_waker: Mutex::new(None),
             dropped: AtomicU64::new(0),
             task_slots: AtomicUsize::new(0),
@@ -134,7 +151,7 @@ impl TaskRunner {
         let worker_shared = Arc::clone(&shared);
         let worker = thread::Builder::new()
             .name("omacell-cmd-worker".into())
-            .spawn(move || worker_loop(bus, rx, worker_shared))
+            .spawn(move || worker_loop(bus, bus_event_subscriber, rx, worker_shared))
             .map_err(|err| CoreError::new("task.spawn", format!("spawn command worker: {err}")))?;
         Ok(Self {
             handle: TaskRunnerHandle {
@@ -292,6 +309,16 @@ impl TaskRunnerHandle {
     /// Drain pending task events (non-blocking).
     pub fn drain_events(&self) -> Vec<TaskEvent> {
         let mut q = self.shared.events.lock().unwrap_or_else(|p| p.into_inner());
+        q.drain(..).collect()
+    }
+
+    /// Drain committed command-bus events for retained scripting hosts.
+    pub fn drain_bus_events(&self) -> Vec<Event> {
+        let mut q = self
+            .shared
+            .bus_events
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         q.drain(..).collect()
     }
 
@@ -512,6 +539,41 @@ impl TaskRunnerHandle {
         rx.recv().map_err(|_| error::task_shutdown())?
     }
 
+    /// Register a Lua worksheet function on the writer-owned calculation engine.
+    pub fn register_function(&self, def: DynamicFn) -> Result<(), CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::RegisterFunction { def, reply: tx })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
+    /// Rebuild and recalculate after a retained host registers worksheet functions.
+    pub fn refresh_functions(&self) -> Result<(), CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::RefreshFunctions { reply: tx })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
+    /// Replace one retained scripting host's worksheet functions and recalculate.
+    pub fn replace_functions(
+        &self,
+        previous: BTreeSet<String>,
+        current: Vec<DynamicFn>,
+    ) -> Result<(), CoreError> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.submit
+            .send(WorkerMsg::ReplaceFunctions {
+                previous,
+                current,
+                reply: tx,
+            })
+            .map_err(|_| error::task_shutdown())?;
+        rx.recv().map_err(|_| error::task_shutdown())?
+    }
+
     /// Request worker shutdown. In-flight work finishes or cancels atomically.
     pub fn shutdown(&self) {
         if self.shared.shutdown.swap(true, Ordering::SeqCst) {
@@ -558,7 +620,12 @@ fn wake_event_consumer(shared: &Shared) {
     }
 }
 
-fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
+fn worker_loop(
+    mut bus: Bus,
+    bus_event_subscriber: crate::event::SubscriberId,
+    rx: Receiver<WorkerMsg>,
+    shared: Arc<Shared>,
+) {
     while let Ok(msg) = rx.recv() {
         shared.writer_busy.store(true, Ordering::SeqCst);
         match msg {
@@ -616,6 +683,7 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                 if outcome.ok && mutating {
                     publish_snapshot(&shared, &bus);
                 }
+                publish_bus_events(&shared, &mut bus, bus_event_subscriber);
                 finish_execute(&shared, id, &outcome);
                 if let Some(reply) = reply {
                     let _ = reply.send(outcome);
@@ -627,6 +695,7 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                 reply,
             } => {
                 let result = bus.propose(origin, forward);
+                publish_bus_events(&shared, &mut bus, bus_event_subscriber);
                 let _ = reply.send(result);
             }
             WorkerMsg::Apply { origin, id, reply } => {
@@ -634,6 +703,7 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                 if result.is_ok() {
                     publish_snapshot(&shared, &bus);
                 }
+                publish_bus_events(&shared, &mut bus, bus_event_subscriber);
                 let _ = reply.send(result);
             }
             WorkerMsg::Revert { origin, id, reply } => {
@@ -641,6 +711,7 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                 if result.is_ok() {
                     publish_snapshot(&shared, &bus);
                 }
+                publish_bus_events(&shared, &mut bus, bus_event_subscriber);
                 let _ = reply.send(result);
             }
             WorkerMsg::ListChangesets { reply } => {
@@ -656,6 +727,26 @@ fn worker_loop(mut bus: Bus, rx: Receiver<WorkerMsg>, shared: Arc<Shared>) {
                 reply,
             } => {
                 let _ = reply.send(bus.dry_run(origin, &cmd, args));
+            }
+            WorkerMsg::RegisterFunction { def, reply } => {
+                bus.engine_mut().registry_mut().register_dynamic(def);
+                let _ = reply.send(Ok(()));
+            }
+            WorkerMsg::RefreshFunctions { reply } => {
+                bus.recalc_after_registry_change();
+                publish_snapshot(&shared, &bus);
+                publish_bus_events(&shared, &mut bus, bus_event_subscriber);
+                let _ = reply.send(Ok(()));
+            }
+            WorkerMsg::ReplaceFunctions {
+                previous,
+                current,
+                reply,
+            } => {
+                replace_functions(&mut bus, &previous, current);
+                publish_snapshot(&shared, &bus);
+                publish_bus_events(&shared, &mut bus, bus_event_subscriber);
+                let _ = reply.send(Ok(()));
             }
         }
         shared.writer_busy.store(false, Ordering::SeqCst);
@@ -746,6 +837,15 @@ fn fail_pending(rx: &Receiver<WorkerMsg>, shared: &Shared) {
             WorkerMsg::DryRun { reply, .. } => {
                 let _ = reply.send(Err(error::task_shutdown()));
             }
+            WorkerMsg::RegisterFunction { reply, .. } => {
+                let _ = reply.send(Err(error::task_shutdown()));
+            }
+            WorkerMsg::RefreshFunctions { reply } => {
+                let _ = reply.send(Err(error::task_shutdown()));
+            }
+            WorkerMsg::ReplaceFunctions { reply, .. } => {
+                let _ = reply.send(Err(error::task_shutdown()));
+            }
             WorkerMsg::Shutdown => {}
         }
     }
@@ -757,6 +857,47 @@ fn publish_snapshot(shared: &Shared, bus: &Bus) {
         spill: bus.engine().spill().clone(),
     });
     *shared.snapshot.lock().unwrap_or_else(|p| p.into_inner()) = next;
+    wake_event_consumer(shared);
+}
+
+fn replace_functions(bus: &mut Bus, previous: &BTreeSet<String>, current: Vec<DynamicFn>) {
+    let previous = previous
+        .iter()
+        .map(|name| name.to_ascii_uppercase())
+        .collect::<BTreeSet<_>>();
+    let mut registry = FnRegistry::new();
+    for def in bus.engine().registry().iter() {
+        registry.register(*def);
+    }
+    for def in bus.engine().registry().iter_dynamic() {
+        if !previous.contains(&def.name.to_ascii_uppercase()) {
+            registry.register_dynamic(def.clone());
+        }
+    }
+    for def in current {
+        registry.register_dynamic(def);
+    }
+    *bus.engine_mut().registry_mut() = registry;
+    bus.recalc_after_registry_change();
+}
+
+fn publish_bus_events(shared: &Shared, bus: &mut Bus, subscriber: crate::event::SubscriberId) {
+    let events = bus.drain(subscriber);
+    if events.is_empty() {
+        return;
+    }
+    let mut queue = shared
+        .bus_events
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for event in events {
+        if queue.len() > crate::changeset::MAX_EFFECT_RECORDS {
+            queue.pop_front();
+            shared.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        queue.push_back(event);
+    }
+    drop(queue);
     wake_event_consumer(shared);
 }
 

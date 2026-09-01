@@ -8,6 +8,7 @@
 pub mod catalog;
 pub mod commands;
 pub mod host;
+pub mod interactive;
 pub mod recorder;
 pub mod runtime;
 pub mod trust;
@@ -22,6 +23,7 @@ use serde_json::Value;
 pub use catalog::{API, ApiEntry, render_markdown};
 pub use commands::{ScriptGate, attach_recorder, register_script_commands};
 pub use host::{ScriptHost, UiSink, hook_name};
+pub use interactive::{InteractiveRuntime, InteractiveUi};
 pub use recorder::{MAX_RECORDED_BYTES, MAX_RECORDED_STEPS, Recorder, json_to_lua, replay_lua};
 pub use runtime::{
     EMBEDDED_INSTRUCTION_LIMIT, EMBEDDED_MEMORY_LIMIT, EMBEDDED_PART, EmbeddedMode,

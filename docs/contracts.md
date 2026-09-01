@@ -205,7 +205,7 @@ WP-20 proposes additive extensions to frozen calculation and command contracts. 
 
 Dynamic function names are case-insensitive and additive beside built-ins; built-ins retain lookup precedence. Dynamic arguments are materialized before dispatch, volatility participates in graph invalidation, and `ArrayLift::All` uses the same lift machinery as built-ins. `FnRegistry::len` and `is_empty` include dynamic entries.
 
-The WP-07a public command catalog adds `macro.record`, `macro.stop`, `macro.save`, and `script.source`. The first, second, and fourth use the closed empty-object schema; `macro.save` requires one string `path`. All four are non-changeset-eligible mutating commands; `script.source` is a deferred host action, and its mutating classification prevents model origins from causing full-profile user code execution. The catalog envelope remains schema version 1 and existing command schemas are unchanged.
+The WP-07a public command catalog adds `macro.record`, `macro.stop`, `macro.save`, and `script.source`. The first, second, and fourth use the closed empty-object schema; `macro.save` requires one string `path`. All four are non-changeset-eligible mutating commands; `script.source` signals the retained GUI/TUI host to rebuild its user-profile runtime and reload trusted `init.lua` / plugin entry points. Its mutating classification prevents model origins from causing full-profile user code execution. The catalog envelope remains schema version 1 and existing command schemas are unchanged.
 
 ## MCP tools and resources — WP-21
 
