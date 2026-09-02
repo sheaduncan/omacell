@@ -9,3 +9,7 @@
 =ROUNDUP("1.1",0)	2	numeric text
 =ROUNDUP(#N/A,0)	#N/A	error
 =ROUNDUP(2,0)	2	integer unchanged
+=ROUNDUP(0.29,2)	0.29	already at the requested decimal precision
+=ROUNDUP(-0.29,2)	-0.29	negative sign is reapplied after decimal rounding
+=ROUNDUP(0.07,2)	0.07	binary product lies above an integer but decimal input is already exact
+=ROUNDUP(-0.07,2)	-0.07	away-from-zero must not add a decimal unit to an exact input

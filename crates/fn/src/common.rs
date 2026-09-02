@@ -122,49 +122,29 @@ pub fn trunc_toward_zero(n: f64) -> f64 {
 /// Half-away-from-zero rounding to `digits` decimal places (Excel `ROUND`).
 #[must_use]
 pub fn round_half_away(n: f64, digits: i32) -> f64 {
-    if !n.is_finite() {
-        return n;
-    }
-    if digits > 20 {
-        return n;
-    }
-    if digits < -20 {
-        return 0.0;
-    }
-    let p = 10f64.powi(digits);
-    let x = n * p;
-    if !x.is_finite() {
-        return n;
-    }
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let ax = x.abs();
-    let floor = ax.floor();
-    let r = if ax - floor >= 0.5 {
-        floor + 1.0
-    } else {
-        floor
-    };
-    sign * r / p
+    decimal_round(n, digits, DecimalRound::Nearest)
 }
 
 /// `ROUNDUP`: away from zero.
 #[must_use]
 pub fn round_up(n: f64, digits: i32) -> f64 {
-    scale_round(n, digits, |ax, p, sign| {
-        let scaled = ax * p;
-        let floor = scaled.floor();
-        let r = if scaled > floor { floor + 1.0 } else { floor };
-        sign * r / p
-    })
+    decimal_round(n, digits, DecimalRound::Away)
 }
 
 /// `ROUNDDOWN`: toward zero.
 #[must_use]
 pub fn round_down(n: f64, digits: i32) -> f64 {
-    scale_round(n, digits, |ax, p, sign| sign * (ax * p).floor() / p)
+    decimal_round(n, digits, DecimalRound::Toward)
 }
 
-fn scale_round(n: f64, digits: i32, f: impl FnOnce(f64, f64, f64) -> f64) -> f64 {
+#[derive(Clone, Copy)]
+enum DecimalRound {
+    Nearest,
+    Away,
+    Toward,
+}
+
+fn decimal_round(n: f64, digits: i32, mode: DecimalRound) -> f64 {
     if !n.is_finite() {
         return n;
     }
@@ -174,13 +154,74 @@ fn scale_round(n: f64, digits: i32, f: impl FnOnce(f64, f64, f64) -> f64) -> f64
     if digits < -20 {
         return 0.0;
     }
-    let p = 10f64.powi(digits);
-    if !p.is_finite() || p == 0.0 {
+    if n == 0.0 {
         return n;
     }
+
     let sign = if n < 0.0 { -1.0 } else { 1.0 };
-    let out = f(n.abs(), p, sign);
+    let magnitude = n.abs();
+    let rough_exponent = magnitude.log10().floor() as i32;
+    let rough_discarded = 14_i32.saturating_sub(rough_exponent).saturating_sub(digits);
+
+    // The supported digit range makes this path relevant only for values far
+    // below the requested quantum. Avoid 10^-324 underflow while retaining
+    // ROUNDUP's away-from-zero behavior.
+    if rough_discarded > 16 {
+        return match mode {
+            DecimalRound::Away => sign * 10f64.powi(-digits),
+            DecimalRound::Nearest | DecimalRound::Toward => sign * 0.0,
+        };
+    }
+
+    let Some((coefficient, exponent)) = decimal_coefficient(magnitude) else {
+        return n;
+    };
+    let discarded = 14_i32.saturating_sub(exponent).saturating_sub(digits);
+    if discarded <= 0 {
+        let normalized = coefficient as f64 * 10f64.powi(exponent - 14);
+        return if normalized.is_finite() {
+            sign * normalized
+        } else {
+            n
+        };
+    }
+
+    let discarded = discarded as u32;
+    let (kept, remainder, divisor) = if discarded > 15 {
+        (0, coefficient, None)
+    } else {
+        let divisor = 10_u64.pow(discarded);
+        (coefficient / divisor, coefficient % divisor, Some(divisor))
+    };
+    let increment = match mode {
+        DecimalRound::Nearest => divisor.is_some_and(|divisor| remainder * 2 >= divisor),
+        DecimalRound::Away => remainder != 0,
+        DecimalRound::Toward => false,
+    };
+    let rounded = kept + u64::from(increment);
+    let out = sign * rounded as f64 * 10f64.powi(-digits);
     if out.is_finite() { out } else { n }
+}
+
+fn decimal_coefficient(magnitude: f64) -> Option<(u64, i32)> {
+    let mut exponent = magnitude.log10().floor() as i32;
+    let power = 10f64.powi(exponent);
+    if !power.is_finite() || power == 0.0 {
+        return None;
+    }
+    let scaled = magnitude / power * 1e14;
+    if !scaled.is_finite() {
+        return None;
+    }
+    let mut coefficient = scaled.round();
+    if coefficient >= 1e15 {
+        coefficient /= 10.0;
+        exponent += 1;
+    } else if coefficient < 1e14 {
+        coefficient *= 10.0;
+        exponent -= 1;
+    }
+    Some((coefficient as u64, exponent))
 }
 
 /// Excel `MOD`: remainder with divisor sign (`n - d * INT(n/d)`).

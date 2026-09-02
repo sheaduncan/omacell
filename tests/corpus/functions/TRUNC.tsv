@@ -9,3 +9,5 @@
 =TRUNC(TRUE)	1	TRUE
 =TRUNC("3.9")	3	numeric text
 =TRUNC(#N/A)	#N/A	error
+=TRUNC(0.57,2)	0.57	already at the requested decimal precision
+=TRUNC(-0.57,2)	-0.57	negative sign is reapplied after decimal truncation

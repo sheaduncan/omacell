@@ -61,6 +61,23 @@
   suites, and the exact repository gate. Preserve frozen interfaces and add no
   dependency.
 
+### 2026-09-02 decimal-rounding follow-up plan (written before coding)
+
+- Add corpus regressions for binary-representation boundaries in `ROUND`,
+  `ROUNDUP`, `ROUNDDOWN`, and `TRUNC`, including positive and negative inputs.
+  The expected direction follows Microsoft's documentation for
+  [`ROUND`](https://support.microsoft.com/en-us/excel/functions/round-function),
+  [`ROUNDUP`](https://support.microsoft.com/en-us/excel/roundup-function),
+  [`ROUNDDOWN`](https://support.microsoft.com/en-us/excel/functions/rounddown-function),
+  and [`TRUNC`](https://support.microsoft.com/en-US/Excel/trunc-function),
+  while input normalization follows Excel's documented
+  [15-significant-digit precision](https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/floating-point-arithmetic-inaccurate-result).
+- Replace binary multiply-and-floor decisions with an integer operation on a
+  normalized 15-digit decimal coefficient. Keep the existing public helpers,
+  argument coercion, extreme-digit behavior, and frozen runtime interfaces.
+- Re-run all WP-05a corpora, function/core suites, strict documentation, and
+  the exact repository gate. Add no dependency.
+
 ## What was built
 
 WP-05a fills the first third of Tier 0 on the frozen WP-05F runtime. Probe `ABS`/`SUM`/`RAND`/`IF` are replaced; `NOW`/`SEQUENCE` stay for WP-05b/05c. `ISOMITTED` is catalog + corpus only.
@@ -89,6 +106,12 @@ remain Boolean, and literal blank criteria match both true blanks and formula
 empty text. A reference to a truly empty criteria cell retains Excel's special
 numeric-zero behavior. One sheet-range integration matrix covers these cases
 across `SUMIF(S)`, `COUNTIF(S)`, `AVERAGEIF(S)`, `MAXIFS`, and `MINIFS`.
+
+The 2026-09-02 decimal-rounding follow-up normalizes finite inputs to Excel's
+15-significant-digit decimal coefficient before deciding which requested
+digits to discard. The rounding direction is then an exact integer decision,
+so binary products just below or above an integer no longer change results for
+`ROUND`, `ROUNDUP`, `ROUNDDOWN`, or `TRUNC`.
 
 ## Interfaces exposed (for dependents)
 
@@ -124,6 +147,11 @@ Host: rustc 1.98.0, Linux.
 - 2026-09-02 criteria-type follow-up: `cargo test -p omacell-fn` and
   `cargo test -p omacell-core` pass; the exact `just check` gate passes with
   `CARGO_BUILD_JOBS=2` to avoid local parallel-linker contention.
+- 2026-09-02 decimal-rounding follow-up: 11 new boundary corpus rows pass;
+  `cargo test -p omacell-fn`, `cargo test -p omacell-core`, and strict
+  all-target `omacell-fn` Clippy pass. The exact `just check` gate and
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` pass with
+  `CARGO_BUILD_JOBS=2` for this machine's linker constraint.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
