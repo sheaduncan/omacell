@@ -225,6 +225,34 @@ fn sort_is_stable_on_ties() {
 }
 
 #[test]
+fn sort_retains_unique_text_when_undo_is_disabled() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_text(s, 0, 0, "bravo").unwrap();
+    wb.set_text(s, 1, 0, "alpha").unwrap();
+
+    sort_range(
+        &mut wb,
+        s,
+        range(0, 0, 1, 0),
+        &SortSpec {
+            keys: vec![SortKey {
+                offset: 0,
+                descending: false,
+                by: SortBy::Value,
+                custom_list: Vec::new(),
+            }],
+            ..SortSpec::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(cell_display(&wb, 0, 0), "alpha");
+    assert_eq!(cell_display(&wb, 1, 0), "bravo");
+}
+
+#[test]
 fn sort_skips_hidden_rows() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

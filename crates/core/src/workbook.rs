@@ -745,6 +745,22 @@ impl Workbook {
         intern.styles.release(slot.style);
     }
 
+    /// Keep workbook-local ids in copied slots alive while `f` mutates cells.
+    pub(crate) fn with_held_slots<T>(
+        &mut self,
+        slots: &[CellSlot],
+        f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
+    ) -> Result<T, CoreError> {
+        for slot in slots {
+            self.hold_slot(slot);
+        }
+        let result = f(self);
+        for slot in slots {
+            self.release_slot(slot);
+        }
+        result
+    }
+
     fn ensure_not_pivot_output(&self, id: SheetId, row: u32, col: u16) -> Result<(), CoreError> {
         self.ensure_range_not_pivot_output(id, row, col, row, col)
     }
@@ -1169,19 +1185,22 @@ impl Workbook {
             (true, false) => self.ref_errors = self.ref_errors.saturating_sub(1),
             _ => {}
         }
+        let undo_enabled = self.undo.is_enabled();
         if let Some(s) = slot {
             self.hold_slot(&s);
         }
-        if let Some(ref old) = old {
-            self.release_slot(old);
-        }
-        if self.undo.is_enabled() {
+        if undo_enabled {
             if let Some(s) = slot {
                 self.hold_slot(&s);
             }
             if let Some(ref old) = old {
                 self.hold_slot(old);
             }
+        }
+        if let Some(ref old) = old {
+            self.release_slot(old);
+        }
+        if undo_enabled {
             self.undo.record(Delta::Cell {
                 sheet: id,
                 row,

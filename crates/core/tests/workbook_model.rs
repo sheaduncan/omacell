@@ -135,6 +135,28 @@ fn undo_redo_restores_numbers() {
 }
 
 #[test]
+fn undo_redo_retains_replaced_unique_text() {
+    let mut wb = Workbook::new();
+    let id = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_text(id, 0, 0, "before").unwrap();
+    wb.undo_log_mut().set_enabled(true);
+    wb.set_text(id, 0, 0, "after").unwrap();
+
+    wb.undo().unwrap();
+    let Value::Text(before) = wb.get(id, 0, 0).unwrap().unwrap().value else {
+        panic!("expected text after undo");
+    };
+    assert_eq!(wb.intern().strings.get(before), Some("before"));
+
+    wb.redo().unwrap();
+    let Value::Text(after) = wb.get(id, 0, 0).unwrap().unwrap().value else {
+        panic!("expected text after redo");
+    };
+    assert_eq!(wb.intern().strings.get(after), Some("after"));
+}
+
+#[test]
 fn undo_redo_restores_structurally_deleted_cells() {
     let mut wb = Workbook::new();
     let id = wb.active_sheet();

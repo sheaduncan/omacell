@@ -22,6 +22,15 @@ fn cell(row: u32, col: u16) -> CellRef {
     CellRef::new(row, col).unwrap()
 }
 
+fn text(wb: &Workbook, row: u32, col: u16) -> String {
+    let sheet = wb.active_sheet();
+    let slot = wb.get(sheet, row, col).unwrap().unwrap();
+    let Value::Text(id) = slot.value else {
+        panic!("expected text cell");
+    };
+    wb.intern().strings.get(id).unwrap_or_default().to_string()
+}
+
 fn a1_range(value: &str) -> RangeRef {
     match parse_a1(value).unwrap().kind {
         RefKind::Cell(cell) => RangeRef::from_corners(cell, cell),
@@ -512,6 +521,21 @@ fn move_retargets_and_clears_source() {
     );
 }
 
+#[test]
+fn overlapping_move_retains_unique_text_when_undo_is_disabled() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_text(s, 0, 0, "alpha").unwrap();
+    wb.set_text(s, 1, 0, "bravo").unwrap();
+
+    move_range_cells(&mut wb, s, range(0, 0, 1, 0), cell(1, 0)).unwrap();
+
+    assert!(wb.get(s, 0, 0).unwrap().is_none());
+    assert_eq!(text(&wb, 1, 0), "alpha");
+    assert_eq!(text(&wb, 2, 0), "bravo");
+}
+
 /// Published Excel XOR worksheet-protection hash vectors
 /// (OpenOffice / ECMA-376 legacy algorithm).
 #[test]
@@ -586,6 +610,21 @@ fn insert_cells_shift_down_moves_band() {
     wb.set_number(s, 1, 0, 2.0).unwrap();
     insert_cells(&mut wb, s, range(0, 0, 0, 0), Shift::Down).unwrap();
     assert_eq!(wb.get(s, 1, 0).unwrap().unwrap().value, Value::Number(1.0));
+}
+
+#[test]
+fn insert_cells_retains_unique_text_when_undo_is_disabled() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_text(s, 0, 0, "alpha").unwrap();
+    wb.set_text(s, 1, 0, "bravo").unwrap();
+
+    insert_cells(&mut wb, s, range(0, 0, 0, 0), Shift::Down).unwrap();
+
+    assert!(wb.get(s, 0, 0).unwrap().is_none());
+    assert_eq!(text(&wb, 1, 0), "alpha");
+    assert_eq!(text(&wb, 2, 0), "bravo");
 }
 
 #[test]

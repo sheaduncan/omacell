@@ -203,26 +203,32 @@ fn sort_rows(
             .collect();
         decorated.push((r, ord, slots, icons));
     }
-    decorated.sort_by(|a, b| {
-        let ord = cmp_records(wb, &a.2, &b.2, &a.3, &b.3, spec);
-        if ord == std::cmp::Ordering::Equal {
-            a.1.cmp(&b.1)
-        } else {
-            ord
+    let held_slots: Vec<CellSlot> = decorated
+        .iter()
+        .flat_map(|(_, _, slots, _)| slots.iter().copied())
+        .collect();
+    wb.with_held_slots(&held_slots, |wb| {
+        decorated.sort_by(|a, b| {
+            let ord = cmp_records(wb, &a.2, &b.2, &a.3, &b.3, spec);
+            if ord == std::cmp::Ordering::Equal {
+                a.1.cmp(&b.1)
+            } else {
+                ord
+            }
+        });
+        let mut moved = 0u32;
+        for (dest_row, (src_row, _, slots, _)) in rows.iter().zip(decorated) {
+            let drow = *dest_row as i32 - src_row as i32;
+            if drow != 0 {
+                moved += 1;
+            }
+            for (i, slot) in slots.into_iter().enumerate() {
+                let col = c0 + i as u16;
+                write_moved(wb, sheet, *dest_row, col, slot, drow, 0)?;
+            }
         }
-    });
-    let mut moved = 0u32;
-    for (dest_row, (src_row, _, slots, _)) in rows.iter().zip(decorated) {
-        let drow = *dest_row as i32 - src_row as i32;
-        if drow != 0 {
-            moved += 1;
-        }
-        for (i, slot) in slots.into_iter().enumerate() {
-            let col = c0 + i as u16;
-            write_moved(wb, sheet, *dest_row, col, slot, drow, 0)?;
-        }
-    }
-    Ok(moved)
+        Ok(moved)
+    })
 }
 
 fn sort_columns(
@@ -274,26 +280,32 @@ fn sort_columns(
             .collect();
         decorated.push((c, ord, slots, icons));
     }
-    decorated.sort_by(|a, b| {
-        let ord = cmp_records(wb, &a.2, &b.2, &a.3, &b.3, spec);
-        if ord == std::cmp::Ordering::Equal {
-            a.1.cmp(&b.1)
-        } else {
-            ord
+    let held_slots: Vec<CellSlot> = decorated
+        .iter()
+        .flat_map(|(_, _, slots, _)| slots.iter().copied())
+        .collect();
+    wb.with_held_slots(&held_slots, |wb| {
+        decorated.sort_by(|a, b| {
+            let ord = cmp_records(wb, &a.2, &b.2, &a.3, &b.3, spec);
+            if ord == std::cmp::Ordering::Equal {
+                a.1.cmp(&b.1)
+            } else {
+                ord
+            }
+        });
+        let mut moved = 0u32;
+        for (dest_col, (src_col, _, slots, _)) in cols.iter().zip(decorated) {
+            let dcol = i32::from(*dest_col) - i32::from(src_col);
+            if dcol != 0 {
+                moved += 1;
+            }
+            for (i, slot) in slots.into_iter().enumerate() {
+                let row = r0 + i as u32;
+                write_moved(wb, sheet, row, *dest_col, slot, 0, dcol)?;
+            }
         }
-    });
-    let mut moved = 0u32;
-    for (dest_col, (src_col, _, slots, _)) in cols.iter().zip(decorated) {
-        let dcol = i32::from(*dest_col) - i32::from(src_col);
-        if dcol != 0 {
-            moved += 1;
-        }
-        for (i, slot) in slots.into_iter().enumerate() {
-            let row = r0 + i as u32;
-            write_moved(wb, sheet, row, *dest_col, slot, 0, dcol)?;
-        }
-    }
-    Ok(moved)
+        Ok(moved)
+    })
 }
 
 fn write_moved(
