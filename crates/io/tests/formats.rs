@@ -13,6 +13,9 @@ use std::io::{Cursor, Write};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
+#[path = "../../../tests/support/libreoffice.rs"]
+mod libreoffice;
+
 fn cell_text(wb: &Workbook, row: u32, col: u16) -> String {
     let sheet = wb.active_sheet();
     match wb.get(sheet, row, col).ok().flatten() {
@@ -112,12 +115,7 @@ fn ods_round_trips_values_formula_merge_name_and_bold() {
 
 #[test]
 fn ods_written_file_reopens_in_libreoffice_if_present() {
-    let Some(soffice) = ["soffice", "libreoffice"].into_iter().find(|bin| {
-        std::process::Command::new(bin)
-            .arg("--version")
-            .output()
-            .is_ok()
-    }) else {
+    let Some(soffice) = libreoffice::find_calc() else {
         return;
     };
     let dir = tempfile_dir("ods-lo");
@@ -128,7 +126,7 @@ fn ods_written_file_reopens_in_libreoffice_if_present() {
     wb.set_number(sheet, 1, 0, 2.0).unwrap();
     wb.set_formula_text(sheet, 2, 0, "=SUM(A1:A2)").unwrap();
     ods::save(&wb, &ods_path).unwrap();
-    let status = std::process::Command::new(soffice)
+    let status = std::process::Command::new(&soffice)
         .arg(format!(
             "-env:UserInstallation=file://{}",
             dir.join("profile").display()

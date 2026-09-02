@@ -18,6 +18,9 @@ use omacell_io::xlsx::{
     SaveOptions, diff, open, open_bytes, save, save_bytes, save_workbook_bytes,
 };
 
+#[path = "../../../tests/support/libreoffice.rs"]
+mod libreoffice;
+
 fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/xlsx")
 }
@@ -100,17 +103,14 @@ fn saved_file_converts_in_libreoffice_if_present() {
     let _ = std::fs::create_dir_all(&dir);
     let tmp = dir.join("in.xlsx");
     std::fs::write(&tmp, &bytes).unwrap();
-    let soffice = ["soffice", "libreoffice"]
-        .iter()
-        .find(|b| Command::new(b).arg("--version").output().is_ok());
-    if soffice.is_none() {
+    let Some(soffice) = libreoffice::find_calc() else {
         let _ = std::fs::remove_dir_all(&dir);
         return;
-    }
+    };
     let profile = dir.join("lo-profile");
     let _ = std::fs::create_dir_all(&profile);
     let profile_uri = format!("file://{}", profile.display());
-    let out = Command::new(soffice.unwrap())
+    let out = Command::new(&soffice)
         .args([
             "--headless",
             &format!("-env:UserInstallation={profile_uri}"),
@@ -778,14 +778,11 @@ fn wp18_modeled_filter_dv_cf_roundtrip() {
     std::fs::create_dir_all(&output_dir).unwrap();
     let tmp = input_dir.join("in.xlsx");
     std::fs::write(&tmp, &bytes).unwrap();
-    let soffice = ["soffice", "libreoffice"]
-        .iter()
-        .find(|b| Command::new(b).arg("--version").output().is_ok());
-    if let Some(bin) = soffice {
+    if let Some(bin) = libreoffice::find_calc() {
         let profile = dir.join("lo-profile");
         std::fs::create_dir_all(&profile).unwrap();
         let profile_uri = format!("file://{}", profile.display());
-        let out = Command::new(bin)
+        let out = Command::new(&bin)
             .args([
                 "--headless",
                 &format!("-env:UserInstallation={profile_uri}"),

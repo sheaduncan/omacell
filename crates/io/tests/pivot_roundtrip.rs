@@ -7,6 +7,9 @@ use omacell_io::xlsx::{open_bytes, save_bytes, save_workbook_bytes};
 use std::io::{Cursor, Read, Write};
 use zip::{ZipWriter, write::SimpleFileOptions};
 
+#[path = "../../../tests/support/libreoffice.rs"]
+mod libreoffice;
+
 fn seed() -> Workbook {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
@@ -139,10 +142,7 @@ except ImportError:
 
 #[test]
 fn libreoffice_opens_modeled_pivot_if_present() {
-    let Some(soffice) = ["soffice", "libreoffice"]
-        .into_iter()
-        .find(|bin| which(bin))
-    else {
+    let Some(soffice) = libreoffice::find_calc() else {
         return;
     };
     let bytes = save_workbook_bytes(&seed()).unwrap();
@@ -154,7 +154,7 @@ fn libreoffice_opens_modeled_pivot_if_present() {
     let path = dir.join("pivot.xlsx");
     let profile = dir.join("libreoffice-profile");
     std::fs::write(&path, bytes).unwrap();
-    let out = std::process::Command::new(soffice)
+    let out = std::process::Command::new(&soffice)
         .arg(format!(
             "-env:UserInstallation=file://{}",
             profile.display()
@@ -190,12 +190,6 @@ fn libreoffice_opens_modeled_pivot_if_present() {
         content.contains("table:data-pilot-table") && content.contains("table:name=\"Sales\""),
         "LibreOffice opened the workbook but did not retain a live pivot"
     );
-}
-
-fn which(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .and_then(|paths| std::env::split_paths(&paths).find(|p| p.join(bin).is_file()))
-        .is_some()
 }
 
 fn zip_part(zip: &[u8], name: &str) -> Vec<u8> {
@@ -488,10 +482,7 @@ fn generated_distinct_count_writes_x14_and_calc_field_formula() {
 
 #[test]
 fn libreoffice_opens_calc_and_distinct_fixtures_if_present() {
-    let Some(soffice) = ["soffice", "libreoffice"]
-        .into_iter()
-        .find(|bin| which(bin))
-    else {
+    let Some(soffice) = libreoffice::find_calc() else {
         return;
     };
     for (label, bytes) in [
@@ -506,7 +497,7 @@ fn libreoffice_opens_calc_and_distinct_fixtures_if_present() {
         let path = dir.join("pivot.xlsx");
         let profile = dir.join("libreoffice-profile");
         std::fs::write(&path, bytes).unwrap();
-        let out = std::process::Command::new(soffice)
+        let out = std::process::Command::new(&soffice)
             .arg(format!(
                 "-env:UserInstallation=file://{}",
                 profile.display()
