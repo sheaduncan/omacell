@@ -316,6 +316,7 @@ fn wp28_distribution_assets_are_complete() {
         "options=('!lto')",
         "PKGBUILD_SOURCE_URL",
         "PKGBUILD_SOURCE_SHA256",
+        "install -d \"${pkgdir}/usr/share/omacell\"",
         "ttf-carlito",
         "ttf-liberation",
         "/usr/share/omacell",
@@ -450,4 +451,7 @@ fn wp28_manual_and_release_automation_are_present() {
         fs::read_to_string(root.join(".github/workflows/nightly.yml")).expect("read nightly");
     assert!(nightly.contains("cargo +nightly fuzz list"));
     assert!(nightly.contains("cargo deny check"));
+    let release =
+        fs::read_to_string(root.join(".github/workflows/release.yml")).expect("read release");
+    assert!(release.contains("install -d \"$root/share/omacell\""));
 }

@@ -70,6 +70,9 @@ package() {
     "${pkgdir}/usr/share/applications/omacell.desktop"
   install -Dm644 packaging/omacell.xml \
     "${pkgdir}/usr/share/mime/packages/omacell.xml"
+  install -d "${pkgdir}/usr/share/omacell" \
+    "${pkgdir}/usr/share/icons" \
+    "${pkgdir}/usr/share/doc/${pkgname}"
   cp -a default "${pkgdir}/usr/share/omacell/default"
   cp -a i18n "${pkgdir}/usr/share/omacell/i18n"
   cp -a packaging/icons/hicolor "${pkgdir}/usr/share/icons/"

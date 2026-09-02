@@ -59,6 +59,7 @@ jobs:
           install -Dm644 LICENSE "release-tree/usr/share/licenses/omacell/LICENSE"
           install -Dm644 packaging/omacell.desktop "$root/share/applications/omacell.desktop"
           install -Dm644 packaging/omacell.xml "$root/share/mime/packages/omacell.xml"
+          install -d "$root/share/omacell" "$root/share/icons" "$root/share/doc/omacell"
           cp -a default "$root/share/omacell/default"
           cp -a i18n "$root/share/omacell/i18n"
           cp -a packaging/icons/hicolor "$root/share/icons/"
