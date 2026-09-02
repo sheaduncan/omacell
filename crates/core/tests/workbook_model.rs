@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use omacell_core::addr::{SheetId, parse_a1};
+use omacell_core::addr::{CellRef, RangeRef, SheetId, parse_a1};
 use omacell_core::error::{ErrorKind, codes};
 use omacell_core::geometry::AxisGeometry;
 use omacell_core::names::{DefinedName, NameReferent, NameScope, validate_defined_name};
@@ -97,6 +97,68 @@ fn resolve_sheet_spec() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn sheet_rename_rewrites_formula_qualifiers_as_one_undo_unit() {
+    let mut wb = Workbook::new();
+    wb.undo_log_mut().set_enabled(false);
+    let source = wb.active_sheet();
+    let calc = wb.add_sheet("Calc").unwrap();
+    let array = RangeRef::from_corners(CellRef::new(1, 0).unwrap(), CellRef::new(1, 1).unwrap());
+    wb.set_formula_text(calc, 0, 0, "=Sheet1!A1").unwrap();
+    wb.set_array_formula_text(calc, array, "=Sheet1!A1:A2")
+        .unwrap();
+    wb.set_formula_text(calc, 2, 0, "=[Book.xlsx]Sheet1!A1")
+        .unwrap();
+    wb.set_formula_text(calc, 3, 0, "=sum(A1)").unwrap();
+    wb.undo_log_mut().set_enabled(true);
+
+    wb.rename_sheet(source, "Input Data").unwrap();
+    assert_eq!(
+        wb.formula_text_at(calc, 0, 0).as_deref(),
+        Some("='Input Data'!A1")
+    );
+    assert_eq!(
+        wb.formula_text_at(calc, 1, 1).as_deref(),
+        Some("{='Input Data'!A1:A2}")
+    );
+    assert_eq!(
+        wb.formula_text_at(calc, 2, 0).as_deref(),
+        Some("=[Book.xlsx]Sheet1!A1")
+    );
+    assert_eq!(wb.formula_text_at(calc, 3, 0).as_deref(), Some("=sum(A1)"));
+
+    wb.undo().unwrap();
+    assert_eq!(
+        wb.sheet(source).map(|sheet| sheet.name.as_str()),
+        Some("Sheet1")
+    );
+    assert_eq!(
+        wb.formula_text_at(calc, 0, 0).as_deref(),
+        Some("=Sheet1!A1")
+    );
+    assert_eq!(
+        wb.formula_text_at(calc, 1, 1).as_deref(),
+        Some("{=Sheet1!A1:A2}")
+    );
+    assert_eq!(wb.formula_text_at(calc, 3, 0).as_deref(), Some("=sum(A1)"));
+    assert!(!wb.undo_log().can_undo());
+
+    wb.redo().unwrap();
+    assert_eq!(
+        wb.sheet(source).map(|sheet| sheet.name.as_str()),
+        Some("Input Data")
+    );
+    assert_eq!(
+        wb.formula_text_at(calc, 0, 0).as_deref(),
+        Some("='Input Data'!A1")
+    );
+    assert_eq!(
+        wb.formula_text_at(calc, 1, 1).as_deref(),
+        Some("{='Input Data'!A1:A2}")
+    );
+    assert_eq!(wb.formula_text_at(calc, 3, 0).as_deref(), Some("=sum(A1)"));
 }
 
 #[test]

@@ -1807,7 +1807,78 @@ impl Workbook {
 
     /// Rename a sheet.
     pub fn rename_sheet(&mut self, id: SheetId, name: impl Into<String>) -> Result<(), CoreError> {
-        self.rename_sheet_inner(id, &name.into(), true)
+        let name = name.into();
+        let before = self
+            .sheet(id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?
+            .name
+            .clone();
+        if before == name {
+            return Ok(());
+        }
+        self.transact_try(move |workbook| {
+            workbook.rename_sheet_inner(id, &name, true)?;
+            workbook.rewrite_sheet_formula_qualifiers(&before, &name)
+        })
+    }
+
+    fn rewrite_sheet_formula_qualifiers(&mut self, old: &str, new: &str) -> Result<(), CoreError> {
+        let mut formulas = Vec::new();
+        let operation = crate::formula::RewriteOp::SheetRename {
+            old: old.to_string(),
+            new: new.to_string(),
+        };
+        for sheet in self.sheets() {
+            for (row, col, slot) in sheet.store.iter() {
+                let Some(formula) = slot.formula else {
+                    continue;
+                };
+                let source = self.intern().formulas.get(formula).ok_or_else(|| {
+                    CoreError::new(
+                        "sheet.rename",
+                        "formula source is missing from the intern pool",
+                    )
+                })?;
+                let parsed = crate::formula::parse(source).map_err(|error| {
+                    CoreError::new(
+                        "sheet.rename",
+                        format!("could not rewrite sheet reference: {error}"),
+                    )
+                })?;
+                let rewritten_ast =
+                    crate::formula::apply(&parsed.ast, &operation).map_err(|error| {
+                        CoreError::new(
+                            "sheet.rename",
+                            format!("could not rewrite sheet reference: {error}"),
+                        )
+                    })?;
+                if rewritten_ast != parsed.ast {
+                    let rewritten = crate::formula::print(&crate::formula::Formula {
+                        ast: rewritten_ast,
+                        style: parsed.style,
+                        base_row: parsed.base_row,
+                        base_col: parsed.base_col,
+                    });
+                    formulas.push((sheet.id, row, col, rewritten));
+                }
+            }
+        }
+
+        for (sheet, row, col, source) in formulas {
+            let formula = self.intern_formula(&source)?;
+            let update = (|| {
+                let mut slot = self
+                    .get(sheet, row, col)?
+                    .copied()
+                    .ok_or_else(|| CoreError::new("sheet.rename", "formula cell vanished"))?;
+                slot.formula = Some(formula);
+                self.write_slot(sheet, row, col, Some(slot))?;
+                Ok(())
+            })();
+            self.release_formula(formula);
+            update?;
+        }
+        Ok(())
     }
 
     fn rename_sheet_inner(
