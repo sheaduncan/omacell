@@ -238,7 +238,12 @@ impl DepGraph {
 
     /// Remove a formula node.
     pub fn remove_node(&mut self, coord: CellCoord) {
-        self.nodes.remove(&coord);
+        let mut cell_dependents = self
+            .nodes
+            .remove(&coord)
+            .map(|node| node.cell_dependents)
+            .unwrap_or_default();
+        cell_dependents.retain(|dependent| *dependent != coord);
         self.chain.retain(|c| *c != coord);
         for b in self.buckets.values_mut() {
             b.sheet.retain(|c| *c != coord);
@@ -254,6 +259,9 @@ impl DepGraph {
         }
         for n in self.nodes.values_mut() {
             n.cell_dependents.retain(|c| *c != coord);
+        }
+        if !cell_dependents.is_empty() {
+            self.nodes.entry(coord).or_default().cell_dependents = cell_dependents;
         }
     }
 

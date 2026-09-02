@@ -368,27 +368,30 @@ fn shift_band_rows(
         .iter()
         .filter(|(_, c, _)| *c >= c0 && *c <= c1)
         .collect();
-    for (r, c, _) in &cells {
-        let _ = replace_cell_slot(wb, sheet, *r, *c, None)?;
-    }
-    let mag = count;
-    for (r, c, slot) in cells {
-        let nr = if delete {
-            if r < at {
-                r
-            } else if r < at + mag {
-                continue;
+    let held_slots: Vec<CellSlot> = cells.iter().map(|(_, _, slot)| *slot).collect();
+    wb.with_held_slots(&held_slots, |wb| {
+        for (r, c, _) in &cells {
+            let _ = replace_cell_slot(wb, sheet, *r, *c, None)?;
+        }
+        let mag = count;
+        for (r, c, slot) in cells {
+            let nr = if delete {
+                if r < at {
+                    r
+                } else if r < at + mag {
+                    continue;
+                } else {
+                    r - mag
+                }
+            } else if r >= at {
+                r + mag
             } else {
-                r - mag
-            }
-        } else if r >= at {
-            r + mag
-        } else {
-            r
-        };
-        let _ = replace_cell_slot(wb, sheet, nr, c, Some(slot))?;
-    }
-    Ok(())
+                r
+            };
+            let _ = replace_cell_slot(wb, sheet, nr, c, Some(slot))?;
+        }
+        Ok(())
+    })
 }
 
 fn shift_band_cols(
@@ -407,27 +410,30 @@ fn shift_band_cols(
         .iter()
         .filter(|(r, _, _)| *r >= r0 && *r <= r1)
         .collect();
-    for (r, c, _) in &cells {
-        let _ = replace_cell_slot(wb, sheet, *r, *c, None)?;
-    }
-    let mag = count;
-    for (r, c, slot) in cells {
-        let nc = if delete {
-            if c < at {
-                c
-            } else if c < at + mag {
-                continue;
+    let held_slots: Vec<CellSlot> = cells.iter().map(|(_, _, slot)| *slot).collect();
+    wb.with_held_slots(&held_slots, |wb| {
+        for (r, c, _) in &cells {
+            let _ = replace_cell_slot(wb, sheet, *r, *c, None)?;
+        }
+        let mag = count;
+        for (r, c, slot) in cells {
+            let nc = if delete {
+                if c < at {
+                    c
+                } else if c < at + mag {
+                    continue;
+                } else {
+                    c - mag
+                }
+            } else if c >= at {
+                c + mag
             } else {
-                c - mag
-            }
-        } else if c >= at {
-            c + mag
-        } else {
-            c
-        };
-        let _ = replace_cell_slot(wb, sheet, r, nc, Some(slot))?;
-    }
-    Ok(())
+                c
+            };
+            let _ = replace_cell_slot(wb, sheet, r, nc, Some(slot))?;
+        }
+        Ok(())
+    })
 }
 
 fn shift_band_side_tables_rows(
@@ -2164,27 +2170,30 @@ pub fn move_range_cells(
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut changed = 0u32;
-    for (dr, cells) in grid.iter().enumerate() {
-        for (dc, slot) in cells.iter().enumerate() {
-            let row = dest.row + dr as u32;
-            let col = dest.col + dc as u16;
-            replace_cell_slot(wb, sheet, row, col, *slot)?;
-            changed += 1;
-        }
-    }
-    for r in r0..=r1 {
-        for c in c0..=c1 {
-            let in_dest =
-                r >= dest.row && r < dest.row + height && c >= dest.col && c < dest.col + width;
-            if !in_dest {
-                wb.clear_cell(sheet, r, c)?;
+    let held_slots: Vec<CellSlot> = grid.iter().flatten().filter_map(|slot| *slot).collect();
+    wb.with_held_slots(&held_slots, |wb| {
+        let mut changed = 0u32;
+        for (dr, cells) in grid.iter().enumerate() {
+            for (dc, slot) in cells.iter().enumerate() {
+                let row = dest.row + dr as u32;
+                let col = dest.col + dc as u16;
+                replace_cell_slot(wb, sheet, row, col, *slot)?;
+                changed += 1;
             }
         }
-    }
-    move_side_tables(wb, sheet, src, dest)?;
-    rewrite_formulas_move(wb, sheet, src, dest)?;
-    Ok(changed)
+        for r in r0..=r1 {
+            for c in c0..=c1 {
+                let in_dest =
+                    r >= dest.row && r < dest.row + height && c >= dest.col && c < dest.col + width;
+                if !in_dest {
+                    wb.clear_cell(sheet, r, c)?;
+                }
+            }
+        }
+        move_side_tables(wb, sheet, src, dest)?;
+        rewrite_formulas_move(wb, sheet, src, dest)?;
+        Ok(changed)
+    })
 }
 
 /// Move a range between sheets with cut semantics and workbook-wide retargeting.
@@ -2220,25 +2229,28 @@ pub fn move_range_cells_between(
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
-    for (dr, cells) in grid.iter().enumerate() {
-        for (dc, slot) in cells.iter().enumerate() {
-            replace_cell_slot(
-                wb,
-                dest_sheet,
-                dest.row + dr as u32,
-                dest.col + dc as u16,
-                *slot,
-            )?;
+    let held_slots: Vec<CellSlot> = grid.iter().flatten().filter_map(|slot| *slot).collect();
+    wb.with_held_slots(&held_slots, |wb| {
+        for (dr, cells) in grid.iter().enumerate() {
+            for (dc, slot) in cells.iter().enumerate() {
+                replace_cell_slot(
+                    wb,
+                    dest_sheet,
+                    dest.row + dr as u32,
+                    dest.col + dc as u16,
+                    *slot,
+                )?;
+            }
         }
-    }
-    for row in r0..=r1 {
-        for col in c0..=c1 {
-            wb.clear_cell(source_sheet, row, col)?;
+        for row in r0..=r1 {
+            for col in c0..=c1 {
+                wb.clear_cell(source_sheet, row, col)?;
+            }
         }
-    }
-    move_side_tables_between(wb, source_sheet, src, dest_sheet, dest, height, width)?;
-    rewrite_formulas_move_between(wb, source_sheet, src, dest_sheet, dest, height, width)?;
-    Ok(u32::from(width).saturating_mul(height))
+        move_side_tables_between(wb, source_sheet, src, dest_sheet, dest, height, width)?;
+        rewrite_formulas_move_between(wb, source_sheet, src, dest_sheet, dest, height, width)?;
+        Ok(u32::from(width).saturating_mul(height))
+    })
 }
 
 fn validate_cross_sheet_merges(

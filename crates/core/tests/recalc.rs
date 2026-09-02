@@ -98,6 +98,27 @@ fn incremental_dirties_dependents_only() {
     );
 }
 
+#[test]
+fn replacing_formula_with_value_preserves_dependents_for_later_edits() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_formula_text(s, 0, 0, "=1+1").unwrap();
+    wb.set_formula_text(s, 0, 1, "=A1+1").unwrap();
+    let mut eng = RecalcEngine::new(FnRegistry::new());
+    eng.recalc_full(&mut wb);
+    assert_eq!(display(&wb, 0, 1), "3");
+
+    wb.set_number(s, 0, 0, 5.0).unwrap();
+    eng.notify_edit(&wb, CellCoord::new(s, 0, 0));
+    eng.recalc_incremental(&mut wb);
+    assert_eq!(display(&wb, 0, 1), "6");
+
+    wb.set_number(s, 0, 0, 9.0).unwrap();
+    eng.notify_edit(&wb, CellCoord::new(s, 0, 0));
+    eng.recalc_incremental(&mut wb);
+    assert_eq!(display(&wb, 0, 1), "10");
+}
+
 fn snapshot_values(wb: &Workbook) -> Vec<(u32, u16, String)> {
     let s = wb.active_sheet();
     let mut out = Vec::new();
