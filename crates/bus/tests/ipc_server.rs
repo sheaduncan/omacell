@@ -34,7 +34,9 @@ fn runtime_dir() -> PathBuf {
 }
 
 fn bus() -> Bus {
-    Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).expect("bus")
+    let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).expect("bus");
+    omacell_bus::register_edit_commands(bus.registry_mut()).expect("register edit commands");
+    bus
 }
 
 fn start() -> (omacell_bus::ipc::IpcHandle, PathBuf) {
@@ -123,6 +125,50 @@ fn mutating_execute_is_rejected_internal_ids_are_rejected() {
         err.error.as_ref().unwrap().code,
         omacell_bus::codes::COMMAND_INTERNAL
     );
+}
+
+#[test]
+fn ipc_repeat_cannot_replay_a_session_mutation() {
+    let (handle, bus, dir) = start_shared();
+    {
+        let mut bus = bus.lock().unwrap();
+        let set = bus.execute(
+            Origin::User,
+            "cell.set",
+            serde_json::json!({"ref": "A1", "input": "1"}),
+        );
+        assert!(set.ok, "{:?}", set.error);
+        let insert = bus.execute(
+            Origin::User,
+            "edit.insert",
+            serde_json::json!({"range": "A1", "shift": "rows"}),
+        );
+        assert!(insert.ok, "{:?}", insert.error);
+    }
+
+    let mut client = IpcClient::connect(handle.socket_path()).unwrap();
+    for mode in [None, Some(Mode::Execute)] {
+        let err = client
+            .command("edit.repeat", serde_json::json!({"count": 1}), mode)
+            .unwrap();
+        assert!(!err.ok);
+        assert_eq!(
+            err.error.as_ref().unwrap().code,
+            omacell_bus::codes::IPC_MODE
+        );
+    }
+
+    {
+        let bus = bus.lock().unwrap();
+        let sheet = bus.workbook().active_sheet();
+        assert_eq!(
+            bus.workbook().get(sheet, 1, 0).unwrap().unwrap().value,
+            omacell_core::value::Value::Number(1.0)
+        );
+        assert!(bus.workbook().get(sheet, 2, 0).unwrap().is_none());
+    }
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -226,6 +272,13 @@ fn runner_backed_server_preserves_ipc_mutation_policy() {
         internal.error.unwrap().code,
         omacell_bus::codes::COMMAND_INTERNAL
     );
+
+    for mode in [None, Some(Mode::Execute)] {
+        let repeat = client
+            .command("edit.repeat", serde_json::json!({"count": 1}), mode)
+            .unwrap();
+        assert_eq!(repeat.error.unwrap().code, omacell_bus::codes::IPC_MODE);
+    }
 }
 
 #[test]

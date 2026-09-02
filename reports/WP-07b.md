@@ -114,6 +114,11 @@ Review hardening added before merge:
 - Discovery treats metadata as untrusted: socket paths are reconstructed from the validated pid, instance files are size/type/owner checked, and failed startup removes a newly bound socket without following or deleting a pre-existing symlink.
 - The active frame limit includes the newline without transiently buffering an oversized frame, and control-op schemas exactly match the decoder's op-specific fields.
 - The hard/default limit is now 16 MiB and `[ipc].max_frame_bytes` can lower it to 1–16 MiB. Server decode/encode, clients, MCP, and the Python stdio bridge use the same validated limit within each process.
+- The shared bus/runner dispatcher rejects `edit.repeat` in IPC execute mode.
+  Repeat expands session-private state into an arbitrary prior mutation, so IPC
+  callers must submit that original command as a reviewable proposal instead.
+  Socket regressions cover omitted and explicit execute modes on both server
+  implementations; trusted in-process user and script repeat behavior is unchanged.
 
 The post-WP-16 integration adds focused-instance routing without changing IPC
 v1. `IpcHandle::set_focused` maintains a zero-byte, owned mode-0600
@@ -165,6 +170,9 @@ Host: local Linux.
   scripting tests. Coverage includes >1 MiB default requests, a lowered 1 MiB
   setting, client and server rejection, and oversized replies converted into a
   correlated `ipc.frame` response.
+- Repeat-boundary follow-up: `cargo test -p omacell-bus` passes, including 22
+  server/client tests; the 3-test CLI scripting bridge suite, strict workspace
+  Clippy, and workspace rustdoc also pass.
 
 No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-approved). `libfuzzer-sys` remains fuzz-workspace only.
 
