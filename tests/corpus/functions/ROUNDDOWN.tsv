@@ -9,3 +9,5 @@
 =ROUNDDOWN(#N/A,0)	#N/A	error
 =ROUNDDOWN(2,0)	2	integer
 =ROUNDDOWN(-2.01,1)	-2	one decimal negative
+=ROUNDDOWN(0.29,2)	0.29	already at the requested decimal precision
+=ROUNDDOWN(-0.29,2)	-0.29	negative sign is reapplied after decimal rounding
