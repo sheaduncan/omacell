@@ -5,6 +5,9 @@ use omacell_core::chart::{ChartKind, ChartTheme, Sparkline, SparklineKind, chart
 use omacell_core::workbook::Workbook;
 use omacell_io::xlsx::{diff, open_bytes, save_bytes, save_workbook_bytes};
 
+#[path = "../../../tests/support/libreoffice.rs"]
+mod libreoffice;
+
 fn seed() -> Workbook {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
@@ -181,10 +184,7 @@ fn png_dimensions_are_bounded() {
 
 #[test]
 fn libreoffice_opens_modeled_chart_if_present() {
-    let Some(soffice) = ["soffice", "libreoffice"]
-        .into_iter()
-        .find(|bin| which(bin))
-    else {
+    let Some(soffice) = libreoffice::find_calc() else {
         return;
     };
     let wb = seed();
@@ -197,7 +197,7 @@ fn libreoffice_opens_modeled_chart_if_present() {
     let path = dir.join("chart.xlsx");
     let profile = dir.join("libreoffice-profile");
     std::fs::write(&path, bytes).unwrap();
-    let out = std::process::Command::new(soffice)
+    let out = std::process::Command::new(&soffice)
         .arg(format!(
             "-env:UserInstallation=file://{}",
             profile.display()
@@ -224,14 +224,6 @@ fn libreoffice_opens_modeled_chart_if_present() {
     );
     let _ = std::fs::remove_dir_all(&dir);
     assert!(out.status.success(), "{failure}");
-}
-
-fn which(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .unwrap_or_default()
-        .to_string_lossy()
-        .split(':')
-        .any(|dir| std::path::Path::new(dir).join(bin).exists())
 }
 
 #[test]

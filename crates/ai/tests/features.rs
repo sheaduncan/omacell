@@ -26,6 +26,9 @@ use omacell_core::value::Value as CellValue;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
 use omacell_io::xlsx::{open_bytes, save_workbook_bytes};
+
+#[path = "../../../tests/support/libreoffice.rs"]
+mod libreoffice;
 use serde_json::{Value, json};
 
 struct CountingTransport {
@@ -840,12 +843,7 @@ fn fill_round_trip_custom_part_and_xlsx() {
     assert!(!provenance.prompt_hash.is_empty());
     assert!(!provenance.input_hash.is_empty());
     assert!(provenance.ts > 0);
-    if let Some(soffice) = ["soffice", "libreoffice"].into_iter().find(|bin| {
-        std::process::Command::new(bin)
-            .arg("--version")
-            .output()
-            .is_ok()
-    }) {
+    if let Some(soffice) = libreoffice::find_calc() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("fill.xlsx");
         let profile = dir.path().join("profile");
@@ -853,7 +851,7 @@ fn fill_round_trip_custom_part_and_xlsx() {
         std::fs::create_dir_all(&profile).unwrap();
         std::fs::create_dir_all(&output_dir).unwrap();
         std::fs::write(&path, &bytes).unwrap();
-        let output = std::process::Command::new(soffice)
+        let output = std::process::Command::new(&soffice)
             .arg(format!(
                 "-env:UserInstallation=file://{}",
                 profile.display()

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Headless LibreOffice cross-check for function corpus rows.
 
-Skips cleanly when `soffice` / LibreOffice is not installed. Network is never
-used. Intended for WP-05a/b/c corpora under tests/corpus/functions/.
+Skips cleanly when `soffice` / LibreOffice is not installed or its Calc
+conversion filter is unavailable. Network is never used. Intended for
+WP-05a/b/c corpora under tests/corpus/functions/.
 
 Usage:
     python3 scripts/lo-crosscheck.py [tsv ...]
@@ -287,10 +288,27 @@ def evaluate(
     return [csv_rows[index][0].strip() if csv_rows[index] else "" for index in range(len(rows))]
 
 
+def calc_capable(soffice: str) -> bool:
+    """Return whether LibreOffice can perform a real Calc XLSX conversion."""
+    try:
+        with tempfile.TemporaryDirectory(prefix="omacell-lo-probe-") as temp:
+            result = evaluate(
+                soffice,
+                [("=1+1", "2", "Calc capability probe")],
+                Path(temp),
+            )
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        return False
+    return result == ["2"]
+
+
 def main(argv: list[str]) -> int:
     soffice = find_soffice()
     if soffice is None:
         print("lo-crosscheck: LibreOffice not installed; skip.")
+        return 0
+    if not calc_capable(soffice):
+        print("lo-crosscheck: LibreOffice Calc conversion unavailable; skip.")
         return 0
     files = [Path(a) for a in argv[1:]]
     if not files:
