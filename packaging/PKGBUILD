@@ -29,8 +29,8 @@ optdepends=(
   'omarchy: desktop theme, menu, and agent integration'
 )
 install=omacell.install
-_source_url="${OMACELL_SOURCE_URL:-${url}/archive/refs/tags/v${pkgver}.tar.gz}"
-_source_sha256="${OMACELL_SOURCE_SHA256:-REPLACE_WITH_RELEASE_SHA256}"
+_source_url="${PKGBUILD_SOURCE_URL:-${url}/archive/refs/tags/v${pkgver}.tar.gz}"
+_source_sha256="${PKGBUILD_SOURCE_SHA256:-REPLACE_WITH_RELEASE_SHA256}"
 source=(
   "${pkgname}-${pkgver}.tar.gz::${_source_url}"
   'omacell.install'

@@ -16,7 +16,7 @@ docker run --rm --volume "$root:/src:ro" "$image" bash -euo pipefail -c '
   install -o build -g build /src/packaging/PKGBUILD /src/packaging/omacell.install /home/build/package/
   chown -R build:build /home/build
   checksum=$(sha256sum /home/build/omacell-0.0.0.tar.gz | cut -d " " -f 1)
-  su build -c "cd /home/build/package && OMACELL_SOURCE_URL=file:///home/build/omacell-0.0.0.tar.gz OMACELL_SOURCE_SHA256=$checksum makepkg --noconfirm"
+  su build -c "cd /home/build/package && PKGBUILD_SOURCE_URL=file:///home/build/omacell-0.0.0.tar.gz PKGBUILD_SOURCE_SHA256=$checksum makepkg --noconfirm"
   pacman -U --noconfirm /home/build/package/omacell-0.0.0-1-*.pkg.tar.zst
   omacell --version
   omacell fn list --json >/dev/null

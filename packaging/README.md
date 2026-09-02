@@ -17,7 +17,9 @@ runs `makepkg --printsrcinfo`, builds both packages in clean Arch containers,
 and publishes the resulting recipes with the release assets.
 For a local source smoke build, `scripts/arch-package-smoke.sh` creates a source
 archive and supplies its `file://` URL and checksum through the documented
-`OMACELL_SOURCE_URL` and `OMACELL_SOURCE_SHA256` inputs.
+`PKGBUILD_SOURCE_URL` and `PKGBUILD_SOURCE_SHA256` inputs. These build-only
+variables deliberately stay outside Omacell's `OMACELL_*` runtime configuration
+namespace.
 
 Installed paths:
 

@@ -314,11 +314,23 @@ fn wp28_distribution_assets_are_complete() {
         "check()",
         "package()",
         "options=('!lto')",
+        "PKGBUILD_SOURCE_URL",
+        "PKGBUILD_SOURCE_SHA256",
         "ttf-carlito",
         "ttf-liberation",
         "/usr/share/omacell",
     ] {
         assert!(source.contains(needle), "source PKGBUILD missing {needle}");
+    }
+    assert!(
+        !source.contains("OMACELL_SOURCE_"),
+        "build inputs must not collide with the OMACELL_* runtime config namespace"
+    );
+
+    let smoke =
+        fs::read_to_string(root.join("scripts/arch-package-smoke.sh")).expect("read Arch smoke");
+    for needle in ["PKGBUILD_SOURCE_URL", "PKGBUILD_SOURCE_SHA256"] {
+        assert!(smoke.contains(needle), "Arch smoke missing {needle}");
     }
 
     let book = fs::read_to_string(root.join("book.toml")).expect("read mdBook configuration");
