@@ -72,7 +72,7 @@ package() {
     "${pkgdir}/usr/share/mime/packages/omacell.xml"
   install -d "${pkgdir}/usr/share/omacell" \
     "${pkgdir}/usr/share/icons" \
-    "${pkgdir}/usr/share/doc/${pkgname}"
+    "${pkgdir}/usr/share/doc/${pkgname}/manual"
   cp -a default "${pkgdir}/usr/share/omacell/default"
   cp -a i18n "${pkgdir}/usr/share/omacell/i18n"
   cp -a packaging/icons/hicolor "${pkgdir}/usr/share/icons/"
@@ -84,5 +84,5 @@ package() {
     "${pkgdir}/usr/share/fish/vendor_completions.d/omacell.fish"
   install -Dm644 target/dist/_omacell \
     "${pkgdir}/usr/share/zsh/site-functions/_omacell"
-  cp -a book "${pkgdir}/usr/share/doc/${pkgname}/manual"
+  cp -a book/. "${pkgdir}/usr/share/doc/${pkgname}/manual/"
 }

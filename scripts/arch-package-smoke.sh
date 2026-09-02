@@ -18,10 +18,17 @@ docker run --rm --volume "$root:/src:ro" "$image" bash -euo pipefail -c '
   checksum=$(sha256sum /home/build/omacell-0.0.0.tar.gz | cut -d " " -f 1)
   su build -c "cd /home/build/package && PKGBUILD_SOURCE_URL=file:///home/build/omacell-0.0.0.tar.gz PKGBUILD_SOURCE_SHA256=$checksum makepkg --noconfirm"
   pacman -U --noconfirm /home/build/package/omacell-0.0.0-1-*.pkg.tar.zst
+  printf "%s\n" "smoke: installed package"
   omacell --version
+  printf "%s\n" "smoke: version command"
   omacell fn list --json >/dev/null
+  printf "%s\n" "smoke: function catalog"
   desktop-file-validate /usr/share/applications/omacell.desktop
+  printf "%s\n" "smoke: desktop entry"
   test -f /usr/share/omacell/default/agents/skills/omacell/SKILL.md
+  printf "%s\n" "smoke: packaged skill"
   test -f /usr/share/omacell/i18n/en-US/omacell.ftl
+  printf "%s\n" "smoke: locale catalog"
   test -f /usr/share/doc/omacell/manual/index.html
+  printf "%s\n" "smoke: manual"
 '
