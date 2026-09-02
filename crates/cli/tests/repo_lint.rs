@@ -313,6 +313,7 @@ fn wp28_distribution_assets_are_complete() {
         "build()",
         "check()",
         "package()",
+        "options=('!lto')",
         "ttf-carlito",
         "ttf-liberation",
         "/usr/share/omacell",

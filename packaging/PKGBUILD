@@ -6,6 +6,10 @@ pkgdesc='Keyboard-first spreadsheet for Omarchy Linux'
 arch=('x86_64' 'aarch64')
 url='https://github.com/sheaduncan/omacell'
 license=('MIT')
+# makepkg's GCC `-flto=auto` turns ring's bundled C/assembly objects into
+# plugin LTO objects that rust-lld cannot recover from the Rust archive. Cargo
+# still applies the workspace's Rust thin-LTO release profile.
+options=('!lto')
 depends=(
   'fontconfig'
   'gcc-libs'
