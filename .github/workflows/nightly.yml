@@ -31,6 +31,14 @@ jobs:
         with:
           tool: cargo-fuzz
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
+        with:
+          tool: cargo-deny
+
+      - name: Dependency policy
+        run: cargo deny check
+
       - name: Ignored / large-file tests
         run: cargo +nightly test --workspace -- --ignored
 

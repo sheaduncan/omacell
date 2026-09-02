@@ -1,0 +1,102 @@
+name: Omarchy channels
+
+on:
+  schedule:
+    - cron: "41 5 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: Omarchy ${{ matrix.channel }}
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, rc, edge]
+    runs-on: [self-hosted, linux, x64, "${{ format('omarchy-{0}', matrix.channel) }}"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-28
+        with:
+          toolchain: 1.98.0
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build and install the package on the channel image
+        shell: bash
+        run: |
+          package_root="$RUNNER_TEMP/omacell-package"
+          source_root="$RUNNER_TEMP/omacell-0.0.0"
+          install -d "$package_root" "$source_root"
+          git archive HEAD | tar -C "$source_root" -xf -
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/omacell-0.0.0.tar.gz" omacell-0.0.0
+          install -m644 packaging/PKGBUILD packaging/omacell.install "$package_root/"
+          source_sha=$(sha256sum "$RUNNER_TEMP/omacell-0.0.0.tar.gz" | cut -d ' ' -f 1)
+          (
+            cd "$package_root"
+            OMACELL_SOURCE_URL="file://$RUNNER_TEMP/omacell-0.0.0.tar.gz" \
+              OMACELL_SOURCE_SHA256="$source_sha" \
+              makepkg --noconfirm --syncdeps --cleanbuild --nocheck
+          )
+          sudo pacman -U --noconfirm "$package_root"/omacell-0.0.0-1-*.pkg.tar.zst
+          /usr/bin/omacell --version
+
+      - name: Verify live theme fixtures
+        run: scripts/fetch-omarchy-themes.sh --check
+
+      - name: Setup, font, theme, and agent integration
+        shell: bash
+        run: |
+          integration_home=$(mktemp -d)
+          server_pid=
+          cleanup() {
+            if [[ -n $server_pid ]]; then kill "$server_pid" 2>/dev/null || true; fi
+            rm -rf "$integration_home"
+          }
+          trap cleanup EXIT
+          export HOME=$integration_home
+          export XDG_CONFIG_HOME=$integration_home/.config
+          export XDG_STATE_HOME=$integration_home/.local/state
+          export XDG_RUNTIME_DIR=$integration_home/run
+          install -d -m700 "$XDG_RUNTIME_DIR"
+          real_omarchy=$(command -v omarchy)
+          install -d "$HOME/bin"
+          sed "s|@REAL_OMARCHY@|$real_omarchy|" > "$HOME/bin/omarchy" <<'SH'
+          #!/bin/bash
+          if [[ $1 == default && $2 == agent ]]; then printf '%s\n' codex; exit 0; fi
+          if [[ $1 == agent && $2 == prompt ]]; then exit 0; fi
+          exec @REAL_OMARCHY@ "$@"
+          SH
+          chmod +x "$HOME/bin/omarchy"
+          export PATH=$HOME/bin:/usr/bin:$PATH
+          install -d "$HOME/.local/state/omarchy/current/theme"
+          mapfile -t themes < <(find /usr/share/omarchy/themes -mindepth 1 -maxdepth 1 -type d | sort | head -2)
+          test "${#themes[@]}" -eq 2
+          for index in 0 1; do
+            theme=${themes[$index]}
+            cp "$theme/colors.toml" "$HOME/.local/state/omarchy/current/theme/colors.toml"
+            printf '%s\n' "$(basename "$theme")" > "$HOME/.local/state/omarchy/current/theme.name"
+            printf '[font]\nbase-size = %s\n' "$((12 + index * 2))" \
+              > "$HOME/.local/state/omarchy/current/theme/shell.toml"
+            omacell theme show --json >/dev/null
+          done
+          omacell setup omarchy --menu
+          test -f "$HOME/.config/omarchy/themed/omacell.toml.tpl"
+          test -x "$HOME/.config/omarchy/hooks/theme-set.d/omacell"
+          test -L "$HOME/.codex/skills/omacell"
+          omacell theme show --json >/dev/null
+          omacell config check --json >/dev/null
+          test "$(omarchy default agent)" = codex
+          omacell mcp --quiet --socket "$XDG_RUNTIME_DIR/mcp.sock" &
+          server_pid=$!
+          for _ in {1..100}; do
+            compgen -G "$XDG_RUNTIME_DIR/omacell/*.sock" >/dev/null && break
+            sleep 0.05
+          done
+          omacell --json ipc ping >/dev/null
+          omacell --json ipc theme.reload --all --quiet >/dev/null
+          cargo test -p omacell-conf --test font --test setup --test theme

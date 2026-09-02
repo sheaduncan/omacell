@@ -166,6 +166,7 @@ impl App {
         } else {
             ConfigStore::load_with(paths.clone(), options.clone())?
         };
+        file_session.attach_state_dir(&paths.state_dir);
         file_session.attach_config(store.handle());
         let mut registry = FnRegistry::new();
         register_all(&mut registry);

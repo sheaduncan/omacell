@@ -1,0 +1,14 @@
+post_install() {
+  update-mime-database usr/share/mime >/dev/null 2>&1 || true
+  gtk-update-icon-cache -q -t -f usr/share/icons/hicolor >/dev/null 2>&1 || true
+  printf '%s\n' 'Optional Omarchy integration: run `omacell setup omarchy` as your user.'
+}
+
+post_upgrade() {
+  post_install
+}
+
+post_remove() {
+  update-mime-database usr/share/mime >/dev/null 2>&1 || true
+  gtk-update-icon-cache -q -t -f usr/share/icons/hicolor >/dev/null 2>&1 || true
+}

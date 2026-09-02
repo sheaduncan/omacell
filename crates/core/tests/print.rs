@@ -2,7 +2,9 @@
 
 use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::geometry::DEFAULT_ROW_PX;
-use omacell_core::print::{Orientation, PX_TO_PT, PageSetup, PaperSize, expand_header, paginate};
+use omacell_core::print::{
+    Orientation, PX_TO_PT, PageSetup, PaperSize, PrintTitleBand, expand_header, paginate,
+};
 use omacell_core::workbook::Workbook;
 
 fn fill_grid(wb: &mut Workbook, rows: u32, cols: u16) {
@@ -199,5 +201,60 @@ fn page_setup_is_validated_and_undo_tracked() {
     assert_eq!(
         wb.set_page_setup(sheet, invalid).unwrap_err().code,
         "print.setup"
+    );
+}
+
+#[test]
+fn non_origin_title_bands_keep_leading_data_and_repeat() {
+    let mut wb = Workbook::new();
+    fill_grid(&mut wb, 100, 8);
+    let setup = PageSetup {
+        title_row_band: Some(PrintTitleBand { start: 2, end: 3 }),
+        title_col_band: Some(PrintTitleBand { start: 1, end: 1 }),
+        ..PageSetup::default()
+    };
+    let pages = paginate(wb.sheet(wb.active_sheet()).unwrap(), &setup).unwrap();
+    assert!(pages.len() > 1);
+    assert_eq!(
+        pages[0].row0, 0,
+        "rows before the title band remain printable"
+    );
+    assert_eq!(
+        pages[0].col0, 0,
+        "columns before the title band remain printable"
+    );
+    assert_eq!(
+        setup.row_title_band(0),
+        Some(PrintTitleBand { start: 2, end: 3 })
+    );
+    assert_eq!(
+        setup.col_title_band(0),
+        Some(PrintTitleBand { start: 1, end: 1 })
+    );
+}
+
+#[test]
+fn inverted_title_band_is_rejected() {
+    let setup = PageSetup {
+        title_row_band: Some(PrintTitleBand { start: 4, end: 3 }),
+        ..PageSetup::default()
+    };
+    assert_eq!(setup.validate().unwrap_err().code, "print.setup");
+}
+
+#[test]
+fn legacy_origin_title_counts_remain_deserializable() {
+    let setup: PageSetup = serde_json::from_value(serde_json::json!({
+        "title_rows": 2,
+        "title_cols": 1
+    }))
+    .unwrap();
+    assert_eq!(
+        setup.row_title_band(3),
+        Some(PrintTitleBand { start: 3, end: 4 })
+    );
+    assert_eq!(
+        setup.col_title_band(2),
+        Some(PrintTitleBand { start: 2, end: 2 })
     );
 }

@@ -55,6 +55,8 @@ fn freeze_and_split_are_mutually_exclusive_in_both_dispatch_paths() {
     assert!(bus.execute(Origin::User, "view.split", json!({})).ok);
     assert_eq!(session.viewport().freeze, FreezePanes::default());
     assert!(session.viewport().split.is_some());
+    assert_eq!(session.viewport().first_row, 2);
+    assert_eq!(session.viewport().first_col, 3);
     assert!(bus.execute(Origin::User, "view.freeze", json!({})).ok);
     assert_eq!(session.viewport().freeze, FreezePanes { rows: 2, cols: 3 });
     assert!(session.viewport().split.is_none());
@@ -64,6 +66,8 @@ fn freeze_and_split_are_mutually_exclusive_in_both_dispatch_paths() {
         .unwrap();
     assert_eq!(session.viewport().freeze, FreezePanes::default());
     assert!(session.viewport().split.is_some());
+    assert_eq!(session.viewport().first_row, 2);
+    assert_eq!(session.viewport().first_col, 3);
     apply_local_command(&session, bus.workbook(), "view.freeze", &json!({}))
         .unwrap()
         .unwrap();

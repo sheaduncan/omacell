@@ -1,7 +1,7 @@
 //! Parse and emit worksheet print fragments from [`PageSetup`].
 
-use omacell_core::addr::{RangeRef, parse_a1};
-use omacell_core::print::{Orientation, PageSetup, PaperSize};
+use omacell_core::addr::{RangeRef, col_to_letters, parse_a1};
+use omacell_core::print::{Orientation, PageSetup, PaperSize, PrintTitleBand};
 use omacell_core::sheet::Sheet;
 
 use super::xml::{XmlEvent, XmlReader, attr, escape};
@@ -148,6 +148,8 @@ pub(crate) fn extras_match(print_xml: &[Vec<u8>], setup: &PageSetup) -> bool {
     }
     let mut parsed = PageSetup {
         print_area: setup.print_area,
+        title_row_band: setup.title_row_band,
+        title_col_band: setup.title_col_band,
         title_rows: setup.title_rows,
         title_cols: setup.title_cols,
         ..PageSetup::default()
@@ -251,26 +253,42 @@ pub(crate) fn apply_print_name(setup: &mut PageSetup, name: &str, referent: &str
     }
     if is_print_titles(&lower) {
         for part in referent.split(',') {
-            if let Some(range) = parse_print_range(part.trim()) {
-                let rows = range
-                    .end
-                    .row
-                    .saturating_sub(range.start.row)
-                    .saturating_add(1);
-                let cols = range
-                    .end
-                    .col
-                    .saturating_sub(range.start.col)
-                    .saturating_add(1);
-                // Whole-row titles look like `$1:$2` (span every column).
-                if u32::from(cols) > 256 {
-                    setup.title_rows = rows;
+            let part = part.trim();
+            if let (Some(range), Some(rows)) = (parse_print_range(part), print_title_is_rows(part))
+            {
+                if rows {
+                    setup.title_row_band = Some(PrintTitleBand {
+                        start: range.start.row,
+                        end: range.end.row,
+                    });
+                    setup.title_rows = 0;
                 } else {
-                    setup.title_cols = cols;
+                    setup.title_col_band = Some(PrintTitleBand {
+                        start: range.start.col,
+                        end: range.end.col,
+                    });
+                    setup.title_cols = 0;
                 }
             }
         }
     }
+}
+
+fn print_title_is_rows(text: &str) -> Option<bool> {
+    let a1 = text.rsplit_once('!').map_or(text, |(_, rest)| rest);
+    let (start, end) = a1.split_once(':')?;
+    let start = start.trim().trim_start_matches('$');
+    let end = end.trim().trim_start_matches('$');
+    let rows = [start, end]
+        .iter()
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    if rows {
+        return Some(true);
+    }
+    let cols = [start, end]
+        .iter()
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_alphabetic()));
+    cols.then_some(false)
 }
 
 /// Whether `name` is one of Excel's built-in print defined names.
@@ -302,11 +320,13 @@ pub(crate) fn print_names_match<'a>(
         saw_titles |= is_print_titles(&lower);
         apply_print_name(&mut parsed, name, referent);
     }
+    let expected_rows = setup.row_title_band(0);
+    let expected_cols = setup.col_title_band(0);
     saw_area == setup.print_area.is_some()
-        && saw_titles == (setup.title_rows > 0 || setup.title_cols > 0)
+        && saw_titles == (expected_rows.is_some() || expected_cols.is_some())
         && parsed.print_area == setup.print_area
-        && parsed.title_rows == setup.title_rows
-        && parsed.title_cols == setup.title_cols
+        && parsed.row_title_band(0) == expected_rows
+        && parsed.col_title_band(0) == expected_cols
 }
 
 fn parse_print_range(text: &str) -> Option<RangeRef> {
@@ -334,20 +354,22 @@ pub(crate) fn print_names_xml(sheet: &Sheet, local_sheet_id: usize) -> String {
             escape(&area.to_a1())
         ));
     }
-    if sheet.page_setup.title_rows > 0 || sheet.page_setup.title_cols > 0 {
+    let title_rows = sheet.page_setup.row_title_band(0);
+    let title_cols = sheet.page_setup.col_title_band(0);
+    if title_rows.is_some() || title_cols.is_some() {
         let mut parts = Vec::new();
-        if sheet.page_setup.title_rows > 0 {
+        if let Some(band) = title_rows {
             parts.push(format!(
-                "{}!$1:${}",
+                "{}!${}:${}",
                 escape_name(&sheet.name),
-                sheet.page_setup.title_rows
+                band.start.saturating_add(1),
+                band.end.saturating_add(1)
             ));
         }
-        if sheet.page_setup.title_cols > 0 {
-            let end =
-                omacell_core::addr::col_to_letters(sheet.page_setup.title_cols.saturating_sub(1))
-                    .unwrap_or_else(|_| "A".into());
-            parts.push(format!("{}!$A:${end}", escape_name(&sheet.name)));
+        if let Some(band) = title_cols {
+            let start = col_to_letters(band.start).unwrap_or_else(|_| "A".into());
+            let end = col_to_letters(band.end).unwrap_or_else(|_| start.clone());
+            parts.push(format!("{}!${start}:${end}", escape_name(&sheet.name)));
         }
         s.push_str(&format!(
             r#"<definedName name="_xlnm.Print_Titles" localSheetId="{local_sheet_id}">{}</definedName>"#,
@@ -412,5 +434,39 @@ mod tests {
         assert_eq!(setup.print_area, None);
         assert!(!is_print_name("Quarterly_Print_Area"));
         assert!(is_print_name("_xlnm.Print_Area"));
+    }
+
+    #[test]
+    fn non_origin_print_titles_parse_match_and_emit() {
+        let mut setup = PageSetup::default();
+        apply_print_name(
+            &mut setup,
+            "_xlnm.Print_Titles",
+            "Sheet1!$3:$4,Sheet1!$B:$C",
+        );
+        assert_eq!(
+            setup.title_row_band,
+            Some(PrintTitleBand { start: 2, end: 3 })
+        );
+        assert_eq!(
+            setup.title_col_band,
+            Some(PrintTitleBand { start: 1, end: 2 })
+        );
+        assert!(print_names_match(
+            &setup,
+            [("_xlnm.Print_Titles", "Sheet1!$3:$4,Sheet1!$B:$C")]
+        ));
+
+        let mut sheet = Sheet::new(omacell_core::addr::SheetId::new(0), "Sheet1").unwrap();
+        sheet.page_setup = setup.clone();
+        let xml = print_names_xml(&sheet, 0);
+        assert!(xml.contains("Sheet1!$3:$4,Sheet1!$B:$C"), "{xml}");
+
+        apply_print_name(&mut setup, "_xlnm.Print_Titles", "Sheet1!$A$1:$ZZ$2");
+        assert_eq!(
+            setup.title_row_band,
+            Some(PrintTitleBand { start: 2, end: 3 }),
+            "cell ranges are not valid print-title bands"
+        );
     }
 }

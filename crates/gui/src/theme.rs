@@ -1,8 +1,13 @@
-//! Map `LoadedConfig.theme.roles` onto egui visuals and grid colors.
+//! Map `LoadedConfig.theme.roles` onto egui visuals, colors, and font caches.
 
-use egui::{Color32, CornerRadius, Stroke, Visuals};
-use omacell_conf::font::ShellTokens;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use egui::{Color32, CornerRadius, FontFamily, Stroke, Visuals};
+use omacell_conf::font::{ShellTokens, resolve_font_path, substitute_file_font};
 use omacell_conf::theme::ThemeRoles;
+use omacell_core::workbook::Workbook;
+use omacell_ui::UiSession;
 
 /// Parsed chrome + grid palette from resolved roles (no file parse here).
 #[derive(Clone, Debug)]
@@ -173,31 +178,142 @@ pub fn hex_color(hex: &str) -> Color32 {
     Color32::GRAY
 }
 
-/// Load a font file into egui when the shell resolved a path.
-pub fn install_font(ctx: &egui::Context, path: Option<&std::path::Path>) {
-    let Some(path) = path else {
-        return;
-    };
-    let Ok(bytes) = std::fs::read(path) else {
-        return;
-    };
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "omacell-ui".into(),
-        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-    );
-    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-        family.insert(0, "omacell-ui".into());
+/// Retained font definitions and aliases for visible workbook cell families.
+pub(crate) struct WorkbookFontCache {
+    definitions: egui::FontDefinitions,
+    attempted: BTreeSet<String>,
+    families: BTreeMap<String, FontFamily>,
+}
+
+impl WorkbookFontCache {
+    /// Start with egui defaults plus the resolved Omarchy UI font.
+    pub(crate) fn new(ctx: &egui::Context, ui_path: Option<&Path>) -> Self {
+        let mut cache = Self {
+            definitions: egui::FontDefinitions::default(),
+            attempted: BTreeSet::new(),
+            families: BTreeMap::new(),
+        };
+        if let Some(path) = ui_path {
+            cache.install_ui(path);
+        }
+        ctx.set_fonts(cache.definitions.clone());
+        cache
     }
-    if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-        family.insert(0, "omacell-ui".into());
+
+    /// Resolve and load font families used by currently visible cells.
+    pub(crate) fn ensure_visible(
+        &mut self,
+        ctx: &egui::Context,
+        workbook: &Workbook,
+        session: &UiSession,
+    ) {
+        let viewport = session.viewport();
+        let panes = crate::grid::pane_counts(&viewport);
+        let selection = session.selection();
+        let (first_row, _, last_row) = viewport.screen_rows();
+        let last_col = viewport
+            .first_col
+            .saturating_add(viewport.page_cols().saturating_sub(1));
+        let rows = (0..panes.rows)
+            .chain(first_row..=last_row)
+            .take(128)
+            .collect::<Vec<_>>();
+        let cols = (0..panes.cols)
+            .chain(viewport.first_col..=last_col)
+            .take(64)
+            .collect::<Vec<_>>();
+        let mut names = BTreeSet::new();
+        for row in rows {
+            for &col in &cols {
+                let Some(style) = workbook
+                    .get(selection.sheet, row, col)
+                    .ok()
+                    .flatten()
+                    .and_then(|slot| workbook.intern().styles.get(slot.style))
+                else {
+                    continue;
+                };
+                if !style.font.name.trim().is_empty() {
+                    names.insert(style.font.name.clone());
+                }
+            }
+        }
+        let mut changed = false;
+        for name in names {
+            changed |= self.ensure_family(&name);
+        }
+        if changed {
+            ctx.set_fonts(self.definitions.clone());
+        }
     }
-    ctx.set_fonts(fonts);
+
+    /// Egui family for a workbook typeface, with a cached fallback.
+    pub(crate) fn family(&self, name: &str) -> FontFamily {
+        if name.trim().is_empty() {
+            return FontFamily::Monospace;
+        }
+        self.families
+            .get(&name.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or(FontFamily::Monospace)
+    }
+
+    fn install_ui(&mut self, path: &Path) {
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        self.definitions.font_data.insert(
+            "omacell-ui".into(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        for family in [FontFamily::Monospace, FontFamily::Proportional] {
+            if let Some(entries) = self.definitions.families.get_mut(&family) {
+                entries.insert(0, "omacell-ui".into());
+            }
+        }
+    }
+
+    fn ensure_family(&mut self, requested: &str) -> bool {
+        let key = requested.to_ascii_lowercase();
+        if !self.attempted.insert(key.clone()) {
+            return false;
+        }
+        let substituted = substitute_file_font(requested).to_string();
+        let Some(path) = resolve_font_path(&substituted) else {
+            self.families.insert(key, FontFamily::Monospace);
+            return false;
+        };
+        let Ok(bytes) = std::fs::read(&path) else {
+            self.families.insert(key, FontFamily::Monospace);
+            return false;
+        };
+        let data_id = font_data_id(&substituted, &path);
+        self.definitions.font_data.insert(
+            data_id.clone(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        let family = FontFamily::Name(substituted.clone().into());
+        let mut fallbacks = vec![data_id];
+        if let Some(defaults) = self.definitions.families.get(&FontFamily::Proportional) {
+            fallbacks.extend(defaults.iter().cloned());
+        }
+        self.definitions.families.insert(family.clone(), fallbacks);
+        self.families.insert(key, family);
+        true
+    }
+}
+
+fn font_data_id(family: &str, path: &Path) -> String {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("font");
+    format!("omacell-cell-{}-{filename}", family.to_ascii_lowercase())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::hex_color;
+    use super::{WorkbookFontCache, hex_color};
     use egui::Color32;
 
     #[test]
@@ -209,5 +325,16 @@ mod tests {
         );
         assert_eq!(hex_color("not-a-color"), Color32::GRAY);
         assert_eq!(hex_color("aéaaa"), Color32::GRAY);
+    }
+
+    #[test]
+    fn workbook_font_cache_resolves_office_aliases_once() {
+        let ctx = egui::Context::default();
+        let mut cache = WorkbookFontCache::new(&ctx, None);
+        let _ = cache.ensure_family("Calibri");
+        let first = cache.attempted.len();
+        let _ = cache.ensure_family("Calibri");
+        assert_eq!(cache.attempted.len(), first);
+        assert!(cache.attempted.contains("calibri"));
     }
 }

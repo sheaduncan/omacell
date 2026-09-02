@@ -10,7 +10,9 @@ mod app;
 mod chart;
 mod chrome;
 mod grid;
+mod i18n;
 mod input;
+mod motion;
 mod theme;
 
 pub use app::{Gui, Launch, run};

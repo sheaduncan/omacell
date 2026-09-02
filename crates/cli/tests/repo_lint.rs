@@ -289,3 +289,181 @@ fn merged_contract_reports_do_not_retain_pending_merge_gates() {
         violations.join("\n")
     );
 }
+
+#[test]
+fn wp28_distribution_assets_are_complete() {
+    let root = workspace_root();
+    let packaging = root.join("packaging");
+    for relative in [
+        "PKGBUILD",
+        "PKGBUILD-bin",
+        "omacell.install",
+        "omacell.desktop",
+        "omacell.xml",
+        "name.env",
+    ] {
+        assert!(
+            packaging.join(relative).is_file(),
+            "missing packaging/{relative}"
+        );
+    }
+
+    let source = fs::read_to_string(packaging.join("PKGBUILD")).expect("read source PKGBUILD");
+    for needle in [
+        "build()",
+        "check()",
+        "package()",
+        "options=('!lto' 'docs')",
+        "PKGBUILD_SOURCE_URL",
+        "PKGBUILD_SOURCE_SHA256",
+        "export CARGO_TARGET_DIR=\"${srcdir}/${pkgname}-${pkgver}/target\"",
+        "install -d \"${pkgdir}/usr/share/omacell\"",
+        "cp -a book/. \"${pkgdir}/usr/share/doc/${pkgname}/manual/\"",
+        "ttf-carlito",
+        "ttf-liberation",
+        "/usr/share/omacell",
+    ] {
+        assert!(source.contains(needle), "source PKGBUILD missing {needle}");
+    }
+    assert!(
+        !source.contains("OMACELL_SOURCE_"),
+        "build inputs must not collide with the OMACELL_* runtime config namespace"
+    );
+    assert!(
+        !source.contains("book/html"),
+        "source packaging must use book.toml's configured build directory"
+    );
+
+    let smoke =
+        fs::read_to_string(root.join("scripts/arch-package-smoke.sh")).expect("read Arch smoke");
+    for needle in [
+        "PKGBUILD_SOURCE_URL",
+        "PKGBUILD_SOURCE_SHA256",
+        "smoke: manual in package archive",
+    ] {
+        assert!(smoke.contains(needle), "Arch smoke missing {needle}");
+    }
+
+    let book = fs::read_to_string(root.join("book.toml")).expect("read mdBook configuration");
+    assert!(
+        !book.contains("multilingual"),
+        "book.toml must remain compatible with mdBook 0.5"
+    );
+    let binary = fs::read_to_string(packaging.join("PKGBUILD-bin")).expect("read binary PKGBUILD");
+    for needle in ["pkgname=omacell-bin", "package()", "x86_64", "aarch64"] {
+        assert!(binary.contains(needle), "binary PKGBUILD missing {needle}");
+    }
+
+    let desktop =
+        fs::read_to_string(packaging.join("omacell.desktop")).expect("read desktop entry");
+    for mime in [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel.sheet.macroEnabled.12",
+        "application/vnd.ms-excel",
+        "text/csv",
+        "text/tab-separated-values",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/x-omacell",
+    ] {
+        assert!(desktop.contains(mime), "desktop entry missing {mime}");
+    }
+    let mime = fs::read_to_string(packaging.join("omacell.xml")).expect("read MIME XML");
+    assert!(mime.contains("application/x-omacell"));
+    assert!(mime.contains("*.omc"));
+
+    for size in [
+        "16x16", "24x24", "32x32", "48x48", "64x64", "128x128", "256x256",
+    ] {
+        assert!(
+            packaging
+                .join("icons/hicolor")
+                .join(size)
+                .join("apps/omacell.png")
+                .is_file(),
+            "missing hicolor {size} application icon"
+        );
+    }
+    for relative in [
+        "icons/hicolor/scalable/apps/omacell.svg",
+        "icons/hicolor/symbolic/apps/omacell-symbolic.svg",
+        "icons/hicolor/scalable/mimetypes/application-x-omacell.svg",
+    ] {
+        assert!(
+            packaging.join(relative).is_file(),
+            "missing packaging/{relative}"
+        );
+    }
+
+    let mut packaging_text = Vec::new();
+    walk(&packaging, &mut packaging_text);
+    for path in packaging_text {
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        assert!(
+            !text.contains("TODO(WP-28)"),
+            "shipping scaffold remains in {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn wp28_manual_and_release_automation_are_present() {
+    let root = workspace_root();
+    for relative in [
+        "book.toml",
+        "docs/book/SUMMARY.md",
+        "docs/book/manual.md",
+        "docs/book/configuration.md",
+        "docs/book/cli-reference.md",
+        "docs/book/lua-api.md",
+        "docs/book/ai-privacy.md",
+        "docs/book/omarchy.md",
+        "docs/book/parser-limits.md",
+        "docs/book/pdf-printing.md",
+        "scripts/generate-docs.py",
+        "scripts/extract-i18n.py",
+        "scripts/check-perf-baselines.py",
+        "scripts/rename.sh",
+        "scripts/arch-package-smoke.sh",
+        ".github/workflows/packaging.yml",
+        ".github/workflows/omarchy.yml",
+        ".github/workflows/performance.yml",
+        ".github/workflows/release.yml",
+        "CHANGELOG.md",
+        "i18n/en-US/omacell.ftl",
+    ] {
+        assert!(root.join(relative).is_file(), "missing {relative}");
+    }
+
+    let summary = fs::read_to_string(root.join("docs/book/SUMMARY.md")).expect("read SUMMARY");
+    for chapter in [
+        "manual.md",
+        "configuration.md",
+        "cli-reference.md",
+        "lua-api.md",
+        "ai-privacy.md",
+        "omarchy.md",
+        "parser-limits.md",
+        "pdf-printing.md",
+    ] {
+        assert!(
+            summary.contains(chapter),
+            "mdBook summary missing {chapter}"
+        );
+    }
+
+    let rename = fs::read_to_string(root.join("scripts/rename.sh")).expect("read rename script");
+    assert!(rename.contains("packaging/name.env"));
+    assert!(rename.contains("crates/core/src/product.rs"));
+    let nightly =
+        fs::read_to_string(root.join(".github/workflows/nightly.yml")).expect("read nightly");
+    assert!(nightly.contains("cargo +nightly fuzz list"));
+    assert!(nightly.contains("cargo deny check"));
+    let release =
+        fs::read_to_string(root.join(".github/workflows/release.yml")).expect("read release");
+    assert!(release.contains("install -d \"$root/share/omacell\""));
+    assert!(release.contains("cp -a book/. \"$root/share/doc/omacell/manual/\""));
+    assert!(!release.contains("book/html"));
+}

@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  identity-gate:
+    name: Public name clearance
+    runs-on: ubuntu-latest
+    environment: public-release
+    steps:
+      - name: Require recorded clearance
+        env:
+          NAME_CLEARED: ${{ vars.OMACELL_NAME_CLEARED }}
+        run: test "$NAME_CLEARED" = true
+
+  build:
+    needs: identity-gate
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify tag version
+        shell: bash
+        run: |
+          [[ $GITHUB_REF_NAME =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version=${GITHUB_REF_NAME#v}
+          test "$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')" = "$version"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-28
+        with:
+          toolchain: 1.98.0
+
+      - name: Build tested release tree
+        shell: bash
+        run: |
+          cargo test --locked --workspace
+          cargo build --locked --release -p omacell-cli
+          cargo test --locked -p omacell-cli --test dist generate_completions_and_man
+          cargo install mdbook --locked --version 0.4.52
+          cargo run --locked -p omacell-cli --example generate-docs -- docs/book/cli-reference.md
+          python3 scripts/generate-docs.py --write
+          mdbook build
+          version=${GITHUB_REF_NAME#v}
+          root="release-tree/usr"
+          install -Dm755 target/release/omacell "$root/bin/omacell"
+          install -Dm644 LICENSE "release-tree/usr/share/licenses/omacell/LICENSE"
+          install -Dm644 packaging/omacell.desktop "$root/share/applications/omacell.desktop"
+          install -Dm644 packaging/omacell.xml "$root/share/mime/packages/omacell.xml"
+          install -d "$root/share/omacell" "$root/share/icons" "$root/share/doc/omacell/manual"
+          cp -a default "$root/share/omacell/default"
+          cp -a i18n "$root/share/omacell/i18n"
+          cp -a packaging/icons/hicolor "$root/share/icons/"
+          install -Dm644 target/dist/omacell.1 "$root/share/man/man1/omacell.1"
+          install -Dm644 target/dist/omacell.bash "$root/share/bash-completion/completions/omacell"
+          install -Dm644 target/dist/omacell.fish "$root/share/fish/vendor_completions.d/omacell.fish"
+          install -Dm644 target/dist/_omacell "$root/share/zsh/site-functions/_omacell"
+          cp -a book/. "$root/share/doc/omacell/manual/"
+          tar --zstd -cf "omacell-${version}-${{ matrix.arch }}.tar.zst" -C release-tree .
+
+      - name: Upload release tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: omacell-${{ matrix.arch }}
+          path: omacell-*.tar.zst
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: omacell-*
+          merge-multiple: true
+
+      - name: Produce checksummed AUR recipes
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          source_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          curl --fail --location --output source.tar.gz "$source_url"
+          source_sha=$(sha256sum source.tar.gz | cut -d ' ' -f 1)
+          x86_sha=$(sha256sum "omacell-${version}-x86_64.tar.zst" | cut -d ' ' -f 1)
+          arm_sha=$(sha256sum "omacell-${version}-aarch64.tar.zst" | cut -d ' ' -f 1)
+          cp packaging/PKGBUILD PKGBUILD
+          cp packaging/PKGBUILD-bin PKGBUILD-bin
+          sed -i "s/pkgver=0.0.0/pkgver=${version}/" PKGBUILD PKGBUILD-bin
+          sed -i "s/REPLACE_WITH_RELEASE_SHA256/${source_sha}/" PKGBUILD
+          sed -i "s/REPLACE_WITH_X86_64_SHA256/${x86_sha}/" PKGBUILD-bin
+          sed -i "s/REPLACE_WITH_AARCH64_SHA256/${arm_sha}/" PKGBUILD-bin
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          omacell-*.tar.zst PKGBUILD PKGBUILD-bin packaging/omacell.install
+          --verify-tag --title "Omacell $GITHUB_REF_NAME" --notes-file CHANGELOG.md

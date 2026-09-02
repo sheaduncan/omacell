@@ -277,19 +277,16 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
             inner.viewport.split = None;
         }
         "view.split" => {
-            let x = inner
-                .viewport
-                .cols
-                .index_to_pixel(u32::from(inner.selection.cursor.col));
-            let y = inner
-                .viewport
-                .rows
-                .index_to_pixel(inner.selection.cursor.row);
+            let cursor = inner.selection.cursor;
+            let x = inner.viewport.cols.index_to_pixel(u32::from(cursor.col));
+            let y = inner.viewport.rows.index_to_pixel(cursor.row);
             inner.viewport.split = Some(SplitView {
                 x_px: scaled_coordinate(x, inner.viewport.zoom),
                 y_px: scaled_coordinate(y, inner.viewport.zoom),
             });
             inner.viewport.freeze = FreezePanes::default();
+            inner.viewport.first_row = cursor.row;
+            inner.viewport.first_col = cursor.col;
         }
         "view.formulabar" => inner.formula_bar_expanded = !inner.formula_bar_expanded,
         "view.formulas" => inner.show_formulas = !inner.show_formulas,

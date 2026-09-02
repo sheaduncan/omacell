@@ -1,0 +1,40 @@
+# Maintainer: Shea Duncan
+pkgname=omacell-bin
+pkgver=0.0.0
+pkgrel=1
+pkgdesc='Keyboard-first spreadsheet for Omarchy Linux (prebuilt)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/sheaduncan/omacell'
+license=('MIT')
+provides=('omacell')
+conflicts=('omacell')
+depends=(
+  'fontconfig'
+  'gcc-libs'
+  'glibc'
+  'libxkbcommon'
+  'mesa'
+  'shared-mime-info'
+  'ttf-carlito'
+  'ttf-liberation'
+  'wayland'
+  'gtk-update-icon-cache'
+)
+optdepends=(
+  'cups: print through a system printer'
+  'omarchy: desktop theme, menu, and agent integration'
+)
+install=omacell.install
+_release="${url}/releases/download/v${pkgver}"
+source_x86_64=("${OMACELL_BIN_X86_64_URL:-${_release}/omacell-${pkgver}-x86_64.tar.zst}")
+source_aarch64=("${OMACELL_BIN_AARCH64_URL:-${_release}/omacell-${pkgver}-aarch64.tar.zst}")
+sha256sums_x86_64=("${OMACELL_BIN_X86_64_SHA256:-REPLACE_WITH_X86_64_SHA256}")
+sha256sums_aarch64=("${OMACELL_BIN_AARCH64_SHA256:-REPLACE_WITH_AARCH64_SHA256}")
+
+package() {
+  local bundle="${source_x86_64[0]}"
+  if [[ ${CARCH} == aarch64 ]]; then
+    bundle="${source_aarch64[0]}"
+  fi
+  bsdtar -xf "${srcdir}/${bundle##*/}" -C "${pkgdir}"
+}
