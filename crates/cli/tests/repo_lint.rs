@@ -320,6 +320,12 @@ fn wp28_distribution_assets_are_complete() {
     ] {
         assert!(source.contains(needle), "source PKGBUILD missing {needle}");
     }
+
+    let book = fs::read_to_string(root.join("book.toml")).expect("read mdBook configuration");
+    assert!(
+        !book.contains("multilingual"),
+        "book.toml must remain compatible with mdBook 0.5"
+    );
     let binary = fs::read_to_string(packaging.join("PKGBUILD-bin")).expect("read binary PKGBUILD");
     for needle in ["pkgname=omacell-bin", "package()", "x86_64", "aarch64"] {
         assert!(binary.contains(needle), "binary PKGBUILD missing {needle}");
