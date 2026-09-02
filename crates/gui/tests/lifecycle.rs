@@ -328,6 +328,96 @@ fn fill_handle_and_drag_move_execute_atomic_edit_commands() {
 }
 
 #[test]
+fn header_resize_persists_through_writer_commands() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    let a1 = harness.get_by_label_contains("cell A1").rect();
+    let col_edge = egui::pos2(a1.right(), a1.top() - 10.0);
+    let wider = col_edge + egui::vec2(24.0, 0.0);
+    harness.input_mut().events.extend([
+        Event::PointerButton {
+            pos: col_edge,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        },
+        Event::PointerMoved(wider),
+        Event::PointerButton {
+            pos: wider,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    harness.step();
+    wait_tasks(&mut harness);
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    assert_eq!(
+        snapshot
+            .workbook
+            .sheet(sheet)
+            .unwrap()
+            .geometry
+            .cols
+            .size(0)
+            .unwrap(),
+        88
+    );
+
+    harness.step();
+    let a1 = harness.get_by_label_contains("cell A1").rect();
+    let row_edge = egui::pos2(a1.left() - 24.0, a1.bottom());
+    let taller = row_edge + egui::vec2(0.0, 12.0);
+    harness.input_mut().events.extend([
+        Event::PointerButton {
+            pos: row_edge,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        },
+        Event::PointerMoved(taller),
+        Event::PointerButton {
+            pos: taller,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    harness.step();
+    wait_tasks(&mut harness);
+    let snapshot = harness.state().runner().snapshot();
+    assert_eq!(
+        snapshot
+            .workbook
+            .sheet(sheet)
+            .unwrap()
+            .geometry
+            .rows
+            .size(0)
+            .unwrap(),
+        32
+    );
+
+    harness
+        .state_mut()
+        .execute_cmd("edit.undo", serde_json::json!({}))
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert_eq!(harness.state().ui_session().viewport().row_px(0), 20);
+    harness
+        .state_mut()
+        .execute_cmd("edit.undo", serde_json::json!({}))
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert_eq!(harness.state().ui_session().viewport().col_px(0), 64);
+}
+
+#[test]
 fn ctrl_drag_copies_the_selected_range_without_clearing_it() {
     let parts = launch_theme(None);
     let mut harness = Harness::builder()
@@ -627,6 +717,53 @@ fn required_argument_key_opens_the_schema_prompt() {
     assert!(palette.open);
     assert!(palette.prompt.unwrap().contains("path"));
     assert!(!harness.state().runner().is_busy());
+}
+
+#[test]
+fn workbook_panel_commands_open_live_shared_content() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .execute_cmd(
+            "edit.note",
+            serde_json::json!({"ref": "C2", "text": "check this", "author": "Ada"}),
+        )
+        .unwrap();
+    wait_tasks(&mut harness);
+    harness
+        .state_mut()
+        .execute_cmd("comments.panel", serde_json::json!({}))
+        .unwrap();
+    assert!(
+        harness
+            .state()
+            .ui_session()
+            .panel()
+            .body
+            .as_deref()
+            .unwrap()
+            .contains("C2  note by Ada")
+    );
+
+    harness
+        .state_mut()
+        .execute_cmd("format.panel", serde_json::json!({"range": "A1"}))
+        .unwrap();
+    wait_tasks(&mut harness);
+    let panel = harness.state().ui_session().panel();
+    assert_eq!(panel.visible.as_deref(), Some("format"));
+    assert!(
+        panel
+            .body
+            .as_deref()
+            .unwrap()
+            .contains("Number format: General")
+    );
 }
 
 #[test]

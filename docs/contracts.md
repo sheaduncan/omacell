@@ -130,6 +130,16 @@ The final pre-release command integration adds five public workflow commands:
 These are additive schemas; the catalog envelope remains version 1 and no
 existing command schema or IPC envelope changes.
 
+The final report-audit integration adds public `comments.panel`, `sort.panel`,
+and `filter.panel` commands to the retained GUI/TUI composition roots with
+closed empty-object schemas. They mutate only retained UI presentation, are not
+changeset-eligible, and open shared toolkit-neutral bodies from the immutable
+reader snapshot. As with the other session commands, headless composition roots
+do not register them. `format.panel` retains its existing schema/result and both
+retained frontends now consume that result to open the live format panel. The
+catalog envelope remains version 1; human approval of these additive ids is
+recorded by merge of the audit RFC.
+
 The pre-WP-28 import-review integration additively extends two frozen argument
 schemas. `file.open` accepts optional `plan` JSON for an explicitly reviewed
 CSV/TSV `ImportPlan`; `ai.import.assist` accepts optional `preview` JSON holding
@@ -232,9 +242,9 @@ Civil-to-serial conversion rejects impossible calendar dates and inconsistent `l
 
 `format` does not take interned `Value::Text`; pass [`FormatValue::Text`]. Default date system is 1900.
 
-## Analysis — `omacell_core::{pivot,whatif,stats}` (WP-24; approval pending)
+## Analysis — `omacell_core::{pivot,whatif,stats}` (WP-24; approved by merge)
 
-WP-24 proposes the following additions to the frozen public core contract. The PR must not merge until a human approves this RFC in `reports/WP-24.md`.
+WP-24 added the following frozen public core contracts. Human approval is recorded by the merged RFC in `reports/WP-24.md`.
 
 | Type / fn | Source |
 |---|---|
@@ -248,9 +258,9 @@ WP-24 proposes the following additions to the frozen public core contract. The P
 
 The WP-07a command catalog adds public ids `pivot.create`, `pivot.refresh`, `pivot.remove`, `whatif.goalseek`, and `stats.describe` with the typed schemas in [`analysis.rs`](../crates/bus/src/analysis.rs). `pivot.restore` is an internal inverse and is excluded from `commands_json`. The catalog envelope remains schema version 1; existing ids and schemas are unchanged.
 
-## Lua scripting extensions — WP-20 (approval pending)
+## Lua scripting extensions — WP-20 (approved by merge)
 
-WP-20 proposes additive extensions to frozen calculation and command contracts. The PR must not merge until a human approves the RFC in [`reports/WP-20.md`](../reports/WP-20.md).
+WP-20 added the following frozen calculation and command contracts. Human approval is recorded by the merged RFC in [`reports/WP-20.md`](../reports/WP-20.md).
 
 | Type / fn | Source |
 |---|---|
@@ -277,11 +287,11 @@ The MCP tool names, argument schemas, and resource URI templates freeze with thi
 
 `Workbook::ref_error_count()` exposes the incrementally maintained `#REF!` count used to gate the WP-21 diagnose offer without scanning stored cells during paint.
 
-## AI provider and card extensions — WP-22 (approval pending)
+## AI provider and card extensions — WP-22 (approved by merge)
 
-WP-22 proposes additive extensions to the frozen WP-12 configuration and WP-21
-MCP composition surfaces. The PR must not merge until a human approves the RFC
-in [`reports/WP-22.md`](../reports/WP-22.md).
+WP-22 added extensions to the frozen WP-12 configuration and WP-21 MCP
+composition surfaces. Human approval is recorded by the merged RFC in
+[`reports/WP-22.md`](../reports/WP-22.md).
 
 | Item | Source |
 |---|---|

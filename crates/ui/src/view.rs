@@ -279,6 +279,52 @@ pub fn register_ui_commands(
             move |ctx, args| handle(ctx, &inner, kind, args),
         )?;
     }
+    let panel_specs = [
+        (
+            "comments.panel",
+            "List notes and comments on the active sheet",
+            crate::panel::WorkbookPanel::Comments,
+        ),
+        (
+            "sort.panel",
+            "Open sort controls for the selection",
+            crate::panel::WorkbookPanel::Sort,
+        ),
+        (
+            "filter.panel",
+            "Show the active filter and filter controls",
+            crate::panel::WorkbookPanel::Filter,
+        ),
+    ];
+    for (id, doc, kind) in panel_specs {
+        let inner = inner.clone();
+        registry.register::<omacell_bus::args::EmptyArgs, _>(
+            CommandSpec {
+                id,
+                doc,
+                kind: CommandKind::Mutating,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            move |ctx, _args| {
+                if ctx.is_preflight() {
+                    return Ok(Effect::query(
+                        serde_json::json!({"dry_run": ctx.is_dry_run()}),
+                    ));
+                }
+                let mut session = inner.lock().unwrap_or_else(|p| p.into_inner());
+                let selection = session.selection.clone();
+                crate::panel::open_workbook_panel(
+                    &mut session.panel,
+                    &selection,
+                    ctx.workbook_ref(),
+                    kind,
+                );
+                Ok(Effect::query(serde_json::json!({"panel": kind.id()})))
+            },
+        )?;
+    }
     let zoom_inner = session.inner.clone();
     registry.register::<ZoomArgs, _>(
         CommandSpec {

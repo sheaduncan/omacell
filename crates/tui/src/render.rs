@@ -1512,9 +1512,10 @@ fn draw_panel(
         "import" => ui
             .import_review()
             .map_or_else(|| "no active import preview".into(), |review| review.body()),
-        "comments" => "comments (WP-19)".into(),
-        "format" => "format panel (WP-18)".into(),
-        "sort" | "filter" => format!("{id} panel (WP-17)"),
+        "comments" => "Run comments.panel to refresh the comments list.".into(),
+        "format" => "Run format.panel to inspect the current selection.".into(),
+        "sort" => "Run sort.panel to refresh the sort controls.".into(),
+        "filter" => "Run filter.panel to refresh the filter state.".into(),
         other => format!("{other} panel"),
     });
     frame.render_widget(

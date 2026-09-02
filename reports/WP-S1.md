@@ -65,7 +65,7 @@ WP-01 proceeds against `crates/core` with no IronCalc types.
 - `SUM(A:A)` edge count is from source (`CellOrRange::Range`) plus issue #849, not a public counter (`support` is `pub(crate)`).
 - Isolated 100k and the 100k pass that shared a process with 1M disagree by ~2×; both show incr ≈ full. The ADR quotes the isolated process as the primary 100k number.
 - Concurrent WP-01/WP-S2 on other worktrees; this package does not commit their files and does not edit `crates/core`.
-- Acceptance "ADR merged" cannot be ticked: this PR does not merge (human).
+- The historical PR could not tick its own merge gate; ADR-002 and the report acceptance item were subsequently merged and are now checked below.
 
 ## Measurements
 

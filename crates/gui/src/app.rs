@@ -24,7 +24,8 @@ use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
     AgentRole, Area, ChangesetReview, ClipboardPayload, EditSurface, FormulaAssist,
     ImportPlanReview, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, SessionState, UiSession,
-    apply_local_command, apply_search_result, inject_selection_args,
+    apply_command_panel, apply_local_command, apply_search_result, command_changes_workbook,
+    inject_selection_args,
 };
 use serde_json::json;
 
@@ -337,6 +338,7 @@ impl Gui {
         for event in self.runner.handle().drain_events() {
             match event {
                 TaskEvent::Completed { state, outcome } => {
+                    let mut workbook_changed = false;
                     let import_apply = self.import_apply_task == Some(state.id);
                     if import_apply {
                         self.import_apply_task = None;
@@ -352,6 +354,11 @@ impl Gui {
                         continue;
                     }
                     self.message = None;
+                    if let Some(result) = outcome.result.as_ref()
+                        && let Err(error) = apply_command_panel(&self.ui, &state.command, result)
+                    {
+                        self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
                     if matches!(
                         state.command.as_str(),
                         "edit.copy" | "edit.cut" | "edit.yank"
@@ -441,6 +448,7 @@ impl Gui {
                             .is_some_and(|command| command.mutating);
                         if command_changes_workbook(&state.command, &outcome, mutating) {
                             self.dirty = true;
+                            workbook_changed = true;
                         }
                     }
                     self.ui.remember_command(&state.command);
@@ -484,6 +492,15 @@ impl Gui {
                         && let Err(error) = self.open_latest_review()
                     {
                         self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
+                    if workbook_changed {
+                        self.adopt_snapshot();
+                        let snapshot = self.runner.handle().snapshot();
+                        apply_sheet_geometry(
+                            &self.ui,
+                            &snapshot.workbook,
+                            snapshot.workbook.active_sheet(),
+                        );
                     }
                 }
                 TaskEvent::Failed { state, message, .. } => {
@@ -1876,6 +1893,7 @@ impl Gui {
                 let mut vp = self.ui.viewport();
                 let _ = vp.cols.set_size(u32::from(col), width);
                 self.ui.set_viewport(vp);
+                self.persist_col_width(col, width);
                 return;
             }
             let orig = vp.col_px(col);
@@ -1891,6 +1909,7 @@ impl Gui {
                 let mut vp = self.ui.viewport();
                 let _ = vp.rows.set_size(row, DEFAULT_FIT_ROW);
                 self.ui.set_viewport(vp);
+                self.persist_row_height(row, DEFAULT_FIT_ROW);
                 return;
             }
             let orig = vp.row_px(row);
@@ -2080,7 +2099,38 @@ impl Gui {
                     self.ui.set_selection(selection);
                 }
             }
+            Some(PointerDrag::ColResize { col, .. }) => {
+                self.persist_col_width(col, self.ui.viewport().col_px(col));
+            }
+            Some(PointerDrag::RowResize { row, .. }) => {
+                self.persist_row_height(row, self.ui.viewport().row_px(row));
+            }
             _ => {}
+        }
+    }
+
+    fn persist_col_width(&mut self, col: u16, px: u32) {
+        let result = col_to_letters(col).and_then(|letters| {
+            self.execute_cmd(
+                "format.colwidth",
+                json!({"range": format!("{letters}1"), "px": px}),
+            )?;
+            Ok(())
+        });
+        if let Err(error) = result {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+        }
+    }
+
+    fn persist_row_height(&mut self, row: u32, px: u32) {
+        if let Err(error) = self
+            .execute_cmd(
+                "format.rowheight",
+                json!({"range": format!("A{}", row.saturating_add(1)), "px": px}),
+            )
+            .map(|_| ())
+        {
+            self.message = Some(format!("{}: {}", error.code, error.message));
         }
     }
 
@@ -2202,9 +2252,8 @@ fn apply_sheet_view(ui: &UiSession, wb: &omacell_core::workbook::Workbook, id: S
     vp.set_zoom(sheet.view.zoom);
     vp.freeze = sheet.view.freeze;
     vp.split = sheet.view.split;
-    vp.rows = sheet.geometry.rows.clone();
-    vp.cols = sheet.geometry.cols.clone();
     ui.set_viewport(vp);
+    apply_sheet_geometry(ui, wb, id);
 
     let mut start = sheet.view.selection.start;
     let mut end = sheet.view.selection.end;
@@ -2215,6 +2264,16 @@ fn apply_sheet_view(ui: &UiSession, wb: &omacell_core::workbook::Workbook, id: S
     selection.replace(Area { start, end });
     ui.set_selection(selection);
     ui.set_show_formulas(sheet.view.show_formulas);
+}
+
+fn apply_sheet_geometry(ui: &UiSession, wb: &omacell_core::workbook::Workbook, id: SheetId) {
+    let Some(sheet) = wb.sheet(id) else {
+        return;
+    };
+    let mut viewport = ui.viewport();
+    viewport.rows = sheet.geometry.rows.clone();
+    viewport.cols = sheet.geometry.cols.clone();
+    ui.set_viewport(viewport);
 }
 
 fn apply_restored_session(
@@ -2244,44 +2303,6 @@ fn apply_restored_session(
         panel.open(id);
         ui.set_panel(panel);
     }
-}
-
-fn command_changes_workbook(command: &str, outcome: &Outcome, registered_mutating: bool) -> bool {
-    if outcome
-        .result
-        .as_ref()
-        .and_then(|result| result.get("changed"))
-        .and_then(serde_json::Value::as_u64)
-        .is_some_and(|changed| changed > 0)
-    {
-        return true;
-    }
-    if matches!(command, "edit.undo" | "edit.redo") {
-        return true;
-    }
-    if !registered_mutating
-        || matches!(
-            command.split_once('.').map(|(prefix, _)| prefix),
-            Some("nav" | "sel" | "view" | "mode" | "palette" | "help" | "edit")
-        )
-        || matches!(
-            command,
-            "sheet.next"
-                | "sheet.prev"
-                | "changeset.review"
-                | "file.open"
-                | "file.save"
-                | "file.saveas"
-                | "file.new"
-                | "file.close"
-                | "file.export"
-                | "file.print"
-                | "theme.reload"
-        )
-    {
-        return false;
-    }
-    true
 }
 
 fn autopilot_scope_label(

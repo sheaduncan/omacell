@@ -2,7 +2,7 @@
 
 use omacell_bus::Bus;
 use omacell_conf::{Paths, load};
-use omacell_core::command::Origin;
+use omacell_core::command::{Origin, Outcome};
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::sheet::FreezePanes;
@@ -10,7 +10,7 @@ use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
 use omacell_ui::{
     EditSurface, FindScope, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, Mode, UiSession,
-    apply_local_command, register_ui_commands,
+    apply_command_panel, apply_local_command, command_changes_workbook, register_ui_commands,
 };
 use serde_json::json;
 
@@ -69,6 +69,80 @@ fn freeze_and_split_are_mutually_exclusive_in_both_dispatch_paths() {
         .unwrap();
     assert_eq!(session.viewport().freeze, FreezePanes { rows: 2, cols: 3 });
     assert!(session.viewport().split.is_none());
+}
+
+#[test]
+fn workbook_panels_use_live_data_and_closed_schemas() {
+    let (_dir, session, mut bus) = harness();
+    let note = bus.execute(
+        Origin::User,
+        "edit.note",
+        json!({"ref": "C2", "text": "check this", "author": "Ada"}),
+    );
+    assert!(note.ok, "{:?}", note.error);
+
+    let comments = bus.execute(Origin::User, "comments.panel", json!({}));
+    assert!(comments.ok, "{:?}", comments.error);
+    assert_eq!(session.panel().visible.as_deref(), Some("comments"));
+    assert!(
+        session
+            .panel()
+            .body
+            .as_deref()
+            .unwrap()
+            .contains("C2  note by Ada")
+    );
+
+    for id in ["comments.panel", "sort.panel", "filter.panel"] {
+        let schema =
+            serde_json::to_value(&bus.registry().get_str(id).unwrap().descriptor.arg_schema)
+                .unwrap();
+        assert_eq!(schema["additionalProperties"], false, "{id}: {schema}");
+        assert!(
+            schema
+                .get("properties")
+                .is_none_or(|properties| properties == &json!({})),
+            "{id}: {schema}"
+        );
+    }
+
+    let format = bus.execute(Origin::User, "format.panel", json!({"range": "A1"}));
+    assert!(format.ok, "{:?}", format.error);
+    assert!(
+        apply_command_panel(&session, "format.panel", format.result.as_ref().unwrap()).unwrap()
+    );
+    assert_eq!(session.panel().visible.as_deref(), Some("format"));
+    assert!(
+        session
+            .panel()
+            .body
+            .as_deref()
+            .unwrap()
+            .contains("Number format: General")
+    );
+}
+
+#[test]
+fn workbook_change_policy_distinguishes_session_and_model_mutations() {
+    let no_count = Outcome::success(json!({}));
+    assert!(command_changes_workbook("view.hiderows", &no_count, true));
+    assert!(command_changes_workbook("edit.undo", &no_count, true));
+    assert!(!command_changes_workbook("view.zoom", &no_count, true));
+    assert!(!command_changes_workbook("file.save", &no_count, true));
+    assert!(!command_changes_workbook("cell.set", &no_count, false));
+
+    let explicit_noop = Outcome::success(json!({"changed": 0}));
+    assert!(!command_changes_workbook(
+        "view.hiderows",
+        &explicit_noop,
+        true
+    ));
+    let explicit_change = Outcome::success(json!({"changed": 1}));
+    assert!(command_changes_workbook(
+        "otherwise.presentation",
+        &explicit_change,
+        true
+    ));
 }
 
 fn execute_key(bus: &mut Bus, outcome: KeyOutcome) {

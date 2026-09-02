@@ -11,8 +11,6 @@ pub const EXIT_OK: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
 /// Usage / clap parse error.
 pub const EXIT_USAGE: i32 = 2;
-/// Stub / not yet implemented.
-pub const EXIT_NYI: i32 = 3;
 
 /// CLI failure with a stable `{code, message, hint}` body.
 #[derive(Debug, Clone, Serialize)]
@@ -53,15 +51,6 @@ impl CliError {
     pub fn exit(mut self, exit: i32) -> Self {
         self.exit = exit;
         self
-    }
-
-    /// Stub that names the owning work package.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn nyi(feature: &str, wp: &str) -> Self {
-        Self::new("cli.not_yet", format!("{feature} arrives in {wp}"))
-            .hint(format!("see docs/build/wp/{wp}-*.md"))
-            .exit(EXIT_NYI)
     }
 
     /// JSON object for stderr in `--json` mode.

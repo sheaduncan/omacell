@@ -1004,7 +1004,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
             exposure: Exposure::Public,
             default_keys: &[],
         },
-        edit_repeat_placeholder,
+        edit_repeat_without_session,
     )?;
     type FormatHandler =
         for<'a> fn(&mut CommandContext<'a>, FormatActionArgs) -> Result<Effect, CoreError>;
@@ -2475,7 +2475,7 @@ fn current_excel_serial(system: omacell_core::workbook::DateSystem) -> Result<f6
     Ok(epoch + seconds / 86_400.0)
 }
 
-fn edit_repeat_placeholder(
+fn edit_repeat_without_session(
     _ctx: &mut CommandContext<'_>,
     _args: RepeatArgs,
 ) -> Result<Effect, CoreError> {
