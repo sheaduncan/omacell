@@ -156,11 +156,19 @@ afn!(
 );
 
 fn crit_of(ctx: &EvalCtx<'_>, arg: &ArgVal) -> Result<Criteria, ErrorKind> {
+    let is_reference = matches!(&arg.value, RuntimeValue::Ref(_));
     let s = match ctx.materialize(arg.value.clone()) {
         RuntimeValue::Scalar(s) => s,
         _ => return Err(ErrorKind::Value),
     };
-    parse_criteria(&s)
+    // Excel treats a reference to a truly empty criteria cell as numeric zero.
+    // A literal empty string remains blank criteria and matches both blank cells
+    // and formulas that return empty text.
+    if is_reference && matches!(s, Scalar::Empty) {
+        parse_criteria(&Scalar::Number(0.0))
+    } else {
+        parse_criteria(&s)
+    }
 }
 
 fn require_reference(arg: &ArgVal) -> Result<(), ErrorKind> {
