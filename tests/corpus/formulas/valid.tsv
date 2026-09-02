@@ -67,7 +67,7 @@
 =-5%	=-5%	a1	Microsoft precedence: unary minus then percent → (-5)%
 =2^3	=2^3	a1	F-3.1 exponentiation
 =2^3^2	=2^3^2	a1	Excel ^ is left-associative: (2^3)^2 = 64
-=-2^2	=-2^2	a1	unary minus vs power: Excel evaluates -(2^2) = -4
+=-2^2	=-2^2	a1	Microsoft Excel precedence: negation before power, so (-2)^2 = 4
 =1+2*3	=1+2*3	a1	F-3.1 * binds tighter than + (1+2*3 = 7)
 =(1+2)*3	=(1+2)*3	a1	parentheses override precedence
 =1*2+3	=1*2+3	a1	left-to-right * then +
@@ -757,7 +757,7 @@ SUM(A1)	=SUM(A1)	a1	bare call; print adds =
 =--5%	=--5%	a1	double unary then percent
 =+5%	=+5%	a1	unary plus percent
 =5%^2	=5%^2	a1	(5%)^2 because % > ^
-=-2^3	=-2^3	a1	Excel evaluates as -(2^3) = -8 (engine, not MS table)
+=-2^3	=-2^3	a1	Microsoft Excel precedence: negation before power; (-2)^3 remains -8
 =2^-3	=2^-3	a1	2 to the power of -3
 =2^3^2^2	=2^3^2^2	a1	left-assoc tower (((((2^3)^2)^2))
 =(2^3)^2	=(2^3)^2	a1	explicit left-assoc power grouping
