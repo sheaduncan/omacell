@@ -313,7 +313,7 @@ fn wp28_distribution_assets_are_complete() {
         "build()",
         "check()",
         "package()",
-        "options=('!lto')",
+        "options=('!lto' 'docs')",
         "PKGBUILD_SOURCE_URL",
         "PKGBUILD_SOURCE_SHA256",
         "export CARGO_TARGET_DIR=\"${srcdir}/${pkgname}-${pkgver}/target\"",
@@ -336,7 +336,11 @@ fn wp28_distribution_assets_are_complete() {
 
     let smoke =
         fs::read_to_string(root.join("scripts/arch-package-smoke.sh")).expect("read Arch smoke");
-    for needle in ["PKGBUILD_SOURCE_URL", "PKGBUILD_SOURCE_SHA256"] {
+    for needle in [
+        "PKGBUILD_SOURCE_URL",
+        "PKGBUILD_SOURCE_SHA256",
+        "smoke: manual in package archive",
+    ] {
         assert!(smoke.contains(needle), "Arch smoke missing {needle}");
     }
 

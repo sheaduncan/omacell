@@ -35,3 +35,8 @@ Installed paths:
 The install hook updates only system caches and prints the optional
 `omacell setup omarchy` next step. It never writes into a user's home or
 `/usr/share/omarchy`.
+
+The clean-container smoke test verifies the manual in the package archive
+before installation, because a pacman host may intentionally exclude
+documentation with `NoExtract`. The recipe explicitly enables makepkg's
+`docs` option so package creation itself cannot discard the manual.
