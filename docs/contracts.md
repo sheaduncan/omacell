@@ -70,6 +70,16 @@ JSON of `Value::Number` is a JSON number. That is not bit-exact for every IEEE v
 
 Records are `Eq` + `Hash` (`f64` fields compare by `to_bits`) so WP-02 can intern by value.
 
+## Printing — `omacell_core::print` (WP-28; approval required)
+
+`PageSetup` additively exposes optional `title_row_band: PrintTitleBand<u32>`
+and `title_col_band: PrintTitleBand<u16>`. Bands are inclusive, zero-based,
+ordered, and grid-bounded. They preserve Excel `_xlnm.Print_Titles` such as
+`$3:$4` and `$B:$C`; the earlier `title_rows` / `title_cols` origin-count fields
+remain readable and are used as a compatibility fallback for existing OMC
+documents. New XLSX imports and exports use the explicit bands. This frozen
+core addition requires the approval recorded by merge of the WP-28 RFC.
+
 ## Commands — `omacell_core::command`
 
 | Type | Source |
@@ -147,6 +157,12 @@ the bounded retained preview. Existing path-only and plan-only requests remain
 valid, the catalog envelope remains version 1, and IPC envelopes are unchanged.
 The `file.open` result may add `{import:{current,preview}}` for delimited files.
 This frozen-contract change requires the human approval recorded on the PR.
+
+WP-28 keeps the frozen `file.print {path?, printer?}` argument schema unchanged.
+Its query/result object additively reports `last_printer`, `printed`,
+`font_embedded`, and an optional `warning` alongside the existing `pages`,
+`printers`, and `path`. The remembered CUPS name is local UI state and does not
+alter the workbook or IPC envelope.
 
 ## IPC v1 — `docs/schemas/ipc/` (WP-07b)
 

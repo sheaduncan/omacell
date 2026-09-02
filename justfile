@@ -57,3 +57,22 @@ wp08-baseline-verify:
 # record criterion baselines (packages that touch §12.1 call this)
 perf-baseline:
     cargo bench --workspace -- --save-baseline default
+
+# Rebuild the schema/Clap/Lua references and the mdBook manual.
+docs:
+    cargo run -p omacell-cli --example generate-docs -- docs/book/cli-reference.md
+    python3 scripts/generate-docs.py --write
+    mdbook build
+
+# Reject committed manual pages that no longer match their source APIs.
+docs-check:
+    cargo run -p omacell-cli --example generate-docs -- --check docs/book/cli-reference.md
+    python3 scripts/generate-docs.py --check
+
+# Check Fluent message coverage and direct GUI widget literals.
+i18n-check:
+    python3 scripts/extract-i18n.py --check
+
+# Validate the committed §12.1 budgets before running fixed-host measurements.
+perf-check results="":
+    python3 scripts/check-perf-baselines.py {{results}}

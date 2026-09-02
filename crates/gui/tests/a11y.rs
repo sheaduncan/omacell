@@ -2,10 +2,12 @@
 
 mod common;
 
-use common::launch_theme;
+use common::{fixed_gpu_setup, launch_theme};
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use omacell_gui::Gui;
+use omacell_ui::{KeyCode, KeyEvent};
 
 #[test]
 fn focused_cell_is_in_the_accesskit_tree() {
@@ -25,6 +27,140 @@ fn focused_cell_is_in_the_accesskit_tree() {
 }
 
 #[test]
+fn palette_panel_and_status_actions_are_in_the_accesskit_tree() {
+    let parts = launch_theme(Some("nord"));
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .execute_cmd("palette.open", serde_json::json!({}))
+        .unwrap();
+    harness.step();
+    assert_eq!(
+        harness
+            .get_by_label("Command palette")
+            .accesskit_node()
+            .role(),
+        Role::Window
+    );
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Esc))
+        .unwrap();
+    harness
+        .state_mut()
+        .execute_cmd("nav.goto", serde_json::json!({}))
+        .unwrap();
+    harness.step();
+    assert!(harness.get_by_label("Go to").accesskit_node().role() == Role::Label);
+
+    let zoom = harness.get_by_label("Zoom 100%");
+    assert_eq!(zoom.accesskit_node().role(), Role::Button);
+}
+
+#[test]
+fn keyboard_only_grid_palette_and_panel_walkthrough() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Right))
+        .unwrap();
+    assert_eq!(harness.state().ui_session().selection().cursor.col, 1);
+    harness
+        .state_mut()
+        .step_key(KeyEvent {
+            code: KeyCode::Char('p'),
+            ctrl: true,
+            alt: false,
+            shift: true,
+        })
+        .unwrap();
+    assert!(harness.state().ui_session().palette().open);
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Esc))
+        .unwrap();
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::F(1)))
+        .unwrap();
+    assert_eq!(
+        harness.state().ui_session().panel().visible.as_deref(),
+        Some("keys")
+    );
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Esc))
+        .unwrap();
+    assert!(harness.state().ui_session().panel().visible.is_none());
+}
+
+#[test]
+fn print_preview_opens_a_keyboard_accessible_printer_panel() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .execute_cmd("file.print", serde_json::json!({}))
+        .unwrap();
+    for _ in 0..100 {
+        harness.step();
+        if harness.state().ui_session().panel().visible.as_deref() == Some("print") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        harness.state().ui_session().panel().visible.as_deref(),
+        Some("print")
+    );
+    assert!(
+        harness
+            .state()
+            .ui_session()
+            .panel()
+            .body
+            .as_deref()
+            .is_some_and(|body| body.contains("> lab (last used)"))
+    );
+    assert_eq!(
+        harness.get_by_label("Print").accesskit_node().role(),
+        Role::Label
+    );
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Up))
+        .unwrap();
+    assert!(
+        harness
+            .state()
+            .ui_session()
+            .panel()
+            .body
+            .as_deref()
+            .is_some_and(|body| body.contains("> office"))
+    );
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Esc))
+        .unwrap();
+    assert!(harness.state().ui_session().panel().visible.is_none());
+}
+
+#[test]
 #[ignore = "nightly wall-clock smoke bound; shared CI software runners are nondeterministic"]
 fn first_frame_renders_within_software_ci_smoke_budget() {
     // The product's 300 ms target is gated on the fixed integrated-GPU
@@ -32,9 +168,12 @@ fn first_frame_renders_within_software_ci_smoke_budget() {
     // seconds, so this is only a render-completion smoke bound.
     let start = std::time::Instant::now();
     let parts = launch_theme(None);
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(640.0, 400.0))
-        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    let mut builder = Harness::builder().with_size(egui::vec2(640.0, 400.0));
+    if let Some(setup) = fixed_gpu_setup() {
+        builder = builder.wgpu_setup(setup);
+    }
+    let mut harness =
+        builder.build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
     harness.run();
     let _ = harness.render().expect("render first frame");
     let ms = start.elapsed().as_secs_f64() * 1000.0;

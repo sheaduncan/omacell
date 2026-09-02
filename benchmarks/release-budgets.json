@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "reference_host": "Framework 13-class laptop, integrated graphics",
+  "regression_tolerance_percent": 10,
+  "metrics": [
+    {"id": "gui_cold_start_ms", "direction": "maximum", "target": 300, "budget": 330, "unit": "ms"},
+    {"id": "tui_cold_start_ms", "direction": "maximum", "target": 100, "budget": 110, "unit": "ms"},
+    {"id": "csv_100mb_first_paint_ms", "direction": "maximum", "target": 1000, "budget": 1100, "unit": "ms"},
+    {"id": "csv_100mb_loaded_ms", "direction": "maximum", "target": 4000, "budget": 4400, "unit": "ms"},
+    {"id": "xlsx_50mb_open_ms", "direction": "maximum", "target": 5000, "budget": 5500, "unit": "ms"},
+    {"id": "xlsx_50mb_save_ms", "direction": "maximum", "target": 5000, "budget": 5500, "unit": "ms"},
+    {"id": "recalc_incremental_100k_ms", "direction": "maximum", "target": 50, "budget": 55, "unit": "ms"},
+    {"id": "recalc_full_1m_ms", "direction": "maximum", "target": 5000, "budget": 5500, "unit": "ms"},
+    {"id": "keystroke_to_paint_ms", "direction": "maximum", "target": 16, "budget": 17.6, "unit": "ms"},
+    {"id": "scroll_frame_ms", "direction": "maximum", "target": 16.6667, "budget": 18.33337, "unit": "ms"},
+    {"id": "memory_1m_x20_bytes", "direction": "maximum", "target": 1500000000, "budget": 1650000000, "unit": "bytes"},
+    {"id": "theme_reload_ms", "direction": "maximum", "target": 100, "budget": 110, "unit": "ms"},
+    {"id": "inline_completion_first_token_ms", "direction": "maximum", "target": 300, "budget": 330, "unit": "ms"},
+    {"id": "local_plan_ms", "direction": "maximum", "target": 3000, "budget": 3300, "unit": "ms"},
+    {"id": "cloud_plan_ms", "direction": "maximum", "target": 5000, "budget": 5500, "unit": "ms"},
+    {"id": "ai_batch_cells", "direction": "minimum", "target": 50, "budget": 45, "unit": "cells"},
+    {"id": "workbook_card_columns_1m_ms", "direction": "maximum", "target": 200, "budget": 220, "unit": "ms"}
+  ]
+}

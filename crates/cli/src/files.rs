@@ -41,6 +41,8 @@ enum FileKind {
 }
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const PDF_FONT_WARNING: &str =
+    "no embeddable font was resolved; PDF uses Standard-14 Helvetica and layout may differ";
 
 #[derive(Default)]
 struct FileState {
@@ -51,6 +53,8 @@ struct FileState {
     config: Option<ReloadHandle>,
     ai: Option<std::sync::Arc<omacell_ai::AiRuntime>>,
     ui: Option<UiSession>,
+    state_dir: Option<PathBuf>,
+    last_printer: Option<String>,
 }
 
 /// Sidecar retained by file command closures (package bytes live outside `Workbook`).
@@ -81,6 +85,39 @@ impl FileSession {
 
     pub(crate) fn attach_config(&self, config: ReloadHandle) {
         self.lock().config = Some(config);
+    }
+
+    pub(crate) fn attach_state_dir(&self, state_dir: &Path) {
+        let remembered = std::fs::read_to_string(state_dir.join("last-printer"))
+            .ok()
+            .map(|name| name.trim().to_string())
+            .filter(|name| validate_printer(name).is_ok());
+        let mut state = self.lock();
+        state.state_dir = Some(state_dir.to_path_buf());
+        state.last_printer = remembered;
+    }
+
+    fn last_printer(&self) -> Option<String> {
+        self.lock().last_printer.clone()
+    }
+
+    fn remember_printer(&self, printer: &str) -> Result<(), CoreError> {
+        let state_dir = {
+            let mut state = self.lock();
+            state.last_printer = Some(printer.to_string());
+            state.state_dir.clone()
+        };
+        let Some(state_dir) = state_dir else {
+            return Ok(());
+        };
+        std::fs::create_dir_all(&state_dir).map_err(|error| {
+            CoreError::new(
+                "file.print",
+                format!("create printer state directory: {error}"),
+            )
+        })?;
+        atomic_write_bytes(&state_dir.join("last-printer"), printer.as_bytes(), None)
+            .map_err(|error| CoreError::new("file.print", error.message))
     }
 
     pub(crate) fn attach_ai(&self, runtime: std::sync::Arc<omacell_ai::AiRuntime>) {
@@ -621,6 +658,7 @@ fn file_export(
     if ctx.is_preflight() && !ctx.is_dry_run() {
         return Ok(Effect::query(serde_json::json!({})));
     }
+    let mut warning = None;
     match kind {
         FileKind::Csv => {
             let mut plan = ExportPlan {
@@ -672,7 +710,10 @@ fn file_export(
             }
         }
         FileKind::Pdf => {
-            let options = pdf_options_for(session, &path);
+            let options = pdf_options_for(session, ctx.workbook_ref(), &path);
+            if options.font_path.is_none() {
+                warning = Some(PDF_FONT_WARNING);
+            }
             if ctx.is_preflight() {
                 let _ = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
             } else {
@@ -709,13 +750,17 @@ fn file_export(
         return Ok(Effect::query(serde_json::json!({
             "path": path.display().to_string(),
             "dry_run": true,
+            "warning": warning,
         })));
     }
     Ok(Effect {
         events: vec![Event::FileSaved {
             path: path.display().to_string(),
         }],
-        result: serde_json::json!({"path": path.display().to_string()}),
+        result: serde_json::json!({
+            "path": path.display().to_string(),
+            "warning": warning,
+        }),
         auto_recalc: false,
         ..Effect::default()
     })
@@ -1337,10 +1382,14 @@ fn file_print(
     }
     let printers = list_printers();
     let printer = args.printer.as_deref().map(validate_printer).transpose()?;
+    let preview_options = pdf_options_for(session, ctx.workbook_ref(), Path::new("workbook.pdf"));
+    let font_embedded = preview_options.font_path.is_some();
+    let mut warning = (!font_embedded).then_some(PDF_FONT_WARNING.to_string());
     if ctx.is_preflight() {
         return Ok(Effect::query(serde_json::json!({
             "pages": pages,
             "printers": printers,
+            "last_printer": session.last_printer(),
             "dry_run": ctx.is_dry_run(),
         })));
     }
@@ -1351,7 +1400,7 @@ fn file_print(
             Some(path) => path.clone(),
             None => print_spool_path()?,
         };
-        let options = pdf_options_for(session, &dest);
+        let options = pdf_options_for(session, ctx.workbook_ref(), &dest);
         let bytes = omacell_io::pdf::write_pdf(ctx.workbook_ref(), &options)?;
         if ephemeral {
             write_private_spool(&dest, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
@@ -1367,12 +1416,24 @@ fn file_print(
         };
         print_result?;
         cleanup_result?;
+        if let Some(printer) = printer
+            && let Err(error) = session.remember_printer(printer)
+        {
+            warning = Some(match warning {
+                Some(existing) => format!("{existing}; {}", error.message),
+                None => error.message,
+            });
+        }
     }
     Ok(Effect {
         result: serde_json::json!({
             "pages": pages,
             "printers": printers,
             "path": explicit_dest.map(|path| path.display().to_string()),
+            "printed": printer,
+            "last_printer": session.last_printer(),
+            "font_embedded": font_embedded,
+            "warning": warning,
         }),
         auto_recalc: false,
         ..Effect::default()
@@ -1457,6 +1518,7 @@ fn send_to_printer(printer: &str, path: &Path) -> Result<(), CoreError> {
     let status = std::process::Command::new("lp")
         .arg("-d")
         .arg(printer)
+        .arg("--")
         .arg(path)
         .status()
         .map_err(|err| CoreError::new("file.print", format!("lp: {err}")))?;
@@ -1470,12 +1532,28 @@ fn send_to_printer(printer: &str, path: &Path) -> Result<(), CoreError> {
     }
 }
 
-fn pdf_options_for(session: &FileSession, dest: &Path) -> omacell_io::pdf::PdfOptions {
-    let font_path = session
+fn pdf_options_for(
+    session: &FileSession,
+    workbook: &Workbook,
+    dest: &Path,
+) -> omacell_io::pdf::PdfOptions {
+    let configured_cell_font = session
         .lock()
         .config
         .as_ref()
-        .and_then(|cfg| cfg.snapshot().shell.ui_font_path.clone());
+        .map(|cfg| cfg.snapshot().config.appearance.cell_font.clone());
+    let styles = &workbook.intern().styles;
+    let font_path = workbook
+        .sheets()
+        .flat_map(|sheet| sheet.store.iter())
+        .filter_map(|(_, _, slot)| styles.get(slot.style))
+        .map(|style| style.font.name.trim())
+        .filter(|name| !name.is_empty())
+        .chain(configured_cell_font.as_deref())
+        .chain(["Carlito", "Liberation Sans", "sans-serif"])
+        .find_map(|name| {
+            omacell_conf::font::resolve_font_path(omacell_conf::font::substitute_file_font(name))
+        });
     omacell_io::pdf::PdfOptions {
         font_path,
         file_name: dest
@@ -1494,10 +1572,15 @@ fn list_printers() -> Vec<String> {
     if !out.status.success() {
         return Vec::new();
     }
-    String::from_utf8_lossy(&out.stdout)
+    let mut printers: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
-        .collect()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| validate_printer(name).is_ok())
+        .map(str::to_string)
+        .collect();
+    printers.sort();
+    printers.dedup();
+    printers
 }
 
 #[cfg(test)]
@@ -1533,6 +1616,18 @@ mod tests {
         assert!(validate_printer("-o").is_err());
         assert!(validate_printer("office name").is_err());
         assert!(validate_printer("office\nname").is_err());
+    }
+
+    #[test]
+    fn last_printer_survives_a_new_file_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = FileSession::new();
+        first.attach_state_dir(temp.path());
+        first.remember_printer("office-2").unwrap();
+
+        let reopened = FileSession::new();
+        reopened.attach_state_dir(temp.path());
+        assert_eq!(reopened.last_printer().as_deref(), Some("office-2"));
     }
 
     #[test]

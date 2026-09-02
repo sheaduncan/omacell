@@ -102,7 +102,8 @@ fn modeled_page_setup_round_trips_through_omc() {
     let setup = PageSetup {
         paper: PaperSize::A4,
         orientation: Orientation::Landscape,
-        title_rows: 2,
+        title_row_band: Some(omacell_core::print::PrintTitleBand { start: 2, end: 3 }),
+        title_col_band: Some(omacell_core::print::PrintTitleBand { start: 1, end: 2 }),
         ..PageSetup::default()
     };
     wb.set_page_setup(sheet, setup.clone()).unwrap();

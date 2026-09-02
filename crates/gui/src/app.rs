@@ -31,8 +31,10 @@ use serde_json::json;
 
 use crate::chrome;
 use crate::grid::{self, GridLayout};
+use crate::i18n::tr;
 use crate::input;
-use crate::theme::{GuiTheme, install_font};
+use crate::motion;
+use crate::theme::{GuiTheme, WorkbookFontCache};
 
 /// Objects the CLI composition root hands to the GUI. No second config load.
 pub struct Launch {
@@ -87,6 +89,7 @@ pub struct Gui {
     ui: UiSession,
     roots: KeymapRoots,
     theme: GuiTheme,
+    fonts: WorkbookFontCache,
     catalog: Vec<CommandJson>,
     message: Option<String>,
     script_status: Option<String>,
@@ -111,6 +114,8 @@ pub struct Gui {
     focused_cancel: Option<CancelHandle>,
     last_title: String,
     print_preview: bool,
+    print_printers: Vec<String>,
+    print_index: usize,
     window_focused: Option<bool>,
     ipc: Option<IpcHandle>,
 }
@@ -175,10 +180,15 @@ impl Gui {
             launch.ui.set_session_state(state);
         }
         let theme = GuiTheme::from_loaded(&loaded.theme, &loaded.shell);
-        if launch.use_shell_font {
-            install_font(ctx, loaded.shell.ui_font_path.as_deref());
-        }
+        let fonts = WorkbookFontCache::new(
+            ctx,
+            launch
+                .use_shell_font
+                .then_some(loaded.shell.ui_font_path.as_deref())
+                .flatten(),
+        );
         theme.apply_visuals(ctx);
+        motion::apply(ctx, &loaded.config.appearance.animation);
         ctx.tessellation_options_mut(|opts| {
             opts.feathering = false;
         });
@@ -190,6 +200,7 @@ impl Gui {
             ui: launch.ui,
             roots: launch.roots,
             theme,
+            fonts,
             catalog,
             message,
             script_status,
@@ -214,6 +225,8 @@ impl Gui {
             focused_cancel,
             last_title: String::new(),
             print_preview: false,
+            print_printers: Vec::new(),
+            print_index: 0,
             window_focused: None,
             ipc: ipc_handle,
         })
@@ -324,11 +337,15 @@ impl Gui {
     }
 
     fn rebuild_theme(&mut self, loaded: &LoadedConfig, ctx: &egui::Context) {
-        if self.use_shell_font {
-            install_font(ctx, loaded.shell.ui_font_path.as_deref());
-        }
+        self.fonts = WorkbookFontCache::new(
+            ctx,
+            self.use_shell_font
+                .then_some(loaded.shell.ui_font_path.as_deref())
+                .flatten(),
+        );
         self.theme = GuiTheme::from_loaded(&loaded.theme, &loaded.shell);
         self.theme.apply_visuals(ctx);
+        motion::apply(ctx, &loaded.config.appearance.animation);
         ctx.tessellation_options_mut(|opts| {
             opts.feathering = false;
         });
@@ -358,6 +375,11 @@ impl Gui {
                         && let Err(error) = apply_command_panel(&self.ui, &state.command, result)
                     {
                         self.message = Some(format!("{}: {}", error.code, error.message));
+                    }
+                    if state.command == "file.print"
+                        && let Some(result) = outcome.result.as_ref()
+                    {
+                        self.open_print_panel(result);
                     }
                     if matches!(
                         state.command.as_str(),
@@ -666,6 +688,9 @@ impl Gui {
         if self.ui.panel().visible.as_deref() == Some("import") {
             return self.step_import_review(event);
         }
+        if self.ui.panel().visible.as_deref() == Some("print") {
+            return self.step_print_panel(event);
+        }
         let outcome = self.ui.handle_key(event);
         if let KeyOutcome::Command { cmd, args, .. } = outcome.clone() {
             self.execute_cmd(&cmd, args)?;
@@ -910,6 +935,85 @@ impl Gui {
                     panel.dismiss();
                     self.ui.set_panel(panel);
                     self.message = Some("kept the sniffed import plan".into());
+                }
+            }
+            _ => {}
+        }
+        Ok(KeyOutcome::Pending)
+    }
+
+    fn open_print_panel(&mut self, value: &serde_json::Value) {
+        self.print_printers = value
+            .get("printers")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect();
+        let last = value
+            .get("last_printer")
+            .and_then(serde_json::Value::as_str);
+        self.print_index = last
+            .and_then(|name| {
+                self.print_printers
+                    .iter()
+                    .position(|printer| printer == name)
+            })
+            .unwrap_or(0);
+        if let Some(printer) = value.get("printed").and_then(serde_json::Value::as_str) {
+            self.message = Some(format!("{} {printer}", tr("print-sent")));
+        }
+        if let Some(warning) = value.get("warning").and_then(serde_json::Value::as_str) {
+            self.message = Some(warning.to_string());
+        }
+        self.refresh_print_panel(last);
+    }
+
+    fn refresh_print_panel(&self, last: Option<&str>) {
+        let body = if self.print_printers.is_empty() {
+            tr("print-no-printers").to_string()
+        } else {
+            let mut lines = vec![tr("print-choose").to_string()];
+            lines.extend(
+                self.print_printers
+                    .iter()
+                    .enumerate()
+                    .map(|(index, printer)| {
+                        let selected = if index == self.print_index { ">" } else { " " };
+                        let remembered = if Some(printer.as_str()) == last {
+                            format!(" ({})", tr("print-last-used"))
+                        } else {
+                            String::new()
+                        };
+                        format!("{selected} {printer}{remembered}")
+                    }),
+            );
+            lines.join("\n")
+        };
+        let mut panel = self.ui.panel();
+        panel.open_with_body("print", body);
+        self.ui.set_panel(panel);
+    }
+
+    fn step_print_panel(&mut self, event: KeyEvent) -> Result<KeyOutcome, CoreError> {
+        match (event.code, event.ctrl, event.alt) {
+            (KeyCode::Esc, false, false) => {
+                let mut panel = self.ui.panel();
+                panel.dismiss();
+                self.ui.set_panel(panel);
+            }
+            (KeyCode::Up, false, false) if !self.print_printers.is_empty() => {
+                self.print_index = self.print_index.saturating_sub(1);
+                self.refresh_print_panel(None);
+            }
+            (KeyCode::Down, false, false) if !self.print_printers.is_empty() => {
+                self.print_index = (self.print_index + 1).min(self.print_printers.len() - 1);
+                self.refresh_print_panel(None);
+            }
+            (KeyCode::Enter, false, false) => {
+                if let Some(printer) = self.print_printers.get(self.print_index).cloned() {
+                    let _ = self.execute_cmd("file.print", json!({"printer": printer}))?;
                 }
             }
             _ => {}
@@ -1296,7 +1400,11 @@ impl Gui {
             }
             return Ok(Outcome::success(json!({"ok": true})));
         }
-        if cmd == "file.print" {
+        if cmd == "file.print"
+            && args.as_object().is_none_or(|fields| {
+                fields.get("path").is_none() && fields.get("printer").is_none()
+            })
+        {
             self.toggle_print_preview();
         }
         if let Err(error) = self.scripts.before_command(cmd) {
@@ -1693,8 +1801,9 @@ impl Gui {
             });
         }
         if cfg.appearance.show_status_line {
+            let mut status_action = None;
             egui::TopBottomPanel::bottom("omacell-status").show(ctx, |ui| {
-                chrome::status(
+                status_action = chrome::status(
                     ui,
                     &snapshot.workbook,
                     &self.ui,
@@ -1704,8 +1813,12 @@ impl Gui {
                     busy,
                 );
             });
+            if let Some(action) = status_action {
+                let _ = self.execute_cmd(action.command, action.args);
+            }
         }
 
+        self.fonts.ensure_visible(ctx, &snapshot.workbook, &self.ui);
         egui::CentralPanel::default().show(ctx, |ui| {
             chrome::panel(ui, &self.ui.panel(), &self.ui, &self.theme);
             let a11y = grid::cell_a11y(&snapshot.workbook, &self.ui);
@@ -1716,6 +1829,7 @@ impl Gui {
                 conditional_formats.as_deref(),
                 &self.ui,
                 &self.theme,
+                &self.fonts,
                 ctx.pixels_per_point(),
                 &a11y,
             );
@@ -1791,11 +1905,11 @@ impl Gui {
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        if ui.button("Copy").clicked() {
+                        if ui.button(tr("context-copy")).clicked() {
                             let _ = self.execute_cmd("edit.copy", json!({}));
                             close = true;
                         }
-                        if ui.button("Paste").clicked() {
+                        if ui.button(tr("context-paste")).clicked() {
                             let _ = self.execute_cmd("edit.paste", json!({}));
                             close = true;
                         }

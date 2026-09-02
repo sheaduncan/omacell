@@ -1,0 +1,15 @@
+[book]
+title = "Omacell Manual"
+authors = ["Shea Duncan"]
+language = "en"
+multilingual = false
+src = "docs/book"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/sheaduncan/omacell"
+edit-url-template = "https://github.com/sheaduncan/omacell/edit/main/{path}"
+site-url = "/omacell/"

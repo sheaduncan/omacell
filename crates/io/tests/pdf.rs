@@ -1,6 +1,6 @@
 //! Golden PDF text/geometry and pagination parity (spec F-11.2).
 
-use omacell_core::print::{PageSetup, paginate};
+use omacell_core::print::{PageSetup, PrintTitleBand, paginate};
 use omacell_core::workbook::Workbook;
 use omacell_io::pdf::{
     PdfOptions, pdf_extract_text, pdf_has_fontfile2, pdf_media_box, pdf_page_count, write_pdf,
@@ -133,7 +133,10 @@ fn changed_page_setup_replaces_stale_xlsx_fragments_and_names() {
         .unwrap()
         .page_setup;
     assert_eq!(got.paper, changed.paper);
-    assert_eq!(got.title_rows, 2);
+    assert_eq!(
+        got.row_title_band(0),
+        Some(PrintTitleBand { start: 0, end: 1 })
+    );
     assert_eq!(got.margins.left, 0.25);
 }
 
@@ -157,6 +160,40 @@ fn title_columns_are_repeated_in_pdf_content() {
     assert_eq!(
         pdf_extract_text(&bytes).matches("REPEATED_TITLE").count(),
         pages.len()
+    );
+}
+
+#[test]
+fn non_origin_title_rows_repeat_once_per_pdf_page_and_round_trip() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_text(sheet, 0, 0, "LEADING_DATA").unwrap();
+    wb.set_text(sheet, 2, 0, "NON_ORIGIN_TITLE").unwrap();
+    for row in 0..100 {
+        wb.set_number(sheet, row, 1, f64::from(row)).unwrap();
+    }
+    let setup = PageSetup {
+        title_row_band: Some(PrintTitleBand { start: 2, end: 2 }),
+        ..PageSetup::default()
+    };
+    wb.set_page_setup(sheet, setup.clone()).unwrap();
+    let pages = paginate(wb.sheet(sheet).unwrap(), &setup).unwrap();
+    assert!(pages.len() > 1);
+    let pdf = write_pdf(&wb, &PdfOptions::default()).unwrap();
+    let text = pdf_extract_text(&pdf);
+    assert!(text.contains("LEADING_DATA"));
+    assert_eq!(text.matches("NON_ORIGIN_TITLE").count(), pages.len());
+
+    let xlsx = save_workbook_bytes(&wb).unwrap();
+    let reopened = open_bytes(&xlsx).unwrap();
+    assert_eq!(
+        reopened
+            .workbook
+            .sheet(reopened.workbook.active_sheet())
+            .unwrap()
+            .page_setup
+            .title_row_band,
+        setup.title_row_band
     );
 }
 

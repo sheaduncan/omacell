@@ -1,0 +1,51 @@
+name: Fixed-host performance
+
+on:
+  schedule:
+    - cron: "23 6 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reference-host:
+    name: Framework 13 integrated-GPU gates
+    runs-on: [self-hosted, linux, x64, framework-13, integrated-gpu]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-28
+        with:
+          toolchain: 1.98.0
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Validate complete 10 percent budget table
+        run: python3 scripts/check-perf-baselines.py
+
+      - name: Fixed-adapter render and readback measurements
+        env:
+          OMACELL_FIXED_GPU: "1"
+        run: |
+          cargo test --release -p omacell-gui --test a11y \
+            first_frame_renders_within_software_ci_smoke_budget -- --ignored --exact --nocapture
+          cargo test --release -p omacell-gui --test performance -- --ignored --nocapture
+          cargo test --release -p omacell-tui --test snapshots \
+            first_frame_completes -- --ignored --exact --nocapture
+
+      - name: Engine and I/O measurements
+        run: |
+          cargo bench -p omacell-core --bench recalc -- --save-baseline release
+          cargo bench -p omacell-io --bench csv_parse --bench xlsx_open --bench xlsx_save -- \
+            --save-baseline release
+          cargo bench -p omacell-conf --bench theme_reload -- --save-baseline release
+          cargo bench -p omacell-ai --bench card -- --save-baseline release
+
+      - name: Validate fixed-host result export
+        shell: bash
+        run: |
+          : "${OMACELL_PERF_RESULTS:?fixed host must export the product measurement JSONL path}"
+          test -f "$OMACELL_PERF_RESULTS"
+          python3 scripts/check-perf-baselines.py "$OMACELL_PERF_RESULTS"

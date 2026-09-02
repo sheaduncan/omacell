@@ -30,6 +30,27 @@ pub fn fixture_theme(name: &str) -> std::path::PathBuf {
         .join("colors.toml")
 }
 
+pub fn fixed_gpu_setup() -> Option<eframe::egui_wgpu::WgpuSetup> {
+    if std::env::var_os("OMACELL_FIXED_GPU").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return None;
+    }
+    let setup = eframe::egui_wgpu::WgpuSetupCreateNew {
+        native_adapter_selector: Some(Arc::new(|adapters, _surface| {
+            adapters
+                .iter()
+                .find(|adapter| {
+                    adapter.get_info().device_type == eframe::wgpu::DeviceType::IntegratedGpu
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    "fixed-host gate requires an integrated-GPU wgpu adapter".to_string()
+                })
+        })),
+        ..eframe::egui_wgpu::WgpuSetupCreateNew::default()
+    };
+    Some(eframe::egui_wgpu::WgpuSetup::CreateNew(setup))
+}
+
 fn install_omarchy_theme(paths: &Paths, name: &str) {
     let theme_dir = paths.omarchy_state.join("current/theme");
     std::fs::create_dir_all(&theme_dir).unwrap();
@@ -57,6 +78,15 @@ struct EmptyArgs {}
 #[serde(deny_unknown_fields)]
 struct FileSaveAsArgs {
     path: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FilePrintArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    printer: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -325,6 +355,25 @@ fn register_file_lifecycle(bus: &mut Bus) -> Result<(), omacell_core::error::Cor
             default_keys: &["F12"],
         },
         |_ctx, args| Ok(Effect::query(json!({"path": args.path}))),
+    )?;
+    bus.registry_mut().register::<FilePrintArgs, _>(
+        CommandSpec {
+            id: "file.print",
+            doc: "Print-preview page boxes, export PDF, or send a PDF to CUPS",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Public,
+            default_keys: &["Ctrl+P"],
+        },
+        |_ctx, args| {
+            Ok(Effect::query(json!({
+                "pages": [],
+                "printers": ["office", "lab"],
+                "last_printer": "lab",
+                "printed": args.printer,
+                "path": args.path,
+            })))
+        },
     )?;
     Ok(())
 }

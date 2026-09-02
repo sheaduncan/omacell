@@ -155,6 +155,15 @@ impl Margins {
     }
 }
 
+/// Inclusive row or column band repeated on every printed page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrintTitleBand<T> {
+    /// First zero-based row or column.
+    pub start: T,
+    /// Last zero-based row or column, inclusive.
+    pub end: T,
+}
+
 /// Per-sheet page setup.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PageSetup {
@@ -179,10 +188,16 @@ pub struct PageSetup {
     /// Print area.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub print_area: Option<RangeRef>,
-    /// Rows to repeat at top (`0..n` count).
+    /// Explicit rows to repeat at the top of every page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_row_band: Option<PrintTitleBand<u32>>,
+    /// Explicit columns to repeat at the left of every page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_col_band: Option<PrintTitleBand<u16>>,
+    /// Legacy origin-based row count, read for pre-WP-28 OMC compatibility.
     #[serde(default)]
     pub title_rows: u32,
-    /// Columns to repeat at left.
+    /// Legacy origin-based column count.
     #[serde(default)]
     pub title_cols: u16,
     /// Header text (Excel `&` codes allowed).
@@ -222,6 +237,8 @@ impl Default for PageSetup {
             fit_to_width: None,
             fit_to_height: None,
             print_area: None,
+            title_row_band: None,
+            title_col_band: None,
             title_rows: 0,
             title_cols: 0,
             header: None,
@@ -282,6 +299,18 @@ impl PageSetup {
                 "print-title counts exceed the worksheet grid",
             ));
         }
+        if self
+            .title_row_band
+            .is_some_and(|band| band.start > band.end || band.end >= MAX_ROWS)
+            || self
+                .title_col_band
+                .is_some_and(|band| band.start > band.end || band.end >= MAX_COLS)
+        {
+            return Err(CoreError::new(
+                "print.setup",
+                "print-title bands must be ordered and inside the worksheet grid",
+            ));
+        }
         if self.row_breaks.iter().any(|row| *row >= MAX_ROWS - 1)
             || self.col_breaks.iter().any(|col| *col >= MAX_COLS - 1)
         {
@@ -328,6 +357,32 @@ impl PageSetup {
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
+
+    /// Effective row-title band, falling back to an old origin-based count.
+    #[must_use]
+    pub fn row_title_band(&self, legacy_origin: u32) -> Option<PrintTitleBand<u32>> {
+        self.title_row_band.or_else(|| {
+            (self.title_rows > 0).then(|| PrintTitleBand {
+                start: legacy_origin,
+                end: legacy_origin
+                    .saturating_add(self.title_rows.saturating_sub(1))
+                    .min(MAX_ROWS - 1),
+            })
+        })
+    }
+
+    /// Effective column-title band, falling back to an old origin-based count.
+    #[must_use]
+    pub fn col_title_band(&self, legacy_origin: u16) -> Option<PrintTitleBand<u16>> {
+        self.title_col_band.or_else(|| {
+            (self.title_cols > 0).then(|| PrintTitleBand {
+                start: legacy_origin,
+                end: legacy_origin
+                    .saturating_add(self.title_cols.saturating_sub(1))
+                    .min(MAX_COLS - 1),
+            })
+        })
+    }
 }
 
 /// One printed page's cell window.
@@ -353,33 +408,15 @@ pub struct PageBox {
 pub fn paginate(sheet: &Sheet, setup: &PageSetup) -> Result<Vec<PageBox>, CoreError> {
     setup.validate()?;
     let (area_r0, area_c0, area_r1, area_c1) = print_bounds(sheet, setup);
-    let title_rows = setup
-        .title_rows
-        .min(area_r1.saturating_sub(area_r0).saturating_add(1));
-    let title_cols = setup
-        .title_cols
-        .min(area_c1.saturating_sub(area_c0).saturating_add(1));
+    let title_row_band = setup.row_title_band(area_r0);
+    let title_col_band = setup.col_title_band(area_c0);
+    let title_rows = title_row_band.map_or(0, |band| band.end - band.start + 1);
+    let title_cols = title_col_band.map_or(0, |band| band.end - band.start + 1);
     let (usable_w, usable_h) = setup.usable_pt();
     let heading_w = if setup.headings { 28.0 } else { 0.0 };
     let heading_h = if setup.headings { 14.0 } else { 0.0 };
-    let title_h = if title_rows == 0 {
-        0.0
-    } else {
-        row_span_pt(
-            sheet,
-            area_r0,
-            area_r0.saturating_add(title_rows).saturating_sub(1),
-        )
-    };
-    let title_w = if title_cols == 0 {
-        0.0
-    } else {
-        col_span_pt(
-            sheet,
-            area_c0,
-            area_c0.saturating_add(title_cols).saturating_sub(1),
-        )
-    };
+    let title_h = title_row_band.map_or(0.0, |band| row_span_pt(sheet, band.start, band.end));
+    let title_w = title_col_band.map_or(0.0, |band| col_span_pt(sheet, band.start, band.end));
     let content_w = col_span_pt(sheet, area_c0, area_c1);
     let content_h = row_span_pt(sheet, area_r0, area_r1);
     let scale = compute_scale(
@@ -394,15 +431,27 @@ pub fn paginate(sheet: &Sheet, setup: &PageSetup) -> Result<Vec<PageBox>, CoreEr
     let data_w = ((usable_w - heading_w) / scale - title_w).max(1.0);
     let data_h = ((usable_h - heading_h) / scale - title_h).max(1.0);
 
-    let data_r0 = area_r0.saturating_add(title_rows);
-    let data_c0 = area_c0.saturating_add(title_cols);
-    let mut row_pages = pack_axis_rows(sheet, data_r0, area_r1, data_h, &setup.row_breaks);
-    let mut col_pages = pack_axis_cols(sheet, data_c0, area_c1, data_w, &setup.col_breaks);
+    let mut row_pages = pack_axis_rows(
+        sheet,
+        area_r0,
+        area_r1,
+        data_h,
+        &setup.row_breaks,
+        title_row_band,
+    );
+    let mut col_pages = pack_axis_cols(
+        sheet,
+        area_c0,
+        area_c1,
+        data_w,
+        &setup.col_breaks,
+        title_col_band,
+    );
     if row_pages.is_empty() {
-        row_pages.push((data_r0, area_r1));
+        row_pages.push((area_r0, area_r1));
     }
     if col_pages.is_empty() {
-        col_pages.push((data_c0, area_c1));
+        col_pages.push((area_c0, area_c1));
     }
     let page_count = row_pages
         .len()
@@ -417,9 +466,9 @@ pub fn paginate(sheet: &Sheet, setup: &PageSetup) -> Result<Vec<PageBox>, CoreEr
     }
     let mut visits = 0u64;
     for (r0, r1) in &row_pages {
-        let rows = if r1 < r0 { 0 } else { u64::from(r1 - r0) + 1 } + u64::from(title_rows);
+        let rows = span_rows_excluding(*r0, *r1, title_row_band) + u64::from(title_rows);
         for (c0, c1) in &col_pages {
-            let cols = if c1 < c0 { 0 } else { u64::from(c1 - c0) + 1 } + u64::from(title_cols);
+            let cols = span_cols_excluding(*c0, *c1, title_col_band) + u64::from(title_cols);
             visits = visits.saturating_add(rows.saturating_mul(cols));
         }
     }
@@ -529,6 +578,7 @@ fn pack_axis_rows(
     end: u32,
     budget: f64,
     breaks: &[u32],
+    exclude: Option<PrintTitleBand<u32>>,
 ) -> Vec<(u32, u32)> {
     let mut pages = Vec::new();
     let mut r = start;
@@ -536,22 +586,31 @@ fn pack_axis_rows(
         let mut used = 0.0;
         let r0 = r;
         let mut r1 = r;
+        let mut saw_data = false;
         while r <= end {
-            if r > r0 && breaks.iter().any(|b| *b + 1 == r) {
+            if exclude.is_some_and(|band| (band.start..=band.end).contains(&r)) {
+                r1 = r;
+                r = r.saturating_add(1);
+                continue;
+            }
+            if saw_data && breaks.iter().any(|b| *b + 1 == r) {
                 break;
             }
             let h = row_span_pt(sheet, r, r);
-            if used > 0.0 && used + h > budget {
+            if saw_data && used + h > budget {
                 break;
             }
             used += h;
             r1 = r;
+            saw_data = true;
             r = r.saturating_add(1);
             if r == 0 {
                 break;
             }
         }
-        pages.push((r0, r1));
+        if saw_data {
+            pages.push((r0, r1));
+        }
         if r <= r0 {
             r = r0.saturating_add(1);
         }
@@ -568,6 +627,7 @@ fn pack_axis_cols(
     end: u16,
     budget: f64,
     breaks: &[u16],
+    exclude: Option<PrintTitleBand<u16>>,
 ) -> Vec<(u16, u16)> {
     let mut pages = Vec::new();
     let mut c = start;
@@ -575,22 +635,31 @@ fn pack_axis_cols(
         let mut used = 0.0;
         let c0 = c;
         let mut c1 = c;
+        let mut saw_data = false;
         while c <= end {
-            if c > c0 && breaks.iter().any(|b| *b + 1 == c) {
+            if exclude.is_some_and(|band| (band.start..=band.end).contains(&c)) {
+                c1 = c;
+                c = c.saturating_add(1);
+                continue;
+            }
+            if saw_data && breaks.iter().any(|b| *b + 1 == c) {
                 break;
             }
             let w = col_span_pt(sheet, c, c);
-            if used > 0.0 && used + w > budget {
+            if saw_data && used + w > budget {
                 break;
             }
             used += w;
             c1 = c;
+            saw_data = true;
             if c == u16::MAX {
                 break;
             }
             c = c.saturating_add(1);
         }
-        pages.push((c0, c1));
+        if saw_data {
+            pages.push((c0, c1));
+        }
         if c <= c0 {
             c = c0.saturating_add(1);
         }
@@ -599,6 +668,40 @@ fn pack_axis_cols(
         }
     }
     pages
+}
+
+fn span_rows_excluding(start: u32, end: u32, exclude: Option<PrintTitleBand<u32>>) -> u64 {
+    if end < start {
+        return 0;
+    }
+    let total = u64::from(end - start) + 1;
+    let excluded = exclude.map_or(0, |band| {
+        let first = start.max(band.start);
+        let last = end.min(band.end);
+        if last < first {
+            0
+        } else {
+            u64::from(last - first) + 1
+        }
+    });
+    total.saturating_sub(excluded)
+}
+
+fn span_cols_excluding(start: u16, end: u16, exclude: Option<PrintTitleBand<u16>>) -> u64 {
+    if end < start {
+        return 0;
+    }
+    let total = u64::from(end - start) + 1;
+    let excluded = exclude.map_or(0, |band| {
+        let first = start.max(band.start);
+        let last = end.min(band.end);
+        if last < first {
+            0
+        } else {
+            u64::from(last - first) + 1
+        }
+    });
+    total.saturating_sub(excluded)
 }
 
 /// Expand Excel header/footer codes (`&P`, `&N`, `&A`, `&F`, `&D`).

@@ -10,6 +10,7 @@ use omacell_core::geometry::{DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::locale::LocaleId;
 use omacell_core::numfmt::{FormatValue, format};
+use omacell_core::sheet::FreezePanes;
 use omacell_core::spill::SpillTable;
 use omacell_core::style::{Border, BorderSide, BorderStyle};
 use omacell_core::style::{Color, Fill, HorizontalAlign, Style};
@@ -17,9 +18,12 @@ use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_ui::{EditSurface, UiSession, Viewport, conditional_format_ranges};
 
-use crate::theme::GuiTheme;
+use crate::theme::{GuiTheme, WorkbookFontCache};
 
 const EDGE_PX: f32 = 4.0;
+const MAX_PAINTED_ROWS: usize = 512;
+const MAX_PAINTED_COLS: usize = 256;
+const MAX_PANE_AXIS_SCAN: usize = 4_096;
 
 /// Geometry of the last painted grid, for hit-testing.
 #[derive(Clone, Debug)]
@@ -140,7 +144,7 @@ impl GridLayout {
     ) -> Vec<omacell_core::addr::RangeRef> {
         let rows = self.rows.iter().map(|(row, _, _)| *row).collect::<Vec<_>>();
         let cols = self.cols.iter().map(|(col, _, _)| *col).collect::<Vec<_>>();
-        conditional_format_ranges(&rows, &cols, viewport.freeze)
+        conditional_format_ranges(&rows, &cols, pane_counts(viewport))
     }
 
     /// Screen rect covering `row`/`col` if those cells were painted.
@@ -154,13 +158,14 @@ impl GridLayout {
 
 /// Paint the visible window. Returns layout for the next pointer event.
 #[allow(clippy::too_many_arguments)]
-pub fn paint(
+pub(crate) fn paint(
     ui: &mut Ui,
     wb: &Workbook,
     spill: &SpillTable,
     conditional_formats: Option<&ConditionalFormatSnapshot>,
     session: &UiSession,
     theme: &GuiTheme,
+    fonts: &WorkbookFontCache,
     ppp: f32,
     a11y_label: &str,
 ) -> GridLayout {
@@ -183,30 +188,59 @@ pub fn paint(
 
     let sel = session.selection();
     let sheet = sel.sheet;
-    let (first_row, _, _) = vp.screen_rows();
-    let first_col = vp.first_col.max(vp.freeze.cols);
+    let panes = pane_counts(&vp);
+    let split = vp.split;
     let show_formulas = session.show_formulas();
     let edit = session.edit();
     let grid_lines = session.config().appearance.grid_lines;
     let font = FontId::monospace((theme.ui_font_size_pt as f32 * zoom).clamp(9.0, 48.0));
     let hair = 1.0_f32 / ppp.max(1.0);
 
-    let mut col_x = rect.left() + header_w;
+    let data_left = rect.left() + header_w;
+    let data_top = rect.top() + header_h;
+    let split_x = split
+        .filter(|split| split.x_px > 0)
+        .map(|split| data_left + split.x_px as f32)
+        .filter(|x| *x > data_left && *x < rect.right());
+    let split_y = split
+        .filter(|split| split.y_px > 0)
+        .map(|split| data_top + split.y_px as f32)
+        .filter(|y| *y > data_top && *y < rect.bottom());
+    let mut col_x = data_left;
     let mut header_cols: Vec<(u16, f32, f32)> = Vec::new();
-    for col in 0..vp.freeze.cols {
+    for col in (0..panes.cols).take(MAX_PANE_AXIS_SCAN) {
+        if header_cols.len() >= MAX_PAINTED_COLS || col_x >= split_x.unwrap_or(rect.right()) {
+            break;
+        }
         let w = snap(vp.col_px(col) as f32, ppp);
         if w <= 0.0 {
             continue;
         }
         let x0 = snap_pos(col_x, ppp);
-        let x1 = snap_pos(col_x + w, ppp);
+        let x1 = snap_pos(
+            (col_x + w)
+                .min(split_x.unwrap_or(f32::INFINITY))
+                .min(rect.right()),
+            ppp,
+        );
         header_cols.push((col, x0, x1));
         col_x = x1;
     }
-    let freeze_x = col_x;
-    let mut col = first_col;
-    while col_x < rect.right() && col < MAX_COLS {
-        if col < vp.freeze.cols {
+    let pane_x = split_x.unwrap_or(col_x);
+    col_x = pane_x;
+    let mut col = if split.is_some() {
+        vp.first_col
+    } else {
+        vp.first_col.max(panes.cols)
+    };
+    let mut scanned_cols = 0usize;
+    while col_x < rect.right()
+        && col < MAX_COLS
+        && header_cols.len() < MAX_PAINTED_COLS
+        && scanned_cols < MAX_PANE_AXIS_SCAN
+    {
+        scanned_cols += 1;
+        if split.is_none() && col < panes.cols {
             col = col.saturating_add(1);
             continue;
         }
@@ -238,25 +272,52 @@ pub fn paint(
         );
     }
 
-    let mut row_list: Vec<u32> = Vec::new();
-    for row in 0..vp.freeze.rows {
-        if vp.row_px(row) != 0 {
-            row_list.push(row);
+    let mut row_stops: Vec<(u32, f32, f32)> = Vec::new();
+    let mut row_y = data_top;
+    for row in (0..panes.rows).take(MAX_PANE_AXIS_SCAN) {
+        if row_stops.len() >= MAX_PAINTED_ROWS || row_y >= split_y.unwrap_or(rect.bottom()) {
+            break;
         }
+        let h = snap(vp.row_px(row) as f32, ppp);
+        if h <= 0.0 {
+            continue;
+        }
+        let y0 = snap_pos(row_y, ppp);
+        let y1 = snap_pos(
+            (row_y + h)
+                .min(split_y.unwrap_or(f32::INFINITY))
+                .min(rect.bottom()),
+            ppp,
+        );
+        row_stops.push((row, y0, y1));
+        row_y = y1;
     }
-    let mut row = first_row;
-    while row < MAX_ROWS && row_list.len() < 512 {
-        if row >= vp.freeze.rows && vp.row_px(row) != 0 {
-            row_list.push(row);
+    let pane_y = split_y.unwrap_or(row_y);
+    row_y = pane_y;
+    let mut row = if split.is_some() {
+        vp.first_row
+    } else {
+        vp.first_row.max(panes.rows)
+    };
+    let mut scanned_rows = 0usize;
+    while row < MAX_ROWS
+        && row_y < rect.bottom()
+        && row_stops.len() < MAX_PAINTED_ROWS
+        && scanned_rows < MAX_PANE_AXIS_SCAN
+    {
+        scanned_rows += 1;
+        if (split.is_some() || row >= panes.rows) && vp.row_px(row) != 0 {
+            let h = snap(vp.row_px(row) as f32, ppp);
+            let y0 = snap_pos(row_y, ppp);
+            let y1 = snap_pos((row_y + h).min(rect.bottom()), ppp);
+            row_stops.push((row, y0, y1));
+            row_y = y1;
         }
         let next = row.saturating_add(1);
         if next <= row {
             break;
         }
         row = next;
-        if (row_list.len() as f32) * cell_h > data_h + header_h {
-            break;
-        }
     }
 
     let active = sel.active();
@@ -264,19 +325,11 @@ pub fn paint(
     let review_sheet = wb.sheet(sheet).map(|sheet| sheet.name.as_str());
     let (r0, c0, r1, c1) = active.normalized();
     let last_visible_col = header_cols.last().map(|(col, _, _)| *col);
-    let last_visible_row = row_list.last().copied();
-    let mut painted_rows: Vec<(u32, f32, f32)> = Vec::new();
+    let last_visible_row = row_stops.last().map(|(row, _, _)| *row);
+    let painted_rows = row_stops.clone();
     let mut fill_handle = None;
     let mut cursor_rect = None;
-    let mut row_y = rect.top() + header_h;
-    for row in row_list {
-        let h = snap(vp.row_px(row) as f32, ppp);
-        if h <= 0.0 {
-            continue;
-        }
-        let y0 = snap_pos(row_y, ppp);
-        let y1 = snap_pos(row_y + h, ppp);
-        painted_rows.push((row, y0, y1));
+    for (row, y0, y1) in row_stops {
         painter.rect_filled(
             Rect::from_min_max(pos2(rect.left(), y0), pos2(rect.left() + header_w, y1)),
             0.0,
@@ -426,7 +479,12 @@ pub fn paint(
             };
             let cell_font = style.map_or_else(
                 || font.clone(),
-                |style| FontId::monospace((style.font.size_pt as f32 * zoom).clamp(9.0, 72.0)),
+                |style| {
+                    FontId::new(
+                        (style.font.size_pt as f32 * zoom).clamp(9.0, 72.0),
+                        fonts.family(&style.font.name),
+                    )
+                },
             );
             painter.text(galley_pos, anchor, text, cell_font, color);
             if grid_lines {
@@ -511,22 +569,32 @@ pub fn paint(
                 fill_handle = Some(handle);
             }
         }
-        if vp.freeze.rows > 0 && row + 1 == vp.freeze.rows {
-            painter.line_segment(
-                [pos2(rect.left(), y1), pos2(rect.right(), y1)],
-                Stroke::new(2.0_f32, theme.frozen_edge),
-            );
-        }
-        row_y = y1;
-        if row_y > rect.bottom() {
-            break;
-        }
     }
 
-    if vp.freeze.cols > 0 {
+    if split.is_none() && panes.cols > 0 && pane_x > data_left && pane_x < rect.right() {
         painter.line_segment(
-            [pos2(freeze_x, rect.top()), pos2(freeze_x, rect.bottom())],
+            [pos2(pane_x, rect.top()), pos2(pane_x, rect.bottom())],
             Stroke::new(2.0_f32, theme.frozen_edge),
+        );
+    }
+    if split.is_none() && panes.rows > 0 && pane_y > data_top && pane_y < rect.bottom() {
+        painter.line_segment(
+            [pos2(rect.left(), pane_y), pos2(rect.right(), pane_y)],
+            Stroke::new(2.0_f32, theme.frozen_edge),
+        );
+    }
+
+    let (split_x, split_y) = split_dividers(rect, header_w, header_h, &vp);
+    if let Some(x) = split_x {
+        painter.line_segment(
+            [pos2(x, rect.top()), pos2(x, rect.bottom())],
+            Stroke::new(3.0_f32, theme.frozen_edge),
+        );
+    }
+    if let Some(y) = split_y {
+        painter.line_segment(
+            [pos2(rect.left(), y), pos2(rect.right(), y)],
+            Stroke::new(3.0_f32, theme.frozen_edge),
         );
     }
 
@@ -550,6 +618,50 @@ pub fn paint(
         rows: painted_rows,
         fill_handle,
     }
+}
+
+fn split_dividers(
+    rect: Rect,
+    header_w: f32,
+    header_h: f32,
+    viewport: &Viewport,
+) -> (Option<f32>, Option<f32>) {
+    let Some(split) = viewport.split else {
+        return (None, None);
+    };
+    let x = rect.left() + header_w + split.x_px as f32;
+    let y = rect.top() + header_h + split.y_px as f32;
+    let x = (x > rect.left() + header_w && x < rect.right()).then_some(x);
+    let y = (y > rect.top() + header_h && y < rect.bottom()).then_some(y);
+    (x, y)
+}
+
+pub(crate) fn pane_counts(viewport: &Viewport) -> FreezePanes {
+    let Some(split) = viewport.split else {
+        return viewport.freeze;
+    };
+    let zoom = viewport.zoom.clamp(0.25, 8.0);
+    let base_x = (f64::from(split.x_px) / zoom).round() as u64;
+    let base_y = (f64::from(split.y_px) / zoom).round() as u64;
+    let cols = if base_x == 0 {
+        0
+    } else {
+        viewport
+            .cols
+            .pixel_to_index(base_x - 1)
+            .saturating_add(1)
+            .min(u32::from(MAX_COLS)) as u16
+    };
+    let rows = if base_y == 0 {
+        0
+    } else {
+        viewport
+            .rows
+            .pixel_to_index(base_y - 1)
+            .saturating_add(1)
+            .min(MAX_ROWS)
+    };
+    FreezePanes { rows, cols }
 }
 
 fn explicit_color(color: Color) -> Option<Color32> {
@@ -845,12 +957,45 @@ pub fn autofit_col_px(wb: &Workbook, session: &UiSession, col: u16) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        GridLayout, conditional_icon, data_bar_rect, explicit_color, strongest_border, style_fill,
+        GridLayout, conditional_icon, data_bar_rect, explicit_color, pane_counts, split_dividers,
+        strongest_border, style_fill,
     };
     use egui::{Color32, Rect, pos2};
     use omacell_core::condfmt::CfVisual;
     use omacell_core::style::{BorderSide, BorderStyle, Color, Fill, Style};
     use omacell_ui::Viewport;
+
+    #[test]
+    fn split_view_paints_both_dividers_inside_the_grid() {
+        let mut viewport = Viewport {
+            split: Some(omacell_core::sheet::SplitView {
+                x_px: 100,
+                y_px: 40,
+            }),
+            ..Viewport::default()
+        };
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+        let (x, y) = split_dividers(rect, 48.0, 20.0, &viewport);
+        assert_eq!(x, Some(148.0));
+        assert_eq!(y, Some(60.0));
+
+        viewport.first_col = 10;
+        viewport.first_row = 10;
+        let (x, y) = split_dividers(rect, 48.0, 20.0, &viewport);
+        assert_eq!(
+            x,
+            Some(148.0),
+            "split dividers stay fixed while panes scroll"
+        );
+        assert_eq!(
+            y,
+            Some(60.0),
+            "split dividers stay fixed while panes scroll"
+        );
+        let panes = pane_counts(&viewport);
+        assert_eq!(panes.cols, 2, "100px spans one full and one partial column");
+        assert_eq!(panes.rows, 2);
+    }
 
     #[test]
     fn hit_uses_painted_stops() {

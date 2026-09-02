@@ -6,7 +6,16 @@ use omacell_core::workbook::Workbook;
 use omacell_ui::{EditSurface, Palette, PanelState, StatusLine, UiSession};
 
 use crate::grid;
+use crate::i18n::tr;
 use crate::theme::GuiTheme;
+
+/// Command produced by an actionable status-line segment.
+pub struct StatusAction {
+    /// Registered command id.
+    pub command: &'static str,
+    /// Command arguments.
+    pub args: serde_json::Value,
+}
 
 /// Top sheet tabs.
 pub fn tabs(ui: &mut Ui, wb: &Workbook, session: &UiSession, theme: &GuiTheme) -> Option<SheetId> {
@@ -50,7 +59,7 @@ pub fn formula_bar(
     let mut changed = None;
     ui.horizontal(|ui| {
         ui.label(RichText::new(addr).color(theme.header_foreground).strong());
-        ui.label(RichText::new("fx").color(theme.muted));
+        ui.label(RichText::new(tr("formula-symbol")).color(theme.muted));
         let editor = if session.formula_bar_expanded() {
             TextEdit::multiline(&mut text).desired_rows(3)
         } else {
@@ -60,7 +69,7 @@ pub fn formula_bar(
             editor
                 .desired_width(f32::INFINITY)
                 .font(egui::TextStyle::Monospace)
-                .hint_text("Enter a value or formula"),
+                .hint_text(tr("formula-hint")),
         );
         if response.gained_focus() && session.edit().is_idle() {
             session.begin_edit(EditSurface::FormulaBar, &text);
@@ -84,18 +93,18 @@ pub fn status(
     dirty: bool,
     message: Option<&str>,
     busy: bool,
-) {
+) -> Option<StatusAction> {
     let sel = session.selection();
     let cell = format!(
         "{}{}",
         col_to_letters(sel.cursor.col).unwrap_or_else(|_| "A".into()),
         sel.cursor.row + 1
     );
-    let stats = format!("Cnt {}", sel.cell_count());
+    let stats = format!("{} {}", tr("status-count"), sel.cell_count());
     let calc = match wb.settings().calc_mode {
-        omacell_core::workbook::CalcMode::Manual => "Manual",
-        omacell_core::workbook::CalcMode::AutomaticExceptTables => "Auto*",
-        omacell_core::workbook::CalcMode::Automatic => "Auto",
+        omacell_core::workbook::CalcMode::Manual => tr("status-manual"),
+        omacell_core::workbook::CalcMode::AutomaticExceptTables => tr("status-auto-except-tables"),
+        omacell_core::workbook::CalcMode::Automatic => tr("status-auto"),
     };
     let mut line = StatusLine::default();
     let ids = session.config().layout.status_line;
@@ -135,21 +144,62 @@ pub fn status(
             _ => {}
         }
     }
+    let mut picked = None;
     ui.horizontal(|ui| {
         for seg in &line.segments {
             if seg.text.is_empty() {
                 continue;
             }
-            ui.label(RichText::new(&seg.text).color(theme.muted));
+            if let Some(action) = status_action(&seg.id) {
+                let label = status_accessible_label(&seg.id, &seg.text);
+                let response =
+                    ui.add(egui::Button::new(RichText::new(label).color(theme.muted)).frame(false));
+                if response.clicked() {
+                    picked = Some(action);
+                }
+            } else {
+                ui.label(RichText::new(&seg.text).color(theme.muted));
+            }
             ui.separator();
         }
         if busy {
-            ui.label(RichText::new("working…").color(theme.warning));
+            ui.label(RichText::new(tr("status-working")).color(theme.warning));
         }
         if let Some(msg) = message {
             ui.label(RichText::new(msg).color(theme.foreground));
         }
     });
+    picked
+}
+
+fn status_accessible_label(id: &str, text: &str) -> String {
+    let prefix = match id {
+        "mode" => tr("status-mode"),
+        "cell" => tr("status-cell"),
+        "calc" => tr("status-calculation"),
+        "theme" => tr("status-theme"),
+        "zoom" => tr("status-zoom"),
+        "dirty" => tr("status-save"),
+        _ => return text.to_string(),
+    };
+    format!("{prefix} {text}")
+}
+
+/// Map a status segment onto an existing registered command.
+#[must_use]
+pub fn status_action(id: &str) -> Option<StatusAction> {
+    let (command, args) = match id {
+        "mode" => ("mode.normal", serde_json::json!({})),
+        "cell" => ("nav.goto", serde_json::json!({})),
+        "calc" => ("calc.recalc", serde_json::json!({})),
+        "theme" => ("theme.reload", serde_json::json!({})),
+        "zoom" => ("view.zoom", serde_json::json!({"factor": 1.0})),
+        "dirty" => ("file.save", serde_json::json!({})),
+        "ai" => ("ai.agent", serde_json::json!({})),
+        "diagnose" => ("ai.agent", serde_json::json!({"diagnose": true})),
+        _ => return None,
+    };
+    Some(StatusAction { command, args })
 }
 
 /// Command palette overlay.
@@ -160,13 +210,13 @@ pub fn palette(
     theme: &GuiTheme,
 ) -> Option<String> {
     let mut chosen = None;
-    egui::Window::new("palette")
+    egui::Window::new(tr("palette-title"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_TOP, [0.0, 48.0])
         .frame(egui::Frame::popup(&ctx.style()).fill(theme.popup_background))
         .show(ctx, |ui| {
-            ui.label(palette.prompt.as_deref().unwrap_or("palette"));
+            ui.label(palette.prompt.as_deref().unwrap_or(tr("palette-prompt")));
             ui.label(&palette.query);
             if let Some(preview) = &palette.preview {
                 ui.monospace(preview);
@@ -194,18 +244,30 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
     let body = panel.body.clone().unwrap_or_else(|| match id.as_str() {
         "find" => {
             let f = session.find_replace();
-            format!("find: {}\nreplace: {}", f.find, f.replace)
+            format!(
+                "{}: {}\n{}: {}",
+                tr("panel-find"),
+                f.find,
+                tr("panel-replace"),
+                f.replace
+            )
         }
-        "goto" => format!("goto: {}", session.goto().target),
-        "keys" => "F1 keys overlay\nEsc closes panels\nCtrl+Q quits".into(),
+        "goto" => format!("{}: {}", tr("panel-goto"), session.goto().target),
+        "keys" => format!(
+            "{}\n{}\n{}",
+            tr("panel-keys-help"),
+            tr("panel-escape-help"),
+            tr("panel-quit-help")
+        ),
         "changeset" => session
             .changeset_review()
-            .map_or_else(|| "no proposed changesets".into(), |review| review.body()),
+            .map_or_else(|| tr("panel-no-changesets").into(), |review| review.body()),
         "agent" => session.agent_panel().body(),
         "formula" => {
-            let mut body = session
-                .formula_assist()
-                .map_or_else(|| "no formula-assist result".into(), |assist| assist.body());
+            let mut body = session.formula_assist().map_or_else(
+                || tr("panel-no-formula-assist").into(),
+                |assist| assist.body(),
+            );
             if let Some(review) = session.changeset_review() {
                 body.push_str("\n\n");
                 body.push_str(&review.body());
@@ -214,13 +276,19 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
         }
         "import" => session
             .import_review()
-            .map_or_else(|| "no active import preview".into(), |review| review.body()),
-        "format" => "Run format.panel to inspect the current selection.".into(),
-        "comments" => "Run comments.panel to refresh the comments list.".into(),
-        "sort" => "Run sort.panel to refresh the sort controls.".into(),
-        "filter" => "Run filter.panel to refresh the filter state.".into(),
-        other => format!("{other} panel"),
+            .map_or_else(|| tr("panel-no-import").into(), |review| review.body()),
+        "format" => tr("panel-format-help").into(),
+        "comments" => tr("panel-comments-help").into(),
+        "sort" => tr("panel-sort-help").into(),
+        "filter" => tr("panel-filter-help").into(),
+        other => format!("{other} {}", tr("panel-suffix")),
     });
+    let title = match id.as_str() {
+        "goto" => tr("panel-goto"),
+        "keys" => tr("panel-keys-title"),
+        "print" => tr("panel-print-title"),
+        other => other,
+    };
     let width = (panel.width as f32 / 8.0).clamp(180.0, 360.0);
     match panel.side.as_str() {
         "left" => {
@@ -228,7 +296,7 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
                 .resizable(true)
                 .min_width(width)
                 .show_inside(ui, |ui| {
-                    ui.heading(id);
+                    ui.heading(title);
                     ui.label(RichText::new(body).color(theme.foreground));
                 });
         }
@@ -236,7 +304,7 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
             egui::TopBottomPanel::bottom("omacell-panel")
                 .resizable(true)
                 .show_inside(ui, |ui| {
-                    ui.heading(id);
+                    ui.heading(title);
                     ui.label(body);
                 });
         }
@@ -245,7 +313,7 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
                 .resizable(true)
                 .min_width(width)
                 .show_inside(ui, |ui| {
-                    ui.heading(id);
+                    ui.heading(title);
                     ui.label(body);
                 });
         }
@@ -256,24 +324,40 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
 pub fn menu_bar(ui: &mut Ui) -> Option<&'static str> {
     let mut cmd = None;
     egui::MenuBar::new().ui(ui, |ui| {
-        ui.menu_button("File", |ui| {
-            if ui.button("Save").clicked() {
+        ui.menu_button(tr("menu-file"), |ui| {
+            if ui.button(tr("menu-save")).clicked() {
                 cmd = Some("file.save");
             }
         });
-        ui.menu_button("Edit", |ui| {
-            if ui.button("Undo").clicked() {
+        ui.menu_button(tr("menu-edit"), |ui| {
+            if ui.button(tr("menu-undo")).clicked() {
                 cmd = Some("edit.undo");
             }
-            if ui.button("Copy").clicked() {
+            if ui.button(tr("menu-copy")).clicked() {
                 cmd = Some("edit.copy");
             }
         });
-        ui.menu_button("Help", |ui| {
-            if ui.button("Keys").clicked() {
+        ui.menu_button(tr("menu-help"), |ui| {
+            if ui.button(tr("menu-keys")).clicked() {
                 cmd = Some("help.keys");
             }
         });
     });
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::status_action;
+
+    #[test]
+    fn clickable_status_segments_use_registered_commands() {
+        let zoom = status_action("zoom").expect("zoom action");
+        assert_eq!(zoom.command, "view.zoom");
+        assert_eq!(zoom.args, serde_json::json!({"factor": 1.0}));
+        let diagnose = status_action("diagnose").expect("diagnose action");
+        assert_eq!(diagnose.command, "ai.agent");
+        assert_eq!(diagnose.args, serde_json::json!({"diagnose": true}));
+        assert!(status_action("stats").is_none());
+    }
 }

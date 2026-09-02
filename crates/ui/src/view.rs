@@ -497,16 +497,16 @@ fn handle(
             g.viewport.split = None;
         }
         HandlerKind::Split => {
-            let x = g
-                .viewport
-                .cols
-                .index_to_pixel(u32::from(g.selection.cursor.col));
-            let y = g.viewport.rows.index_to_pixel(g.selection.cursor.row);
+            let cursor = g.selection.cursor;
+            let x = g.viewport.cols.index_to_pixel(u32::from(cursor.col));
+            let y = g.viewport.rows.index_to_pixel(cursor.row);
             g.viewport.split = Some(SplitView {
                 x_px: scaled_coordinate(x, g.viewport.zoom),
                 y_px: scaled_coordinate(y, g.viewport.zoom),
             });
             g.viewport.freeze = FreezePanes::default();
+            g.viewport.first_row = cursor.row;
+            g.viewport.first_col = cursor.col;
         }
         HandlerKind::Center => {
             let row = g.selection.cursor.row;

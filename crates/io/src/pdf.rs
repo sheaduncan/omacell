@@ -10,7 +10,9 @@ use omacell_core::error::CoreError;
 use omacell_core::geometry::{DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::locale::LocaleId;
 use omacell_core::numfmt::{FormatValue, format};
-use omacell_core::print::{PX_TO_PT, PageBox, PageSetup, expand_header, paginate, print_bounds};
+use omacell_core::print::{
+    PX_TO_PT, PageBox, PageSetup, PrintTitleBand, expand_header, paginate, print_bounds,
+};
 use omacell_core::sheet::{Hyperlink, Sheet};
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
@@ -395,39 +397,25 @@ fn build_content(
     let origin_x = left + heading_w;
     let mut y_from_top = heading_h;
 
-    let (area_r0, area_c0, area_r1, area_c1) = print_bounds(sheet, setup);
-    let title_rows = setup
-        .title_rows
-        .min(area_r1.saturating_sub(area_r0).saturating_add(1));
-    let title_cols = setup
-        .title_cols
-        .min(area_c1.saturating_sub(area_c0).saturating_add(1));
-    let title_r1 = area_r0.saturating_add(title_rows).saturating_sub(1);
-    let title_c1 = area_c0.saturating_add(title_cols).saturating_sub(1);
-    let title_c0 = (title_cols > 0).then_some(area_c0);
-    let title_w = if title_cols == 0 {
-        0.0
-    } else {
-        col_span_pt(sheet, area_c0, title_c1) * scale
-    };
-    let title_h = if title_rows == 0 {
-        0.0
-    } else {
-        row_span_pt(sheet, area_r0, title_r1) * scale
-    };
+    let (area_r0, area_c0, _, _) = print_bounds(sheet, setup);
+    let title_rows = setup.row_title_band(area_r0);
+    let title_cols = setup.col_title_band(area_c0);
+    let title_w = title_cols.map_or(0.0, |band| col_span_pt(sheet, band.start, band.end) * scale);
+    let title_h = title_rows.map_or(0.0, |band| row_span_pt(sheet, band.start, band.end) * scale);
     let data_x = origin_x + title_w;
 
     if setup.headings {
-        if title_cols > 0 {
+        if let Some(band) = title_cols {
             draw_col_labels(
                 sheet,
                 &mut content,
                 face,
-                area_c0,
-                title_c1,
+                band.start,
+                band.end,
                 origin_x,
                 media_h - top - heading_h + 2.0,
                 scale,
+                None,
             );
         }
         draw_col_labels(
@@ -439,22 +427,24 @@ fn build_content(
             data_x,
             media_h - top - heading_h + 2.0,
             scale,
+            title_cols,
         );
     }
 
-    if title_rows > 0 {
+    if let Some(band) = title_rows {
         if setup.headings {
             draw_row_labels(
                 sheet,
                 &mut content,
                 face,
-                area_r0,
-                title_r1,
+                band.start,
+                band.end,
                 left,
                 media_h,
                 top,
                 y_from_top,
                 scale,
+                None,
             );
         }
         y_from_top += draw_split_band(
@@ -462,10 +452,9 @@ fn build_content(
             sheet,
             &mut content,
             face,
-            area_r0,
-            title_r1,
-            title_c0,
-            title_c1,
+            band.start,
+            band.end,
+            title_cols,
             page.col0,
             page.col1,
             origin_x,
@@ -476,6 +465,8 @@ fn build_content(
             scale,
             setup.gridlines,
             bw,
+            None,
+            title_cols,
         );
     }
 
@@ -491,6 +482,7 @@ fn build_content(
             top,
             y_from_top,
             scale,
+            title_rows,
         );
     }
     y_from_top += draw_split_band(
@@ -500,8 +492,7 @@ fn build_content(
         face,
         page.row0,
         page.row1,
-        title_c0,
-        title_c1,
+        title_cols,
         page.col0,
         page.col1,
         origin_x,
@@ -512,6 +503,8 @@ fn build_content(
         scale,
         setup.gridlines,
         bw,
+        title_rows,
+        title_cols,
     );
 
     let _ = (y_from_top, media_w);
@@ -525,21 +518,36 @@ fn build_content(
             continue;
         }
         let scene = layout_chart(wb, chart, theme, 320.0, 200.0)?;
-        let x0 =
-            data_x + col_offset_pt(sheet, page.col0, chart.anchor.from_col.max(page.col0)) * scale;
+        let x0 = data_x
+            + col_offset_pt_excluding(
+                sheet,
+                page.col0,
+                chart.anchor.from_col.max(page.col0),
+                title_cols,
+            ) * scale;
         let y0 = heading_h
             + title_h
-            + row_offset_pt(sheet, page.row0, chart.anchor.from_row.max(page.row0)) * scale;
-        let w = col_span_pt(
+            + row_offset_pt_excluding(
+                sheet,
+                page.row0,
+                chart.anchor.from_row.max(page.row0),
+                title_rows,
+            ) * scale;
+        let w = col_span_pt_excluding(
             sheet,
             chart.anchor.from_col.max(page.col0),
             chart.anchor.to_col.min(page.col1),
+            title_cols,
         ) * scale;
-        let h = row_span_pt(
+        let h = row_span_pt_excluding(
             sheet,
             chart.anchor.from_row.max(page.row0),
             chart.anchor.to_row.min(page.row1),
+            title_rows,
         ) * scale;
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
         paint_scene(
             &mut content,
             face,
@@ -565,12 +573,16 @@ fn draw_col_labels(
     origin_x: f64,
     y: f64,
     scale: f64,
+    exclude: Option<PrintTitleBand<u16>>,
 ) {
     if c1 < c0 {
         return;
     }
     let mut x = origin_x;
     for col in c0..=c1 {
+        if exclude.is_some_and(|band| (band.start..=band.end).contains(&col)) {
+            continue;
+        }
         let w = col_pt(sheet, col) * scale;
         let label = col_to_letters(col).unwrap_or_else(|_| "?".into());
         show_text(content, face, x + 2.0, y, 8.0, &label, (0.2, 0.2, 0.2));
@@ -590,12 +602,16 @@ fn draw_row_labels(
     top: f64,
     y_from_top: f64,
     scale: f64,
+    exclude: Option<PrintTitleBand<u32>>,
 ) {
     if r1 < r0 {
         return;
     }
     let mut y = y_from_top;
     for row in r0..=r1 {
+        if exclude.is_some_and(|band| (band.start..=band.end).contains(&row)) {
+            continue;
+        }
         let h = row_pt(sheet, row) * scale;
         if h > 0.0 {
             show_text(
@@ -620,8 +636,7 @@ fn draw_split_band(
     face: Option<&ttf_parser::Face<'_>>,
     r0: u32,
     r1: u32,
-    title_c0: Option<u16>,
-    title_c1: u16,
+    title_cols: Option<PrintTitleBand<u16>>,
     data_c0: u16,
     data_c1: u16,
     title_x: f64,
@@ -632,20 +647,37 @@ fn draw_split_band(
     scale: f64,
     gridlines: bool,
     bw: bool,
+    skip_rows: Option<PrintTitleBand<u32>>,
+    skip_data_cols: Option<PrintTitleBand<u16>>,
 ) -> f64 {
-    if let Some(title_c0) = title_c0 {
+    if let Some(band) = title_cols {
         draw_row_band(
-            wb, sheet, content, face, r0, r1, title_c0, title_c1, title_x, media_h, top,
-            y_from_top, scale, gridlines, bw,
+            wb, sheet, content, face, r0, r1, band.start, band.end, title_x, media_h, top,
+            y_from_top, scale, gridlines, bw, skip_rows, None,
         );
     }
     if data_c1 >= data_c0 {
         draw_row_band(
-            wb, sheet, content, face, r0, r1, data_c0, data_c1, data_x, media_h, top, y_from_top,
-            scale, gridlines, bw,
+            wb,
+            sheet,
+            content,
+            face,
+            r0,
+            r1,
+            data_c0,
+            data_c1,
+            data_x,
+            media_h,
+            top,
+            y_from_top,
+            scale,
+            gridlines,
+            bw,
+            skip_rows,
+            skip_data_cols,
         );
     }
-    row_span_pt(sheet, r0, r1) * scale
+    row_span_pt_excluding(sheet, r0, r1, skip_rows) * scale
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -665,18 +697,26 @@ fn draw_row_band(
     scale: f64,
     gridlines: bool,
     bw: bool,
+    skip_rows: Option<PrintTitleBand<u32>>,
+    skip_cols: Option<PrintTitleBand<u16>>,
 ) -> f64 {
     if r1 < r0 {
         return 0.0;
     }
     let mut y = y_from_top;
     for row in r0..=r1 {
+        if skip_rows.is_some_and(|band| (band.start..=band.end).contains(&row)) {
+            continue;
+        }
         let h = row_pt(sheet, row) * scale;
         if h <= 0.0 {
             continue;
         }
         let mut x = origin_x;
         for col in c0..=c1 {
+            if skip_cols.is_some_and(|band| (band.start..=band.end).contains(&col)) {
+                continue;
+            }
             let w = col_pt(sheet, col) * scale;
             if w <= 0.0 {
                 continue;
@@ -926,6 +966,36 @@ fn col_span_pt(sheet: &Sheet, c0: u16, c1: u16) -> f64 {
     (c0..=c1).map(|c| col_pt(sheet, c)).sum()
 }
 
+fn row_span_pt_excluding(
+    sheet: &Sheet,
+    r0: u32,
+    r1: u32,
+    exclude: Option<PrintTitleBand<u32>>,
+) -> f64 {
+    if r1 < r0 {
+        return 0.0;
+    }
+    (r0..=r1)
+        .filter(|row| !exclude.is_some_and(|band| (band.start..=band.end).contains(row)))
+        .map(|row| row_pt(sheet, row))
+        .sum()
+}
+
+fn col_span_pt_excluding(
+    sheet: &Sheet,
+    c0: u16,
+    c1: u16,
+    exclude: Option<PrintTitleBand<u16>>,
+) -> f64 {
+    if c1 < c0 {
+        return 0.0;
+    }
+    (c0..=c1)
+        .filter(|col| !exclude.is_some_and(|band| (band.start..=band.end).contains(col)))
+        .map(|col| col_pt(sheet, col))
+        .sum()
+}
+
 fn row_offset_pt(sheet: &Sheet, from: u32, to: u32) -> f64 {
     if to <= from {
         0.0
@@ -942,6 +1012,32 @@ fn col_offset_pt(sheet: &Sheet, from: u16, to: u16) -> f64 {
     }
 }
 
+fn row_offset_pt_excluding(
+    sheet: &Sheet,
+    from: u32,
+    to: u32,
+    exclude: Option<PrintTitleBand<u32>>,
+) -> f64 {
+    if to <= from {
+        0.0
+    } else {
+        row_span_pt_excluding(sheet, from, to.saturating_sub(1), exclude)
+    }
+}
+
+fn col_offset_pt_excluding(
+    sheet: &Sheet,
+    from: u16,
+    to: u16,
+    exclude: Option<PrintTitleBand<u16>>,
+) -> f64 {
+    if to <= from {
+        0.0
+    } else {
+        col_span_pt_excluding(sheet, from, to.saturating_sub(1), exclude)
+    }
+}
+
 fn collect_links(_wb: &Workbook, planned: &PlannedPage<'_>) -> Vec<LinkAnn> {
     let sheet = planned.sheet;
     let page = &planned.page;
@@ -952,34 +1048,22 @@ fn collect_links(_wb: &Workbook, planned: &PlannedPage<'_>) -> Vec<LinkAnn> {
     let scale = page.scale;
     let heading_w = if setup.headings { 28.0 } else { 0.0 };
     let heading_h = if setup.headings { 14.0 } else { 0.0 };
-    let (area_r0, area_c0, area_r1, area_c1) = print_bounds(sheet, setup);
-    let title_rows = setup
-        .title_rows
-        .min(area_r1.saturating_sub(area_r0).saturating_add(1));
-    let title_cols = setup
-        .title_cols
-        .min(area_c1.saturating_sub(area_c0).saturating_add(1));
-    let title_r1 = area_r0.saturating_add(title_rows).saturating_sub(1);
-    let title_c1 = area_c0.saturating_add(title_cols).saturating_sub(1);
-    let title_w = if title_cols == 0 {
-        0.0
-    } else {
-        col_span_pt(sheet, area_c0, title_c1) * scale
-    };
-    let title_h = if title_rows == 0 {
-        0.0
-    } else {
-        row_span_pt(sheet, area_r0, title_r1) * scale
-    };
+    let (area_r0, area_c0, _, _) = print_bounds(sheet, setup);
+    let title_rows = setup.row_title_band(area_r0);
+    let title_cols = setup.col_title_band(area_c0);
+    let title_w = title_cols.map_or(0.0, |band| col_span_pt(sheet, band.start, band.end) * scale);
+    let title_h = title_rows.map_or(0.0, |band| row_span_pt(sheet, band.start, band.end) * scale);
     let mut out = Vec::new();
     let mut links: Vec<((u32, u16), &Hyperlink)> =
         sheet.hyperlinks.iter().map(|(k, v)| (*k, v)).collect();
     links.sort_by_key(|(k, _)| *k);
     for ((row, col), link) in links {
-        let title_col = title_cols > 0 && (area_c0..=title_c1).contains(&col);
-        let data_col = page.col1 >= page.col0 && (page.col0..=page.col1).contains(&col);
-        let title_row = title_rows > 0 && (area_r0..=title_r1).contains(&row);
-        let data_row = page.row1 >= page.row0 && (page.row0..=page.row1).contains(&row);
+        let title_col = title_cols.is_some_and(|band| (band.start..=band.end).contains(&col));
+        let data_col =
+            !title_col && page.col1 >= page.col0 && (page.col0..=page.col1).contains(&col);
+        let title_row = title_rows.is_some_and(|band| (band.start..=band.end).contains(&row));
+        let data_row =
+            !title_row && page.row1 >= page.row0 && (page.row0..=page.row1).contains(&row);
         if !(title_col || data_col) || !(title_row || data_row) {
             continue;
         }
@@ -989,15 +1073,15 @@ fn collect_links(_wb: &Workbook, planned: &PlannedPage<'_>) -> Vec<LinkAnn> {
         let x = left
             + heading_w
             + if title_col {
-                col_offset_pt(sheet, area_c0, col) * scale
+                col_offset_pt(sheet, title_cols.map_or(col, |band| band.start), col) * scale
             } else {
-                title_w + col_offset_pt(sheet, page.col0, col) * scale
+                title_w + col_offset_pt_excluding(sheet, page.col0, col, title_cols) * scale
             };
         let y_top = heading_h
             + if title_row {
-                row_offset_pt(sheet, area_r0, row) * scale
+                row_offset_pt(sheet, title_rows.map_or(row, |band| band.start), row) * scale
             } else {
-                title_h + row_offset_pt(sheet, page.row0, row) * scale
+                title_h + row_offset_pt_excluding(sheet, page.row0, row, title_rows) * scale
             };
         let w = col_pt(sheet, col) * scale;
         let h = row_pt(sheet, row) * scale;

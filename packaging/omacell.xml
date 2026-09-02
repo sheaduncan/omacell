@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- TODO(WP-28): complete shared-mime-info definitions for .xlsx/.csv/.omc. -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-omacell">
     <comment>Omacell workbook</comment>
-    <glob pattern="*.omc"/>
+    <acronym>OMC</acronym>
+    <icon name="application-x-omacell"/>
+    <glob pattern="*.omc" weight="80"/>
   </mime-type>
 </mime-info>

@@ -1,0 +1,25 @@
+name: Arch packaging
+
+on:
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "default/**"
+      - "docs/book/**"
+      - "crates/cli/**"
+      - "scripts/arch-package-smoke.sh"
+      - ".github/workflows/packaging.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-package:
+    name: clean Arch source package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build, install, and smoke test
+        run: scripts/arch-package-smoke.sh
