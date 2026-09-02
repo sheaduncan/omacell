@@ -135,9 +135,41 @@ fn sheet_add_rename_visibility() {
     assert!(bus.workbook().sheet_by_name("Data").is_some());
     common::exec_ok(
         &mut bus,
+        "cell.set",
+        json!({"ref": "Data!A1", "input": "2"}),
+    );
+    common::exec_ok(
+        &mut bus,
+        "cell.set",
+        json!({"ref": "Sheet1!A1", "input": "=Data!A1+1"}),
+    );
+    common::exec_ok(
+        &mut bus,
         "sheet.rename",
         json!({"sheet": "Data", "name": "Inputs"}),
     );
+    assert_eq!(
+        common::cell_formula(&bus, 0, 0).as_deref(),
+        Some("=Inputs!A1+1")
+    );
+    assert_eq!(common::cell_value(&bus, 0, 0), Some(Value::Number(3.0)));
+
+    common::exec_ok(&mut bus, "edit.undo", json!({}));
+    assert!(bus.workbook().sheet_by_name("Data").is_some());
+    assert_eq!(
+        common::cell_formula(&bus, 0, 0).as_deref(),
+        Some("=Data!A1+1")
+    );
+    assert_eq!(common::cell_value(&bus, 0, 0), Some(Value::Number(3.0)));
+
+    common::exec_ok(&mut bus, "edit.redo", json!({}));
+    assert!(bus.workbook().sheet_by_name("Inputs").is_some());
+    assert_eq!(
+        common::cell_formula(&bus, 0, 0).as_deref(),
+        Some("=Inputs!A1+1")
+    );
+    assert_eq!(common::cell_value(&bus, 0, 0), Some(Value::Number(3.0)));
+
     common::exec_ok(
         &mut bus,
         "sheet.visibility",

@@ -131,7 +131,7 @@ sheet_rename	='My Sheet'!A1	My Sheet	Cost Model		='Cost Model'!A1	quoted sheet r
 sheet_rename	=Sheet1!A1	Sheet1	My Sheet		='My Sheet'!A1	rename to a name that needs quotes
 sheet_rename	='My Sheet'!A1	My Sheet	Data		=Data!A1	rename to a name that drops quotes
 sheet_rename	=SUM(Sheet1!A:A)	Sheet1	Data		=SUM(Data!A:A)	rename inside a call
-sheet_rename	=[Book.xlsx]Sheet1!A1	Sheet1	Data		=[Book.xlsx]Data!A1	external sheet name rewritten; book preserved
+sheet_rename	=[Book.xlsx]Sheet1!A1	Sheet1	Data		=[Book.xlsx]Sheet1!A1	local sheet rename does not alter an external workbook reference
 table_rename	=Table1[Col]	Table1	Sales		=Sales[Col]	F-1.4 table rename rewrites structured refs
 table_rename	=Table1[[#Headers],[Col]]	Table1	Sales		=Sales[[#Headers],[Col]]	table rename with specifier
 table_rename	=[@Col]	Table1	Sales		=[@Col]	unqualified structured ref has no table name to rewrite

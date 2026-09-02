@@ -5,7 +5,7 @@ use crate::error::ErrorKind;
 use crate::limits::{MAX_COLS, MAX_ROWS};
 
 use super::Formula;
-use super::ast::{Expr, ExprKind};
+use super::ast::{Callee, Expr, ExprKind};
 use super::error::ParseError;
 use super::parser::parse;
 use super::printer::print;
@@ -210,28 +210,63 @@ pub fn adjust_cols(expr: &Expr, at: u16, count: u16, delete: bool) -> Expr {
 /// Rename sheet qualifiers (case-insensitive match, new spelling used).
 #[must_use]
 pub fn rename_sheet(expr: &Expr, old: &str, new: &str) -> Expr {
-    expr.clone().map(&mut |e| {
-        let kind = match e.kind {
-            ExprKind::Cell { sheet, cell } => ExprKind::Cell {
-                sheet: sheet.map(|s| rename_spec(s, old, new)),
-                cell,
-            },
-            ExprKind::Range { sheet, range } => ExprKind::Range {
-                sheet: sheet.map(|s| rename_spec(s, old, new)),
-                range,
-            },
-            ExprKind::ThreeD { sheets, inner } => ExprKind::ThreeD {
-                sheets: rename_spec(sheets, old, new),
-                inner,
-            },
-            ExprKind::Name { sheet, name } => ExprKind::Name {
-                sheet: sheet.map(|s| rename_spec(s, old, new)),
-                name,
-            },
-            other => other,
-        };
-        Expr { kind, span: e.span }
-    })
+    let Expr { kind, span } = expr.clone();
+    let kind = match kind {
+        ExprKind::Array(rows) => ExprKind::Array(
+            rows.into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|cell| rename_sheet(&cell, old, new))
+                        .collect()
+                })
+                .collect(),
+        ),
+        ExprKind::Cell { sheet, cell } => ExprKind::Cell {
+            sheet: sheet.map(|sheet| rename_spec(sheet, old, new)),
+            cell,
+        },
+        ExprKind::Range { sheet, range } => ExprKind::Range {
+            sheet: sheet.map(|sheet| rename_spec(sheet, old, new)),
+            range,
+        },
+        ExprKind::ThreeD { sheets, inner } => ExprKind::ThreeD {
+            sheets: rename_spec(sheets, old, new),
+            inner: Box::new(rename_sheet(&inner, old, new)),
+        },
+        ExprKind::Name { sheet, name } => ExprKind::Name {
+            sheet: sheet.map(|sheet| rename_spec(sheet, old, new)),
+            name,
+        },
+        // A local workbook rename must not retarget another workbook's sheet.
+        external @ ExprKind::External { .. } => external,
+        ExprKind::Prefix { op, expr } => ExprKind::Prefix {
+            op,
+            expr: Box::new(rename_sheet(&expr, old, new)),
+        },
+        ExprKind::Postfix { expr, op } => ExprKind::Postfix {
+            expr: Box::new(rename_sheet(&expr, old, new)),
+            op,
+        },
+        ExprKind::Binary { op, left, right } => ExprKind::Binary {
+            op,
+            left: Box::new(rename_sheet(&left, old, new)),
+            right: Box::new(rename_sheet(&right, old, new)),
+        },
+        ExprKind::Paren(inner) => ExprKind::Paren(Box::new(rename_sheet(&inner, old, new))),
+        ExprKind::Call { callee, args } => {
+            let callee = match callee {
+                Callee::Name(name) => Callee::Name(name),
+                Callee::Expr(expr) => Callee::Expr(Box::new(rename_sheet(&expr, old, new))),
+            };
+            let args = args
+                .into_iter()
+                .map(|arg| arg.map(|expr| rename_sheet(&expr, old, new)))
+                .collect();
+            ExprKind::Call { callee, args }
+        }
+        other => other,
+    };
+    Expr { kind, span }
 }
 
 /// Rename table names in structured refs (case-insensitive match).
