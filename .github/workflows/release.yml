@@ -67,7 +67,7 @@ jobs:
           install -Dm644 target/dist/omacell.bash "$root/share/bash-completion/completions/omacell"
           install -Dm644 target/dist/omacell.fish "$root/share/fish/vendor_completions.d/omacell.fish"
           install -Dm644 target/dist/_omacell "$root/share/zsh/site-functions/_omacell"
-          cp -a book/html "$root/share/doc/omacell/manual"
+          cp -a book "$root/share/doc/omacell/manual"
           tar --zstd -cf "omacell-${version}-${{ matrix.arch }}.tar.zst" -C release-tree .
 
       - name: Upload release tree
