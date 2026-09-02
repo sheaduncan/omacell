@@ -75,7 +75,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
     let wb_bytes = wb_part.bytes.clone();
     let wb_rels = package.rels_for(&wb_name)?;
     let theme = load_theme(&package, &wb_rels, &mut warnings)?;
-    let sst = load_sst(&package, &wb_rels, &mut warnings)?;
+    let sst = load_sst(&package, &wb_rels, &theme, &mut warnings)?;
     let styles = load_styles(&package, &wb_rels, &theme, &mut wb, &mut warnings)?;
     let workbook_meta = parse_workbook_xml(&wb_bytes, &mut wb)?;
     let persons = load_persons(&package, &wb_rels, &mut warnings)?;
@@ -178,6 +178,7 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
             &sheet_rels,
             &sst,
             &styles,
+            &theme,
             &mut warnings,
         )?;
         let mut setup = omacell_core::print::PageSetup::default();
@@ -409,6 +410,7 @@ struct Sst(Vec<(String, Vec<RichTextRun>)>);
 fn load_sst(
     package: &OpcPackage,
     rels: &[Relationship],
+    theme: &Theme,
     warnings: &mut FileWarnings,
 ) -> Result<Sst, CoreError> {
     let Some(rel) = rels.iter().find(|r| r.rel_type == REL_SST) else {
@@ -459,7 +461,7 @@ fn load_sst(
             XmlEvent::Start { name, .. } if in_r && name == "rPr" => in_rpr = true,
             XmlEvent::End { name } if name == "rPr" => in_rpr = false,
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs } if in_rpr => {
-                apply_font_tag(&mut run_font, &name, &attrs);
+                apply_font_tag(&mut run_font, &name, &attrs, Some(theme));
             }
             XmlEvent::End { name } if in_r && name == "r" => {
                 in_r = false;
@@ -479,7 +481,7 @@ fn load_sst(
     Ok(Sst(out))
 }
 
-fn apply_font_tag(font: &mut Font, name: &str, attrs: &[(String, String)]) {
+fn apply_font_tag(font: &mut Font, name: &str, attrs: &[(String, String)], theme: Option<&Theme>) {
     match name {
         "b" => font.bold = attr(attrs, "val").is_none_or(truthy),
         "i" => font.italic = attr(attrs, "val").is_none_or(truthy),
@@ -503,7 +505,7 @@ fn apply_font_tag(font: &mut Font, name: &str, attrs: &[(String, String)]) {
                 _ => Underline::Single,
             };
         }
-        "color" => font.color = parse_color(attrs, None),
+        "color" => font.color = parse_color(attrs, theme),
         _ => {}
     }
 }
@@ -588,7 +590,7 @@ fn load_styles(
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if in_font && name != "font" =>
             {
-                apply_font_tag(&mut cur_font, &name, &attrs);
+                apply_font_tag(&mut cur_font, &name, &attrs, Some(theme));
             }
             XmlEvent::Start { name, .. } if name == "fills" => in_fills = true,
             XmlEvent::End { name } if name == "fills" => in_fills = false,
@@ -871,7 +873,7 @@ fn parse_border_style(s: &str) -> BorderStyle {
 
 #[derive(Clone, Debug, Default)]
 struct Theme {
-    scheme: Vec<Color>,
+    scheme: [Option<Color>; 12],
 }
 
 fn load_theme(
@@ -891,12 +893,22 @@ fn load_theme(
         return Ok(Theme::default());
     };
     let mut r = XmlReader::new(&part.bytes);
-    let mut scheme = Vec::new();
+    let mut scheme = [None; 12];
     let mut in_scheme = false;
+    let mut scheme_slot = None;
     while let Some(ev) = r.next()? {
         match ev {
             XmlEvent::Start { name, .. } if name == "clrScheme" => in_scheme = true,
-            XmlEvent::End { name } if name == "clrScheme" => in_scheme = false,
+            XmlEvent::End { name } if name == "clrScheme" => {
+                in_scheme = false;
+                scheme_slot = None;
+            }
+            XmlEvent::Start { name, .. } if in_scheme && theme_scheme_index(&name).is_some() => {
+                scheme_slot = theme_scheme_index(&name);
+            }
+            XmlEvent::End { name } if in_scheme && theme_scheme_index(&name).is_some() => {
+                scheme_slot = None;
+            }
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if in_scheme && (name == "srgbClr" || name == "sysClr") =>
             {
@@ -905,8 +917,8 @@ fn load_theme(
                 } else {
                     attr(&attrs, "val")
                 };
-                if let Some(val) = value {
-                    scheme.push(rgb_from_hex(val));
+                if let (Some(slot), Some(val)) = (scheme_slot, value) {
+                    scheme[slot] = Some(rgb_from_hex(val));
                 }
             }
             _ => {}
@@ -915,29 +927,124 @@ fn load_theme(
     Ok(Theme { scheme })
 }
 
+fn theme_scheme_index(name: &str) -> Option<usize> {
+    match name {
+        "lt1" => Some(0),
+        "dk1" => Some(1),
+        "lt2" => Some(2),
+        "dk2" => Some(3),
+        "accent1" => Some(4),
+        "accent2" => Some(5),
+        "accent3" => Some(6),
+        "accent4" => Some(7),
+        "accent5" => Some(8),
+        "accent6" => Some(9),
+        "hlink" => Some(10),
+        "folHlink" => Some(11),
+        _ => None,
+    }
+}
+
 fn parse_color(attrs: &[(String, String)], theme: Option<&Theme>) -> Color {
     if let Some(rgb) = attr(attrs, "rgb") {
         return rgb_from_hex(rgb);
     }
-    if let Some(idx) = attr(attrs, "theme").and_then(|s| s.parse::<usize>().ok()) {
-        let tint = attr(attrs, "tint")
+    if let Some(idx) = attr(attrs, "theme").and_then(|s| s.parse::<u8>().ok()) {
+        let tint: f64 = attr(attrs, "tint")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0);
         if let Some(t) = theme
-            && let Some(c) = t.scheme.get(idx)
+            && let Some(Color::Rgb { argb }) = t.scheme.get(usize::from(idx)).copied().flatten()
+            && tint.is_finite()
+            && (-1.0..=1.0).contains(&tint)
         {
-            let _ = tint;
-            return *c;
+            return Color::Rgb {
+                argb: tint_argb(argb, tint),
+            };
         }
-        return Color::Theme {
-            theme: idx as u8,
-            tint,
-        };
+        return Color::Theme { theme: idx, tint };
     }
     if let Some(i) = attr(attrs, "indexed").and_then(|s| s.parse().ok()) {
         return Color::Indexed { index: i };
     }
     Color::Auto
+}
+
+fn tint_argb(argb: u32, tint: f64) -> u32 {
+    if tint == 0.0 {
+        return argb;
+    }
+    let [alpha, red, green, blue] = argb.to_be_bytes();
+    let red = f64::from(red) / 255.0;
+    let green = f64::from(green) / 255.0;
+    let blue = f64::from(blue) / 255.0;
+    let max = red.max(green).max(blue);
+    let min = red.min(green).min(blue);
+    let mut luminance = (max + min) / 2.0;
+    let (hue, saturation) = if max == min {
+        (0.0, 0.0)
+    } else {
+        let delta = max - min;
+        let saturation = if luminance > 0.5 {
+            delta / (2.0 - max - min)
+        } else {
+            delta / (max + min)
+        };
+        let hue = if max == red {
+            (green - blue) / delta + if green < blue { 6.0 } else { 0.0 }
+        } else if max == green {
+            (blue - red) / delta + 2.0
+        } else {
+            (red - green) / delta + 4.0
+        } / 6.0;
+        (hue, saturation)
+    };
+    luminance = if tint < 0.0 {
+        luminance * (1.0 + tint)
+    } else {
+        luminance * (1.0 - tint) + tint
+    };
+    let (red, green, blue) = hsl_to_rgb(hue, saturation, luminance);
+    u32::from_be_bytes([alpha, color_byte(red), color_byte(green), color_byte(blue)])
+}
+
+fn hsl_to_rgb(hue: f64, saturation: f64, luminance: f64) -> (f64, f64, f64) {
+    if saturation == 0.0 {
+        return (luminance, luminance, luminance);
+    }
+    let q = if luminance < 0.5 {
+        luminance * (1.0 + saturation)
+    } else {
+        luminance + saturation - luminance * saturation
+    };
+    let p = 2.0 * luminance - q;
+    (
+        hue_to_rgb(p, q, hue + 1.0 / 3.0),
+        hue_to_rgb(p, q, hue),
+        hue_to_rgb(p, q, hue - 1.0 / 3.0),
+    )
+}
+
+fn hue_to_rgb(p: f64, q: f64, mut hue: f64) -> f64 {
+    if hue < 0.0 {
+        hue += 1.0;
+    }
+    if hue > 1.0 {
+        hue -= 1.0;
+    }
+    if hue < 1.0 / 6.0 {
+        p + (q - p) * 6.0 * hue
+    } else if hue < 0.5 {
+        q
+    } else if hue < 2.0 / 3.0 {
+        p + (q - p) * (2.0 / 3.0 - hue) * 6.0
+    } else {
+        p
+    }
+}
+
+fn color_byte(component: f64) -> u8 {
+    (component.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn rgb_from_hex(s: &str) -> Color {
@@ -1036,6 +1143,7 @@ fn load_sheet(
     sheet_rels: &[Relationship],
     sst: &Sst,
     styles: &StyleTable,
+    theme: &Theme,
     warnings: &mut FileWarnings,
 ) -> Result<WorksheetExtras, CoreError> {
     let Some(part) = package.part(part_name) else {
@@ -1082,7 +1190,7 @@ fn load_sheet(
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "tabColor" =>
             {
-                wb.set_tab_color(id, Some(parse_color(&attrs, None)))?;
+                wb.set_tab_color(id, Some(parse_color(&attrs, Some(theme))))?;
             }
             XmlEvent::Start { name, .. } if name == "sheetData" => in_sheet_data = true,
             XmlEvent::End { name } if name == "sheetData" => in_sheet_data = false,
@@ -2129,5 +2237,134 @@ fn load_omacell_parts(wb: &mut Workbook, package: &OpcPackage) {
         if lower.starts_with("xl/omacell/") && !lower.ends_with(".rels") {
             wb.custom_parts.insert(name.clone(), part.bytes.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use indexmap::IndexMap;
+
+    use super::super::opc::PreservedPart;
+    use super::*;
+
+    fn package_with_part(name: &str, bytes: &[u8]) -> OpcPackage {
+        let name = name.to_string();
+        let mut parts = IndexMap::new();
+        parts.insert(
+            name.clone(),
+            PreservedPart {
+                name,
+                content_type: None,
+                bytes: bytes.to_vec(),
+            },
+        );
+        OpcPackage {
+            parts,
+            package_rels: Vec::new(),
+        }
+    }
+
+    fn test_theme() -> Theme {
+        let xml = br#"<?xml version="1.0"?>
+            <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:themeElements><a:clrScheme name="Test">
+                <a:dk1><a:srgbClr val="101010"/></a:dk1>
+                <a:lt1><a:srgbClr val="F0F0F0"/></a:lt1>
+                <a:dk2><a:srgbClr val="202020"/></a:dk2>
+                <a:lt2><a:srgbClr val="E0E0E0"/></a:lt2>
+                <a:accent1><a:srgbClr val="336699"/></a:accent1>
+                <a:accent2><a:srgbClr val="AA0000"/></a:accent2>
+                <a:accent3><a:srgbClr val="00AA00"/></a:accent3>
+                <a:accent4><a:srgbClr val="0000AA"/></a:accent4>
+                <a:accent5><a:srgbClr val="AAAA00"/></a:accent5>
+                <a:accent6><a:srgbClr val="AA00AA"/></a:accent6>
+                <a:hlink><a:srgbClr val="0000FF"/></a:hlink>
+                <a:folHlink><a:srgbClr val="800080"/></a:folHlink>
+              </a:clrScheme></a:themeElements>
+            </a:theme>"#;
+        let name = "xl/theme/theme1.xml";
+        let package = package_with_part(name, xml);
+        let relationship = Relationship {
+            id: "rIdTheme".into(),
+            rel_type: REL_THEME.into(),
+            target: name.into(),
+            external: false,
+        };
+        load_theme(&package, &[relationship], &mut FileWarnings::new()).expect("test theme parses")
+    }
+
+    fn theme_attrs(theme: usize, tint: Option<f64>) -> Vec<(String, String)> {
+        let mut attrs = vec![("theme".into(), theme.to_string())];
+        if let Some(tint) = tint {
+            attrs.push(("tint".into(), tint.to_string()));
+        }
+        attrs
+    }
+
+    #[test]
+    fn spreadsheet_theme_indices_map_light_and_dark_slots() {
+        let theme = test_theme();
+        let expected = [0xFFF0_F0F0, 0xFF10_1010, 0xFFE0_E0E0, 0xFF20_2020];
+        for (index, argb) in expected.into_iter().enumerate() {
+            assert_eq!(
+                parse_color(&theme_attrs(index, None), Some(&theme)),
+                Color::Rgb { argb },
+                "theme index {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn spreadsheet_theme_tint_changes_hls_luminance() {
+        let theme = test_theme();
+        assert_eq!(
+            parse_color(&theme_attrs(4, Some(0.4)), Some(&theme)),
+            Color::Rgb { argb: 0xFF75_A3D1 }
+        );
+        assert_eq!(
+            parse_color(&theme_attrs(4, Some(-0.4)), Some(&theme)),
+            Color::Rgb { argb: 0xFF1F_3D5C }
+        );
+    }
+
+    #[test]
+    fn stylesheet_theme_colors_are_resolved_before_interning() {
+        let xml = br#"<?xml version="1.0"?>
+            <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <fonts count="1"><font><color theme="1"/></font></fonts>
+              <fills count="1"><fill><patternFill patternType="solid">
+                <fgColor theme="4" tint="0.4"/>
+              </patternFill></fill></fills>
+              <borders count="1"><border><left style="thin">
+                <color theme="2"/>
+              </left><right/><top/><bottom/></border></borders>
+              <cellXfs count="1"><xf fontId="0" fillId="0" borderId="0"/></cellXfs>
+            </styleSheet>"#;
+        let name = "xl/styles.xml";
+        let package = package_with_part(name, xml);
+        let relationship = Relationship {
+            id: "rIdStyles".into(),
+            rel_type: REL_STYLES.into(),
+            target: name.into(),
+            external: false,
+        };
+        let mut workbook = Workbook::new();
+        let styles = load_styles(
+            &package,
+            &[relationship],
+            &test_theme(),
+            &mut workbook,
+            &mut FileWarnings::new(),
+        )
+        .expect("test styles parse");
+        let style = &styles.cell_xfs[0];
+        assert_eq!(style.font.color, Color::Rgb { argb: 0xFF10_1010 });
+        assert_eq!(
+            style.fill,
+            Fill::Solid {
+                fg: Color::Rgb { argb: 0xFF75_A3D1 }
+            }
+        );
+        assert_eq!(style.border.left.color, Color::Rgb { argb: 0xFFE0_E0E0 });
     }
 }
