@@ -90,6 +90,10 @@ fn workbook_scope_still_blocks_security_and_policy_commands() {
         "config.set",
         "macro.replay",
         "workbook.protect",
+        "chart.move",
+        "chart.resize",
+        "chart.title",
+        "chart.axistitle",
         "future.command",
     ] {
         let mut policy = AutopilotPolicy::new(AutopilotScope::Workbook, 10);

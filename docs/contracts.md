@@ -120,7 +120,7 @@ the workbook-owned gridline setting is preserved. Frozen and split panes are
 mutually exclusive, and save gives frozen panes precedence when canonicalizing
 an older inconsistent retained state.
 
-The final pre-release command integration adds five public workflow commands:
+The final pre-release and WP-28 integrations add these public workflow commands:
 
 - `name.manager` uses a closed empty-object schema and opens the session's
   defined-name panel. `name.paste` requires `{name: string}` and inserts the
@@ -136,6 +136,15 @@ The final pre-release command integration adds five public workflow commands:
 - `chart.export` requires `path`, accepts optional `sheet` and chart `id`, and
   defaults `width`/`height` to 800×480. It is a non-changeset-eligible mutating
   composition command because it writes bounded SVG/PNG output atomically.
+- `chart.move {id?, to}` preserves the chart's cell span while moving its
+  top-left anchor; `chart.resize {id?, range}` replaces the inclusive two-cell
+  anchor. The address must resolve to the chart's current sheet. Omitting `id`
+  selects the first chart on the active sheet.
+- `chart.title {id?, title}` and `chart.axistitle {id?, axis, title}` edit the
+  modeled titles; `axis` is `category`, `value`, or `secondary`, and an empty
+  title clears it. Secondary titles require a combo chart. These four commands
+  preserve stable chart identity, are undoable and changeset-eligible, and stay
+  review-only unless separately admitted by the autopilot allowlist.
 
 These are additive schemas; the catalog envelope remains version 1 and no
 existing command schema or IPC envelope changes.

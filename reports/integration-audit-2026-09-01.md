@@ -3,9 +3,9 @@
 ## Scope and evidence
 
 This audit covers every completed report in `reports/` (`G1`, `WP-S1`,
-`WP-S2`, `WP-00` through `WP-27`, and `WP-29`) on merged `main` at `f7e1415`
-(through PR69), plus this final reconciliation follow-up. WP-28 and WP-30 have
-specifications but no completion reports yet.
+`WP-S2`, `WP-00` through `WP-29`) through the final pre-release reconciliation
+and the WP-28 release branch. WP-30 has a specification but no completion
+report and remains separately owned repository-policy work.
 
 The audit:
 
@@ -140,7 +140,7 @@ closed and empty, headless composition roots remain unchanged, existing
 ids/envelopes are unchanged, and merge of this reconciliation is the human
 approval record.
 
-## WP-28 entry gates and owned release work
+## WP-28 technical closure and owned live gates
 
 The following items are intentionally not hidden in the integration queue:
 
@@ -148,11 +148,15 @@ The following items are intentionally not hidden in the integration queue:
   GPU presentation-aware performance, and the final one-process-per-file ADR.
 - **Human/G7:** Omarchy approval/trademark clearance for the name and the live
   Excel checklist/oracle rows that cannot be established locally.
-- **WP-28:** packaging and Omarchy-channel CI; generated manual/reference drift;
-  nightly fuzz; accessibility and i18n; semantic Quattro theme roles; all nine
-  agent setup paths; the documented Hyprland launch-table form; GUI split-pane,
-  font/fallback, shaping-cache and clickable-status closure; performance gates;
-  print-title bands, printer palette, and PDF font policy.
+- **Human/G5:** decide whether agent hand-offs retain the workbook directory as
+  cwd for file context or use Omarchy's `~/Work` trust-persistence convention.
+- **Completed in WP-28:** packaging and Omarchy-channel workflow definitions;
+  generated manual/reference drift; nightly fuzz; accessibility and i18n;
+  semantic Quattro theme roles; all nine agent-specific/generic skill links;
+  the documented Hyprland launch-table form; GUI split-pane, font/fallback,
+  shaping-cache and clickable-status closure; performance gates; print-title
+  bands, printer palette and PDF font policy; and the minimal chart
+  move/resize/title/axis-title command surface.
 - **WP-30:** repository security settings that require maintainer policy,
   including trusted-reviewer and emergency-bypass decisions.
 
@@ -194,16 +198,17 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-14` | Deferred table is empty; count propagation, `ViewState` save synchronization, and the docs command-id lint are integrated. |
 | `WP-15` | Runner/bootstrap, terminal-chart graphics, and live comments/format/sort/filter panels are complete; terminal coverage is HUMAN/G4. |
 | `WP-15a` | Worker/cancellation and runner-backed subscriptions are complete; stale-cell hatching is post-1.0. |
-| `WP-16` | Clipboard and conditional formatting are integrated; remaining GUI completion and hardware decisions are WP-28/HUMAN. |
+| `WP-16` | Clipboard, conditional formatting, split panes, font-family caching, and clickable status are integrated; remaining live hardware decisions are HUMAN/G4. |
 | `WP-17` / `WP-18` | Contracts were approved by merge; frontend clipboard/fill/drag, panel consumers, and conditional-format consumers are integrated. |
 | `WP-19` | WP-22 completed diagnostic redaction; search/error frontends are integrated. |
 | `WP-20` | Retained Lua startup/events/keymaps/source integration and user-profile AI extensions are complete; merged async-node approval is reconciled. |
 | `WP-21` / `WP-22` | Agent/MCP and provider/privacy work is complete; hand-off content uses a private file and merged approval markers are reconciled. |
 | `WP-23` | Acceptance, Lua AI, import review, and AI-function refresh/lifecycle integration are complete; `COPILOT()` remains an explicit HUMAN decision. |
 | `WP-24` / `WP-24a` | Pivot fidelity follow-up is complete; package-excluded Data Tables/Scenario Manager remain explicit post-1.0 scope. |
-| `WP-25` | Chart export and terminal graphics are integrated; minimal release editing is WP-28 and exotic modeling is post-1.0. |
-| `WP-26` | Print gaps are explicitly owned by WP-28. |
+| `WP-25` | Chart export, terminal graphics, and minimal release editing are integrated; exotic modeling and a full property inspector are post-1.0. |
+| `WP-26` | Explicit print-title bands, accessible printer selection, embedded system fonts, and the documented Helvetica fallback are complete. |
 | `WP-27` | In-process XLS is complete; listed ODS/Parquet enhancements are explicit post-1.0 scope. |
+| `WP-28` | Agent-verifiable packaging, docs, workflow, hardening, a11y, i18n, GUI, print, chart, and release work is complete; named live runners, hardware walkthroughs, and public-name clearance remain HUMAN gates. |
 | `WP-29` | Parser/security hardening is complete; repository-policy work is WP-30. |
 | `WP-S1` | ADR-002 is decided. |
 | `WP-S2` | Measurements are retained; CJK IME and Orca remain explicitly unchecked HUMAN/G4 gates. |
