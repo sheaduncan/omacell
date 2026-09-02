@@ -138,10 +138,11 @@ pub(crate) fn load(bytes: &[u8]) -> Result<XlsxDocument, CoreError> {
             },
             None => NameScope::Workbook,
         };
+        let referent = parse_name_ref(&name.text, &mut wb);
         if let Err(e) = wb.define_name(DefinedName {
             name: name.name,
             scope,
-            referent: name.referent,
+            referent,
             comment: name.comment,
         }) {
             warnings.push("xlsx.name", e.message, Some(wb_name.clone()));
@@ -234,7 +235,7 @@ struct SheetMeta {
 struct NameMeta {
     name: String,
     local_sheet_index: Option<usize>,
-    referent: NameReferent,
+    text: String,
     comment: Option<String>,
 }
 
@@ -325,7 +326,7 @@ fn parse_workbook_xml(bytes: &[u8], wb: &mut Workbook) -> Result<WorkbookMeta, C
                         name: nm,
                         local_sheet_index: attr(&name_attrs, "localSheetId")
                             .and_then(|s| s.parse::<usize>().ok()),
-                        referent: parse_name_ref(name_text.trim(), wb),
+                        text: name_text.trim().to_string(),
                         comment: attr(&name_attrs, "comment").map(ToOwned::to_owned),
                     });
                 }
@@ -345,8 +346,10 @@ fn parse_workbook_xml(bytes: &[u8], wb: &mut Workbook) -> Result<WorkbookMeta, C
 }
 
 fn parse_name_ref(text: &str, wb: &mut Workbook) -> NameReferent {
-    if let Ok(parsed) = parse_a1(text) {
-        match parsed.kind {
+    if let Ok(parsed) = parse_a1(text)
+        && let Ok(resolved) = wb.resolve_parsed(parsed)
+    {
+        match resolved {
             RefKind::Range(r) => return NameReferent::Range(r),
             RefKind::Cell(c) => {
                 return NameReferent::Range(RangeRef::from_corners(c, c));
@@ -2300,6 +2303,15 @@ mod tests {
             attrs.push(("tint".into(), tint.to_string()));
         }
         attrs
+    }
+
+    #[test]
+    fn unresolved_defined_name_sheet_is_preserved_as_formula_text() {
+        let mut workbook = Workbook::new();
+        assert_eq!(
+            parse_name_ref("Missing!$A$1", &mut workbook),
+            NameReferent::Formula("Missing!$A$1".into())
+        );
     }
 
     #[test]

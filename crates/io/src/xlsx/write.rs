@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Cursor, Write};
 
 use indexmap::IndexMap;
-use omacell_core::addr::{col_to_letters, quote_sheet_name};
+use omacell_core::addr::{RangeRef, SheetSpec, col_to_letters, quote_sheet_name};
 use omacell_core::condfmt::CfDxf;
 use omacell_core::error::CoreError;
 use omacell_core::geometry::DEFAULT_COL_PX;
@@ -744,7 +744,7 @@ fn workbook_xml(
                 .unwrap_or_default(),
         };
         let text = match &n.referent {
-            omacell_core::names::NameReferent::Range(r) => r.to_a1(),
+            omacell_core::names::NameReferent::Range(r) => defined_name_range_text(wb, *r)?,
             omacell_core::names::NameReferent::Formula(f) => super::formula::to_xlsx(f),
             omacell_core::names::NameReferent::Constant(v) => constant_name_text(intern, *v),
         };
@@ -786,6 +786,39 @@ fn workbook_xml(
     }
     s.push_str("</workbook>");
     Ok(s.into_bytes())
+}
+
+fn defined_name_range_text(wb: &Workbook, range: RangeRef) -> Result<String, CoreError> {
+    if range.start.sheet != range.end.sheet {
+        return Err(error::xlsx_write(
+            "defined-name range endpoints have different sheets",
+        ));
+    }
+    let body = range.to_a1();
+    let Some(start_id) = range.start.sheet else {
+        if range.sheet_end.is_some() {
+            return Err(error::xlsx_write(
+                "defined-name 3-D range is missing its start sheet",
+            ));
+        }
+        return Ok(body);
+    };
+    let start = wb
+        .sheet(start_id)
+        .ok_or_else(|| error::xlsx_write("defined name has an unknown sheet id"))?;
+    let prefix = if let Some(end_id) = range.sheet_end {
+        let end = wb
+            .sheet(end_id)
+            .ok_or_else(|| error::xlsx_write("defined name has an unknown end sheet id"))?;
+        SheetSpec {
+            start: start.name.clone(),
+            end: Some(end.name.clone()),
+        }
+        .to_a1_prefix()
+    } else {
+        format!("{}!", quote_sheet_name(&start.name))
+    };
+    Ok(format!("{prefix}{body}"))
 }
 
 fn filter_database_name_xml(sheet: &Sheet, local_sheet_id: usize) -> Result<String, CoreError> {
