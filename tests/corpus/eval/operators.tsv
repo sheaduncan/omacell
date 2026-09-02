@@ -6,7 +6,7 @@
 =10/0	#DIV/0!	division by zero
 =0/0	#DIV/0!	0/0 is #DIV/0! (Excel)
 =2^3	8	power
-=-2^2	-4	caret is tighter than unary minus (Excel engine; WP-03)
+=-2^2	4	Microsoft Excel precedence: negation binds before exponentiation
 =2^-2	0.25	negative exponent
 =0^0	#NUM!	0^0 is #NUM! (Excel)
 =(-2)^0.5	#NUM!	negative to non-integer power is #NUM!

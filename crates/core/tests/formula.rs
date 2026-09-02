@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use omacell_core::formula::{
-    ParseOptions, RefStyle, RewriteOp, collect_deps, parse, parse_editor, parse_with, print,
-    rewrite_print,
+    BinOp, ExprKind, ParseOptions, PostfixOp, PrefixOp, RefStyle, RewriteOp, collect_deps, parse,
+    parse_editor, parse_with, print, rewrite_print,
 };
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use proptest::prelude::*;
@@ -42,6 +42,56 @@ fn parse_mode(
     } else {
         parse(src)
     }
+}
+
+#[test]
+fn excel_unary_precedence_shapes_the_ast() {
+    let negated_power = parse("=-2^2").expect("negated power");
+    assert!(matches!(
+        negated_power.ast.kind,
+        ExprKind::Binary {
+            op: BinOp::Pow,
+            left,
+            ..
+        } if matches!(
+            left.kind,
+            ExprKind::Prefix {
+                op: PrefixOp::Minus,
+                ..
+            }
+        )
+    ));
+
+    let negative_exponent = parse("=2^-2").expect("negative exponent");
+    assert!(matches!(
+        negative_exponent.ast.kind,
+        ExprKind::Binary {
+            op: BinOp::Pow,
+            right,
+            ..
+        } if matches!(
+            right.kind,
+            ExprKind::Prefix {
+                op: PrefixOp::Minus,
+                ..
+            }
+        )
+    ));
+
+    let negated_percent = parse("=-5%").expect("negated percent");
+    assert!(matches!(
+        negated_percent.ast.kind,
+        ExprKind::Postfix {
+            op: PostfixOp::Percent,
+            expr,
+        } if matches!(
+            expr.kind,
+            ExprKind::Prefix {
+                op: PrefixOp::Minus,
+                ..
+            }
+        )
+    ));
 }
 
 #[test]
