@@ -103,8 +103,12 @@ pub struct ReqwestTransport {
 impl ReqwestTransport {
     /// Build with a default timeout (overridden per request by `tokio::time`).
     pub fn new() -> Result<Self, AiError> {
+        // Workbook payloads and provider credentials must stay on the exact
+        // endpoint selected by Omacell's reviewed configuration.
         let client = reqwest::Client::builder()
             .use_rustls_tls()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| AiError::new(codes::PROVIDER, err.to_string()))?;
         Ok(Self { client })
@@ -472,3 +476,50 @@ pub(crate) fn validate_json(value: &Value) -> Result<(), AiError> {
 
 /// Shared transport handle.
 pub type SharedTransport = Arc<dyn Transport>;
+
+#[cfg(test)]
+mod tests {
+    use super::ReqwestTransport;
+
+    const POLICY_CHILD: &str = "OMACELL_TEST_HTTP_POLICY_CHILD";
+    const POLICY_TEST: &str =
+        "http::tests::production_client_disables_ambient_proxies_and_redirects";
+
+    #[test]
+    fn production_client_disables_ambient_proxies_and_redirects() {
+        if std::env::var_os(POLICY_CHILD).is_some() {
+            let transport = ReqwestTransport::new().expect("production client");
+            let debug = format!("{:?}", transport.client);
+            assert!(
+                debug.contains("redirect_policy: \"Policy(None)\""),
+                "redirect policy was not disabled: {debug}"
+            );
+            assert!(
+                !debug.contains("proxies:"),
+                "ambient proxy was retained: {debug}"
+            );
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", POLICY_TEST, "--nocapture"])
+            .env(POLICY_CHILD, "1")
+            .env("ALL_PROXY", "http://127.0.0.1:9")
+            .env("HTTP_PROXY", "http://127.0.0.1:9")
+            .env("HTTPS_PROXY", "http://127.0.0.1:9")
+            .env("all_proxy", "http://127.0.0.1:9")
+            .env("http_proxy", "http://127.0.0.1:9")
+            .env("https_proxy", "http://127.0.0.1:9")
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .env_remove("REQUEST_METHOD")
+            .output()
+            .expect("policy child");
+        assert!(
+            output.status.success(),
+            "policy child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

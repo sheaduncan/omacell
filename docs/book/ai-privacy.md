@@ -15,6 +15,9 @@ Credentials belong in the configured secret source, not a workbook, prompt,
 Lua script, repository file, or command-line argument. Provider prompts and
 responses may still be retained by the chosen provider; consult that service's
 policy. Use a local endpoint for material that must not leave the machine.
+AI provider requests connect only to the configured endpoint: Omacell ignores
+ambient system-proxy environment variables and does not follow HTTP redirects.
+Configure a gateway as the provider endpoint when one is deliberately required.
 
 Embedded workbook Lua cannot register AI tasks or hooks, invoke prompts, alter
 keys, or gain new command capabilities merely because a command was added.
