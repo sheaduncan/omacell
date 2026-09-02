@@ -316,6 +316,7 @@ fn wp28_distribution_assets_are_complete() {
         "options=('!lto')",
         "PKGBUILD_SOURCE_URL",
         "PKGBUILD_SOURCE_SHA256",
+        "export CARGO_TARGET_DIR=\"${srcdir}/${pkgname}-${pkgver}/target\"",
         "install -d \"${pkgdir}/usr/share/omacell\"",
         "ttf-carlito",
         "ttf-liberation",

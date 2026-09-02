@@ -44,7 +44,7 @@ prepare() {
 
 build() {
   cd "${srcdir}/${pkgname}-${pkgver}"
-  export CARGO_TARGET_DIR=target
+  export CARGO_TARGET_DIR="${srcdir}/${pkgname}-${pkgver}/target"
   cargo build --frozen --release -p omacell-cli
   cargo test --frozen -p omacell-cli --test dist generate_completions_and_man
   cargo run --frozen -p omacell-cli --example generate-docs -- docs/book/cli-reference.md
@@ -54,7 +54,7 @@ build() {
 
 check() {
   cd "${srcdir}/${pkgname}-${pkgver}"
-  export CARGO_TARGET_DIR=target
+  export CARGO_TARGET_DIR="${srcdir}/${pkgname}-${pkgver}/target"
   cargo test --frozen --workspace
   cargo run --frozen -p omacell-cli --example generate-docs -- --check docs/book/cli-reference.md
   python scripts/generate-docs.py --check
