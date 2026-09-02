@@ -178,6 +178,9 @@ alter the workbook or IPC envelope.
 Unix-socket JSON-lines envelopes freeze when WP-07b merges: request, reply,
 event/overflow, and discovery records. Mutating changeset-eligible commands
 default to `propose`; internal command ids are never addressable on the socket.
+The session-dependent `edit.repeat` wrapper cannot use `execute` over IPC;
+callers submit the original mutation as a proposal instead, so repeat cannot
+replay a hidden prior command outside changeset review.
 `MAX_FRAME_BYTES` is a 16 MiB hard ceiling and default;
 `[ipc].max_frame_bytes` may lower the active limit to 1–16 MiB and requires a process
 restart to take effect. `MAX_JSON_DEPTH` remains 32 and `MAX_CONNECTIONS`

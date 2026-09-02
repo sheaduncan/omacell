@@ -179,6 +179,16 @@ fn dispatch_command(
             error::ipc_mode("changeset-eligible mutating commands cannot use mode execute"),
         );
     }
+    // Repeat is a meta-command: the session expands it into the last direct
+    // mutation only after descriptor policy has been resolved here.
+    if origin == Origin::Ipc && command == "edit.repeat" && mode == Mode::Execute {
+        return Reply::err(
+            id,
+            error::ipc_mode(
+                "edit.repeat cannot use mode execute over IPC; submit the original mutation as a proposal",
+            ),
+        );
+    }
     match mode {
         Mode::Execute => outcome_reply(id, target.execute(origin, command, args)),
         Mode::DryRun => match target.dry_run(origin, command, args) {
