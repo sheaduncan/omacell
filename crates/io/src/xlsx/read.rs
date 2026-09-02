@@ -369,7 +369,7 @@ fn parse_name_ref(text: &str, wb: &mut Workbook) -> NameReferent {
     if let Some(number) = text.parse::<f64>().ok().filter(|number| number.is_finite()) {
         return NameReferent::Constant(Value::Number(number));
     }
-    NameReferent::Formula(text.to_string())
+    NameReferent::Formula(super::formula::from_xlsx(text))
 }
 
 fn truthy(s: &str) -> bool {
@@ -1608,8 +1608,9 @@ fn commit_cell(
         formula_src = Some(with_eq(f));
     }
 
-    if let Some(src) = formula_src.as_ref() {
-        match parse(src) {
+    if let Some(raw_src) = formula_src.as_ref() {
+        let src = super::formula::from_xlsx(raw_src);
+        match parse(&src) {
             Ok(_) => {
                 if f_t == "array" {
                     let range = match parse_array_formula_ref(f_ref, cell) {
@@ -1623,9 +1624,9 @@ fn commit_cell(
                             RangeRef::from_corners(cell, cell)
                         }
                     };
-                    wb.set_array_formula_text(sheet, range, src)?;
+                    wb.set_array_formula_text(sheet, range, &src)?;
                 } else {
-                    wb.set_formula_text(sheet, cell.row, cell.col, src)?;
+                    wb.set_formula_text(sheet, cell.row, cell.col, &src)?;
                 }
             }
             Err(e) => {
@@ -1634,7 +1635,7 @@ fn commit_cell(
                     format!("unparsable formula at {r}: {}", e.error.message),
                     Some(part.into()),
                 );
-                wb.set_text(sheet, cell.row, cell.col, src)?;
+                wb.set_text(sheet, cell.row, cell.col, &src)?;
                 apply_style(wb, sheet, cell, style_idx, styles)?;
                 return Ok(());
             }

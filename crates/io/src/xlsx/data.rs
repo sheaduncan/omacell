@@ -266,6 +266,14 @@ pub(crate) fn parse_validations(blobs: &[Vec<u8>]) -> Vec<DataValidation> {
             }
         }
     }
+    for validation in &mut out {
+        if let Some(formula) = &mut validation.formula1 {
+            *formula = super::formula::from_xlsx(formula);
+        }
+        if let Some(formula) = &mut validation.formula2 {
+            *formula = super::formula::from_xlsx(formula);
+        }
+    }
     out
 }
 
@@ -439,13 +447,13 @@ fn finish_formulas(mut rule: CondFormat, formulas: &[String]) -> CondFormat {
             formula1, formula2, ..
         } => {
             if let Some(f) = formulas.first() {
-                *formula1 = f.clone();
+                *formula1 = super::formula::from_xlsx(f);
             }
-            *formula2 = formulas.get(1).cloned();
+            *formula2 = formulas.get(1).map(|f| super::formula::from_xlsx(f));
         }
         CfKind::Formula(s) => {
             if let Some(f) = formulas.first() {
-                *s = f.clone();
+                *s = super::formula::from_xlsx(f);
             }
         }
         _ => {}
@@ -785,10 +793,12 @@ pub(crate) fn modeled_validations(rules: &[DataValidation]) -> Option<String> {
         }
         s.push('>');
         if let Some(f) = &dv.formula1 {
-            s.push_str(&format!("<formula1>{}</formula1>", escape(f)));
+            let formula = super::formula::to_xlsx(f);
+            s.push_str(&format!("<formula1>{}</formula1>", escape(&formula)));
         }
         if let Some(f) = &dv.formula2 {
-            s.push_str(&format!("<formula2>{}</formula2>", escape(f)));
+            let formula = super::formula::to_xlsx(f);
+            s.push_str(&format!("<formula2>{}</formula2>", escape(&formula)));
         }
         s.push_str("</dataValidation>");
     }
@@ -817,7 +827,8 @@ pub(crate) fn modeled_cond_formats(rules: &[CondFormat], dxfs: &[CfDxf]) -> Vec<
             rule.priority,
         );
         for f in formulas {
-            s.push_str(&format!("<formula>{}</formula>", escape(&f)));
+            let formula = super::formula::to_xlsx(&f);
+            s.push_str(&format!("<formula>{}</formula>", escape(&formula)));
         }
         match &rule.kind {
             CfKind::ColorScale { colors } => {
