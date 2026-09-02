@@ -169,6 +169,59 @@ fn criteria_wildcards_on_sheet_ranges() {
 }
 
 #[test]
+fn criteria_matching_keeps_blank_text_number_and_bool_distinct() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+
+    // A1 and C1 are true blank cells. The remaining criteria-range values
+    // deliberately distinguish formula empty text, numeric text, and booleans.
+    wb.set_formula_text(s, 1, 0, "=\"\"").unwrap();
+    wb.set_number(s, 2, 0, 0.0).unwrap();
+    wb.set_formula_text(s, 3, 0, "=FALSE").unwrap();
+    wb.set_number(s, 4, 0, 3.0).unwrap();
+    wb.set_text(s, 5, 0, "3").unwrap();
+    wb.set_text(s, 6, 0, "alpha").unwrap();
+    wb.set_formula_text(s, 7, 0, "=TRUE").unwrap();
+    wb.set_text(s, 8, 0, "0").unwrap();
+    for row in 0..9 {
+        wb.set_number(s, row, 1, f64::from((row + 1) * 10)).unwrap();
+    }
+
+    let cases = [
+        ("=COUNTIF(A1:A9,\"<5\")", "4"),
+        ("=COUNTIF(A1:A9,\"*\")", "4"),
+        ("=COUNTIF(A1:A9,0)", "2"),
+        ("=COUNTIF(A1:A9,FALSE)", "1"),
+        ("=COUNTIF(A1:A9,\"FALSE\")", "1"),
+        ("=COUNTIF(A1:A9,\"\")", "2"),
+        ("=COUNTIF(A1:A9,C1)", "2"),
+        ("=COUNTIF(A1:A9,\"=3\")", "2"),
+        ("=SUMIF(A1:A9,\"<5\",B1:B9)", "230"),
+        ("=AVERAGEIF(A1:A9,\"<5\",B1:B9)", "57.5"),
+        ("=SUMIFS(B1:B9,A1:A9,\"<5\")", "230"),
+        ("=COUNTIFS(A1:A9,\"<5\")", "4"),
+        ("=AVERAGEIFS(B1:B9,A1:A9,\"<5\")", "57.5"),
+        ("=MAXIFS(B1:B9,A1:A9,\"<5\")", "90"),
+        ("=MINIFS(B1:B9,A1:A9,\"<5\")", "30"),
+        ("=SUMIF(A1:A9,\"*\",B1:B9)", "240"),
+        ("=AVERAGEIF(A1:A9,\"*\",B1:B9)", "60"),
+        ("=SUMIF(A1:A9,FALSE,B1:B9)", "40"),
+        ("=SUMIF(A1:A9,\"\",B1:B9)", "30"),
+        ("=SUMIF(A1:A9,C1,B1:B9)", "120"),
+    ];
+    for (row, (formula, _)) in cases.iter().enumerate() {
+        wb.set_formula_text(s, row as u32, 3, formula).unwrap();
+    }
+
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+    for (row, (_, expected)) in cases.iter().enumerate() {
+        assert_eq!(display(&wb, row as u32, 3), *expected);
+    }
+}
+
+#[test]
 fn if_family_requires_range_references() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

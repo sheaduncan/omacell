@@ -47,6 +47,20 @@
   2. Legacy `CEILING`/`FLOOR` sign rules differ across Excel versions; corpus cites 365-style and LibreOffice disagreements go to known-differences.
   3. `MODE.MULT` / `FREQUENCY` spill arrays; 1×1 collapse follows WP-05F `RuntimeValue::array`.
 
+### 2026-09-02 criteria-type follow-up plan (written before coding)
+
+- Add a sheet-range integration regression first that distinguishes true
+  blanks, formula empty text, numbers, numeric text, booleans, and ordinary
+  text across every `*IF(S)` aggregate.
+- Give criteria matching its own Excel type policy instead of falling through
+  to general formula comparison: numeric criteria accept numeric text,
+  wildcards inspect text only, and blank range cells do not become zero or
+  FALSE. Preserve Excel's special rule that a reference to a truly empty
+  criteria cell is treated as numeric zero.
+- Re-run the WP-05a corpora/integration suite, the complete function and core
+  suites, and the exact repository gate. Preserve frozen interfaces and add no
+  dependency.
+
 ## What was built
 
 WP-05a fills the first third of Tier 0 on the frozen WP-05F runtime. Probe `ABS`/`SUM`/`RAND`/`IF` are replaced; `NOW`/`SEQUENCE` stay for WP-05b/05c. `ISOMITTED` is catalog + corpus only.
@@ -67,6 +81,14 @@ Key files:
 Key tests: `crates/fn/tests/corpus.rs`, `integration.rs` (`lazy_if_family_*`, `and_or_do_not_short_circuit`, `hidden_row_subtotal_*`, `nested_subtotal_is_ignored`, `random_is_deterministic_across_thread_counts`, `whole_column_sum_sumifs_subtotal`, `criteria_wildcards_on_sheet_ranges`, `if_family_requires_range_references`, `fuzz_smoke_eager_functions_do_not_panic`).
 
 Review hardening corrects the Excel `AGGREGATE` option table, including hidden-row/nested-aggregate behavior and `COUNTA`/error handling. `GCD`/`LCM` now reject negative and ≥2^53 inputs/results. Mode calculations use a deterministic first-seen hash index instead of quadratic scans; `FREQUENCY` uses binary-search bins and validates its spill shape before allocation. Criteria wildcards are non-recursive and treat `?` as one Unicode scalar, eliminating adversarial recursion/stack growth.
+
+The 2026-09-02 criteria-type follow-up gives `*IF(S)` aggregates a
+criteria-specific comparison policy. Numeric criteria accept numeric text but
+not blanks or booleans, wildcards inspect text values only, Boolean criteria
+remain Boolean, and literal blank criteria match both true blanks and formula
+empty text. A reference to a truly empty criteria cell retains Excel's special
+numeric-zero behavior. One sheet-range integration matrix covers these cases
+across `SUMIF(S)`, `COUNTIF(S)`, `AVERAGEIF(S)`, `MAXIFS`, and `MINIFS`.
 
 ## Interfaces exposed (for dependents)
 
@@ -99,6 +121,9 @@ Host: rustc 1.98.0, Linux.
 
 - `just check` — pass
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — pass
+- 2026-09-02 criteria-type follow-up: `cargo test -p omacell-fn` and
+  `cargo test -p omacell-core` pass; the exact `just check` gate passes with
+  `CARGO_BUILD_JOBS=2` to avoid local parallel-linker contention.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**

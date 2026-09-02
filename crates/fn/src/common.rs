@@ -753,12 +753,12 @@ fn parse_criteria_text(t: &str) -> Result<Criteria, ErrorKind> {
     };
     let rhs = if rest.is_empty() {
         Scalar::Empty
-    } else if let Some(n) = coerce::parse_numeric_text(rest) {
-        Scalar::Number(n)
     } else if rest.eq_ignore_ascii_case("TRUE") {
         Scalar::Bool(true)
     } else if rest.eq_ignore_ascii_case("FALSE") {
         Scalar::Bool(false)
+    } else if let Some(n) = coerce::parse_numeric_text(rest) {
+        Scalar::Number(n)
     } else {
         Scalar::Text(Arc::from(rest))
     };
@@ -793,28 +793,68 @@ pub fn criteria_match(value: &Scalar, crit: &Criteria) -> bool {
     }
     let Criteria::Cmp { op, rhs, pattern } = crit;
     if let Some(pat) = pattern {
-        let text = match value {
-            Scalar::Text(t) => t.to_string(),
-            Scalar::Empty => String::new(),
-            Scalar::Number(n) => {
-                omacell_core::eval::format_runtime(&RuntimeValue::Scalar(Scalar::Number(*n)))
-            }
-            Scalar::Bool(true) => "TRUE".into(),
-            Scalar::Bool(false) => "FALSE".into(),
-            Scalar::Error(_) => return false,
+        let Scalar::Text(text) = value else {
+            return matches!(op, CmpOp::Ne) && !matches!(value, Scalar::Empty);
         };
-        let hit = pat.matches(&text);
+        let hit = pat.matches(text);
         return match op {
             CmpOp::Eq => hit,
             CmpOp::Ne => !hit,
             _ => false,
         };
     }
-    match (value, rhs, op) {
-        (Scalar::Empty, Scalar::Empty, CmpOp::Eq) => true,
-        (Scalar::Empty, Scalar::Text(t), CmpOp::Eq) if t.is_empty() => true,
-        (Scalar::Text(t), Scalar::Empty, CmpOp::Eq) if t.is_empty() => true,
-        _ => coerce::compare_op(*op, value, rhs).unwrap_or(false),
+
+    match rhs {
+        Scalar::Empty => {
+            let blank = matches!(value, Scalar::Empty)
+                || matches!(value, Scalar::Text(text) if text.is_empty());
+            match op {
+                CmpOp::Eq => blank,
+                CmpOp::Ne => !blank,
+                _ => false,
+            }
+        }
+        Scalar::Number(_) => {
+            let numeric_text;
+            let comparable = match value {
+                Scalar::Number(_) => value,
+                Scalar::Text(text) => {
+                    let trimmed = text.trim();
+                    if trimmed.is_empty()
+                        || trimmed.eq_ignore_ascii_case("TRUE")
+                        || trimmed.eq_ignore_ascii_case("FALSE")
+                    {
+                        return matches!(op, CmpOp::Ne);
+                    }
+                    let Some(number) = coerce::parse_numeric_text(trimmed) else {
+                        return matches!(op, CmpOp::Ne);
+                    };
+                    numeric_text = Scalar::Number(number);
+                    &numeric_text
+                }
+                Scalar::Empty | Scalar::Bool(_) => return matches!(op, CmpOp::Ne),
+                Scalar::Error(_) => return false,
+            };
+            coerce::compare_op(*op, comparable, rhs).unwrap_or(false)
+        }
+        Scalar::Bool(_) => match value {
+            Scalar::Bool(_) => coerce::compare_op(*op, value, rhs).unwrap_or(false),
+            Scalar::Empty | Scalar::Number(_) | Scalar::Text(_) => matches!(op, CmpOp::Ne),
+            Scalar::Error(_) => false,
+        },
+        Scalar::Text(_) => match value {
+            Scalar::Text(_) => coerce::compare_op(*op, value, rhs).unwrap_or(false),
+            Scalar::Empty | Scalar::Number(_) | Scalar::Bool(_) => matches!(op, CmpOp::Ne),
+            Scalar::Error(_) => false,
+        },
+        Scalar::Error(error) => match value {
+            Scalar::Error(value_error) => match op {
+                CmpOp::Eq => value_error == error,
+                CmpOp::Ne => value_error != error,
+                _ => false,
+            },
+            _ => matches!(op, CmpOp::Ne),
+        },
     }
 }
 
