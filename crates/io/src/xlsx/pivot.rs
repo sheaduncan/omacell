@@ -209,7 +209,10 @@ pub(crate) fn cache_parts(wb: &Workbook, pivot: &PivotTable) -> Result<CachePart
             .calc_fields
             .iter()
             .find(|field| field.name == *header)
-            .map(|field| format!(r#" databaseField="0" formula="{}""#, escape(&field.formula)))
+            .map(|field| {
+                let formula = super::formula::to_xlsx(&field.formula);
+                format!(r#" databaseField="0" formula="{}""#, escape(&formula))
+            })
             .unwrap_or_default();
         fields.push_str(&format!(
             r#"<cacheField name="{}" numFmtId="0"{calc}><sharedItems{attrs}>{shared}</sharedItems>{group}</cacheField>"#,
@@ -566,7 +569,7 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
                 if calculated {
                     calc_fields.push(PivotCalcField {
                         name: current_field.clone(),
-                        formula: attr(&attrs, "formula").unwrap_or("").to_string(),
+                        formula: super::formula::from_xlsx(attr(&attrs, "formula").unwrap_or("")),
                     });
                 }
             }

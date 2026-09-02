@@ -18,6 +18,7 @@ mod atomic;
 pub(crate) mod data;
 mod diff;
 mod drawing;
+mod formula;
 pub(crate) mod opc;
 pub(crate) mod pivot;
 pub(crate) mod print;

@@ -745,7 +745,7 @@ fn workbook_xml(
         };
         let text = match &n.referent {
             omacell_core::names::NameReferent::Range(r) => r.to_a1(),
-            omacell_core::names::NameReferent::Formula(f) => f.clone(),
+            omacell_core::names::NameReferent::Formula(f) => super::formula::to_xlsx(f),
             omacell_core::names::NameReferent::Constant(v) => constant_name_text(intern, *v),
         };
         let comment = n
@@ -1949,7 +1949,8 @@ fn cell_xml(
         .and_then(|id| intern.formulas.get(id))
         .filter(|source| !super::ai_formula::is_ai_formula(source));
     if let Some(src) = formula {
-        let body = src.strip_prefix('=').unwrap_or(src);
+        let xlsx_formula = super::formula::to_xlsx(src);
+        let body = xlsx_formula.strip_prefix('=').unwrap_or(&xlsx_formula);
         if let Some(array_formula) = array_formula {
             inner.push_str(&format!(
                 r#"<f t="array" ref="{}">{}</f>"#,
