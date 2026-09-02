@@ -38,7 +38,7 @@ pub struct SetupReport {
 
 /// Hyprland snippet printed by `--show-hyprland`.
 pub const HYPRLAND_SNIPPET: &str = r#"-- ~/.config/hypr/bindings.lua  (pick any chord that is free on your machine)
-o.bind("SUPER + ALT + X", "Spreadsheet", "omacell")
+o.bind("SUPER + ALT + X", "Spreadsheet", { launch = "omacell" })
 "#;
 
 /// Theme-set hook body.
@@ -73,8 +73,12 @@ pub fn setup_omarchy(
                 ".agents/skills/omacell",
                 ".claude/skills/omacell",
                 ".codex/skills/omacell",
-                ".pi/agent/skills/omacell",
+                ".config/crush/skills/omacell",
+                ".config/opencode/skills/omacell",
+                ".copilot/skills/omacell",
                 ".gemini/config/skills/omacell",
+                ".grok/skills/omacell",
+                ".pi/agent/skills/omacell",
             ] {
                 let dest = paths.home.join(relative);
                 if let Some(parent) = dest.parent() {

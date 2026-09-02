@@ -467,3 +467,63 @@ fn wp28_manual_and_release_automation_are_present() {
     assert!(release.contains("cp -a book/. \"$root/share/doc/omacell/manual/\""));
     assert!(!release.contains("book/html"));
 }
+
+#[test]
+fn wp28_release_handoffs_are_implemented_and_reconciled() {
+    let root = workspace_root();
+    let setup = fs::read_to_string(root.join("crates/conf/src/setup.rs")).expect("read setup");
+    for relative in [
+        ".agents/skills/omacell",
+        ".claude/skills/omacell",
+        ".codex/skills/omacell",
+        ".config/crush/skills/omacell",
+        ".config/opencode/skills/omacell",
+        ".copilot/skills/omacell",
+        ".gemini/config/skills/omacell",
+        ".grok/skills/omacell",
+        ".pi/agent/skills/omacell",
+    ] {
+        assert!(setup.contains(relative), "setup omarchy missing {relative}");
+    }
+    assert!(setup.contains(r#"{ launch = "omacell" }"#));
+
+    let charts = fs::read_to_string(root.join("crates/bus/src/chart.rs")).expect("read charts");
+    for command in [
+        "chart.axistitle",
+        "chart.move",
+        "chart.resize",
+        "chart.title",
+    ] {
+        assert!(
+            charts.contains(command),
+            "chart release command missing {command}"
+        );
+    }
+
+    for (relative, stale) in [
+        (
+            "reports/WP-16.md",
+            "Per-cell typeface substitution and an explicit shaping cache are not implemented",
+        ),
+        ("reports/WP-25.md", "WP-28 release surface"),
+        ("reports/WP-26.md", "WP-28 release closure"),
+        (
+            "docs/open-question-triage-2026-08-31.md",
+            "split this into WP-28a",
+        ),
+        (
+            "reports/integration-audit-2026-09-01.md",
+            "minimal release editing is WP-28",
+        ),
+        (
+            "reports/integration-audit-2026-09-01.md",
+            "Print gaps are explicitly owned by WP-28",
+        ),
+    ] {
+        let text = fs::read_to_string(root.join(relative)).expect("read reconciled report");
+        assert!(
+            !text.contains(stale),
+            "stale handoff in {relative}: {stale}"
+        );
+    }
+}

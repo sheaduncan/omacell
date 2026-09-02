@@ -137,8 +137,48 @@ pub fn layout(
         ChartKind::Unsupported => unsupported(&mut scene, chart, theme, plot),
         _ => cartesian(&mut scene, sampled, chart, theme, plot),
     }
+    if !matches!(
+        sampled.kind,
+        ChartKind::Pie | ChartKind::Donut | ChartKind::Unsupported
+    ) {
+        axis_titles(&mut scene, chart, theme, plot, height);
+    }
     legend(&mut scene, sampled, chart, theme, plot);
     scene
+}
+
+fn axis_titles(scene: &mut Scene, chart: &Chart, theme: &ChartTheme, plot: PlotRect, height: f32) {
+    if let Some(title) = chart.category_axis.title.as_deref() {
+        scene.ops.push(Op::Text {
+            x: plot.x + plot.w * 0.4,
+            y: height - 6.0,
+            text: title.to_string(),
+            color: theme.foreground.clone(),
+            size: 11.0,
+        });
+    }
+    if let Some(title) = chart.value_axis.title.as_deref() {
+        scene.ops.push(Op::Text {
+            x: 4.0,
+            y: plot.y + 14.0,
+            text: title.to_string(),
+            color: theme.foreground.clone(),
+            size: 11.0,
+        });
+    }
+    if let Some(title) = chart
+        .secondary_axis
+        .as_ref()
+        .and_then(|axis| axis.title.as_deref())
+    {
+        scene.ops.push(Op::Text {
+            x: plot.x + plot.w + 6.0,
+            y: plot.y + 14.0,
+            text: title.to_string(),
+            color: theme.foreground.clone(),
+            size: 11.0,
+        });
+    }
 }
 
 /// Sample and layout.

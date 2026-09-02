@@ -179,6 +179,14 @@ fn production_host_keeps_new_commands_closed_until_reviewed() {
         .unwrap();
     assert!(host.embedded_command_allowed("cell.set"));
     assert!(!host.embedded_command_allowed("future.network"));
+    for id in [
+        "chart.move",
+        "chart.resize",
+        "chart.title",
+        "chart.axistitle",
+    ] {
+        assert!(!host.embedded_command_allowed(id), "{id}");
+    }
 }
 
 #[test]

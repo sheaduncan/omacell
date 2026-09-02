@@ -27,6 +27,11 @@ between the classic keymap and local Hyprland bindings. Consult the generated
 [configuration](configuration.md) and [CLI](cli-reference.md) references for
 the authoritative options.
 
+Charts created with `F11` can be edited through `chart.move`, `chart.resize`,
+`chart.title`, and `chart.axistitle` in the command palette. Omitting the chart
+id targets the first chart on the active sheet; pass the stable id when a sheet
+has more than one chart. Empty title text clears the selected title.
+
 ## Formats and compatibility
 
 The project targets Excel formula and workbook semantics, not pixel-identical

@@ -1,17 +1,22 @@
 //! Chart and sparkline commands (WP-25).
 
-use omacell_core::addr::SheetId;
+use omacell_core::addr::{CellRef, RefKind, SheetId, parse_a1};
 use omacell_core::changeset::ChangeSummary;
 use omacell_core::chart::{
-    ChartId, ChartKind, Sparkline, SparklineKind, chart_from_range, parse_range,
+    Axis, Chart, ChartAnchor, ChartId, ChartKind, Sparkline, SparklineKind, chart_from_range,
+    parse_range,
 };
 use omacell_core::error::CoreError;
+use omacell_core::workbook::Workbook;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::handler::{CommandContext, Effect};
 use crate::logical::call;
 use crate::registry::{CommandKind, CommandRegistry, CommandSpec, Exposure};
+use crate::resolve::{
+    ResolvedCell, ResolvedRange, format_cell, format_range, resolve_cell, resolve_range_unbounded,
+};
 
 /// Public chart-kind argument. Keeping this an enum makes the command schema
 /// advertise exactly the values callers may send.
@@ -121,6 +126,64 @@ pub struct SparklineSetArgs {
     pub kind: Option<SparklineKindArg>,
 }
 
+/// Axis selected by `chart.axistitle`.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartAxisArg {
+    /// Category or horizontal value axis.
+    Category,
+    /// Primary value axis.
+    Value,
+    /// Secondary value axis on a combo chart.
+    Secondary,
+}
+
+/// `chart.move`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChartMoveArgs {
+    /// Stable chart id. Omitted selects the first chart on the active sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// New top-left cell, optionally sheet-qualified.
+    pub to: String,
+}
+
+/// `chart.resize`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChartResizeArgs {
+    /// Stable chart id. Omitted selects the first chart on the active sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// New inclusive two-cell anchor, optionally sheet-qualified.
+    pub range: String,
+}
+
+/// `chart.title`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChartTitleArgs {
+    /// Stable chart id. Omitted selects the first chart on the active sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// New title. An empty string removes it.
+    pub title: String,
+}
+
+/// `chart.axistitle`
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChartAxisTitleArgs {
+    /// Stable chart id. Omitted selects the first chart on the active sheet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// Axis to edit.
+    pub axis: ChartAxisArg,
+    /// New title. An empty string removes it.
+    pub title: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ChartRemoveArgs {
@@ -158,6 +221,50 @@ pub fn register_chart_commands(registry: &mut CommandRegistry) -> Result<(), Cor
             default_keys: &[],
         },
         sparkline_set,
+    )?;
+    registry.register(
+        CommandSpec {
+            id: "chart.move",
+            doc: "Move a chart to a new top-left cell",
+            kind: CommandKind::Mutating,
+            changeset_eligible: true,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        chart_move,
+    )?;
+    registry.register(
+        CommandSpec {
+            id: "chart.resize",
+            doc: "Resize a chart to an inclusive cell range",
+            kind: CommandKind::Mutating,
+            changeset_eligible: true,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        chart_resize,
+    )?;
+    registry.register(
+        CommandSpec {
+            id: "chart.title",
+            doc: "Set or clear a chart title",
+            kind: CommandKind::Mutating,
+            changeset_eligible: true,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        chart_title,
+    )?;
+    registry.register(
+        CommandSpec {
+            id: "chart.axistitle",
+            doc: "Set or clear a chart axis title",
+            kind: CommandKind::Mutating,
+            changeset_eligible: true,
+            exposure: Exposure::Public,
+            default_keys: &[],
+        },
+        chart_axis_title,
     )?;
     registry.register(
         CommandSpec {
@@ -260,6 +367,252 @@ fn sparkline_set(
         auto_recalc: false,
         ..Effect::default()
     })
+}
+
+fn chart_move(ctx: &mut CommandContext<'_>, args: ChartMoveArgs) -> Result<Effect, CoreError> {
+    let before = find_chart(ctx.workbook_ref(), args.id)?;
+    let qualified = parse_a1(&args.to)?.sheet.is_some();
+    let mut target = resolve_cell(ctx.workbook_ref(), &args.to)?;
+    if !qualified {
+        target.sheet = before.sheet;
+    }
+    if target.sheet != before.sheet {
+        return Err(CoreError::new(
+            "chart.anchor",
+            "a chart cannot be moved to a different sheet",
+        )
+        .with_hint("move the chart within its current sheet"));
+    }
+    let row_span = before.anchor.to_row - before.anchor.from_row;
+    let col_span = before.anchor.to_col - before.anchor.from_col;
+    let to_row = target
+        .row
+        .checked_add(row_span)
+        .ok_or_else(chart_anchor_overflow)?;
+    let to_col = target
+        .col
+        .checked_add(col_span)
+        .ok_or_else(chart_anchor_overflow)?;
+    CellRef::new(to_row, to_col).map_err(|_| chart_anchor_overflow())?;
+    let mut after = before.clone();
+    after.anchor = ChartAnchor {
+        from_row: target.row,
+        from_col: target.col,
+        to_row,
+        to_col,
+    };
+    let inverse = serde_json::json!({
+        "id": before.id.index(),
+        "to": qualified_anchor_start(ctx.workbook_ref(), &before),
+    });
+    apply_chart_edit(ctx, before, after, "chart.move", inverse, "move chart")
+}
+
+fn chart_resize(ctx: &mut CommandContext<'_>, args: ChartResizeArgs) -> Result<Effect, CoreError> {
+    let before = find_chart(ctx.workbook_ref(), args.id)?;
+    let parsed = parse_a1(&args.range)?;
+    if matches!(
+        parsed.kind,
+        RefKind::Range(range) if range.whole_row || range.whole_col
+    ) {
+        return Err(CoreError::new(
+            "chart.anchor",
+            "chart anchors require two cell corners, not a whole row or column",
+        ));
+    }
+    let qualified = parsed.sheet.is_some();
+    let mut target = resolve_range_unbounded(ctx.workbook_ref(), &args.range)?;
+    if !qualified {
+        target.sheet = before.sheet;
+    }
+    if target.sheet != before.sheet {
+        return Err(CoreError::new(
+            "chart.anchor",
+            "a chart anchor cannot span a different sheet",
+        )
+        .with_hint("resize the chart within its current sheet"));
+    }
+    let mut after = before.clone();
+    after.anchor = ChartAnchor {
+        from_row: target.min_row,
+        from_col: target.min_col,
+        to_row: target.max_row,
+        to_col: target.max_col,
+    };
+    let inverse = serde_json::json!({
+        "id": before.id.index(),
+        "range": qualified_anchor_range(ctx.workbook_ref(), &before),
+    });
+    apply_chart_edit(ctx, before, after, "chart.resize", inverse, "resize chart")
+}
+
+fn chart_title(ctx: &mut CommandContext<'_>, args: ChartTitleArgs) -> Result<Effect, CoreError> {
+    let before = find_chart(ctx.workbook_ref(), args.id)?;
+    let mut after = before.clone();
+    after.title = checked_title(args.title)?;
+    let inverse = serde_json::json!({
+        "id": before.id.index(),
+        "title": before.title.clone().unwrap_or_default(),
+    });
+    apply_chart_edit(
+        ctx,
+        before,
+        after,
+        "chart.title",
+        inverse,
+        "edit chart title",
+    )
+}
+
+fn chart_axis_title(
+    ctx: &mut CommandContext<'_>,
+    args: ChartAxisTitleArgs,
+) -> Result<Effect, CoreError> {
+    let before = find_chart(ctx.workbook_ref(), args.id)?;
+    let title = checked_title(args.title)?;
+    let mut after = before.clone();
+    let previous = match args.axis {
+        ChartAxisArg::Category => std::mem::replace(&mut after.category_axis.title, title),
+        ChartAxisArg::Value => std::mem::replace(&mut after.value_axis.title, title),
+        ChartAxisArg::Secondary => {
+            if after.secondary_axis.is_none() && after.kind != ChartKind::Combo {
+                return Err(
+                    CoreError::new("chart.axis", "this chart has no secondary value axis")
+                        .with_hint("secondary axis titles are available on combo charts"),
+                );
+            }
+            std::mem::replace(
+                &mut after.secondary_axis.get_or_insert_with(Axis::default).title,
+                title,
+            )
+        }
+    };
+    let inverse = serde_json::json!({
+        "id": before.id.index(),
+        "axis": args.axis,
+        "title": previous.unwrap_or_default(),
+    });
+    apply_chart_edit(
+        ctx,
+        before,
+        after,
+        "chart.axistitle",
+        inverse,
+        "edit chart axis title",
+    )
+}
+
+fn find_chart(workbook: &Workbook, id: Option<u32>) -> Result<Chart, CoreError> {
+    if let Some(id) = id {
+        return workbook
+            .sheets()
+            .flat_map(|sheet| sheet.charts.iter())
+            .find(|chart| chart.id.index() == id)
+            .cloned()
+            .ok_or_else(|| CoreError::new("chart.id", format!("unknown chart {id}")));
+    }
+    workbook
+        .sheet(workbook.active_sheet())
+        .and_then(|sheet| sheet.charts.first())
+        .cloned()
+        .ok_or_else(|| {
+            CoreError::new("chart.id", "the active sheet has no chart")
+                .with_hint("create a chart first or provide its id")
+        })
+}
+
+fn checked_title(title: String) -> Result<Option<String>, CoreError> {
+    if title.len() > 4_096 {
+        return Err(CoreError::new(
+            "chart.title",
+            "chart titles are limited to 4096 UTF-8 bytes",
+        ));
+    }
+    Ok((!title.is_empty()).then_some(title))
+}
+
+fn apply_chart_edit(
+    ctx: &mut CommandContext<'_>,
+    before: Chart,
+    after: Chart,
+    inverse_id: &str,
+    inverse_args: serde_json::Value,
+    summary: &str,
+) -> Result<Effect, CoreError> {
+    after.values_valid()?;
+    let changed = before != after;
+    let result = serde_json::json!({
+        "changed": changed,
+        "id": after.id.index(),
+        "sheet": after.sheet.index(),
+        "anchor": anchor_range(&after.anchor),
+        "title": after.title.clone(),
+    });
+    if !changed {
+        return Ok(Effect::query(result));
+    }
+    let inverse = call(inverse_id, inverse_args)?;
+    if !ctx.is_preflight() {
+        let _ = ctx
+            .workbook()
+            .replace_chart(after.sheet, after.id, after.clone())?;
+    }
+    Ok(Effect {
+        inverse: vec![inverse],
+        summary: ChangeSummary {
+            text: summary.into(),
+            ..ChangeSummary::default()
+        },
+        result,
+        auto_recalc: false,
+        ..Effect::default()
+    })
+}
+
+fn anchor_start(anchor: &ChartAnchor) -> String {
+    CellRef::new(anchor.from_row, anchor.from_col)
+        .map(|cell| cell.to_a1())
+        .unwrap_or_default()
+}
+
+fn anchor_range(anchor: &ChartAnchor) -> String {
+    let start = anchor_start(anchor);
+    let end = CellRef::new(anchor.to_row, anchor.to_col)
+        .map(|cell| cell.to_a1())
+        .unwrap_or_default();
+    format!("{start}:{end}")
+}
+
+fn qualified_anchor_start(workbook: &Workbook, chart: &Chart) -> String {
+    format_cell(
+        workbook,
+        ResolvedCell {
+            sheet: chart.sheet,
+            row: chart.anchor.from_row,
+            col: chart.anchor.from_col,
+        },
+    )
+}
+
+fn qualified_anchor_range(workbook: &Workbook, chart: &Chart) -> String {
+    format_range(
+        workbook,
+        ResolvedRange {
+            sheet: chart.sheet,
+            min_row: chart.anchor.from_row,
+            min_col: chart.anchor.from_col,
+            max_row: chart.anchor.to_row,
+            max_col: chart.anchor.to_col,
+        },
+    )
+}
+
+fn chart_anchor_overflow() -> CoreError {
+    CoreError::new(
+        "chart.anchor",
+        "moving this chart would exceed the worksheet grid",
+    )
+    .with_hint("choose a top-left cell that leaves room for the current chart size")
 }
 
 fn chart_remove(ctx: &mut CommandContext<'_>, args: ChartRemoveArgs) -> Result<Effect, CoreError> {

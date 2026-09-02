@@ -161,6 +161,49 @@ fn print_preview_opens_a_keyboard_accessible_printer_panel() {
 }
 
 #[test]
+fn chart_release_edits_are_reachable_through_the_gui_command_surface() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    for (command, args) in [
+        (
+            "chart.fromselection",
+            serde_json::json!({"range": "A1:B2", "kind": "combo"}),
+        ),
+        ("chart.resize", serde_json::json!({"range": "C3:H12"})),
+        (
+            "chart.title",
+            serde_json::json!({"title": "Quarterly sales"}),
+        ),
+        (
+            "chart.axistitle",
+            serde_json::json!({"axis": "category", "title": "Quarter"}),
+        ),
+    ] {
+        harness.state_mut().execute_cmd(command, args).unwrap();
+        for _ in 0..200 {
+            harness.step();
+            if !harness.state().runner().is_busy() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!harness.state().runner().is_busy(), "{command}");
+    }
+
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    let chart = &snapshot.workbook.sheet(sheet).unwrap().charts[0];
+    assert_eq!(chart.anchor.from_row, 2);
+    assert_eq!(chart.anchor.from_col, 2);
+    assert_eq!(chart.title.as_deref(), Some("Quarterly sales"));
+    assert_eq!(chart.category_axis.title.as_deref(), Some("Quarter"));
+}
+
+#[test]
 #[ignore = "nightly wall-clock smoke bound; shared CI software runners are nondeterministic"]
 fn first_frame_renders_within_software_ci_smoke_budget() {
     // The product's 300 ms target is gated on the fixed integrated-GPU

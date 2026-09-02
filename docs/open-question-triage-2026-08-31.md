@@ -28,12 +28,12 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 
 - **First-party "Oma-" app family.** Quattro ships Omawrite, Omacut, and Omacalc as default apps, C++/Qt, hosted under the `omacom` GitHub org and distributed through the Omarchy Package Repository. Omacalc is a four-function calculator, not a spreadsheet — no functional collision — but "Oma-" now reads as *first-party*. See WP-00.3.
 - **Default terminal is Foot** (sixel capable). Herdr ships alongside tmux. Ghostty/Kitty speak the kitty graphics protocol. See WP-15.1, WP-15.3.
-- **Hyprland config is Lua.** The idiomatic app binding is `o.bind("SUPER + SHIFT + W", "Omawrite", { launch = "omawrite" })`. Omacell's snippet passes a bare string as the third argument; confirm `{ launch = "omacell" }` is the form that gets the systemd scope and focus-or-launch behaviour.
+- **Hyprland config is Lua.** The idiomatic app binding is `o.bind("SUPER + SHIFT + W", "Omawrite", { launch = "omawrite" })`. WP-28 updated Omacell's emitted snippet to the equivalent `{ launch = "omacell" }` table form.
 - **Apps run in their own systemd scopes** with `systemd-oomd` allowed to kill a runaway app. Favors process-per-file (WP-16.1) and makes autosave/recovery load-bearing.
-- **Theme:** state at `~/.local/state/omarchy/current/theme/colors.toml`, expanded from 8 to 24 semantic colors. `conf/theme.rs` still derives most roles by mixing `background`/`foreground`; WP-28 aesthetics pass should use the expanded set where a semantic key exists.
+- **Theme:** state at `~/.local/state/omarchy/current/theme/colors.toml`, expanded from 8 to 24 semantic colors. WP-28 maps the available semantic surface/text/state/reference/chart keys into GUI roles, retaining derived fallbacks only when a theme omits a role.
 - **Text scaling:** `omarchy display text size` moves GTK's `text-scaling-factor`, which `conf/font.rs` already reads. Test 9px and 20px extremes at G4.
 - **Notifications** are native to the Quickshell shell; the freedesktop D-Bus fallback in `conf/notify.rs` is the right path, `omarchy-notification-send` if still present is a bonus.
-- **Default agent:** nine harnesses selectable (Claude Code, Codex, OpenCode, Pi, Oh My Pi, Gemini, Grok, Copilot, Crush), launched as `org.omarchy.agent`, started in `~/Work` "so trust sticks". `setup omarchy` links skills for five of the nine; WP-28 should cover all nine. Omacell's hand-off uses the workbook directory as cwd, which means a per-directory trust prompt in Claude Code — decide at G5 whether to follow Omarchy's `~/Work` convention instead.
+- **Default agent:** nine harnesses selectable (Claude Code, Codex, OpenCode, Pi, Oh My Pi, Gemini, Grok, Copilot, Crush), launched as `org.omarchy.agent`, started in `~/Work` "so trust sticks". WP-28 links the skill into the generic and harness-specific Claude, Codex, OpenCode, Pi, Gemini, Grok, Copilot, and Crush locations. Omacell's hand-off uses the workbook directory as cwd, which means a per-directory trust prompt in Claude Code — decide at G5 whether to follow Omarchy's `~/Work` convention instead.
 - **Menu extension** path `~/.config/omarchy/extensions/omarchy-menu.jsonc` — already what `setup.rs` writes.
 - **Security posture:** Quattro closed three code-execution paths that a malicious *theme* could take. Treat `colors.toml` as untrusted input (it already goes through the `toml` crate — good).
 
@@ -112,7 +112,9 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 `CLOSED` · **Decision: keep locale application-level.** Excel's locale is a system/app setting, not a workbook property; formats are stored locale-independently. No contract change. **H**
 
 ### WP-05a.1 `CELL()` without a reference
-`AGENT` · **Decision: implement Excel's rule once editing exists — "the last cell that was changed" — and make it volatile.** Until WP-28 wires session state, keep the formula cell and list it as a known difference. **H**
+`CLOSED` · The live `RecalcEngine` retains the session's last changed cell and
+uses it for omitted `CELL()` references; direct evaluation without a session
+falls back to the formula cell. **H**
 
 ### WP-05a.2 `CEILING`/`FLOOR` with opposite signs
 `BUG` · **Decision: match Excel 2010+, which is asymmetric.** `CEILING(-2.5, 2)` = `-2` (toward zero) and `FLOOR(-2.5, 2)` = `-4` (away from zero); only a *positive* number with a *negative* significance returns `#NUM!` (`CEILING(2.5,-2)`, `FLOOR(2.5,-2)`). `fn/src/math.rs` currently returns `#NUM!` for `n·sig < 0` in both directions — that is Excel 2007 behaviour. Microsoft's example tables show `=CEILING(-2.5, 2)` → `-2` and `=FLOOR(2.5,-2)` → `#NUM!`. **H**, live rows in Appendix A.
@@ -213,10 +215,11 @@ Verified against the v4.0.0 release notes and the Omarchy manual:
 `CLOSED` — `cli` depends on `tui` and `gui`; one binary.
 
 ### WP-14.1 Flush `UiSession` freeze/split/zoom into `ViewState` on save
-`AGENT` · **Decision: mandatory.** Excel persists `zoomScale`, panes, selection and `topLeftCell` in `sheetView`; without the flush the G2 round-trip diff is never empty. Verify WP-16 did it; otherwise WP-28. **H**
+`CLOSED` · Interactive save/save-as flushes retained zoom, panes, selection,
+scroll, and formula-display state after the atomic write succeeds. **H**
 
 ### WP-14.2 Preserve `KeyOutcome.count`
-`AGENT` · yes (modal `5j`); verify in TUI and GUI.
+`CLOSED` · TUI and GUI dispatch preserve modal counts for count-aware commands.
 
 ### WP-14.3 Underscore-free command ids in docs
 `CLOSED` — `repo_lint` scans `docs/` for underscore-bearing command-id shapes
@@ -229,7 +232,7 @@ an ANSI Unicode-braille fallback. tmux/Herdr `auto` falls back; explicit
 protocol selection remains available for configured passthrough.
 
 ### WP-15.2 Share `App::bootstrap_live`
-`CLOSED` if WP-16 uses it; otherwise WP-28.
+`CLOSED` — WP-16 uses the shared live bootstrap and task-runner attachment.
 
 ### WP-15.3 Manual terminal matrix
 `HUMAN` · **Reorder for Quattro:** Foot (default), Ghostty, Kitty, Alacritty, then tmux *and Herdr*, then an SSH session. Part of G3.
@@ -270,16 +273,23 @@ protocol selection remains available for configured passthrough.
 `AGENT` · **Decision: L3 preserve, don't model.** Histogram, Pareto, waterfall, treemap, sunburst, box-and-whisker and funnel live in `xl/charts/chartEx*.xml` under the `cx:` namespace, not `c15`. Spec §2.2 already says exotic charts are preserved-not-rendered. Post-1.0. **H**
 
 ### WP-25.2 Chart property editing and move/resize
-`AGENT` · **Decision: minimal for 1.0** — `chart.move`, `chart.resize`, title and axis-title editing through commands; the full property panel is post-1.0. WP-28 is already the largest remaining package; split this into WP-28a. **L**
+`CLOSED` · WP-28 implements `chart.move`, `chart.resize`, `chart.title`, and
+`chart.axistitle` as undoable, changeset-eligible commands reachable through
+the retained command surface. The full property panel is post-1.0. **L**
 
 ### WP-26.1 Print titles as a count vs `$3:$4` band
-`AGENT` · **Decision: implement bands.** Excel stores `_xlnm.Print_Titles` as `Sheet1!$3:$4` or `$A:$B` — arbitrary rows/columns, not counted from the print-area origin. Required for real files at G2/G6. WP-28 already lists it. **H**
+`CLOSED` · WP-28 implements explicit start/end row and column bands, XLSX
+round-trip, and repeated-band pagination. **H**
 
 ### WP-26.2 Native printer dialog vs palette chooser
-`AGENT` · **Decision: palette chooser.** Omarchy is keyboard-first with no settings GUIs, and Quattro ships no print panel. `file.print` opens a palette list from `lpstat -a`, remembers the last printer, and is accessible by construction. **L**
+`CLOSED` · `file.print` opens a retained keyboard/AccessKit printer list from
+`lpstat -a` and remembers the last printer. **L**
 
 ### WP-26.3 PDF fallback font
-`AGENT` · **Decision: don't bundle a face in the repo; depend on system fonts that are metric-compatible with what `.xlsx` files actually use.** Add `ttf-carlito` (Calibri metrics — the pre-2023 Excel default) and `ttf-liberation` (Arial/Times metrics) to PKGBUILD `depends`, alias Calibri→Carlito and Arial→Liberation Sans via fontconfig, embed the resolved face in every PDF, and fall back to Standard-14 Helvetica only when fontconfig returns nothing. This also fixes column-width fidelity (WP-02.4). There is no free metric clone of Aptos; document it as a known difference. **M**
+`CLOSED` · WP-28 packages Carlito and Liberation, applies Office-compatible
+aliases, embeds the resolved face, and documents warning-bearing Standard-14
+Helvetica only as the no-font fallback. Aptos remains a documented metric
+difference because no free clone exists. **M**
 
 ---
 
@@ -334,11 +344,11 @@ Type each into a fresh workbook; record the result next to the item and turn it 
 
 ## Appendix B — things not in the 83 that Quattro surfaced
 
-1. Skills are linked for five of Quattro's nine selectable agents; add OpenCode, Grok, Copilot, Crush paths in `setup.rs` (WP-28).
+1. **Resolved by WP-28:** setup links the skill into all nine generic/harness-specific locations, including OpenCode, Grok, Copilot, and Crush.
 2. Hand-off cwd is the workbook directory; Omarchy starts agents in `~/Work` for trust persistence. Decide at G5.
-3. `HYPRLAND_SNIPPET` uses a bare-string third argument; Quattro's documented form is `{ launch = "…" }`. Confirm on a Quattro machine.
-4. Theme role map mixes two base colors for most roles; Quattro exposes 24 semantic keys. Aesthetic pass at G4/WP-28.
-5. Add `ttf-carlito` and `ttf-liberation` to PKGBUILD `depends` (WP-26.3) — this also decides WP-02.4's MDW on real machines.
+3. **Resolved by WP-28:** `HYPRLAND_SNIPPET` uses Quattro's `{ launch = "omacell" }` table form.
+4. **Resolved by WP-28:** the expanded semantic theme keys feed the GUI role map.
+5. **Resolved by WP-28:** Arch packages depend on `ttf-carlito` and `ttf-liberation`.
 6. Distribution: Omacalc, NordVPN and others ship through the Omarchy Package Repository. Ask about it in the same conversation as WP-00.3.
 
 ---

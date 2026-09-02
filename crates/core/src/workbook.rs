@@ -596,6 +596,44 @@ impl Workbook {
         Ok(chart)
     }
 
+    /// Replace a chart while preserving its stable identity and undo history.
+    pub fn replace_chart(
+        &mut self,
+        sheet: SheetId,
+        id: ChartId,
+        chart: Chart,
+    ) -> Result<Chart, CoreError> {
+        if chart.sheet != sheet || chart.id != id {
+            return Err(CoreError::new(
+                "chart.id",
+                "replacement chart identity must match its workbook location",
+            ));
+        }
+        chart.values_valid()?;
+        let target = self.sheet_mut(sheet)?;
+        let index = target
+            .charts
+            .iter()
+            .position(|existing| existing.id == id)
+            .ok_or_else(|| CoreError::new("chart.id", format!("unknown chart {}", id.index())))?;
+        let before = target.charts[index].clone();
+        if before == chart {
+            return Ok(before);
+        }
+        target.charts[index] = chart.clone();
+        self.undo.record(crate::undo::Delta::ChartRemove {
+            sheet,
+            index,
+            chart: Box::new(before.clone()),
+        });
+        self.undo.record(crate::undo::Delta::ChartAdd {
+            sheet,
+            index,
+            chart: Box::new(chart),
+        });
+        Ok(before)
+    }
+
     /// Append a sparkline.
     pub fn add_sparkline(&mut self, spark: Sparkline) -> Result<(), CoreError> {
         spark.values_valid()?;

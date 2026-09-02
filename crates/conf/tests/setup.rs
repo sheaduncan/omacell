@@ -1,7 +1,19 @@
 //! `setup omarchy` writes only under the fake $HOME.
 
 use omacell_conf::paths::Paths;
-use omacell_conf::setup::{SetupOptions, setup_omarchy};
+use omacell_conf::setup::{HYPRLAND_SNIPPET, SetupOptions, setup_omarchy};
+
+const SKILL_LINKS: &[&str] = &[
+    ".agents/skills/omacell",
+    ".claude/skills/omacell",
+    ".codex/skills/omacell",
+    ".config/crush/skills/omacell",
+    ".config/opencode/skills/omacell",
+    ".copilot/skills/omacell",
+    ".gemini/config/skills/omacell",
+    ".grok/skills/omacell",
+    ".pi/agent/skills/omacell",
+];
 
 fn relative_entries(root: &std::path::Path) -> Vec<String> {
     fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
@@ -50,13 +62,7 @@ fn setup_without_menu_writes_only_expected_files() {
     assert!(report.skipped.iter().any(|s| s.contains("menu")));
     assert!(report.written.iter().all(|p| p.starts_with(dir.path())));
 
-    for relative in [
-        ".agents/skills/omacell",
-        ".claude/skills/omacell",
-        ".codex/skills/omacell",
-        ".pi/agent/skills/omacell",
-        ".gemini/config/skills/omacell",
-    ] {
+    for relative in SKILL_LINKS {
         assert!(
             std::fs::symlink_metadata(dir.path().join(relative))
                 .unwrap()
@@ -71,13 +77,7 @@ fn setup_without_menu_writes_only_expected_files() {
         .join("agents/skills/omacell")
         .canonicalize()
         .unwrap();
-    for relative in [
-        ".agents/skills/omacell",
-        ".claude/skills/omacell",
-        ".codex/skills/omacell",
-        ".pi/agent/skills/omacell",
-        ".gemini/config/skills/omacell",
-    ] {
+    for relative in SKILL_LINKS {
         let dest = dir.path().join(relative);
         let target = std::fs::read_link(&dest).unwrap();
         let resolved = dest.parent().unwrap().join(&target).canonicalize().unwrap();
@@ -114,22 +114,43 @@ fn setup_without_menu_writes_only_expected_files() {
             ".codex/skills",
             ".codex/skills/omacell",
             ".config",
+            ".config/crush",
+            ".config/crush/skills",
+            ".config/crush/skills/omacell",
             ".config/omarchy",
             ".config/omarchy/hooks",
             ".config/omarchy/hooks/theme-set.d",
             ".config/omarchy/hooks/theme-set.d/omacell",
             ".config/omarchy/themed",
             ".config/omarchy/themed/omacell.toml.tpl",
+            ".config/opencode",
+            ".config/opencode/skills",
+            ".config/opencode/skills/omacell",
+            ".copilot",
+            ".copilot/skills",
+            ".copilot/skills/omacell",
             ".gemini",
             ".gemini/config",
             ".gemini/config/skills",
             ".gemini/config/skills/omacell",
+            ".grok",
+            ".grok/skills",
+            ".grok/skills/omacell",
             ".pi",
             ".pi/agent",
             ".pi/agent/skills",
             ".pi/agent/skills/omacell",
         ]
     );
+}
+
+#[test]
+fn hyprland_snippet_uses_the_quattro_launch_table() {
+    assert!(
+        HYPRLAND_SNIPPET.contains(r#"{ launch = "omacell" }"#),
+        "{HYPRLAND_SNIPPET}"
+    );
+    assert!(!HYPRLAND_SNIPPET.contains(r#", "omacell")"#));
 }
 
 #[test]

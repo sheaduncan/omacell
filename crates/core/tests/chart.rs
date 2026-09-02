@@ -193,6 +193,35 @@ fn scene_and_svg_are_the_same_ops() {
 }
 
 #[test]
+fn shared_scene_renders_edited_axis_titles() {
+    let wb = seed();
+    let mut chart = chart_from_range(
+        &wb,
+        wb.active_sheet(),
+        range(0, 0, 3, 2),
+        ChartKind::Combo,
+        Some("Sales".into()),
+    )
+    .unwrap();
+    chart.category_axis.title = Some("Quarter".into());
+    chart.value_axis.title = Some("Revenue".into());
+    chart.secondary_axis.as_mut().unwrap().title = Some("Margin".into());
+    let sampled = sample(&wb, &chart).unwrap();
+    let scene = layout(&sampled, &chart, &ChartTheme::neutral(), 480.0, 280.0);
+    let text = scene
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            omacell_core::chart::Op::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for title in ["Sales", "Quarter", "Revenue", "Margin"] {
+        assert!(text.contains(&title), "missing {title}: {text:?}");
+    }
+}
+
+#[test]
 fn sparkline_line_and_winloss_layout() {
     let spark = Sparkline {
         kind: SparklineKind::Line,
