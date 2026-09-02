@@ -93,8 +93,18 @@ fn classic_f2_edits_and_types() {
     h.tui.step_key(key(KeyCode::F(2))).unwrap();
     assert!(!h.tui.ui().edit().is_idle());
     assert!(h.tui.ui().edit().buffer.contains("Hello"));
+    h.tui.step_key(key(KeyCode::Space)).unwrap();
     h.tui.step_key(ch('!')).unwrap();
-    assert!(h.tui.ui().edit().buffer.contains('!'));
+    assert_eq!(h.tui.ui().edit().buffer, "Hello !");
+}
+
+#[test]
+fn modal_space_remains_a_leader_outside_editing() {
+    let mut h = harness_modal();
+    let outcome = h.tui.step_key(key(KeyCode::Space)).unwrap();
+    assert_eq!(outcome, KeyOutcome::Pending);
+    assert!(h.tui.ui().edit().is_idle());
+    assert_eq!(h.tui.ui().mode().label(), "NORMAL");
 }
 
 #[test]

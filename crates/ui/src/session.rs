@@ -583,6 +583,10 @@ impl UiSession {
                     g.edit.insert_char(c);
                     return crate::keymap::KeyOutcome::Pending;
                 }
+                (crate::event::KeyCode::Space, false, false) => {
+                    g.edit.insert_char(' ');
+                    return crate::keymap::KeyOutcome::Pending;
+                }
                 _ => {}
             }
             let cmd = match (event.code, event.ctrl, event.alt, event.shift) {
