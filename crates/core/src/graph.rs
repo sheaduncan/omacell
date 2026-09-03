@@ -4,6 +4,8 @@
 //! (whole sheet / whole row / whole column / 256×256 blocks) so `A:A` is one
 //! column-bucket edge.
 
+use std::collections::BTreeMap;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::addr::{CellRef, RangeRef, SheetId, SheetSpec};
@@ -12,7 +14,7 @@ use crate::formula::{Deps, collect_deps};
 use crate::intern::FormulaId;
 use crate::limits::{MAX_COLS, MAX_ROWS};
 use crate::names::{MAX_DEFINED_NAME_DEPTH, NameScope};
-use crate::storage::BLOCK_SIZE;
+use crate::storage::{BLOCK_SIZE, BlockCoord};
 use crate::workbook::Workbook;
 
 /// Formula-cell coordinate, ordered by `(sheet, row, col)` for determinism.
@@ -92,6 +94,67 @@ pub struct DepGraph {
     buckets: FxHashMap<SheetId, SheetBuckets>,
     /// Sorted formula cells (calc chain).
     chain: Vec<CellCoord>,
+}
+
+#[derive(Debug, Default)]
+struct FormulaSetIndex {
+    members: FxHashSet<CellCoord>,
+    blocks: FxHashMap<SheetId, BTreeMap<u16, BTreeMap<u8, Vec<CellCoord>>>>,
+}
+
+impl FormulaSetIndex {
+    fn new(cells: FxHashSet<CellCoord>) -> Self {
+        let mut blocks: FxHashMap<SheetId, BTreeMap<u16, BTreeMap<u8, Vec<CellCoord>>>> =
+            FxHashMap::default();
+        for cell in &cells {
+            let block = BlockCoord::from_cell(cell.row, cell.col);
+            blocks
+                .entry(cell.sheet)
+                .or_default()
+                .entry(block.brow)
+                .or_default()
+                .entry(block.bcol)
+                .or_default()
+                .push(*cell);
+        }
+        for rows in blocks.values_mut() {
+            for cols in rows.values_mut() {
+                for cells in cols.values_mut() {
+                    cells.sort_unstable();
+                }
+            }
+        }
+        Self {
+            members: cells,
+            blocks,
+        }
+    }
+
+    fn contains(&self, cell: &CellCoord) -> bool {
+        self.members.contains(cell)
+    }
+
+    fn extend_range(&self, out: &mut Vec<CellCoord>, sheet: SheetId, range: RangeRef) {
+        let Some(rows) = self.blocks.get(&sheet) else {
+            return;
+        };
+        let row0 = range.start.row.min(range.end.row);
+        let row1 = range.start.row.max(range.end.row);
+        let col0 = range.start.col.min(range.end.col);
+        let col1 = range.start.col.max(range.end.col);
+        let first = BlockCoord::from_cell(row0, col0);
+        let last = BlockCoord::from_cell(row1, col1);
+        for (_, cols) in rows.range(first.brow..=last.brow) {
+            for (_, cells) in cols.range(first.bcol..=last.bcol) {
+                out.extend(
+                    cells
+                        .iter()
+                        .copied()
+                        .filter(|cell| range_contains(range, cell.row, cell.col)),
+                );
+            }
+        }
+    }
 }
 
 impl DepGraph {
@@ -441,8 +504,9 @@ impl DepGraph {
         // node first so the exact SCC pass below only allocates for the small
         // residue containing cycles and their downstream cells.
         let mut indegree: FxHashMap<CellCoord, usize> = FxHashMap::default();
+        let all_index = FormulaSetIndex::new(all);
         for &cell in &vertices {
-            indegree.insert(cell, self.precedents_in(cell, &all).len());
+            indegree.insert(cell, self.precedents_in(cell, &all_index).len());
         }
         let mut queue: Vec<CellCoord> = indegree
             .iter()
@@ -471,6 +535,7 @@ impl DepGraph {
         vertices = indegree.into_keys().collect();
         vertices.sort_unstable();
         let among: FxHashSet<CellCoord> = vertices.iter().copied().collect();
+        let among_index = FormulaSetIndex::new(among);
 
         // Build both directions once, then use iterative Kosaraju so a long
         // formula chain cannot overflow the Rust call stack. Kahn leftovers are
@@ -480,7 +545,7 @@ impl DepGraph {
         let mut reverse: FxHashMap<CellCoord, Vec<CellCoord>> = FxHashMap::default();
         for &cell in &vertices {
             reverse.entry(cell).or_default();
-            let precedents = self.precedents_in(cell, &among);
+            let precedents = self.precedents_in(cell, &among_index);
             for precedent in &precedents {
                 reverse.entry(*precedent).or_default().push(cell);
             }
@@ -545,7 +610,7 @@ impl DepGraph {
         circular
     }
 
-    fn precedents_in(&self, c: CellCoord, among: &FxHashSet<CellCoord>) -> Vec<CellCoord> {
+    fn precedents_in(&self, c: CellCoord, among: &FormulaSetIndex) -> Vec<CellCoord> {
         let mut out = Vec::new();
         let Some(n) = self.nodes.get(&c) else {
             return out;
@@ -558,19 +623,11 @@ impl DepGraph {
                     }
                 }
                 Precedent::Range { sheet, range, .. } => {
-                    for other in among {
-                        if other.sheet == *sheet && range_contains(*range, other.row, other.col) {
-                            out.push(*other);
-                        }
-                    }
+                    among.extend_range(&mut out, *sheet, *range);
                 }
                 Precedent::ThreeD { sheets, range } => {
-                    for other in among {
-                        if sheets.contains(&other.sheet)
-                            && range_contains(*range, other.row, other.col)
-                        {
-                            out.push(*other);
-                        }
+                    for sheet in sheets {
+                        among.extend_range(&mut out, *sheet, *range);
                     }
                 }
             }
@@ -584,7 +641,6 @@ impl DepGraph {
     /// handles them). Within a generation, cells are sorted.
     #[must_use]
     pub fn generations(&self, cells: &[CellCoord]) -> Vec<Vec<CellCoord>> {
-        let among: FxHashSet<CellCoord> = cells.iter().copied().collect();
         let circ: FxHashSet<CellCoord> = self.circular_set(cells).into_iter().collect();
         let acyclic: Vec<CellCoord> = cells
             .iter()
@@ -592,17 +648,14 @@ impl DepGraph {
             .filter(|c| !circ.contains(c))
             .collect();
         let set: FxHashSet<CellCoord> = acyclic.iter().copied().collect();
+        let mut remaining = set.clone();
+        let set_index = FormulaSetIndex::new(set);
         let mut indeg: FxHashMap<CellCoord, usize> = FxHashMap::default();
         for &c in &acyclic {
-            let n = self
-                .precedents_in(c, &among)
-                .into_iter()
-                .filter(|p| set.contains(p))
-                .count();
+            let n = self.precedents_in(c, &set_index).len();
             indeg.insert(c, n);
         }
         let mut gens = Vec::new();
-        let mut remaining: FxHashSet<CellCoord> = set.clone();
         while !remaining.is_empty() {
             let mut generation: Vec<CellCoord> = remaining
                 .iter()

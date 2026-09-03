@@ -5,8 +5,8 @@ use std::time::Duration;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use omacell_core::eval::FnRegistry;
-use omacell_core::graph::CellCoord;
+use omacell_core::eval::{AstCache, FnRegistry};
+use omacell_core::graph::{CellCoord, DepGraph};
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 
@@ -35,6 +35,21 @@ fn build_star(n: usize) -> Workbook {
             continue;
         }
         let _ = wb.set_formula_text(sheet, row, col, "=A1+1");
+    }
+    wb
+}
+
+fn build_disjoint_ranges(n: usize) -> Workbook {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    for row in 0..=n as u32 {
+        let _ = wb.set_number(sheet, row, 2, f64::from(row));
+    }
+    for row in 0..n as u32 {
+        let excel_row = row + 1;
+        let next_excel_row = excel_row + 1;
+        let _ = wb.set_formula_text(sheet, row, 1, &format!("=C{excel_row}:C{next_excel_row}"));
     }
     wb
 }
@@ -79,6 +94,16 @@ fn bench_recalc(c: &mut Criterion) {
             let _ = wb.set_number(sheet, 0, 0, n);
             engine.notify_edit(&wb, CellCoord::new(sheet, 0, 0));
             black_box(engine.recalc_incremental(&mut wb));
+        });
+    });
+
+    group.bench_function("generations_5k_disjoint_ranges", |b| {
+        let wb = build_disjoint_ranges(5_000);
+        let mut graph = DepGraph::new();
+        graph.rebuild(&wb, &mut AstCache::new());
+        let cells = graph.formula_cells();
+        b.iter(|| {
+            black_box(graph.generations(&cells));
         });
     });
 

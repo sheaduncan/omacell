@@ -24,6 +24,27 @@ fn iter_occupied(c: &mut Criterion) {
             std::hint::black_box(n)
         });
     });
+    c.bench_function("iter_region_10x10_of_80k", |b| {
+        b.iter(|| {
+            let mut n = 0u64;
+            for (_r, _c, slot) in store.iter_region(2_000, 5, 2_009, 14) {
+                n = n.wrapping_add(slot.value.is_error() as u64);
+            }
+            std::hint::black_box(n)
+        });
+    });
+    c.bench_function("iter_filter_all_for_region_80k_reference", |b| {
+        b.iter(|| {
+            let mut n = 0u64;
+            for (_r, _c, slot) in store
+                .iter()
+                .filter(|(row, col, _)| *row >= 2_000 && *row <= 2_009 && *col >= 5 && *col <= 14)
+            {
+                n = n.wrapping_add(slot.value.is_error() as u64);
+            }
+            std::hint::black_box(n)
+        });
+    });
 }
 
 criterion_group!(benches, iter_occupied);
