@@ -431,6 +431,13 @@ impl<'a> Lexer<'a> {
         let n: f64 = text
             .parse()
             .map_err(|_| ParseError::parse("invalid number", start, vec!["number".into()]))?;
+        if !n.is_finite() {
+            return Err(ParseError::parse(
+                "numeric literal is outside the finite range",
+                start,
+                vec!["number".into()],
+            ));
+        }
         Ok(Some(n))
     }
 
