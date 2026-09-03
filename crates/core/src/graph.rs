@@ -11,6 +11,7 @@ use crate::eval::AstCache;
 use crate::formula::{Deps, collect_deps};
 use crate::intern::FormulaId;
 use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::names::{MAX_DEFINED_NAME_DEPTH, NameScope};
 use crate::storage::BLOCK_SIZE;
 use crate::workbook::Workbook;
 
@@ -625,6 +626,15 @@ fn blocks_of(range: RangeRef) -> Vec<(u32, u16)> {
 }
 
 fn resolve_deps(wb: &Workbook, default_sheet: SheetId, deps: &Deps) -> Vec<Precedent> {
+    resolve_deps_inner(wb, default_sheet, deps, &mut FxHashSet::default())
+}
+
+fn resolve_deps_inner(
+    wb: &Workbook,
+    default_sheet: SheetId,
+    deps: &Deps,
+    active_names: &mut FxHashSet<(NameScope, String)>,
+) -> Vec<Precedent> {
     let mut out = Vec::new();
     for (spec, range) in &deps.ranges {
         match resolve_sheet_spec(wb, spec.as_ref(), default_sheet) {
@@ -683,10 +693,18 @@ fn resolve_deps(wb: &Workbook, default_sheet: SheetId, deps: &Deps) -> Vec<Prece
                     push_cse_anchors(wb, sh, *r, &mut out);
                 }
                 crate::names::NameReferent::Formula(src) => {
+                    if active_names.len() >= MAX_DEFINED_NAME_DEPTH {
+                        continue;
+                    }
+                    let key = (n.scope, n.name.to_lowercase());
+                    if !active_names.insert(key.clone()) {
+                        continue;
+                    }
                     if let Ok(f) = crate::formula::parse(src) {
                         let inner = collect_deps(&f.ast);
-                        out.extend(resolve_deps(wb, sheet, &inner));
+                        out.extend(resolve_deps_inner(wb, sheet, &inner, active_names));
                     }
+                    active_names.remove(&key);
                 }
                 crate::names::NameReferent::Constant(_) => {}
             }

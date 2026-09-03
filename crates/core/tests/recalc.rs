@@ -2,7 +2,8 @@
 
 use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::eval::FnRegistry;
-use omacell_core::graph::CellCoord;
+use omacell_core::graph::{CellCoord, Precedent};
+use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::recalc::{MockAsyncProvider, RecalcEngine, format_cell};
 use omacell_core::storage::CellFlags;
 use omacell_core::style::Style;
@@ -54,6 +55,69 @@ fn circular_set_excludes_downstream_cells() {
         vec![CellCoord::new(s, 0, 0), CellCoord::new(s, 0, 1)]
     );
     assert_eq!(display(&wb, 0, 2), "1");
+}
+
+#[test]
+fn cyclic_defined_names_terminate_and_keep_concrete_precedents() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_number(sheet, 0, 0, 41.0).unwrap();
+    for (name, formula) in [
+        ("SelfCycle", "=selfcycle+1"),
+        ("MutualA", "=mutualb+A1"),
+        ("MutualB", "=MUTUALA"),
+    ] {
+        wb.define_name(DefinedName {
+            name: name.to_string(),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Formula(formula.to_string()),
+            comment: None,
+        })
+        .unwrap();
+    }
+    wb.set_formula_text(sheet, 0, 1, "=SelfCycle").unwrap();
+    wb.set_formula_text(sheet, 0, 2, "=MutualA").unwrap();
+
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.rebuild(&wb);
+    assert!(
+        engine
+            .graph()
+            .precedents(CellCoord::new(sheet, 0, 2))
+            .contains(&Precedent::Cell(CellCoord::new(sheet, 0, 0)))
+    );
+
+    engine.recalc_full(&mut wb);
+    assert_eq!(display(&wb, 0, 1), "#NUM!");
+    assert_eq!(display(&wb, 0, 2), "#NUM!");
+}
+
+#[test]
+fn excessive_defined_name_depth_terminates() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    for index in 0..600 {
+        wb.define_name(DefinedName {
+            name: format!("Chain{index}"),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Formula(format!("=Chain{}", index + 1)),
+            comment: None,
+        })
+        .unwrap();
+    }
+    wb.define_name(DefinedName {
+        name: "Chain600".to_string(),
+        scope: NameScope::Workbook,
+        referent: NameReferent::Formula("=1".to_string()),
+        comment: None,
+    })
+    .unwrap();
+    wb.set_formula_text(sheet, 0, 0, "=Chain0").unwrap();
+
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_full(&mut wb);
+
+    assert_eq!(display(&wb, 0, 0), "#NUM!");
 }
 
 #[test]
