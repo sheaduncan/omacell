@@ -1386,7 +1386,8 @@ fn spill_of(ctx: &EvalCtx<'_>, v: RuntimeValue) -> RuntimeValue {
             end_row,
             end_col,
         }) if start_row == end_row && start_col == end_col => {
-            if let Some(region) = ctx.spill.region_at(sheet, start_row, start_col) {
+            let origin = CellCoord::new(sheet, start_row, start_col);
+            if let Some(region) = ctx.spill.get(origin) {
                 let end_col = region
                     .origin
                     .col
@@ -1402,7 +1403,7 @@ fn spill_of(ctx: &EvalCtx<'_>, v: RuntimeValue) -> RuntimeValue {
                     end_col,
                 })
             } else {
-                RuntimeValue::Ref(Reference::cell(sheet, start_row, start_col))
+                RuntimeValue::error(ErrorKind::Ref)
             }
         }
         RuntimeValue::Ref(r) => RuntimeValue::Ref(r),
@@ -1419,9 +1420,6 @@ fn eval_binary(ctx: &mut EvalCtx<'_>, op: BinOp, left: &Expr, right: &Expr) -> R
             let left_v = eval_expr(ctx, left);
             let left_origin = operand_origin(left, &left_v);
             let l = materialize_value(ctx, left_v);
-            if let Some(e) = l.error_kind() {
-                return RuntimeValue::error(e);
-            }
             let right_v = eval_expr(ctx, right);
             let right_origin = operand_origin(right, &right_v);
             let r = materialize_value(ctx, right_v);
