@@ -9,3 +9,5 @@
 =PERCENTRANK.INC({10,20,30},20)	0.5	middle
 =PERCENTRANK.INC({5},5)	1	single → 1
 =PERCENTRANK.INC({1,2,3},2)	0.5	n=3
+=PERCENTRANK.INC({1,1,1,2,3,4,8,11,12,13},8)	0.666	default significance truncates 6/9; Microsoft PERCENTRANK.INC example
+=PERCENTRANK.INC({1,2,3,4},2,0)	#NUM!	significance below one; Microsoft PERCENTRANK.INC documentation

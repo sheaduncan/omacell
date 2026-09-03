@@ -9,3 +9,4 @@
 =PERCENTRANK.EXC({5,5,5,5},5)	0.2	ties first
 =ISNUMBER(PERCENTRANK.EXC({1,2,3,4},2))	TRUE	finite; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =PERCENTRANK.EXC({1,2,3,4},2.5)	0.5	interp
+=PERCENTRANK.EXC({1,2,3,6,6,6,7,8,9},5.43,1)	0.3	significance truncates rather than rounds; Microsoft PERCENTRANK.EXC example

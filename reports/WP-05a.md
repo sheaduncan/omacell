@@ -124,6 +124,18 @@
   dependency, run the complete function/core suites and strict Clippy, then
   run exact `just check` and reconcile this report.
 
+### 2026-09-03 PERCENTRANK significance plan (written before coding)
+
+- Add failing corpus rows first from Microsoft's `PERCENTRANK.INC` and
+  `PERCENTRANK.EXC` examples that distinguish decimal truncation from rounding,
+  plus the documented `#NUM!` result for significance below one.
+- Validate the truncated significance before converting it to an integer, then
+  truncate the computed nonnegative rank to that many decimal places using the
+  existing decimal helper rather than binary floating-point scaling.
+- Preserve public interfaces, add no dependency, run the complete function/core
+  suites and strict Clippy, then run exact `just check` and reconcile this
+  report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -236,6 +248,11 @@ row/column shape until all arguments have been validated as exact matches.
 Only finite numeric entries participate in multiplication; Boolean, text, and
 empty entries contribute zero, while cell errors and non-finite numbers retain
 their existing error behavior.
+
+The 2026-09-03 `PERCENTRANK` follow-up truncates inclusive and exclusive ranks
+to the requested decimal significance and returns `#NUM!` when the truncated
+significance is below one, matching Microsoft's examples and documented error
+behavior.
 
 ## Interfaces exposed (for dependents)
 
@@ -363,11 +380,27 @@ Host: rustc 1.98.0, Linux.
     rustdoc.
   - Semantics follow Microsoft's [`SUMPRODUCT`](https://support.microsoft.com/en-us/office/sumproduct-function-16753e75-9f68-4874-94ac-4d2145a2fd2e)
     documentation.
+- 2026-09-03 `PERCENTRANK` test-first evidence:
+  - Microsoft's inclusive example for a 6/9 rank initially returned **0.667**;
+    it now truncates to **0.666** at the default three-digit significance.
+  - Microsoft's exclusive `5.43` example at significance one initially
+    returned **0.4**; it now truncates to **0.3**.
+  - Significance zero initially returned **0.3** after being clamped to one; it
+    now returns the documented `#NUM!` error.
+  - The updated corpus and complete function/core suites pass (21 function
+    integration tests, 73 core unit tests, every integration suite, and 103
+    core doctests); strict all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - Semantics follow Microsoft's [`PERCENTRANK.INC`](https://support.microsoft.com/en-us/excel/functions/percentrank-inc-function)
+    and [`PERCENTRANK.EXC`](https://support.microsoft.com/en-us/excel/functions/percentrank-exc-function)
+    documentation.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1564** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1567** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -402,6 +435,9 @@ Host: rustc 1.98.0, Linux.
    propagation, and `#VALUE!` when no usable value remains.
 8. **Resolved 2026-09-03:** `SUMPRODUCT` requires identical row/column shapes,
    not only equal cell counts, and treats Boolean/text/empty entries as zero.
+9. **Resolved 2026-09-03:** `PERCENTRANK.INC` and `PERCENTRANK.EXC` truncate,
+   rather than round, to the requested significance and reject significance
+   below one with `#NUM!`.
 
 ## RFC (only if a frozen contract changed)
 
@@ -418,6 +454,8 @@ The logical aggregate text follow-up changes no public signature or frozen
 contract.
 
 The `SUMPRODUCT` follow-up changes no public signature or frozen contract.
+
+The `PERCENTRANK` follow-up changes no public signature or frozen contract.
 
 ## Checklist
 
