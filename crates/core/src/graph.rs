@@ -230,7 +230,7 @@ impl DepGraph {
         changed
     }
 
-    /// Whether this formula contains `INDIRECT`/`OFFSET`.
+    /// Whether this formula contains a function with evaluation-resolved precedents.
     #[must_use]
     pub fn is_dynamic(&self, cell: CellCoord) -> bool {
         self.nodes.get(&cell).map(|n| n.dynamic).unwrap_or(false)

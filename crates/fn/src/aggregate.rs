@@ -3,7 +3,8 @@
 use omacell_core::addr::SheetId;
 use omacell_core::coerce::{self, Scalar};
 use omacell_core::error::ErrorKind;
-use omacell_core::eval::{ArgVal, EvalCtx, FnBody, RuntimeValue};
+use omacell_core::eval::{ArgVal, EvalCtx, FnBody, Reference, RuntimeValue};
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 
 use crate::common::{
     Criteria, Origin, arg_number, criteria_match, flatten, for_each_value, frequencies,
@@ -180,7 +181,7 @@ fn require_reference(arg: &ArgVal) -> Result<(), ErrorKind> {
 }
 
 fn if_fold(
-    ctx: &EvalCtx<'_>,
+    ctx: &mut EvalCtx<'_>,
     range: &ArgVal,
     criteria: &ArgVal,
     values: &ArgVal,
@@ -188,7 +189,13 @@ fn if_fold(
 ) -> Result<u32, ErrorKind> {
     let crit = crit_of(ctx, criteria)?;
     let tests = flatten(ctx, &range.value)?;
-    let nums = flatten(ctx, &values.value)?;
+    let aligned = aligned_value_reference(&range.value, &values.value)?;
+    let nums = if let Some(reference) = aligned {
+        ctx.record_dynamic_ref(reference.clone());
+        flatten(ctx, &RuntimeValue::Ref(reference))?
+    } else {
+        flatten(ctx, &values.value)?
+    };
     if tests.len() != nums.len() {
         return Err(ErrorKind::Value);
     }
@@ -208,6 +215,55 @@ fn if_fold(
         }
     }
     Ok(n)
+}
+
+fn aligned_value_reference(
+    criteria: &RuntimeValue,
+    values: &RuntimeValue,
+) -> Result<Option<Reference>, ErrorKind> {
+    let (
+        RuntimeValue::Ref(Reference::Range {
+            start_row: criteria_start_row,
+            start_col: criteria_start_col,
+            end_row: criteria_end_row,
+            end_col: criteria_end_col,
+            ..
+        }),
+        RuntimeValue::Ref(
+            values_reference @ Reference::Range {
+                sheet,
+                start_row: values_start_row,
+                start_col: values_start_col,
+                end_row: values_end_row,
+                end_col: values_end_col,
+            },
+        ),
+    ) = (criteria, values)
+    else {
+        return Ok(None);
+    };
+
+    let rows = criteria_start_row.abs_diff(*criteria_end_row) + 1;
+    let cols = u32::from(criteria_start_col.abs_diff(*criteria_end_col)) + 1;
+    let start_row = (*values_start_row).min(*values_end_row);
+    let start_col = (*values_start_col).min(*values_end_col);
+    let end_row = start_row
+        .checked_add(rows - 1)
+        .filter(|row| *row < MAX_ROWS)
+        .ok_or(ErrorKind::Ref)?;
+    let end_col = u32::from(start_col)
+        .checked_add(cols - 1)
+        .filter(|col| *col < u32::from(MAX_COLS))
+        .and_then(|col| u16::try_from(col).ok())
+        .ok_or(ErrorKind::Ref)?;
+    let aligned = Reference::Range {
+        sheet: *sheet,
+        start_row,
+        start_col,
+        end_row,
+        end_col,
+    };
+    Ok((aligned != *values_reference).then_some(aligned))
 }
 
 fn sumif_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
