@@ -811,7 +811,10 @@ impl<'a> EvalCtx<'a> {
         self.stale = true;
     }
 
-    /// Record a range resolved by a dynamic function (`INDIRECT` / `OFFSET`).
+    /// Record a range resolved during function evaluation.
+    ///
+    /// This covers dynamic functions such as `INDIRECT` / `OFFSET` and
+    /// functions whose effective input range differs from the written range.
     pub fn record_dynamic_ref(&mut self, r: Reference) {
         self.resolved_dynamic.push(r);
     }

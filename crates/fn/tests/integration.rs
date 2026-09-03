@@ -325,6 +325,71 @@ fn criteria_wildcards_on_sheet_ranges() {
 }
 
 #[test]
+fn sumif_value_ranges_resize_from_top_left_and_track_implicit_cells() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+
+    for (row, col, value) in [
+        (0, 0, 1.0),
+        (0, 1, 2.0),
+        (1, 0, 3.0),
+        (1, 1, 4.0),
+        (0, 3, 10.0),
+        (0, 4, 20.0),
+        (1, 3, 30.0),
+        (2, 3, 900.0),
+        (3, 3, 900.0),
+        (0, 5, 40.0),
+    ] {
+        wb.set_number(s, row, col, value).unwrap();
+    }
+    wb.set_formula_text(s, 1, 4, "=F1").unwrap();
+    wb.set_formula_text(s, 0, 6, "=SUMIF(A1:B2,\">2\",D1:D4)")
+        .unwrap();
+    wb.set_formula_text(s, 1, 6, "=AVERAGEIF(A1:B2,\">2\",D1:D4)")
+        .unwrap();
+
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+    assert_eq!(display(&wb, 0, 6), "70");
+    assert_eq!(display(&wb, 1, 6), "35");
+
+    wb.set_number(s, 0, 5, 50.0).unwrap();
+    eng.notify_edit(&wb, CellCoord::new(s, 0, 5));
+    eng.recalc_incremental(&mut wb);
+    assert_eq!(display(&wb, 0, 6), "80");
+    assert_eq!(display(&wb, 1, 6), "40");
+}
+
+#[test]
+fn sumif_resized_range_does_not_create_a_false_cycle_from_the_written_tail() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    for (row, col, value) in [
+        (0, 0, 1.0),
+        (0, 1, 2.0),
+        (1, 0, 3.0),
+        (1, 1, 4.0),
+        (0, 3, 10.0),
+        (0, 4, 20.0),
+        (1, 3, 30.0),
+        (1, 4, 40.0),
+        (3, 3, 900.0),
+    ] {
+        wb.set_number(s, row, col, value).unwrap();
+    }
+    wb.set_formula_text(s, 2, 3, "=SUMIF(A1:B2,\">2\",D1:D4)")
+        .unwrap();
+
+    let mut eng = engine();
+    let result = eng.recalc_full(&mut wb);
+    assert!(result.circular.is_empty());
+    assert_eq!(display(&wb, 2, 3), "70");
+}
+
+#[test]
 fn criteria_matching_keeps_blank_text_number_and_bool_distinct() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

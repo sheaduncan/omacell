@@ -64,6 +64,25 @@
   dependency, run the function/core suites and strict Clippy, then run exact
   `just check` and reconcile this report.
 
+### 2026-09-03 SUMIF value-range plan (written before coding)
+
+- Add a failing 2-D integration regression first where the written
+  `sum_range`/`average_range` has a different shape from the criteria range.
+  Assert both the initial result and an incremental edit to a formula cell that
+  lies inside the effective resized range but outside the written range.
+- Derive the effective value reference from its normalized top-left cell and
+  the criteria reference's height and width, matching Microsoft's documented
+  `SUMIF` and `AVERAGEIF` behavior. Reject an implied range outside worksheet
+  bounds without materializing it.
+- Record a differing effective reference through the existing resolved-range
+  dependency channel and classify `SUMIF`/`AVERAGEIF` as functions with
+  evaluation-resolved precedents. This keeps initial ordering and later dirty
+  propagation correct even when the implicit cells contain formulas.
+- Preserve same-shaped and omitted value-range behavior, keep public
+  signatures/frozen contracts unchanged, add no dependency, run the complete
+  function/core suites, strict Clippy, exact `just check`, and reconcile this
+  report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -137,6 +156,19 @@ rows hidden manually: every function number excludes the former, while only
 101–111 exclude the latter. `AGGREGATE` retains its existing option-controlled
 hidden-row behavior.
 
+The 2026-09-03 SUMIF value-range follow-up resizes an explicit `sum_range` or
+`average_range` from its normalized top-left cell to the criteria range's height
+and width. Direct references contribute that exact effective range to the static
+dependency graph; references resolved through names or expressions use the
+existing evaluation-resolved dependency channel. This orders formula cells in
+the implicit extent, dirties dependents after later edits, and avoids false
+cycles from cells in the written but excluded tail.
+
+The SUMIF value-range follow-up adds
+`sumif_value_ranges_resize_from_top_left_and_track_implicit_cells` and
+`sumif_resized_range_does_not_create_a_false_cycle_from_the_written_tail` to
+`crates/fn/tests/integration.rs`.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -199,11 +231,29 @@ Host: rustc 1.98.0, Linux.
     [`MIN`](https://support.microsoft.com/en-us/office/min-function-61635d12-920f-4ce2-a70f-96f202dcc152),
     and [`SUBTOTAL`](https://support.microsoft.com/en-us/office/subtotal-function-7b027003-f060-4ade-9040-e478765b9939)
     documentation.
+- 2026-09-03 SUMIF value-range test-first evidence:
+  - The 2-D mismatch initially summed the written `D1:D4` tail and returned
+    **1800** instead of the effective `D1:E2` result **70**. It now returns 70
+    for `SUMIF` and 35 for `AVERAGEIF`.
+  - Editing a formula precedent in the implicit `E2` cell updates those values
+    to 80 and 40 through incremental recalc. A second regression initially
+    reported a false circular reference when the SUMIF formula occupied `D3`,
+    which is in the written tail but outside the effective range; it now returns
+    70 with an empty circular set.
+  - The complete function and core suites pass (19 function integration tests,
+    73 core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - Semantics follow Microsoft's [`SUMIF`](https://support.microsoft.com/en-us/office/sumif-function-169b8c99-c05c-4483-a712-1697a653039b)
+    and [`AVERAGEIF`](https://support.microsoft.com/en-us/office/averageif-function-faec8e2e-0dec-4308-af69-f5576d8ac642)
+    documentation.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1554** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1560** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -226,6 +276,10 @@ Host: rustc 1.98.0, Linux.
 4. **Resolved 2026-09-03:** AutoFilter-excluded rows and manually hidden rows
    have distinct `SUBTOTAL` semantics. All function numbers exclude filtered
    rows; only 101–111 additionally exclude manual hiding.
+5. **Resolved 2026-09-03:** Explicit SUMIF/AVERAGEIF value ranges follow
+   Excel's top-left resizing rule. Their effective range, rather than the
+   written shape, is used for values, ordering, circular checks, and dirty
+   propagation.
 
 ## RFC (only if a frozen contract changed)
 
@@ -233,6 +287,8 @@ None. WP-01 types unchanged.
 
 The empty/filter aggregate follow-up adds one method to the post-WP-01
 `EvalCtx` function-runtime interface and changes no frozen contract.
+
+The SUMIF value-range follow-up changes no public signature or frozen contract.
 
 ## Checklist
 

@@ -1,6 +1,7 @@
 //! Dependency extraction for the recalc graph (WP-04).
 
 use crate::addr::{RangeRef, SheetSpec};
+use crate::limits::{MAX_COLS, MAX_ROWS};
 
 use super::ast::{Callee, Expr, ExprKind};
 
@@ -17,8 +18,10 @@ pub const VOLATILE_FUNCS: &[&str] = &[
     "CELL",
 ];
 
-/// Functions whose referenced ranges are not known until eval (F-3.6).
+/// Functions whose effective referenced ranges are not known until eval (F-3.6).
 pub const DYNAMIC_FUNCS: &[&str] = &["OFFSET", "INDIRECT"];
+
+const RESIZED_RANGE_FUNCS: &[&str] = &["SUMIF", "AVERAGEIF"];
 
 /// Precedents extracted from a formula AST.
 ///
@@ -40,7 +43,7 @@ pub struct Deps {
     pub tables: Vec<String>,
     /// True if a volatile function appears.
     pub volatile: bool,
-    /// True if `INDIRECT` / `OFFSET` appears.
+    /// True if a function with evaluation-resolved precedents appears.
     pub dynamic: bool,
 }
 
@@ -92,6 +95,14 @@ fn collect(expr: &Expr, inherited_sheet: Option<&SheetSpec>, deps: &mut Deps) {
             if DYNAMIC_FUNCS.iter().any(|v| *v == u) {
                 deps.dynamic = true;
             }
+            if RESIZED_RANGE_FUNCS.iter().any(|v| *v == u)
+                && args.get(2).and_then(Option::as_ref).is_some()
+            {
+                if collect_static_resized_range(args, inherited_sheet, deps) {
+                    return;
+                }
+                deps.dynamic = true;
+            }
             for arg in args.iter().flatten() {
                 collect(arg, inherited_sheet, deps);
             }
@@ -120,4 +131,76 @@ fn collect(expr: &Expr, inherited_sheet: Option<&SheetSpec>, deps: &mut Deps) {
         }
         ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Bool(_) | ExprKind::Error(_) => {}
     }
+}
+
+fn collect_static_resized_range(
+    args: &[Option<Expr>],
+    inherited_sheet: Option<&SheetSpec>,
+    deps: &mut Deps,
+) -> bool {
+    let Some(criteria) = args.first().and_then(Option::as_ref) else {
+        return false;
+    };
+    let Some(values) = args.get(2).and_then(Option::as_ref) else {
+        return false;
+    };
+    let Some((_, criteria_range)) = static_range(criteria, inherited_sheet) else {
+        return false;
+    };
+    let Some((values_sheet, values_range)) = static_range(values, inherited_sheet) else {
+        return false;
+    };
+    let Some(effective_range) = resize_from_top_left(criteria_range, values_range) else {
+        return false;
+    };
+
+    for (index, arg) in args.iter().enumerate() {
+        if index != 2
+            && let Some(arg) = arg
+        {
+            collect(arg, inherited_sheet, deps);
+        }
+    }
+    deps.ranges.push((values_sheet, effective_range));
+    true
+}
+
+fn static_range(
+    expr: &Expr,
+    inherited_sheet: Option<&SheetSpec>,
+) -> Option<(Option<SheetSpec>, RangeRef)> {
+    match &expr.kind {
+        ExprKind::Cell { sheet, cell } => Some((
+            sheet.clone().or_else(|| inherited_sheet.cloned()),
+            RangeRef::from_corners(*cell, *cell),
+        )),
+        ExprKind::Range { sheet, range } => {
+            Some((sheet.clone().or_else(|| inherited_sheet.cloned()), *range))
+        }
+        ExprKind::Paren(inner) => static_range(inner, inherited_sheet),
+        _ => None,
+    }
+}
+
+fn resize_from_top_left(criteria: RangeRef, values: RangeRef) -> Option<RangeRef> {
+    let rows = criteria.start.row.abs_diff(criteria.end.row) + 1;
+    let cols = u32::from(criteria.start.col.abs_diff(criteria.end.col)) + 1;
+    let start_row = values.start.row.min(values.end.row);
+    let start_col = values.start.col.min(values.end.col);
+    let end_row = start_row
+        .checked_add(rows - 1)
+        .filter(|row| *row < MAX_ROWS)?;
+    let end_col = u32::from(start_col)
+        .checked_add(cols - 1)
+        .filter(|col| *col < u32::from(MAX_COLS))
+        .and_then(|col| u16::try_from(col).ok())?;
+
+    let mut effective = values;
+    effective.start.row = start_row;
+    effective.start.col = start_col;
+    effective.end.row = end_row;
+    effective.end.col = end_col;
+    effective.whole_col = start_row == 0 && end_row == MAX_ROWS - 1;
+    effective.whole_row = start_col == 0 && end_col == MAX_COLS - 1;
+    Some(effective)
 }
