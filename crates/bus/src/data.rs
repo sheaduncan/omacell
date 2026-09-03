@@ -396,7 +396,7 @@ pub fn register_data_commands(registry: &mut CommandRegistry) -> Result<(), Core
         },
         filter_values,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "table.create",
             doc: "Create a table",

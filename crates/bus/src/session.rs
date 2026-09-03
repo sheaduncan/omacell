@@ -652,7 +652,9 @@ fn dispatch(
         let cmd = registry
             .get(&call.id)
             .ok_or_else(|| bus_error::unknown(call.id.as_str()))?;
-        let before = (cmd.descriptor.mutating && cmd.changeset_eligible).then(|| workbook.clone());
+        let before =
+            (cmd.descriptor.mutating && cmd.changeset_eligible && cmd.needs_snapshot_inverse())
+                .then(|| workbook.clone());
         let mut ctx =
             CommandContext::with_task(workbook, engine, origin, preflight, dry_run, task.clone());
         let mut effect = cmd.invoke(&mut ctx, call.args.clone())?;
@@ -748,5 +750,48 @@ fn emit_events(bus: &mut EventBus, effect: &Effect, extra_recalc: Option<Event>)
     }
     if let Some(event) = extra_recalc {
         bus.emit(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_frequency_commands_do_not_request_snapshot_inverses() {
+        let mut registry = CommandRegistry::new();
+        crate::commands::register_core(&mut registry).unwrap();
+        crate::edit::register_edit_commands(&mut registry).unwrap();
+
+        assert!(
+            !registry
+                .get_str("cell.set")
+                .unwrap()
+                .needs_snapshot_inverse()
+        );
+        assert!(
+            !registry
+                .get_str("style.set")
+                .unwrap()
+                .needs_snapshot_inverse()
+        );
+        assert!(
+            !registry
+                .get_str("format.bold")
+                .unwrap()
+                .needs_snapshot_inverse()
+        );
+        assert!(
+            registry
+                .get_str("edit.insert")
+                .unwrap()
+                .needs_snapshot_inverse()
+        );
+        assert!(
+            registry
+                .get_str("sheet.remove")
+                .unwrap()
+                .needs_snapshot_inverse()
+        );
     }
 }
