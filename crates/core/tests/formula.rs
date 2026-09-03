@@ -127,6 +127,22 @@ fn numeric_literals_remain_finite_and_stable_at_excel_boundary() {
 }
 
 #[test]
+fn numeric_whole_row_ranges_reject_invalid_endpoints_at_the_endpoint() {
+    for (source, offset) in [
+        ("=0:0", 1),
+        ("=1.5:2", 1),
+        ("=1:2.5", 3),
+        ("=1048577:1048577", 1),
+    ] {
+        let error = parse(source).expect_err("invalid whole-row endpoint");
+        assert_eq!(error.error.code, omacell_core::formula::codes::PARSE);
+        assert_eq!(error.offset, offset, "{source}");
+    }
+
+    assert!(parse("=1:1048576").is_ok());
+}
+
+#[test]
 fn structured_columns_use_excel_prefix_escapes() {
     for (formula, expected) in [
         ("=DeptSalesFYSummary['#OfItems]", "#OfItems"),

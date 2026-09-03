@@ -700,6 +700,15 @@ impl<'a> Parser<'a> {
                     vec![":".into()],
                 ));
             }
+            if let Some(offset) =
+                invalid_numeric_row_offset(&left).or_else(|| invalid_numeric_row_offset(&right))
+            {
+                return Err(ParseError::parse(
+                    format!("whole-row endpoint must be an integer from 1 through {MAX_ROWS}"),
+                    offset,
+                    vec!["row".into()],
+                ));
+            }
             if let Some(folded) = fold_range(&left, &right) {
                 return folded.map(|kind| Expr::new(kind, span));
             }
@@ -973,6 +982,15 @@ fn number_as_row(n: f64) -> Option<(u32, bool)> {
         None
     } else {
         Some((r - 1, false))
+    }
+}
+
+fn invalid_numeric_row_offset(expr: &Expr) -> Option<usize> {
+    match expr.kind {
+        ExprKind::Number(number) if number_as_row(number).is_none() => {
+            Some(expr.span.start as usize)
+        }
+        _ => None,
     }
 }
 
