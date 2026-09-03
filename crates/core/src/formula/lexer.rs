@@ -344,7 +344,7 @@ impl<'a> Lexer<'a> {
             }
             return Ok(TokenKind::ExternalBook(inner.to_string()));
         }
-        if inner.contains('.') {
+        if inner.contains('.') && !has_unescaped_open_bracket(inner) {
             return Err(ParseError::parse(
                 "external workbook missing sheet and '!'",
                 start,
@@ -816,6 +816,24 @@ fn scan_brackets(src: &str, start: usize) -> Option<(&str, usize)> {
         i += n;
     }
     None
+}
+
+fn has_unescaped_open_bracket(src: &str) -> bool {
+    let mut i = 0;
+    while i < src.len() {
+        if let Some(len) = column_escape_len(src, i) {
+            i += len;
+            continue;
+        }
+        let Some(ch) = src[i..].chars().next() else {
+            break;
+        };
+        if ch == '[' {
+            return true;
+        }
+        i += ch.len_utf8();
+    }
+    false
 }
 
 pub(crate) fn parse_structured(
