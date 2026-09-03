@@ -4,11 +4,13 @@
 //! optional rich-text runs. Styles are interned by value. Formula *source*
 //! is interned as [`FormulaId`]; parsing the AST is WP-03.
 
+use std::hash::{Hash, Hasher};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
+use smallvec::{Array, SmallVec};
 
 use crate::error::{CoreError, codes};
 use crate::limits::MAX_FORMULA_LEN;
@@ -136,6 +138,7 @@ struct FormulaEntry {
 pub struct StringInterner {
     entries: Vec<Option<StringEntry>>,
     by_plain: FxHashMap<Arc<str>, StrId>,
+    by_rich: FxHashMap<u64, SmallVec<[StrId; 1]>>,
     free: Vec<u32>,
 }
 
@@ -161,20 +164,29 @@ impl StringInterner {
         if runs.is_empty() {
             return self.intern(text);
         }
-        for (i, slot) in self.entries.iter_mut().enumerate() {
-            if let Some(entry) = slot
-                && entry.text.as_ref() == text
-                && entry.rich.as_deref() == Some(runs.as_slice())
-            {
-                entry.refs = entry.refs.saturating_add(1);
-                return StrId::new(i as u32);
-            }
+        let identity_hash = rich_identity_hash(text, &runs);
+        let existing = self.by_rich.get(&identity_hash).and_then(|candidates| {
+            candidates.iter().copied().find(|id| {
+                self.entries
+                    .get(id.index() as usize)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|entry| {
+                        entry.text.as_ref() == text
+                            && entry.rich.as_deref() == Some(runs.as_slice())
+                    })
+            })
+        });
+        if let Some(id) = existing {
+            self.add_ref(id);
+            return id;
         }
-        self.alloc(StringEntry {
+        let id = self.alloc(StringEntry {
             text: text.into(),
             rich: Some(runs.into()),
             refs: 1,
-        })
+        });
+        self.by_rich.entry(identity_hash).or_default().push(id);
+        id
     }
 
     fn alloc(&mut self, entry: StringEntry) -> StrId {
@@ -206,8 +218,11 @@ impl StringInterner {
             _ => false,
         };
         if recycle && let Some(entry) = self.entries[i].take() {
-            if entry.rich.is_none() {
-                self.by_plain.remove(&entry.text);
+            if let Some(runs) = &entry.rich {
+                let identity_hash = rich_identity_hash(&entry.text, runs);
+                remove_candidate(&mut self.by_rich, identity_hash, id);
+            } else {
+                self.by_plain.remove(entry.text.as_ref());
             }
             self.free.push(id.index());
         }
@@ -239,6 +254,7 @@ impl StringInterner {
         let mut n = self.entries.capacity() * size_of::<Option<StringEntry>>();
         n += self.free.capacity() * size_of::<u32>();
         n += hashmap_bytes(self.by_plain.capacity(), size_of::<(Arc<str>, StrId)>());
+        n += candidate_index_bytes(&self.by_rich);
         for e in self.entries.iter().flatten() {
             n += e.text.len();
             if let Some(rich) = &e.rich {
@@ -324,30 +340,37 @@ impl StyleInterner {
 #[derive(Clone, Debug, Default)]
 pub struct ArrayInterner {
     entries: Vec<Option<ArrayEntry>>,
+    by_value: FxHashMap<u64, SmallVec<[ArrayId; 1]>>,
     free: Vec<u32>,
 }
 
 impl ArrayInterner {
     /// Intern a payload.
     pub fn intern(&mut self, payload: ArrayPayload) -> ArrayId {
-        for (i, slot) in self.entries.iter_mut().enumerate() {
-            if let Some(entry) = slot
-                && entry.payload.shape == payload.shape
-                && entry.payload.values.as_ref() == payload.values.as_ref()
-            {
-                entry.refs = entry.refs.saturating_add(1);
-                return ArrayId::new(i as u32);
-            }
+        let identity_hash = array_identity_hash(&payload);
+        let existing = self.by_value.get(&identity_hash).and_then(|candidates| {
+            candidates.iter().copied().find(|id| {
+                self.entries
+                    .get(id.index() as usize)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|entry| entry.payload == payload)
+            })
+        });
+        if let Some(id) = existing {
+            self.add_ref(id);
+            return id;
         }
         let entry = ArrayEntry { payload, refs: 1 };
-        if let Some(i) = self.free.pop() {
+        let id = if let Some(i) = self.free.pop() {
             self.entries[i as usize] = Some(entry);
             ArrayId::new(i)
         } else {
             let i = self.entries.len() as u32;
             self.entries.push(Some(entry));
             ArrayId::new(i)
-        }
+        };
+        self.by_value.entry(identity_hash).or_default().push(id);
+        id
     }
 
     /// Increment the refcount.
@@ -367,8 +390,9 @@ impl ArrayInterner {
             }
             _ => false,
         };
-        if recycle {
-            self.entries[i] = None;
+        if recycle && let Some(entry) = self.entries[i].take() {
+            let identity_hash = array_identity_hash(&entry.payload);
+            remove_candidate(&mut self.by_value, identity_hash, id);
             self.free.push(id.index());
         }
     }
@@ -384,6 +408,7 @@ impl ArrayInterner {
     pub(crate) fn heap_bytes(&self) -> usize {
         let mut n = self.entries.capacity() * size_of::<Option<ArrayEntry>>();
         n += self.free.capacity() * 4;
+        n += candidate_index_bytes(&self.by_value);
         for e in self.entries.iter().flatten() {
             n += e.payload.values.len() * size_of::<Value>();
         }
@@ -515,6 +540,83 @@ pub(crate) fn hashmap_bytes(capacity: usize, slot: usize) -> usize {
     capacity.saturating_mul(slot.saturating_add(1))
 }
 
+fn rich_identity_hash(text: &str, runs: &[RichTextRun]) -> u64 {
+    let mut hasher = FxHasher::default();
+    text.hash(&mut hasher);
+    runs.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn array_identity_hash(payload: &ArrayPayload) -> u64 {
+    let mut hasher = FxHasher::default();
+    payload.shape.hash(&mut hasher);
+    for value in payload.values.iter().copied() {
+        hash_value(value, &mut hasher);
+    }
+    hasher.finish()
+}
+
+fn hash_value(value: Value, hasher: &mut impl Hasher) {
+    match value {
+        Value::Empty => 0_u8.hash(hasher),
+        Value::Number(number) => {
+            1_u8.hash(hasher);
+            let bits = if number == 0.0 { 0 } else { number.to_bits() };
+            bits.hash(hasher);
+        }
+        Value::Bool(boolean) => {
+            2_u8.hash(hasher);
+            boolean.hash(hasher);
+        }
+        Value::Text(id) => {
+            3_u8.hash(hasher);
+            id.hash(hasher);
+        }
+        Value::Error(error) => {
+            4_u8.hash(hasher);
+            error.hash(hasher);
+        }
+        Value::Array(id) => {
+            5_u8.hash(hasher);
+            id.hash(hasher);
+        }
+    }
+}
+
+fn remove_candidate<Candidates>(
+    index: &mut FxHashMap<u64, SmallVec<Candidates>>,
+    identity_hash: u64,
+    id: Candidates::Item,
+) where
+    Candidates: Array,
+    Candidates::Item: Copy + Eq,
+{
+    let empty = if let Some(candidates) = index.get_mut(&identity_hash) {
+        if let Some(position) = candidates.iter().position(|candidate| *candidate == id) {
+            candidates.swap_remove(position);
+        }
+        candidates.is_empty()
+    } else {
+        false
+    };
+    if empty {
+        index.remove(&identity_hash);
+    }
+}
+
+fn candidate_index_bytes<Candidates>(index: &FxHashMap<u64, SmallVec<Candidates>>) -> usize
+where
+    Candidates: Array,
+{
+    let buckets = hashmap_bytes(index.capacity(), size_of::<(u64, SmallVec<Candidates>)>());
+    buckets
+        + index
+            .values()
+            .filter(|candidates| candidates.spilled())
+            .map(|candidates| candidates.capacity() * size_of::<Candidates::Item>())
+            .sum::<usize>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,6 +633,98 @@ mod tests {
         assert_eq!(s.get(a), None);
         let c = s.intern("hello");
         assert_eq!(s.get(c), Some("hello"));
+    }
+
+    #[test]
+    fn rich_string_identity_and_recycled_ids_stay_consistent() {
+        let mut s = StringInterner::default();
+        let bold = RichTextRun {
+            start: 0,
+            len: 4,
+            font: Font {
+                bold: true,
+                ..Font::default()
+            },
+        };
+        let italic = RichTextRun {
+            font: Font {
+                italic: true,
+                ..Font::default()
+            },
+            ..bold.clone()
+        };
+
+        let first = s.intern_rich("rich", vec![bold.clone()]);
+        let duplicate = s.intern_rich("rich", vec![bold.clone()]);
+        let different_runs = s.intern_rich("rich", vec![italic]);
+        assert_eq!(first, duplicate);
+        assert_ne!(first, different_runs);
+
+        s.release(first);
+        s.release(duplicate);
+        let replacement = s.intern_rich("next", vec![bold.clone()]);
+        assert_eq!(replacement, first, "the released id should be recycled");
+
+        let original_again = s.intern_rich("rich", vec![bold]);
+        assert_ne!(original_again, replacement);
+        assert_eq!(s.get(replacement), Some("next"));
+        assert_eq!(s.get(original_again), Some("rich"));
+    }
+
+    #[test]
+    fn array_identity_preserves_float_and_shape_semantics() {
+        let mut arrays = ArrayInterner::default();
+        let row = Array2D::new(1, 2).unwrap();
+        let column = Array2D::new(2, 1).unwrap();
+
+        let positive_zero = arrays
+            .intern(ArrayPayload::new(row, vec![Value::Number(0.0), Value::Bool(true)]).unwrap());
+        let negative_zero = arrays
+            .intern(ArrayPayload::new(row, vec![Value::Number(-0.0), Value::Bool(true)]).unwrap());
+        let different_shape = arrays.intern(
+            ArrayPayload::new(column, vec![Value::Number(0.0), Value::Bool(true)]).unwrap(),
+        );
+        let different_value = arrays
+            .intern(ArrayPayload::new(row, vec![Value::Number(0.0), Value::Bool(false)]).unwrap());
+
+        assert_eq!(positive_zero, negative_zero);
+        assert_ne!(positive_zero, different_shape);
+        assert_ne!(positive_zero, different_value);
+
+        let nan_one = arrays.intern(
+            ArrayPayload::new(Array2D::new(1, 1).unwrap(), vec![Value::Number(f64::NAN)]).unwrap(),
+        );
+        let nan_two = arrays.intern(
+            ArrayPayload::new(Array2D::new(1, 1).unwrap(), vec![Value::Number(f64::NAN)]).unwrap(),
+        );
+        assert_ne!(nan_one, nan_two);
+    }
+
+    #[test]
+    fn array_recycled_ids_do_not_leave_stale_identity() {
+        let mut arrays = ArrayInterner::default();
+        let shape = Array2D::new(1, 1).unwrap();
+        let original_payload = ArrayPayload::new(shape, vec![Value::Number(1.0)]).unwrap();
+
+        let first = arrays.intern(original_payload.clone());
+        let duplicate = arrays.intern(original_payload.clone());
+        assert_eq!(first, duplicate);
+        arrays.release(first);
+        arrays.release(duplicate);
+
+        let replacement =
+            arrays.intern(ArrayPayload::new(shape, vec![Value::Number(2.0)]).unwrap());
+        assert_eq!(replacement, first, "the released id should be recycled");
+        let original_again = arrays.intern(original_payload);
+        assert_ne!(original_again, replacement);
+        assert_eq!(
+            arrays.get(replacement).map(|payload| payload.values[0]),
+            Some(Value::Number(2.0))
+        );
+        assert_eq!(
+            arrays.get(original_again).map(|payload| payload.values[0]),
+            Some(Value::Number(1.0))
+        );
     }
 
     #[test]
