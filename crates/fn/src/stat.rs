@@ -1139,7 +1139,7 @@ fn frequency_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Err(e) => return RuntimeValue::error(e),
     };
     let bins = match collect_numbers(ctx, std::slice::from_ref(bins_arg)) {
-        Ok(v) => sorted(v),
+        Ok(v) => v,
         Err(e) => return RuntimeValue::error(e),
     };
     if bins.is_empty() {
@@ -1154,10 +1154,27 @@ fn frequency_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     if omacell_core::eval::RuntimeArray::checked_len(rows, 1).is_err() {
         return RuntimeValue::error(ErrorKind::Num);
     }
+    let mut indexed_bins: Vec<(f64, usize)> = bins
+        .into_iter()
+        .enumerate()
+        .map(|(index, bound)| (bound, index))
+        .collect();
+    indexed_bins.sort_by(|(left_bound, left_index), (right_bound, right_index)| {
+        if left_bound < right_bound {
+            std::cmp::Ordering::Less
+        } else if left_bound > right_bound {
+            std::cmp::Ordering::Greater
+        } else {
+            left_index.cmp(right_index)
+        }
+    });
     let mut counts = vec![0.0; count_len];
     for x in data {
-        let bin = bins.partition_point(|bound| *bound < x);
-        if let Some(count) = counts.get_mut(bin) {
+        let sorted_index = indexed_bins.partition_point(|(bound, _)| *bound < x);
+        let output_index = indexed_bins
+            .get(sorted_index)
+            .map_or(count_len - 1, |(_, original_index)| *original_index);
+        if let Some(count) = counts.get_mut(output_index) {
             *count += 1.0;
         }
     }

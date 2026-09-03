@@ -187,6 +187,19 @@
   run the complete function/core suites and strict Clippy, then run exact
   `just check` and reconcile this report.
 
+### 2026-09-03 FREQUENCY bin-order plan (written before coding)
+
+- Add failing corpus rows first for two unsorted bin permutations. Assert that
+  each interval count appears at its bin's original output position and that
+  the final overflow count remains last.
+- Pair each bin boundary with its original index, order those pairs only for
+  binary-search classification, and increment the count at the matched bin's
+  original index.
+- Preserve empty-bin, error, spill-shape, and sorted-bin behavior; retain the
+  existing O(data log bins) classification, public interfaces, and
+  dependencies. Run the complete function/core suites and strict Clippy, then
+  run exact `just check` and reconcile this report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -320,6 +333,11 @@ The 2026-09-03 math error-classification follow-up returns `#DIV/0!` when
 `POWER` raises zero to a negative exponent or `LOG` uses base one. Other
 domain errors retain `#NUM!`, including `POWER(0,0)`, negative bases with a
 fractional exponent, and `LOG` with a nonpositive number or base.
+
+The 2026-09-03 `FREQUENCY` follow-up retains each bin's original output
+position when classifying unsorted boundaries. It orders indexed boundaries
+for binary search, then charges a match to the boundary's original index;
+equal boundaries remain stable and the overflow count remains last.
 
 ## Interfaces exposed (for dependents)
 
@@ -541,11 +559,35 @@ Host: rustc 1.98.0, Linux.
     documentation supplies the argument contracts; the Office
     [`POWER(0,0)` extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/11087d65-0fe1-44c6-bbeb-61380bc34bad)
     supports retaining Omacell's existing `#NUM!` control.
+- 2026-09-03 `FREQUENCY` bin-order test-first evidence:
+  - The test-first unsorted case initially returned sorted-boundary counts
+    `{2;2;1;1}` instead of `{1;2;2;1}`. It now retains the input bin positions;
+    a second permutation returns `{1;2;1;0}` rather than sorted-order
+    `{2;1;1;0}`.
+  - Existing sorted, empty-bin, error-propagation, tie, and overflow cases
+    remain green.
+  - Classification remains O(data log bins): bins are indexed and ordered
+    once, then each data value uses `partition_point` and writes directly to
+    its original output position.
+  - The complete function/core suites pass (22 function integration tests, 73
+    core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - The optional LibreOffice cross-check skipped because Calc conversion was
+    unavailable in its sandboxed run; no runtime or test dependency was
+    introduced.
+  - The original-position behavior follows the independently verified Excel
+    audit case and the OASIS
+    [OpenFormula `FREQUENCY` semantics](https://docs.oasis-open.org/office/v1.2/cos01/OpenDocument-v1.2-cos01-part2.html);
+    Microsoft's [`FREQUENCY`](https://support.microsoft.com/en-us/excel/functions/frequency-function)
+    documentation defines the inclusive bins and final overflow element.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1582** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1584** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -593,6 +635,9 @@ Host: rustc 1.98.0, Linux.
 13. **Resolved 2026-09-03:** division-singularity cases use `#DIV/0!` for
     `POWER(0, negative)` and `LOG(number,1)`, while other invalid real-domain
     inputs continue to use `#NUM!`.
+14. **Resolved 2026-09-03:** `FREQUENCY` may order boundaries internally for
+    classification, but interval counts are returned in the bins' original
+    order; the overflow count remains the final element.
 
 ## RFC (only if a frozen contract changed)
 
@@ -622,6 +667,9 @@ The exclusive-percentile endpoint follow-up changes no public signature or
 frozen contract.
 
 The math error-classification follow-up changes no public signature or frozen
+contract.
+
+The `FREQUENCY` bin-order follow-up changes no public signature or frozen
 contract.
 
 ## Checklist
