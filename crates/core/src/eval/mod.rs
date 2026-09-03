@@ -1345,13 +1345,15 @@ fn eval_prefix(ctx: &mut EvalCtx<'_>, op: PrefixOp, expr: &Expr) -> RuntimeValue
     match op {
         PrefixOp::Minus => {
             let raw = eval_expr(ctx, expr);
+            let origin = operand_origin(expr, &raw);
             let v = materialize_value(ctx, raw);
-            ops::unary_minus(v)
+            ops::unary_minus(v, ctx.locale(), origin)
         }
         PrefixOp::Plus => {
             let raw = eval_expr(ctx, expr);
+            let origin = operand_origin(expr, &raw);
             let v = materialize_value(ctx, raw);
-            ops::unary_plus(v)
+            ops::unary_plus(v, ctx.locale(), origin)
         }
         PrefixOp::ImplicitIntersect => {
             let v = eval_expr(ctx, expr);
@@ -1364,8 +1366,9 @@ fn eval_postfix(ctx: &mut EvalCtx<'_>, expr: &Expr, op: PostfixOp) -> RuntimeVal
     match op {
         PostfixOp::Percent => {
             let raw = eval_expr(ctx, expr);
+            let origin = operand_origin(expr, &raw);
             let v = materialize_value(ctx, raw);
-            ops::percent(v)
+            ops::percent(v, ctx.locale(), origin)
         }
         PostfixOp::Spill => {
             let v = eval_expr(ctx, expr);
@@ -1414,14 +1417,35 @@ fn eval_binary(ctx: &mut EvalCtx<'_>, op: BinOp, left: &Expr, right: &Expr) -> R
         BinOp::Union => union_op(ctx, left, right),
         other => {
             let left_v = eval_expr(ctx, left);
+            let left_origin = operand_origin(left, &left_v);
             let l = materialize_value(ctx, left_v);
             if let Some(e) = l.error_kind() {
                 return RuntimeValue::error(e);
             }
             let right_v = eval_expr(ctx, right);
+            let right_origin = operand_origin(right, &right_v);
             let r = materialize_value(ctx, right_v);
-            ops::binary(other, l, r)
+            ops::binary(other, l, r, ctx.locale(), left_origin, right_origin)
         }
+    }
+}
+
+fn operand_origin(expr: &Expr, value: &RuntimeValue) -> ops::OperandOrigin {
+    if matches!(value, RuntimeValue::Ref(_)) || is_implicit_intersection(expr) {
+        ops::OperandOrigin::Reference
+    } else {
+        ops::OperandOrigin::Expression
+    }
+}
+
+fn is_implicit_intersection(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Prefix {
+            op: PrefixOp::ImplicitIntersect,
+            ..
+        } => true,
+        ExprKind::Paren(inner) => is_implicit_intersection(inner),
+        _ => false,
     }
 }
 

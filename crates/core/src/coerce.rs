@@ -8,6 +8,9 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::error::ErrorKind;
+use crate::locale::LocaleId;
+
+const MAX_NUMERIC_TEXT_LEN: usize = 32_767;
 
 /// A scalar runtime value (arrays and lambdas live in [`crate::eval::RuntimeValue`]).
 #[derive(Clone, Debug)]
@@ -73,28 +76,156 @@ pub fn first_error(left: &Scalar, right: &Scalar) -> Option<ErrorKind> {
     left.error().or_else(|| right.error())
 }
 
-/// Parse Excel-ish numeric text. Leading/trailing space is ignored; empty
-/// (after trim) is 0. Thousands separators are not accepted.
+/// Parse en-US Excel numeric text used by formula coercion.
+///
+/// Leading/trailing space is ignored. Empty and boolean text are not numeric;
+/// en-US grouping, currency, percentage, decimal, and exponent syntax are
+/// accepted. Input is bounded to 32,767 bytes.
 #[must_use]
 pub fn parse_numeric_text(s: &str) -> Option<f64> {
-    let t = s.trim();
-    if t.is_empty() {
-        return Some(0.0);
-    }
-    if t.eq_ignore_ascii_case("TRUE") {
-        return Some(1.0);
-    }
-    if t.eq_ignore_ascii_case("FALSE") {
-        return Some(0.0);
-    }
-    // Reject commas / currency — those are locale-formatted, not raw numeric text.
-    if t.bytes().any(|b| b == b',' || b == b'$' || b == b'%') {
-        return None;
-    }
-    t.parse::<f64>().ok().filter(|n| n.is_finite())
+    parse_numeric_text_with_locale(s, LocaleId::EN_US)
 }
 
-/// Coerce to a number for arithmetic (empty → 0, bool → 0/1, numeric text).
+pub(crate) fn parse_numeric_text_with_locale(s: &str, locale: LocaleId) -> Option<f64> {
+    if s.len() > MAX_NUMERIC_TEXT_LEN {
+        return None;
+    }
+    let mut text = s.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    let mut negative = false;
+    let mut signed = false;
+    if text.starts_with('(') && text.ends_with(')') {
+        negative = true;
+        text = text.get(1..text.len().saturating_sub(1))?.trim();
+    }
+
+    let mut percent = false;
+    if let Some(rest) = text.strip_suffix('%') {
+        percent = true;
+        text = rest.trim_end();
+    }
+    consume_sign(&mut text, &mut negative, &mut signed)?;
+
+    let currency = locale.info().currency;
+    if let Some(rest) = text.strip_prefix(currency) {
+        text = rest.trim_start();
+    } else if let Some(rest) = text.strip_suffix(currency) {
+        text = rest.trim_end();
+    }
+    consume_sign(&mut text, &mut negative, &mut signed)?;
+    if text.is_empty() {
+        return None;
+    }
+
+    let (mantissa, exponent) = split_exponent(text)?;
+    let separators = locale.separators();
+    let (integer, fraction) = match mantissa.split_once(separators.decimal) {
+        Some((integer, fraction)) if !fraction.contains(separators.decimal) => {
+            (integer, Some(fraction))
+        }
+        Some(_) => return None,
+        None => (mantissa, None),
+    };
+    let integer = normalize_integer(integer, separators.thousands)?;
+    let fraction = fraction.unwrap_or("");
+    if !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        || integer.is_empty() && fraction.is_empty()
+    {
+        return None;
+    }
+
+    let mut normalized = String::with_capacity(text.len().saturating_add(2));
+    if negative {
+        normalized.push('-');
+    }
+    if integer.is_empty() {
+        normalized.push('0');
+    } else {
+        normalized.push_str(&integer);
+    }
+    if fraction.is_empty() {
+        if mantissa.contains(separators.decimal) {
+            normalized.push('.');
+        }
+    } else {
+        normalized.push('.');
+        normalized.push_str(fraction);
+    }
+    if let Some(exponent) = exponent {
+        normalized.push('e');
+        normalized.push_str(exponent);
+    }
+
+    let mut number = normalized.parse::<f64>().ok()?;
+    if percent {
+        number /= 100.0;
+    }
+    number.is_finite().then_some(number)
+}
+
+fn consume_sign(text: &mut &str, negative: &mut bool, signed: &mut bool) -> Option<()> {
+    if let Some(rest) = text.strip_prefix('-') {
+        if *signed || *negative {
+            return None;
+        }
+        *negative = true;
+        *signed = true;
+        *text = rest.trim_start();
+    } else if let Some(rest) = text.strip_prefix('+') {
+        if *signed || *negative {
+            return None;
+        }
+        *signed = true;
+        *text = rest.trim_start();
+    }
+    Some(())
+}
+
+fn split_exponent(text: &str) -> Option<(&str, Option<&str>)> {
+    let mut split = text.split(['e', 'E']);
+    let mantissa = split.next()?;
+    let exponent = split.next();
+    if split.next().is_some() {
+        return None;
+    }
+    if let Some(exponent) = exponent {
+        let digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+    }
+    Some((mantissa, exponent))
+}
+
+fn normalize_integer(integer: &str, group: char) -> Option<String> {
+    if !integer.contains(group) {
+        return integer
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| integer.to_string());
+    }
+    let mut groups = integer.split(group);
+    let first = groups.next()?;
+    if first.is_empty() || first.len() > 3 || !first.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let mut normalized = first.to_string();
+    for digits in groups {
+        if digits.len() != 3 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        normalized.push_str(digits);
+    }
+    Some(normalized)
+}
+
+/// Coerce a scalar function argument to a number.
+///
+/// Empty and empty text become 0, booleans become 0/1, and numeric text uses
+/// en-US syntax. Formula operators apply stricter, origin-aware text rules.
 pub fn to_number(s: &Scalar) -> Result<f64, ErrorKind> {
     match s {
         Scalar::Empty => Ok(0.0),
@@ -102,6 +233,7 @@ pub fn to_number(s: &Scalar) -> Result<f64, ErrorKind> {
         Scalar::Number(_) => Err(ErrorKind::Num),
         Scalar::Bool(true) => Ok(1.0),
         Scalar::Bool(false) => Ok(0.0),
+        Scalar::Text(t) if t.trim().is_empty() => Ok(0.0),
         Scalar::Text(t) => parse_numeric_text(t).ok_or(ErrorKind::Value),
         Scalar::Error(e) => Err(*e),
     }
@@ -115,7 +247,7 @@ pub fn to_text(s: &Scalar) -> Result<Arc<str>, ErrorKind> {
             if !n.is_finite() {
                 return Err(ErrorKind::Num);
             }
-            Ok(Arc::from(crate::numfmt::general(*n)))
+            Ok(Arc::from(crate::numfmt::general_for_width(*n, 24)))
         }
         Scalar::Bool(true) => Ok(Arc::from("TRUE")),
         Scalar::Bool(false) => Ok(Arc::from("FALSE")),
@@ -329,6 +461,37 @@ mod tests {
     fn numeric_text_arithmetic_not_comparison() {
         assert_eq!(to_number(&t("1")).unwrap(), 1.0);
         assert!(!compare_op(CmpOp::Eq, &t("1"), &Scalar::Number(1.0)).unwrap());
+    }
+
+    #[test]
+    fn numeric_text_rejects_empty_and_boolean_words() {
+        assert_eq!(parse_numeric_text(""), None);
+        assert_eq!(parse_numeric_text("  "), None);
+        assert_eq!(to_number(&t("")), Ok(0.0));
+        assert_eq!(to_number(&t("TRUE")), Err(ErrorKind::Value));
+        assert_eq!(to_number(&t("false")), Err(ErrorKind::Value));
+    }
+
+    #[test]
+    fn numeric_text_accepts_en_us_group_currency_and_percent() {
+        assert_eq!(to_number(&t("1,234.5")).unwrap(), 1234.5);
+        assert_eq!(to_number(&t("$5")).unwrap(), 5.0);
+        assert_eq!(to_number(&t("5%")).unwrap(), 0.05);
+        assert_eq!(parse_numeric_text("12,34"), None);
+    }
+
+    #[test]
+    fn numeric_text_input_is_bounded() {
+        let oversized = "0".repeat(MAX_NUMERIC_TEXT_LEN + 1);
+        assert_eq!(parse_numeric_text(&oversized), None);
+    }
+
+    #[test]
+    fn number_to_text_keeps_formula_precision() {
+        assert_eq!(
+            to_text(&Scalar::Number(1.0 / 3.0)).unwrap().as_ref(),
+            "0.333333333333333"
+        );
     }
 
     #[test]
