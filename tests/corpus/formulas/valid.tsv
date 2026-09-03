@@ -439,6 +439,8 @@
 =Table1[#All]	=Table1[#All]	a1	single-bracket #All specifier
 =Table1[[#All]]	=Table1[[#All]]	a1	double-bracket #All specifier
 =[Col]	=[Col]	a1	unqualified column (formula in the table)
+=[[Amt.USD]]	=[[Amt.USD]]	a1	Microsoft: a period in an unqualified column header requires nested brackets
+=[@[Amt.USD]]	=[@[Amt.USD]]	a1	Microsoft: this-row reference to a dotted column uses nested brackets
 =Table1[]	=Table1[]	a1	Table[] means the data body
 =Sales[[#Headers],[Amount]]	=Sales[[#Headers],[Amount]]	a1	Sales headers Amount
 =Table1[[#Data],[Col1]:[Col2]]	=Table1[[#Data],[Col1]:[Col2]]	a1	data body column span

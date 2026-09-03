@@ -97,6 +97,7 @@
 =Table1[[#Nope]]	1	formula.parse	unknown structured specifier #Nope
 =Table1[[[]]	1	formula.parse	unbalanced nested brackets
 =[@Col	1	formula.parse	unclosed [@Col]
+=[@Amt.USD]	1	formula.parse	Microsoft: a period in a column header requires the extra inner brackets
 =Table1[Col][	12	formula.parse	second [ after a finished structured ref
 ={1,2;3,4	9	formula.parse	unclosed 2x2 array
 ={1 2;3 4}	4	formula.parse	spaces instead of commas in array
