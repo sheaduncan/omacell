@@ -200,6 +200,21 @@
   dependencies. Run the complete function/core suites and strict Clippy, then
   run exact `just check` and reconcile this report.
 
+### 2026-09-03 array error-handler plan (written before coding)
+
+- Add failing `IFERROR` and `IFNA` corpus rows first for mixed result arrays,
+  scalar and array fallbacks, unhandled error kinds, and an unused failing
+  fallback. Add a sheet-range integration regression that verifies the
+  element-wise results spill into cells.
+- Materialize the checked value once. Preserve the scalar path; for an array,
+  scan for a handled error before evaluating the fallback, then replace only
+  handled cells using the existing scalar/singleton array broadcasting rules.
+  `IFNA` handles only `#N/A`; `IFERROR` handles every cell error.
+- Remove the existing panicking argument access from both handlers. Preserve
+  lazy evaluation, validated array bounds, public interfaces, and dependencies;
+  run the complete function/core suites and strict Clippy, then run exact
+  `just check` and reconcile this report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -338,6 +353,13 @@ The 2026-09-03 `FREQUENCY` follow-up retains each bin's original output
 position when classifying unsorted boundaries. It orders indexed boundaries
 for binary search, then charges a match to the boundary's original index;
 equal boundaries remain stable and the overflow count remains last.
+
+The 2026-09-03 array error-handler follow-up makes `IFERROR` and `IFNA`
+replace handled errors cell by cell when their checked value is an array.
+`IFERROR` handles every cell error, while `IFNA` handles only `#N/A` and
+preserves other errors in place. A fallback is evaluated once only when at
+least one cell needs it, then uses the existing scalar and singleton-dimension
+broadcasting rules. The shared path also removes panicking argument access.
 
 ## Interfaces exposed (for dependents)
 
@@ -583,11 +605,33 @@ Host: rustc 1.98.0, Linux.
     [OpenFormula `FREQUENCY` semantics](https://docs.oasis-open.org/office/v1.2/cos01/OpenDocument-v1.2-cos01-part2.html);
     Microsoft's [`FREQUENCY`](https://support.microsoft.com/en-us/excel/functions/frequency-function)
     documentation defines the inclusive bins and final overflow element.
+- 2026-09-03 array error-handler test-first evidence:
+  - Four mixed-array corpus cases initially left handled errors unchanged.
+    `IFERROR({1,#N/A,3},0)` now returns `{1,0,3}`, and `IFNA` replaces only
+    `#N/A` while retaining a neighboring `#DIV/0!`. Array fallbacks select the
+    matching cell.
+  - Two controls prove an unused failing fallback remains unevaluated when an
+    array contains no error handled by the selected function.
+  - A sheet-range integration regression spills `IFERROR(A1:A3,0)` as
+    `1, 0, 0` and `IFNA(A1:A3,0)` as `1, 0, #DIV/0!`.
+  - The complete function/core suites pass (23 function integration tests, 73
+    core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - The optional LibreOffice cross-check skipped because Calc conversion was
+    unavailable in its sandboxed run; no runtime or test dependency was
+    introduced.
+  - Per-cell array behavior follows Microsoft's
+    [`IFERROR`](https://support.microsoft.com/en-us/excel/functions/iferror-function)
+    and [`IFNA`](https://support.microsoft.com/en-us/excel/functions/ifna-function)
+    documentation; `IFNA` retains its narrower error selection.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1584** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1590** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -638,6 +682,9 @@ Host: rustc 1.98.0, Linux.
 14. **Resolved 2026-09-03:** `FREQUENCY` may order boundaries internally for
     classification, but interval counts are returned in the bins' original
     order; the overflow count remains the final element.
+15. **Resolved 2026-09-03:** array-valued `IFERROR` and `IFNA` replace handled
+    errors per cell. Their fallback stays lazy when no array cell needs it;
+    `IFNA` leaves non-`#N/A` errors unchanged.
 
 ## RFC (only if a frozen contract changed)
 
@@ -670,6 +717,9 @@ The math error-classification follow-up changes no public signature or frozen
 contract.
 
 The `FREQUENCY` bin-order follow-up changes no public signature or frozen
+contract.
+
+The array error-handler follow-up changes no public signature or frozen
 contract.
 
 ## Checklist

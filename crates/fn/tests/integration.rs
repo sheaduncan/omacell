@@ -80,6 +80,29 @@ fn array_if_selects_and_broadcasts_cells_without_evaluating_unused_branches() {
 }
 
 #[test]
+fn array_error_handlers_replace_cells_and_preserve_unhandled_errors() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_number(sheet, 0, 0, 1.0).unwrap();
+    wb.set_formula_text(sheet, 1, 0, "=NA()").unwrap();
+    wb.set_formula_text(sheet, 2, 0, "=1/0").unwrap();
+    wb.set_formula_text(sheet, 0, 2, "=IFERROR(A1:A3,0)")
+        .unwrap();
+    wb.set_formula_text(sheet, 0, 3, "=IFNA(A1:A3,0)").unwrap();
+
+    let mut engine = engine();
+    engine.recalc_full(&mut wb);
+
+    assert_eq!(display(&wb, 0, 2), "1");
+    assert_eq!(display(&wb, 1, 2), "0");
+    assert_eq!(display(&wb, 2, 2), "0");
+    assert_eq!(display(&wb, 0, 3), "1");
+    assert_eq!(display(&wb, 1, 3), "0");
+    assert_eq!(display(&wb, 2, 3), "#DIV/0!");
+}
+
+#[test]
 fn let_bindings_keep_error_values_for_error_handlers() {
     let mut wb = Workbook::new();
     let sheet = wb.active_sheet();
