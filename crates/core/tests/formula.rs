@@ -95,6 +95,20 @@ fn excel_unary_precedence_shapes_the_ast() {
 }
 
 #[test]
+fn numeric_literals_remain_finite_and_stable_at_excel_boundary() {
+    let parsed = parse("=1.7976931348623158e308").expect("largest formula result");
+    let ExprKind::Number(number) = parsed.ast.kind else {
+        panic!("expected a numeric literal");
+    };
+    assert_eq!(number, f64::MAX);
+    assert!(number.is_finite());
+
+    let canonical = print(&parsed);
+    let reparsed = parse(&canonical).expect("canonical maximum must reparse");
+    assert_eq!(print(&reparsed), canonical);
+}
+
+#[test]
 fn structured_columns_use_excel_prefix_escapes() {
     for (formula, expected) in [
         ("=DeptSalesFYSummary['#OfItems]", "#OfItems"),

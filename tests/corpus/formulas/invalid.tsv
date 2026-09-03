@@ -30,6 +30,8 @@
 =1e	1	formula.parse	incomplete scientific exponent
 =1e+	1	formula.parse	incomplete scientific exponent after sign
 =1e-	1	formula.parse	incomplete scientific exponent after minus
+=1e400	1	formula.parse	Microsoft formula limit is finite; overflow must not become an inf identifier on print
+=-1e400	2	formula.parse	negative overflow is rejected at its numeric token before unary negation
 =.	1	formula.parse	bare dot is not a number
 =.e3	1	formula.parse	dot without digits then exponent
 ="unterminated	1	formula.parse	unterminated string
