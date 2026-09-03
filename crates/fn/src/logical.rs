@@ -169,6 +169,13 @@ fn eval_one(ctx: &mut EvalCtx<'_>, expr: &Option<Expr>) -> RuntimeValue {
     }
 }
 
+fn eval_at(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>], index: usize) -> RuntimeValue {
+    match args.get(index) {
+        Some(expr) => eval_one(ctx, expr),
+        None => RuntimeValue::Scalar(Scalar::Empty),
+    }
+}
+
 fn as_bool_scalar(ctx: &mut EvalCtx<'_>, v: RuntimeValue) -> Result<bool, ErrorKind> {
     match ctx.materialize(v) {
         RuntimeValue::Scalar(s) => coerce::to_bool(&s),
@@ -364,20 +371,56 @@ fn switch_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
 }
 
 fn iferror_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
-    let value = eval_one(ctx, args.first().unwrap_or(&None));
-    if value.error_kind().is_some() {
-        eval_one(ctx, args.get(1).unwrap_or(&None))
-    } else {
-        value
-    }
+    error_handler_impl(ctx, args, |_| true)
 }
 
 fn ifna_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
-    let value = eval_one(ctx, args.first().unwrap_or(&None));
-    if value.error_kind() == Some(ErrorKind::Na) {
-        eval_one(ctx, args.get(1).unwrap_or(&None))
-    } else {
-        value
+    error_handler_impl(ctx, args, |error| error == ErrorKind::Na)
+}
+
+fn error_handler_impl(
+    ctx: &mut EvalCtx<'_>,
+    args: &[Option<Expr>],
+    handles: impl Fn(ErrorKind) -> bool,
+) -> RuntimeValue {
+    let evaluated = eval_at(ctx, args, 0);
+    match ctx.materialize(evaluated) {
+        RuntimeValue::Scalar(scalar) => match scalar.error() {
+            Some(error) if handles(error) => eval_at(ctx, args, 1),
+            _ => RuntimeValue::Scalar(scalar),
+        },
+        RuntimeValue::Array(array) => {
+            if let Err(error) = array.validate() {
+                return RuntimeValue::error(error);
+            }
+            let needs_fallback = array
+                .values
+                .iter()
+                .any(|scalar| scalar.error().is_some_and(&handles));
+            if !needs_fallback {
+                return RuntimeValue::Array(array);
+            }
+
+            let fallback = eval_at(ctx, args, 1);
+            let fallback = ctx.materialize(fallback);
+            if let Err(error) = value_shape(&fallback) {
+                return RuntimeValue::error(error);
+            }
+            let cols = array.cols as usize;
+            let mut values = Vec::with_capacity(array.values.len());
+            for (index, scalar) in array.values.iter().enumerate() {
+                if scalar.error().is_some_and(&handles) {
+                    let row = (index / cols) as u32;
+                    let col = (index % cols) as u32;
+                    values.push(value_at(&fallback, row, col));
+                } else {
+                    values.push(scalar.clone());
+                }
+            }
+            RuntimeValue::array(array.rows, array.cols, values)
+        }
+        RuntimeValue::Lambda(lambda) => RuntimeValue::Lambda(lambda),
+        RuntimeValue::Ref(reference) => RuntimeValue::Ref(reference),
     }
 }
 
