@@ -36,6 +36,10 @@ name = "iteration"
 harness = false
 
 [[bench]]
+name = "intern"
+harness = false
+
+[[bench]]
 name = "parse_formula"
 harness = false
 
