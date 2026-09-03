@@ -5,9 +5,12 @@ use std::io::{Cursor, Read, Write};
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::{RecalcEngine, format_cell};
 use omacell_core::value::Value;
-use omacell_io::xlsx::{open_bytes, save_workbook_bytes};
+use omacell_io::xlsx::{open_bytes, save_bytes, save_workbook_bytes};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
+
+#[path = "../../../tests/support/libreoffice.rs"]
+mod libreoffice;
 
 #[test]
 fn unparsable_formula_becomes_text_with_warning() {
@@ -121,6 +124,115 @@ fn legacy_array_formula_range_recalculates_and_round_trips() {
             .array_formula_at(1, 1)
             .is_some()
     );
+}
+
+#[test]
+fn worksheet_extensions_keep_registered_containers_and_revision_namespace() {
+    let sheet = br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+ xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"
+ xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision">
+ <sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row></sheetData>
+ <autoFilter ref="A1:A2" xr:uid="{11111111-1111-1111-1111-111111111111}"/>
+ <extLst>
+  <ext uri="{78C0D931-6437-407D-A8EE-F0AAD7539E65}">
+   <x14:conditionalFormattings><x14:conditionalFormatting>
+    <x14:cfRule type="dataBar" priority="1"><x14:dataBar><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:fillColor rgb="FF638EC6"/></x14:dataBar></x14:cfRule>
+    <xm:sqref>A1:A2</xm:sqref>
+   </x14:conditionalFormatting></x14:conditionalFormattings>
+  </ext>
+  <ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}">
+   <x14:dataValidations count="1"><x14:dataValidation type="list" allowBlank="1">
+    <x14:formula1><xm:f>Sheet2!$A$1:$A$2</xm:f></x14:formula1><xm:sqref>A1</xm:sqref>
+   </x14:dataValidation></x14:dataValidations>
+  </ext>
+  <ext uri="{05C60535-1F16-4FD2-B633-F4F36F0B64E0}">
+   <x14:sparklineGroups><x14:sparklineGroup><x14:sparklines><x14:sparkline>
+    <xm:f>Sheet1!A1:A2</xm:f><xm:sqref>B1</xm:sqref>
+   </x14:sparkline></x14:sparklines></x14:sparklineGroup></x14:sparklineGroups>
+  </ext>
+ </extLst>
+</worksheet>"#;
+    let doc = open_bytes(&package_with_sheet(sheet)).unwrap();
+    let saved = save_bytes(&doc).unwrap();
+    let reopened = open_bytes(&saved).unwrap();
+    let xml = std::str::from_utf8(
+        &reopened
+            .package
+            .part("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+
+    assert!(
+        xml.contains(
+            r#"xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision""#
+        )
+    );
+    assert!(xml.contains(r#"mc:Ignorable="xr""#));
+    assert!(xml.contains(
+        r#"<extLst><ext uri="{78C0D931-6437-407D-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting"#
+    ));
+    assert!(xml.contains(
+        r#"</x14:conditionalFormattings></ext><ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}"><x14:dataValidations"#
+    ));
+    assert!(xml.contains(
+        r#"</x14:dataValidations></ext><ext uri="{05C60535-1F16-4FD2-B633-F4F36F0B64E0}"><x14:sparklineGroups"#
+    ));
+    assert!(xml.ends_with("</x14:sparklineGroups></ext></extLst></worksheet>"));
+
+    let saved_again = save_bytes(&reopened).unwrap();
+    let reopened_again = open_bytes(&saved_again).unwrap();
+    assert_eq!(
+        reopened
+            .package
+            .part("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .bytes,
+        reopened_again
+            .package
+            .part("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .bytes
+    );
+
+    if let Some(soffice) = libreoffice::find_calc() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("omacell-x14-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let workbook = dir.join("extensions.xlsx");
+        let profile = dir.join("libreoffice-profile");
+        std::fs::write(&workbook, saved).unwrap();
+        let output = std::process::Command::new(soffice)
+            .arg(format!(
+                "-env:UserInstallation=file://{}",
+                profile.display()
+            ))
+            .env("HOME", &dir)
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .env("XDG_CONFIG_HOME", dir.join("config"))
+            .env("SAL_USE_VCLPLUGIN", "svp")
+            .args([
+                "--headless",
+                "--convert-to",
+                "csv",
+                "--outdir",
+                dir.to_str().unwrap(),
+                workbook.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && dir.join("extensions.csv").is_file(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 fn package_with_sheet(sheet: &[u8]) -> Vec<u8> {

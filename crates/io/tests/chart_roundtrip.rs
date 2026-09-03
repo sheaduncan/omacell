@@ -136,7 +136,21 @@ fn sparkline_added_to_opened_workbook_is_written_and_read() {
             sheet,
         })
         .unwrap();
-    let again = open_bytes(&save_bytes(&opened).unwrap()).unwrap();
+    let saved = save_bytes(&opened).unwrap();
+    let again = open_bytes(&saved).unwrap();
+    let worksheet = String::from_utf8(
+        again
+            .package
+            .part("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .bytes
+            .clone(),
+    )
+    .unwrap();
+    assert!(worksheet.contains(
+        r#"<extLst><ext uri="{05C60535-1F16-4FD2-B633-F4F36F0B64E0}"><x14:sparklineGroups"#
+    ));
+    assert!(worksheet.contains("</x14:sparklineGroups></ext></extLst></worksheet>"));
     let sparklines = &again
         .workbook
         .sheet(again.workbook.active_sheet())

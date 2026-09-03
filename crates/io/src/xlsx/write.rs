@@ -34,8 +34,15 @@ use crate::error;
 
 const NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const NS_MC: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+const NS_X14: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+const NS_XM: &str = "http://schemas.microsoft.com/office/excel/2006/main";
+const NS_XR: &str = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision";
 const NS_PKG: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const NS_CT: &str = "http://schemas.openxmlformats.org/package/2006/content-types";
+const EXT_CONDITIONAL_FORMATTING: &str = "{78C0D931-6437-407D-A8EE-F0AAD7539E65}";
+const EXT_DATA_VALIDATIONS: &str = "{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}";
+const EXT_SPARKLINES: &str = "{05C60535-1F16-4FD2-B633-F4F36F0B64E0}";
 const REL_OFFICE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
 const REL_WS: &str =
@@ -1364,9 +1371,23 @@ fn worksheet_xml(
     let mut rels: Vec<(String, String, String, bool)> = Vec::new();
     let mut extra_parts = Vec::new();
     let mut rid = 1u32;
+    let uses_x14 = !sheet.sparklines.is_empty()
+        || extras.is_some_and(|extra| worksheet_extras_contain(extra, b"x14:"));
+    let uses_xr = extras.is_some_and(|extra| worksheet_extras_contain(extra, b"xr:"));
+    let extension_namespaces = if uses_x14 {
+        format!(r#" xmlns:x14="{NS_X14}" xmlns:xm="{NS_XM}""#)
+    } else {
+        String::new()
+    };
+    let revision_namespace = if uses_xr {
+        format!(r#" xmlns:mc="{NS_MC}" xmlns:xr="{NS_XR}" mc:Ignorable="xr""#)
+    } else {
+        String::new()
+    };
     let mut s = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="{NS}" xmlns:r="{NS_R}">"#
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="{NS}" xmlns:r="{NS_R}"{extension_namespaces}{revision_namespace}>"#
     );
+    let mut extensions = WorksheetExtensionFragments::default();
     let filter_mode = sheet
         .autofilter
         .as_ref()
@@ -1525,12 +1546,20 @@ fn worksheet_xml(
             )
     }) {
         for blob in &ex.conditional_formatting_xml {
-            push_fragment(
-                &mut s,
-                blob,
-                "conditional formatting",
-                &["conditionalFormatting"],
-            )?;
+            if is_x14_fragment(blob) {
+                extensions.conditional_formatting.push(validated_fragment(
+                    blob,
+                    "conditional formatting",
+                    &["conditionalFormatting"],
+                )?);
+            } else {
+                push_fragment(
+                    &mut s,
+                    blob,
+                    "conditional formatting",
+                    &["conditionalFormatting"],
+                )?;
+            }
         }
     } else {
         for xml in super::data::modeled_cond_formats(&sheet.cond_formats, dxfs) {
@@ -1547,7 +1576,15 @@ fn worksheet_xml(
             && super::data::validation_extras_match(&ex.data_validations_xml, &sheet.validations)
     }) {
         for blob in &ex.data_validations_xml {
-            push_fragment(&mut s, blob, "data validation", &["dataValidations"])?;
+            if is_x14_fragment(blob) {
+                set_single_extension(
+                    &mut extensions.data_validations,
+                    validated_fragment(blob, "data validation", &["dataValidations"])?,
+                    "data validation",
+                )?;
+            } else {
+                push_fragment(&mut s, blob, "data validation", &["dataValidations"])?;
+            }
         }
     } else if let Some(xml) = super::data::modeled_validations(&sheet.validations) {
         push_fragment(
@@ -1703,10 +1740,18 @@ fn worksheet_xml(
             && drawing::sparkline_extras_match(&ex.sparkline_xml, wb, sheet)
     }) {
         for blob in &ex.sparkline_xml {
-            push_fragment(&mut s, blob, "sparkline", &["sparklineGroups"])?;
+            set_single_extension(
+                &mut extensions.sparklines,
+                validated_fragment(blob, "sparkline", &["sparklineGroups"])?,
+                "sparkline",
+            )?;
         }
     } else if let Some(blob) = drawing::sparkline_xml(wb, sheet) {
-        push_fragment(&mut s, &blob, "sparkline", &["sparklineGroups"])?;
+        set_single_extension(
+            &mut extensions.sparklines,
+            validated_fragment(&blob, "sparkline", &["sparklineGroups"])?,
+            "sparkline",
+        )?;
     }
     if !sheet.notes.is_empty() {
         let id = format!("rId{rid}");
@@ -1735,9 +1780,87 @@ fn worksheet_xml(
             CT_THREADED_CMT.into(),
         ));
     }
+    push_worksheet_extensions(&mut s, &extensions);
     let _ = rid;
     s.push_str("</worksheet>");
     Ok((s.into_bytes(), rels, extra_parts))
+}
+
+#[derive(Default)]
+struct WorksheetExtensionFragments {
+    conditional_formatting: Vec<String>,
+    data_validations: Option<String>,
+    sparklines: Option<String>,
+}
+
+fn worksheet_extras_contain(extras: &WorksheetExtras, needle: &[u8]) -> bool {
+    std::iter::once(extras.autofilter_xml.as_slice())
+        .chain(extras.print_xml.iter().map(Vec::as_slice))
+        .chain(extras.conditional_formatting_xml.iter().map(Vec::as_slice))
+        .chain(extras.data_validations_xml.iter().map(Vec::as_slice))
+        .chain(extras.sparkline_xml.iter().map(Vec::as_slice))
+        .any(|fragment| {
+            fragment
+                .windows(needle.len())
+                .any(|window| window == needle)
+        })
+}
+
+fn is_x14_fragment(fragment: &[u8]) -> bool {
+    fragment.starts_with(b"<x14:")
+}
+
+fn validated_fragment(
+    bytes: &[u8],
+    kind: &str,
+    allowed_roots: &[&str],
+) -> Result<String, CoreError> {
+    let mut fragment = String::new();
+    push_fragment(&mut fragment, bytes, kind, allowed_roots)?;
+    Ok(fragment)
+}
+
+fn set_single_extension(
+    slot: &mut Option<String>,
+    fragment: String,
+    kind: &str,
+) -> Result<(), CoreError> {
+    if slot.replace(fragment).is_some() {
+        return Err(error::xlsx_write(format!(
+            "worksheet has more than one {kind} extension payload"
+        )));
+    }
+    Ok(())
+}
+
+fn push_worksheet_extensions(out: &mut String, extensions: &WorksheetExtensionFragments) {
+    if extensions.conditional_formatting.is_empty()
+        && extensions.data_validations.is_none()
+        && extensions.sparklines.is_none()
+    {
+        return;
+    }
+    out.push_str("<extLst>");
+    if !extensions.conditional_formatting.is_empty() {
+        out.push_str(&format!(
+            r#"<ext uri="{EXT_CONDITIONAL_FORMATTING}"><x14:conditionalFormattings>"#
+        ));
+        for fragment in &extensions.conditional_formatting {
+            out.push_str(fragment);
+        }
+        out.push_str("</x14:conditionalFormattings></ext>");
+    }
+    if let Some(fragment) = &extensions.data_validations {
+        out.push_str(&format!(r#"<ext uri="{EXT_DATA_VALIDATIONS}">"#));
+        out.push_str(fragment);
+        out.push_str("</ext>");
+    }
+    if let Some(fragment) = &extensions.sparklines {
+        out.push_str(&format!(r#"<ext uri="{EXT_SPARKLINES}">"#));
+        out.push_str(fragment);
+        out.push_str("</ext>");
+    }
+    out.push_str("</extLst>");
 }
 
 fn push_fragment(
