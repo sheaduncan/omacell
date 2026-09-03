@@ -354,14 +354,7 @@ impl<'a> Parser<'a> {
                     start,
                     end: Some(end),
                 };
-                let span = inner.span;
-                return Ok(Expr::new(
-                    ExprKind::ThreeD {
-                        sheets,
-                        inner: Box::new(inner),
-                    },
-                    span,
-                ));
+                return attach_sheet(inner, sheets);
             }
             if self.lookahead_bang_after_ident() {
                 let name = start;
@@ -1164,15 +1157,12 @@ fn attach_sheet(expr: Expr, spec: SheetSpec) -> Result<Expr, ParseError> {
                 op,
             }
         }
-        other => {
-            if spec.end.is_some() {
-                ExprKind::ThreeD {
-                    sheets: spec,
-                    inner: Box::new(Expr::new(other, span)),
-                }
-            } else {
-                other
-            }
+        _ => {
+            return Err(ParseError::parse(
+                "sheet qualifier requires a reference",
+                span.start as usize,
+                vec!["cell".into(), "range".into(), "name".into()],
+            ));
         }
     };
     Ok(Expr::new(kind, span))
