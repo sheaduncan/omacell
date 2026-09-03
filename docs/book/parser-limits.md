@@ -20,6 +20,16 @@ Important public limits include:
 | Embedded Lua | 32 MiB memory and 10,000,000 VM instructions |
 | Lua macro recording | 10,000 steps or 16 MiB |
 | Trust store | 1 MiB |
+| Legacy `.xls` input / worker output | 256 MiB each |
+
+Legacy BIFF parsing runs in the private `omacell-xls-worker` companion with a
+1 GiB address-space ceiling, 10 seconds of CPU time, a 15-second host wall-time
+limit, no inherited environment, no core dumps, and a 64 KiB diagnostic cap.
+The host validates the OLE DIFAT chain before starting it and accepts only a
+bounded XLSX reply that passes Omacell's normal package reader. A parser panic,
+allocator abort, loop, or malformed reply therefore becomes an `xls.bridge`
+error instead of terminating the GUI, TUI, or CLI. This helper is part of
+Omacell; LibreOffice is not invoked or required.
 
 Archive readers also cap entry counts, individual expanded entries, aggregate
 expanded bytes, compression ratios, XML nesting/text, shared strings, styles,

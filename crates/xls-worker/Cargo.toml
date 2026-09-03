@@ -1,0 +1,18 @@
+[package]
+name = "omacell-xls-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Resource-limited legacy XLS parser companion for Omacell."
+
+[lints]
+workspace = true
+
+[dependencies]
+calamine = "0.36"
+omacell-core = { path = "../core", version = "0.0.0" }
+omacell-io = { path = "../io", version = "0.0.0" }
+rustix = { workspace = true, features = ["process"] }

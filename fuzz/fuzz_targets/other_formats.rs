@@ -13,5 +13,7 @@ fuzz_target!(|data: &[u8]| {
     let _ = omacell_io::html::open_bytes(data, ClipboardFormat::Html);
     let _ = omacell_io::html::open_bytes(data, ClipboardFormat::Markdown);
     let _ = omacell_io::parquet::open_bytes(data);
-    let _ = omacell_io::bridge::open_xls_bytes(data);
+    // The production host invokes this parser only in the resource-limited
+    // companion process. Fuzz it directly so parser crashes remain findings.
+    let _ = omacell_xls_worker::parse_xls_bytes(data);
 });

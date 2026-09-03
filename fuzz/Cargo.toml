@@ -22,6 +22,9 @@ path = "../crates/bus"
 [dependencies.omacell-io]
 path = "../crates/io"
 
+[dependencies.omacell-xls-worker]
+path = "../crates/xls-worker"
+
 [dependencies.omacell-cli]
 path = "../crates/cli"
 

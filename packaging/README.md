@@ -24,6 +24,7 @@ namespace.
 Installed paths:
 
 - `/usr/bin/omacell`
+- `/usr/lib/omacell/omacell-xls-worker` (private, resource-limited `.xls` parser)
 - `/usr/share/omacell/default/` (configuration, keymaps, theme template,
   prompts, and agent skill)
 - `/usr/share/omacell/i18n/` (Fluent localization resources)

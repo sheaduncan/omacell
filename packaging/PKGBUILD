@@ -45,7 +45,7 @@ prepare() {
 build() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   export CARGO_TARGET_DIR="${srcdir}/${pkgname}-${pkgver}/target"
-  cargo build --frozen --release -p omacell-cli
+  cargo build --frozen --release -p omacell-cli -p omacell-xls-worker
   cargo test --frozen -p omacell-cli --test dist generate_completions_and_man
   cargo run --frozen -p omacell-cli --example generate-docs -- docs/book/cli-reference.md
   python scripts/generate-docs.py --write
@@ -65,6 +65,8 @@ check() {
 package() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   install -Dm755 target/release/omacell "${pkgdir}/usr/bin/omacell"
+  install -Dm755 target/release/omacell-xls-worker \
+    "${pkgdir}/usr/lib/omacell/omacell-xls-worker"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dm644 packaging/omacell.desktop \
     "${pkgdir}/usr/share/applications/omacell.desktop"
