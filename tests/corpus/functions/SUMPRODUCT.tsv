@@ -1,7 +1,7 @@
 # formula	expected	note
 =SUMPRODUCT({1,2},{3,4})	11	1*3+2*4
 =SUMPRODUCT({1,2,3})	6	single array sums
-=SUMPRODUCT({1,2},{3,TRUE})	5	TRUE as 1 in array
+=SUMPRODUCT({1,2},{3,TRUE})	3	Boolean array entries are nonnumeric and become zero; Microsoft SUMPRODUCT documentation
 =SUMPRODUCT({1,2},{3,"x"})	3	text as 0
 =SUMPRODUCT({1,2},{3,4,5})	#VALUE!	length mismatch
 =SUMPRODUCT({1,#N/A},{1,1})	#N/A	error propagates
@@ -9,3 +9,4 @@
 =SUMPRODUCT({-1,2},{3,-4})	-11	mixed signs
 =SUMPRODUCT({1;2},{3;4})	11	columns
 =SUMPRODUCT({1,2},{3,4},{1,1})	11	three arrays
+=SUMPRODUCT({1,2},{3;4})	#VALUE!	equal cell counts but different dimensions return #VALUE!; Microsoft SUMPRODUCT documentation
