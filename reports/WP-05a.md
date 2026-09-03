@@ -175,6 +175,18 @@
 - Run the complete function/core suites and strict Clippy, then run exact
   `just check` and reconcile this report with test-first evidence.
 
+### 2026-09-03 math error-classification plan (written before coding)
+
+- Change the existing `LOG(8,1)` corpus expectation first and add integer and
+  fractional negative-power cases for a zero base.
+- Return `#DIV/0!` for `POWER(0, negative)` and `LOG(number, 1)` before the
+  generic non-finite/domain path. Preserve `POWER(0,0)` and invalid negative
+  fractional powers as `#NUM!`, and preserve `LOG`'s `#NUM!` result for a
+  nonpositive number or base.
+- Preserve successful numeric results, public interfaces, and dependencies;
+  run the complete function/core suites and strict Clippy, then run exact
+  `just check` and reconcile this report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -303,6 +315,11 @@ The 2026-09-03 exclusive-percentile endpoint follow-up admits exact rank one
 and rank n in the shared `PERCENTILE.EXC` interpolation helper. Those ranks
 return the first and last sample values, including the corresponding
 `QUARTILE.EXC` endpoints; ranks outside that interval still return `#NUM!`.
+
+The 2026-09-03 math error-classification follow-up returns `#DIV/0!` when
+`POWER` raises zero to a negative exponent or `LOG` uses base one. Other
+domain errors retain `#NUM!`, including `POWER(0,0)`, negative bases with a
+fractional exponent, and `LOG` with a nonpositive number or base.
 
 ## Interfaces exposed (for dependents)
 
@@ -502,11 +519,33 @@ Host: rustc 1.98.0, Linux.
   - The zero result follows the independently verified Excel audit case;
     retained nonzero behavior follows Microsoft's [`CEILING`](https://support.microsoft.com/en-us/excel/functions/ceiling-function)
     documentation.
+- 2026-09-03 math error-classification test-first evidence:
+  - The three changed corpus cases initially failed: `POWER(0,-1)` and
+    `POWER(0,-0.5)` returned `#NUM!`, and `LOG(8,1)` returned `#NUM!`. They now
+    return `#DIV/0!`.
+  - The added `LOG(0,1)` precedence control remains `#NUM!`; existing
+    `POWER(0,0)` and negative-base/fractional-exponent cases also remain
+    `#NUM!`.
+  - The complete function/core suites pass (22 function integration tests, 73
+    core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - The optional LibreOffice cross-check skipped because Calc conversion was
+    unavailable in its sandboxed run; no runtime or test dependency was
+    introduced.
+  - The error classifications follow the independently verified Excel audit
+    cases. Microsoft's [`POWER`](https://support.microsoft.com/en-us/excel/functions/power-function)
+    and [`LOG`](https://support.microsoft.com/en-us/office/log-function-4e82f196-1ca9-4747-8fb0-6c4a3abb3280)
+    documentation supplies the argument contracts; the Office
+    [`POWER(0,0)` extension](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/11087d65-0fe1-44c6-bbeb-61380bc34bad)
+    supports retaining Omacell's existing `#NUM!` control.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1579** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1582** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -551,6 +590,9 @@ Host: rustc 1.98.0, Linux.
     valid endpoints; only ranks below one or above n are rejected.
 12. **Resolved 2026-09-03:** legacy `CEILING` returns numeric zero when its
     significance is zero, for positive and negative numbers alike.
+13. **Resolved 2026-09-03:** division-singularity cases use `#DIV/0!` for
+    `POWER(0, negative)` and `LOG(number,1)`, while other invalid real-domain
+    inputs continue to use `#NUM!`.
 
 ## RFC (only if a frozen contract changed)
 
@@ -578,6 +620,9 @@ frozen contract.
 
 The exclusive-percentile endpoint follow-up changes no public signature or
 frozen contract.
+
+The math error-classification follow-up changes no public signature or frozen
+contract.
 
 ## Checklist
 
