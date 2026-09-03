@@ -9,3 +9,4 @@
 =AND(#N/A,TRUE)	#N/A	error
 =AND({TRUE,TRUE})	TRUE	array
 =AND(TRUE,TRUE,TRUE)	TRUE	three
+=AND({TRUE,"ignored"})	TRUE	text inside an array is ignored; Microsoft AND documentation

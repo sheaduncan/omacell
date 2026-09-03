@@ -98,6 +98,20 @@
   run the complete function/core suites and strict Clippy, then run exact
   `just check` and reconcile this report.
 
+### 2026-09-03 logical aggregate text plan (written before coding)
+
+- Add failing corpus rows for `AND`, `OR`, and `XOR` over arrays containing
+  text, plus a sheet integration matrix covering text and empty cells inside
+  references, a remaining logical value, and a reference with no logical
+  values.
+- Use the existing value-origin signal in the shared logical fold: ignore text
+  and empty values encountered through an array or reference, retain direct
+  literal coercion/errors and error propagation, and return `#VALUE!` when no
+  usable value remains.
+- Cite Microsoft's documented aggregate-logical rule, preserve public
+  interfaces, add no dependency, run the complete function/core suites and
+  strict Clippy, then run exact `just check` and reconcile this report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -193,6 +207,16 @@ shapes retain the WP-05F validation and allocation cap.
 
 The follow-up adds
 `array_if_selects_and_broadcasts_cells_without_evaluating_unused_branches` to
+`crates/fn/tests/integration.rs`.
+
+The 2026-09-03 logical aggregate text follow-up uses the existing value-origin
+signal in `AND`, `OR`, and `XOR`: text and empty values encountered inside an
+array or reference are ignored, while a direct text argument still errors.
+Errors inside aggregates still propagate, and an aggregate with no usable
+values still returns `#VALUE!`.
+
+The follow-up adds one cited corpus row to each logical aggregate and
+`logical_aggregates_ignore_text_and_empty_cells_inside_references` to
 `crates/fn/tests/integration.rs`.
 
 ## Interfaces exposed (for dependents)
@@ -291,11 +315,28 @@ Host: rustc 1.98.0, Linux.
     rustdoc.
   - Behavior follows Microsoft's documented [`IF`](https://support.microsoft.com/en-us/office/if-function-69aed7c9-4e8a-4755-a9bc-aa8bbff73be2)
     value-selection contract and Omacell's WP-05F array broadcasting policy.
+- 2026-09-03 logical aggregate text test-first evidence:
+  - A sheet range containing `TRUE`, text, and an empty cell initially made
+    `AND` return `#VALUE!`; it now returns `TRUE`. The corresponding `OR` and
+    `XOR` cases return `FALSE` and `TRUE`.
+  - A text/empty-only reference and a direct text argument both still return
+    `#VALUE!`.
+  - Three new array corpus rows pass, as do the complete function and core
+    suites (21 function integration tests, 73 core unit tests, every
+    integration suite, and 103 core doctests); strict all-target Clippy for
+    both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - Semantics follow Microsoft's [`AND`](https://support.microsoft.com/en-us/excel/functions/and-function),
+    [`OR`](https://support.microsoft.com/en-us/excel/functions/or-function),
+    and [`XOR`](https://support.microsoft.com/en-us/excel/functions/xor-function)
+    documentation.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1560** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1563** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -325,6 +366,9 @@ Host: rustc 1.98.0, Linux.
 6. **Resolved 2026-09-03:** An array logical test makes `IF` select branch
    values cell by cell, with scalar/singleton broadcasting and per-cell errors.
    A branch that no condition cell selects remains unevaluated.
+7. **Resolved 2026-09-03:** `AND`, `OR`, and `XOR` ignore text and empty cells
+   inside arrays/references, but retain direct-text errors, aggregate error
+   propagation, and `#VALUE!` when no usable value remains.
 
 ## RFC (only if a frozen contract changed)
 
@@ -336,6 +380,9 @@ The empty/filter aggregate follow-up adds one method to the post-WP-01
 The SUMIF value-range follow-up changes no public signature or frozen contract.
 
 The array-valued `IF` follow-up changes no public signature or frozen contract.
+
+The logical aggregate text follow-up changes no public signature or frozen
+contract.
 
 ## Checklist
 

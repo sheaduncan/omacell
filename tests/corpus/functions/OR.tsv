@@ -9,3 +9,4 @@
 =OR(#N/A,TRUE)	#N/A	error
 =OR({FALSE,TRUE})	TRUE	array
 =OR(FALSE,FALSE,TRUE)	TRUE	three
+=OR({FALSE,"ignored"})	FALSE	text inside an array is ignored; Microsoft OR documentation
