@@ -17,7 +17,40 @@ set D1 =@A1:A3
 expect D1 10
 expect D2 (empty)
 
+# A vertical range with no cell on the formula row has no intersection.
+set D4 =@A1:A3
+expect D4 #VALUE!
+
+# A horizontal range intersects on the formula column; outside it is #VALUE!.
+set A5 40
+set B5 50
+set C5 60
+set B7 =@A5:C5
+set D7 =@A5:C5
+expect B7 50
+expect D7 #VALUE!
+
+# A 2-D range has a unique result only at the formula's row-and-column
+# coordinate. A second sheet makes that coordinate observable without a cycle.
+sheet Sheet2
+set A8 81
+set B8 82
+set C8 83
+set A9 91
+set B9 92
+set C9 93
+set A10 101
+set B10 102
+set C10 103
+set Sheet1!B9 =@Sheet2!A8:C10
+set Sheet1!D9 =@Sheet2!A8:C10
+set Sheet1!B11 =@Sheet2!A8:C10
+expect Sheet1!B9 92
+expect Sheet1!D9 #VALUE!
+expect Sheet1!B11 #VALUE!
+
 # Cell ref to a spill origin returns the origin scalar, not the whole array.
+sheet Sheet1
 set F1 ={7,8,9}
 set F3 =F1
 expect F3 7
