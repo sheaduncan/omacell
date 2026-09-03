@@ -31,9 +31,10 @@ pub const DYNAMIC_FUNCS: &[&str] = &["OFFSET", "INDIRECT"];
 /// ```
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Deps {
-    /// Cell/range/3-D bodies (cells as degenerate ranges).
+    /// Current-workbook cell/range/3-D bodies (cells as degenerate ranges).
+    /// External-workbook references are not representable here and are omitted.
     pub ranges: Vec<(Option<SheetSpec>, RangeRef)>,
-    /// Defined names, with optional sheet qualifier.
+    /// Current-workbook defined names, with optional sheet qualifier.
     pub names: Vec<(Option<SheetSpec>, String)>,
     /// Structured-reference table names (unqualified omitted).
     pub tables: Vec<String>,
@@ -109,8 +110,8 @@ fn collect(expr: &Expr, inherited_sheet: Option<&SheetSpec>, deps: &mut Deps) {
                 collect(cell, inherited_sheet, deps);
             }
         }
-        ExprKind::External { inner, .. }
-        | ExprKind::Prefix { expr: inner, .. }
+        ExprKind::External { .. } => {}
+        ExprKind::Prefix { expr: inner, .. }
         | ExprKind::Postfix { expr: inner, .. }
         | ExprKind::Paren(inner) => collect(inner, inherited_sheet, deps),
         ExprKind::Binary { left, right, .. } => {
