@@ -107,6 +107,37 @@ fn and_or_do_not_short_circuit() {
 }
 
 #[test]
+fn logical_aggregates_ignore_text_and_empty_cells_inside_references() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_formula_text(s, 0, 0, "=TRUE()").unwrap();
+    wb.set_text(s, 1, 0, "ignored").unwrap();
+    wb.set_formula_text(s, 3, 0, "=FALSE()").unwrap();
+    for (row, formula) in [
+        "=AND(A1:A3)",
+        "=OR(A2:A4)",
+        "=XOR(A1:A4)",
+        "=AND(A2:A3)",
+        "=AND(TRUE,\"text\")",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        wb.set_formula_text(s, row as u32, 1, formula).unwrap();
+    }
+
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+
+    assert_eq!(display(&wb, 0, 1), "TRUE");
+    assert_eq!(display(&wb, 1, 1), "FALSE");
+    assert_eq!(display(&wb, 2, 1), "TRUE");
+    assert_eq!(display(&wb, 3, 1), "#VALUE!");
+    assert_eq!(display(&wb, 4, 1), "#VALUE!");
+}
+
+#[test]
 fn hidden_row_subtotal_skips_101_family() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

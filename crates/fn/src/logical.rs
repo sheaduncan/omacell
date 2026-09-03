@@ -5,7 +5,7 @@ use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, RuntimeArray, RuntimeValue, eval_expr};
 use omacell_core::formula::Expr;
 
-use crate::common::{for_each_value, register_specs, rt_bool};
+use crate::common::{Origin, for_each_value, register_specs, rt_bool};
 use crate::metadata::{ArgKind, ArrayBehavior, FunctionSpec};
 
 /// Logical specs.
@@ -389,8 +389,10 @@ fn fold_logicals(
 ) -> Result<bool, ErrorKind> {
     let mut acc = init;
     let mut seen = false;
-    for_each_value(ctx, args, &mut |s, _origin| {
-        if matches!(s, Scalar::Empty) {
+    for_each_value(ctx, args, &mut |s, origin| {
+        if matches!(s, Scalar::Empty)
+            || matches!((&s, origin), (Scalar::Text(_), Origin::Aggregate))
+        {
             return Ok(());
         }
         let b = coerce::to_bool(&s)?;

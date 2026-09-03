@@ -9,3 +9,4 @@
 =XOR(#N/A,TRUE)	#N/A	error
 =XOR({TRUE,FALSE})	TRUE	array
 =XOR(TRUE,"x")	#VALUE!	bad text
+=XOR({TRUE,"ignored",FALSE})	TRUE	text inside an array is ignored; Microsoft XOR documentation
