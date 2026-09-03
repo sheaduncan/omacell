@@ -41,6 +41,45 @@ fn lazy_if_family_skips_unselected_error_volatile_and_async() {
 }
 
 #[test]
+fn array_if_selects_and_broadcasts_cells_without_evaluating_unused_branches() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    for (row, value) in [1.0, 2.0, 3.0].into_iter().enumerate() {
+        wb.set_number(s, row as u32, 0, value).unwrap();
+    }
+    for (row, formula) in [
+        "=SUM(IF(A1:A3>1,A1:A3,0))",
+        "=SUM(IF(A1:A3>1,{10;20;30},1))",
+        "=SUM(IF(A1:A3>9,1/0,7))",
+        "=SUM(IF(A1:A3>0,7,1/0))",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        wb.set_formula_text(s, row as u32, 2, formula).unwrap();
+    }
+    wb.set_formula_text(s, 4, 2, "=IF({TRUE,FALSE,TRUE},{1,2,3},10)")
+        .unwrap();
+    wb.set_formula_text(s, 5, 2, "=IF({TRUE,#N/A,FALSE},1,2)")
+        .unwrap();
+
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+
+    assert_eq!(display(&wb, 0, 2), "5");
+    assert_eq!(display(&wb, 1, 2), "51");
+    assert_eq!(display(&wb, 2, 2), "21");
+    assert_eq!(display(&wb, 3, 2), "21");
+    assert_eq!(display(&wb, 4, 2), "1");
+    assert_eq!(display(&wb, 4, 3), "10");
+    assert_eq!(display(&wb, 4, 4), "3");
+    assert_eq!(display(&wb, 5, 2), "1");
+    assert_eq!(display(&wb, 5, 3), "#N/A");
+    assert_eq!(display(&wb, 5, 4), "2");
+}
+
+#[test]
 fn let_bindings_keep_error_values_for_error_handlers() {
     let mut wb = Workbook::new();
     let sheet = wb.active_sheet();

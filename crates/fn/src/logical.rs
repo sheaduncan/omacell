@@ -2,7 +2,7 @@
 
 use omacell_core::coerce::{self, Scalar};
 use omacell_core::error::ErrorKind;
-use omacell_core::eval::{ArgVal, EvalCtx, FnBody, RuntimeValue, eval_expr};
+use omacell_core::eval::{ArgVal, EvalCtx, FnBody, RuntimeArray, RuntimeValue, eval_expr};
 use omacell_core::formula::Expr;
 
 use crate::common::{for_each_value, register_specs, rt_bool};
@@ -181,15 +181,130 @@ fn if_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
         return RuntimeValue::error(ErrorKind::Value);
     };
     let test = eval_expr(ctx, test_expr);
-    let cond = match as_bool_scalar(ctx, test) {
-        Ok(b) => b,
-        Err(e) => return RuntimeValue::error(e),
+    let test = ctx.materialize(test);
+    let RuntimeValue::Scalar(test) = test else {
+        return array_if(ctx, args, test);
+    };
+    let cond = match coerce::to_bool(&test) {
+        Ok(value) => value,
+        Err(error) => return RuntimeValue::error(error),
     };
     let branch = if cond { 1 } else { 2 };
     match args.get(branch) {
         Some(Some(expr)) => eval_expr(ctx, expr),
         Some(None) | None if !cond => RuntimeValue::Scalar(Scalar::Bool(false)),
         _ => RuntimeValue::Scalar(Scalar::Empty),
+    }
+}
+
+fn array_if(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>], test: RuntimeValue) -> RuntimeValue {
+    let RuntimeValue::Array(test_array) = &test else {
+        return RuntimeValue::error(ErrorKind::Value);
+    };
+    if let Err(error) = test_array.validate() {
+        return RuntimeValue::error(error);
+    }
+
+    let mut needs_true = false;
+    let mut needs_false = false;
+    for condition in test_array.values.iter() {
+        match coerce::to_bool(condition) {
+            Ok(true) => needs_true = true,
+            Ok(false) => needs_false = true,
+            Err(_) => {}
+        }
+    }
+
+    let true_value = needs_true.then(|| eval_array_if_branch(ctx, args, 1, true));
+    let false_value = needs_false.then(|| eval_array_if_branch(ctx, args, 2, false));
+    let mut rows = test_array.rows;
+    let mut cols = test_array.cols;
+    for value in [&true_value, &false_value].into_iter().flatten() {
+        let (value_rows, value_cols) = match value_shape(value) {
+            Ok(shape) => shape,
+            Err(error) => return RuntimeValue::error(error),
+        };
+        rows = rows.max(value_rows);
+        cols = cols.max(value_cols);
+    }
+    let Ok(len) = RuntimeArray::checked_len(rows, cols) else {
+        return RuntimeValue::error(ErrorKind::Num);
+    };
+
+    let mut values = Vec::with_capacity(len);
+    for row in 0..rows {
+        for col in 0..cols {
+            let condition = value_at(&test, row, col);
+            values.push(match coerce::to_bool(&condition) {
+                Ok(true) => selected_value_at(true_value.as_ref(), row, col),
+                Ok(false) => selected_value_at(false_value.as_ref(), row, col),
+                Err(error) => Scalar::Error(error),
+            });
+        }
+    }
+    RuntimeValue::array(rows, cols, values)
+}
+
+fn eval_array_if_branch(
+    ctx: &mut EvalCtx<'_>,
+    args: &[Option<Expr>],
+    index: usize,
+    true_branch: bool,
+) -> RuntimeValue {
+    match args.get(index) {
+        Some(Some(expr)) => {
+            let value = eval_expr(ctx, expr);
+            ctx.materialize(value)
+        }
+        Some(None) | None if !true_branch => RuntimeValue::Scalar(Scalar::Bool(false)),
+        _ => RuntimeValue::Scalar(Scalar::Empty),
+    }
+}
+
+fn value_shape(value: &RuntimeValue) -> Result<(u32, u32), ErrorKind> {
+    match value {
+        RuntimeValue::Array(array) => {
+            array.validate()?;
+            Ok((array.rows, array.cols))
+        }
+        RuntimeValue::Scalar(_) | RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => Ok((1, 1)),
+    }
+}
+
+fn selected_value_at(value: Option<&RuntimeValue>, row: u32, col: u32) -> Scalar {
+    value
+        .map(|value| value_at(value, row, col))
+        .unwrap_or(Scalar::Error(ErrorKind::Value))
+}
+
+fn value_at(value: &RuntimeValue, row: u32, col: u32) -> Scalar {
+    match value {
+        RuntimeValue::Scalar(scalar) => scalar.clone(),
+        RuntimeValue::Array(array) => {
+            let row = if array.rows == 1 {
+                0
+            } else if row < array.rows {
+                row
+            } else {
+                return Scalar::Error(ErrorKind::Na);
+            };
+            let col = if array.cols == 1 {
+                0
+            } else if col < array.cols {
+                col
+            } else {
+                return Scalar::Error(ErrorKind::Na);
+            };
+            let index = (row as usize)
+                .saturating_mul(array.cols as usize)
+                .saturating_add(col as usize);
+            array
+                .values
+                .get(index)
+                .cloned()
+                .unwrap_or(Scalar::Error(ErrorKind::Value))
+        }
+        RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => Scalar::Error(ErrorKind::Value),
     }
 }
 
