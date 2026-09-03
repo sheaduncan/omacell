@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use omacell_core::addr::{CellRef, RangeRef, SheetId, parse_a1};
 use omacell_core::error::{ErrorKind, codes};
 use omacell_core::geometry::AxisGeometry;
+use omacell_core::intern::ArrayPayload;
 use omacell_core::names::{DefinedName, NameReferent, NameScope, validate_defined_name};
 use omacell_core::sheet::{SheetVisibility, validate_sheet_name};
 use omacell_core::storage::{CellFlags, CellSlot};
 use omacell_core::style::StyleId;
-use omacell_core::value::Value;
+use omacell_core::value::{Array2D, Value};
 use omacell_core::workbook::Workbook;
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
@@ -216,6 +217,82 @@ fn undo_redo_retains_replaced_unique_text() {
         panic!("expected text after redo");
     };
     assert_eq!(wb.intern().strings.get(after), Some("after"));
+}
+
+#[test]
+fn undo_budget_eviction_releases_interned_cell_history() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.undo_log_mut().set_budget(1);
+
+    let text = wb.set_text(sheet, 0, 0, "evicted text").unwrap();
+    wb.set_number(sheet, 0, 0, 1.0).unwrap();
+    wb.set_number(sheet, 0, 1, 2.0).unwrap();
+    assert_eq!(wb.intern().strings.get(text), None);
+
+    let formula = wb.set_formula_text(sheet, 1, 0, "=40+2").unwrap();
+    wb.set_number(sheet, 1, 0, 42.0).unwrap();
+    wb.set_number(sheet, 1, 1, 3.0).unwrap();
+    assert_eq!(wb.intern().formulas.get(formula), None);
+
+    let payload = ArrayPayload::new(Array2D::new(1, 1).unwrap(), vec![Value::Number(9.0)]).unwrap();
+    let array = wb.intern_array(payload);
+    wb.set_slot(
+        sheet,
+        2,
+        0,
+        CellSlot {
+            value: Value::Array(array),
+            formula: None,
+            style: StyleId::DEFAULT,
+            flags: CellFlags::DEFAULT,
+        },
+    )
+    .unwrap();
+    wb.release_array(array);
+    wb.set_number(sheet, 2, 0, 9.0).unwrap();
+    wb.set_number(sheet, 2, 1, 4.0).unwrap();
+    assert!(wb.intern().arrays.get(array).is_none());
+}
+
+#[test]
+fn clearing_redo_releases_interned_cell_history() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_text(sheet, 0, 0, "kept").unwrap();
+    wb.undo_log_mut().set_enabled(true);
+
+    let redo_only = wb.set_text(sheet, 0, 0, "discarded redo").unwrap();
+    wb.undo().unwrap();
+    assert_eq!(wb.intern().strings.get(redo_only), Some("discarded redo"));
+
+    wb.set_number(sheet, 0, 1, 1.0).unwrap();
+    assert_eq!(wb.intern().strings.get(redo_only), None);
+    assert_eq!(
+        wb.get(sheet, 0, 0)
+            .unwrap()
+            .and_then(|slot| match slot.value {
+                Value::Text(id) => wb.intern().strings.get(id),
+                _ => None,
+            }),
+        Some("kept")
+    );
+}
+
+#[test]
+fn aborted_transaction_releases_interned_cell_history() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let mut temporary = None;
+
+    let result = wb.transact_try(|wb| {
+        temporary = Some(wb.set_formula_text(sheet, 0, 0, "=1+1")?);
+        Err::<(), _>(omacell_core::error::CoreError::new("test.fail", "boom"))
+    });
+    assert!(result.is_err());
+    assert!(wb.get(sheet, 0, 0).unwrap().is_none());
+    assert!(temporary.is_some_and(|formula| wb.intern().formulas.get(formula).is_none()));
 }
 
 #[test]

@@ -359,7 +359,7 @@ impl Workbook {
             return Ok(());
         }
         self.protection = protection.clone();
-        self.undo.record(Delta::WorkbookProtection {
+        self.record_undo(Delta::WorkbookProtection {
             before,
             after: protection,
         });
@@ -545,7 +545,7 @@ impl Workbook {
                 .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?,
         );
         if before != after {
-            self.undo.record(Delta::SheetEdit {
+            self.record_undo(Delta::SheetEdit {
                 sheet: id,
                 before: Box::new(before),
                 after: Box::new(after),
@@ -571,7 +571,7 @@ impl Workbook {
         let target = self.sheet_mut(sheet)?;
         let index = target.charts.len();
         target.charts.push(chart.clone());
-        self.undo.record(crate::undo::Delta::ChartAdd {
+        self.record_undo(crate::undo::Delta::ChartAdd {
             sheet,
             index,
             chart: Box::new(chart),
@@ -588,7 +588,7 @@ impl Workbook {
             .position(|chart| chart.id == id)
             .ok_or_else(|| CoreError::new("chart.id", format!("unknown chart {}", id.index())))?;
         let chart = target.charts.remove(index);
-        self.undo.record(crate::undo::Delta::ChartRemove {
+        self.record_undo(crate::undo::Delta::ChartRemove {
             sheet,
             index,
             chart: Box::new(chart.clone()),
@@ -621,12 +621,12 @@ impl Workbook {
             return Ok(before);
         }
         target.charts[index] = chart.clone();
-        self.undo.record(crate::undo::Delta::ChartRemove {
+        self.record_undo(crate::undo::Delta::ChartRemove {
             sheet,
             index,
             chart: Box::new(before.clone()),
         });
-        self.undo.record(crate::undo::Delta::ChartAdd {
+        self.record_undo(crate::undo::Delta::ChartAdd {
             sheet,
             index,
             chart: Box::new(chart),
@@ -641,7 +641,7 @@ impl Workbook {
         let target = self.sheet_mut(sheet)?;
         let index = target.sparklines.len();
         target.sparklines.push(spark.clone());
-        self.undo.record(crate::undo::Delta::SparklineAdd {
+        self.record_undo(crate::undo::Delta::SparklineAdd {
             sheet,
             index,
             sparkline: spark,
@@ -657,7 +657,7 @@ impl Workbook {
             return Ok(());
         }
         self.sheet_mut(id)?.page_setup = setup.clone();
-        self.undo.record(Delta::PageSetup {
+        self.record_undo(Delta::PageSetup {
             sheet: id,
             before: Box::new(before),
             after: Box::new(setup),
@@ -679,7 +679,7 @@ impl Workbook {
             ));
         }
         let sparkline = target.sparklines.remove(index);
-        self.undo.record(crate::undo::Delta::SparklineRemove {
+        self.record_undo(crate::undo::Delta::SparklineRemove {
             sheet,
             index,
             sparkline: sparkline.clone(),
@@ -743,6 +743,17 @@ impl Workbook {
             intern.formulas.release(f);
         }
         intern.styles.release(slot.style);
+    }
+
+    fn release_discarded_undo_slots(&mut self) {
+        for slot in self.undo.take_discarded_slots() {
+            self.release_slot(&slot);
+        }
+    }
+
+    fn record_undo(&mut self, delta: Delta) {
+        self.undo.record(delta);
+        self.release_discarded_undo_slots();
     }
 
     /// Keep workbook-local ids in copied slots alive while `f` mutates cells.
@@ -1201,7 +1212,7 @@ impl Workbook {
             self.release_slot(old);
         }
         if undo_enabled {
-            self.undo.record(Delta::Cell {
+            self.record_undo(Delta::Cell {
                 sheet: id,
                 row,
                 col,
@@ -1234,9 +1245,11 @@ impl Workbook {
 
     /// Run `f` as one undo unit.
     pub fn transact<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.release_discarded_undo_slots();
         self.undo.begin();
         let r = f(self);
         self.undo.commit();
+        self.release_discarded_undo_slots();
         r
     }
 
@@ -1248,10 +1261,12 @@ impl Workbook {
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, CoreError>,
     ) -> Result<T, CoreError> {
+        self.release_discarded_undo_slots();
         self.undo.begin();
         match f(self) {
             Ok(value) => {
                 self.undo.commit();
+                self.release_discarded_undo_slots();
                 Ok(value)
             }
             Err(err) => {
@@ -1260,6 +1275,8 @@ impl Workbook {
                     self.undo.set_enabled(false);
                     let rolled = self.apply_transaction(&tx, true);
                     self.undo.set_enabled(undo_on);
+                    self.undo.discard_transaction(tx);
+                    self.release_discarded_undo_slots();
                     if let Err(rollback) = rolled {
                         return Err(CoreError::new(
                             "undo.rollback",
@@ -1278,19 +1295,23 @@ impl Workbook {
 
     /// Undo the last transaction.
     pub fn undo(&mut self) -> Result<Vec<AffectedRange>, CoreError> {
+        self.release_discarded_undo_slots();
         let tx = self.undo.pop_undo()?;
         self.apply_transaction(&tx, true)?;
         let affected = transaction_affected(&tx);
         self.undo.push_redo(tx);
+        self.release_discarded_undo_slots();
         Ok(affected)
     }
 
     /// Redo the last undone transaction.
     pub fn redo(&mut self) -> Result<Vec<AffectedRange>, CoreError> {
+        self.release_discarded_undo_slots();
         let tx = self.undo.pop_redo()?;
         self.apply_transaction(&tx, false)?;
         let affected = transaction_affected(&tx);
         self.undo.push_undo(tx);
+        self.release_discarded_undo_slots();
         Ok(affected)
     }
 
@@ -1677,7 +1698,7 @@ impl Workbook {
         self.next_sheet += 1;
         let sheet = Sheet::new(id, name)?;
         let index = self.sheets.len();
-        self.undo.record(Delta::SheetAdd {
+        self.record_undo(Delta::SheetAdd {
             id,
             index,
             sheet: Box::new(sheet.clone()),
@@ -1713,7 +1734,7 @@ impl Workbook {
                 .ok_or_else(|| CoreError::sheet_id("sheet id space is exhausted"))?,
         );
         self.link_sheet(index, sheet.clone())?;
-        self.undo.record(Delta::SheetAdd {
+        self.record_undo(Delta::SheetAdd {
             id: sheet.id,
             index: index.min(self.sheets.len().saturating_sub(1)),
             sheet: Box::new(sheet),
@@ -1761,7 +1782,7 @@ impl Workbook {
         let active_before = self.active;
         let sheet = self.unlink_sheet(id)?;
         let active_after = self.active;
-        self.undo.record(Delta::SheetRemove {
+        self.record_undo(Delta::SheetRemove {
             id,
             index,
             sheet: Box::new(sheet.clone()),
@@ -1784,7 +1805,7 @@ impl Workbook {
         let to = index.min(self.sheets.len().saturating_sub(1));
         if from != to {
             self.reorder_sheet_inner(id, to)?;
-            self.undo.record(Delta::SheetReorder {
+            self.record_undo(Delta::SheetReorder {
                 id,
                 before: from,
                 after: to,
@@ -1905,7 +1926,7 @@ impl Workbook {
         self.names_by_lower.remove(&before.to_lowercase());
         self.names_by_lower.insert(lower, id);
         if record {
-            self.undo.record(Delta::SheetRename {
+            self.record_undo(Delta::SheetRename {
                 id,
                 before,
                 after: name.to_string(),
@@ -1949,7 +1970,7 @@ impl Workbook {
         }
         self.sheet_mut(id)?.visibility = visibility;
         if record {
-            self.undo.record(Delta::SheetVisibility {
+            self.record_undo(Delta::SheetVisibility {
                 id,
                 before: current,
                 after: visibility,
@@ -1962,7 +1983,7 @@ impl Workbook {
     pub fn set_tab_color(&mut self, id: SheetId, color: Option<Color>) -> Result<(), CoreError> {
         let before = self.sheet_mut(id)?.tab_color;
         self.sheet_mut(id)?.tab_color = color;
-        self.undo.record(Delta::TabColor {
+        self.record_undo(Delta::TabColor {
             id,
             before,
             after: color,
@@ -1983,7 +2004,7 @@ impl Workbook {
             sheet.geometry.rows.set_hidden(row, hidden)?;
             (before_px, hidden_before, custom_before)
         };
-        self.undo.record(Delta::RowGeom {
+        self.record_undo(Delta::RowGeom {
             sheet: id,
             row,
             before_px,
@@ -2009,7 +2030,7 @@ impl Workbook {
             sheet.geometry.rows.set_size(row, px)?;
             (before_px, hidden, custom_before)
         };
-        self.undo.record(Delta::RowGeom {
+        self.record_undo(Delta::RowGeom {
             sheet: id,
             row,
             before_px,
@@ -2035,7 +2056,7 @@ impl Workbook {
             sheet.geometry.cols.set_hidden(u32::from(col), hidden)?;
             (before_px, hidden_before, custom_before)
         };
-        self.undo.record(Delta::ColGeom {
+        self.record_undo(Delta::ColGeom {
             sheet: id,
             col,
             before_px,
@@ -2061,7 +2082,7 @@ impl Workbook {
             sheet.geometry.cols.set_size(u32::from(col), px)?;
             (before_px, hidden, custom_before)
         };
-        self.undo.record(Delta::ColGeom {
+        self.record_undo(Delta::ColGeom {
             sheet: id,
             col,
             before_px,
@@ -2300,7 +2321,7 @@ impl Workbook {
         let scope = name.scope;
         let n = name.name.clone();
         self.names.insert(name.clone())?;
-        self.undo.record(Delta::Name {
+        self.record_undo(Delta::Name {
             scope,
             name: n,
             before: None,
@@ -2316,7 +2337,7 @@ impl Workbook {
                 "defined name {name:?} does not exist in this scope"
             ))
         })?;
-        self.undo.record(Delta::Name {
+        self.record_undo(Delta::Name {
             scope,
             name: before.name.clone(),
             before: Some(before.clone()),
@@ -2332,7 +2353,7 @@ impl Workbook {
             return Ok(());
         }
         self.settings.calc_mode = mode;
-        self.undo.record(Delta::CalcMode {
+        self.record_undo(Delta::CalcMode {
             before,
             after: mode,
         });
@@ -2343,7 +2364,7 @@ impl Workbook {
     pub fn add_table(&mut self, table: Table) -> Result<TableId, CoreError> {
         let id = self.tables.insert(table.clone())?;
         let stored = self.tables.get(id).cloned();
-        self.undo.record(Delta::Table {
+        self.record_undo(Delta::Table {
             before: None,
             after: stored,
         });
@@ -2377,7 +2398,7 @@ impl Workbook {
         write_output(self, &mut table, &cells)?;
         let id = self.pivots.insert(table.clone())?;
         let stored = self.pivots.get(id).cloned();
-        self.undo.record(Delta::Pivot {
+        self.record_undo(Delta::Pivot {
             before: None,
             after: stored.map(Box::new),
         });
@@ -2399,7 +2420,7 @@ impl Workbook {
         write_output(self, &mut table, &cells)?;
         table.ooxml_dirty = true;
         self.pivots.restore(table.clone())?;
-        self.undo.record(Delta::Pivot {
+        self.record_undo(Delta::Pivot {
             before: Some(Box::new(before)),
             after: Some(Box::new(table)),
         });
@@ -2431,7 +2452,7 @@ impl Workbook {
         write_output(self, &mut table, &cells)?;
         table.ooxml_dirty = true;
         self.pivots.restore(table.clone())?;
-        self.undo.record(Delta::Pivot {
+        self.record_undo(Delta::Pivot {
             before: Some(Box::new(before)),
             after: Some(Box::new(table)),
         });
@@ -2457,7 +2478,7 @@ impl Workbook {
         }
         table.out_end_row = table.dest_row;
         table.out_end_col = table.dest_col;
-        self.undo.record(Delta::Pivot {
+        self.record_undo(Delta::Pivot {
             before: Some(Box::new(table.clone())),
             after: None,
         });
@@ -2479,7 +2500,7 @@ impl Workbook {
             }
             return Err(error);
         }
-        self.undo.record(Delta::Pivot {
+        self.record_undo(Delta::Pivot {
             before: before.map(Box::new),
             after: Some(Box::new(table)),
         });
@@ -2545,7 +2566,7 @@ impl Workbook {
             .tables
             .remove(id)
             .ok_or_else(|| CoreError::table_name("unknown table"))?;
-        self.undo.record(Delta::Table {
+        self.record_undo(Delta::Table {
             before: Some(before.clone()),
             after: None,
         });
@@ -2593,7 +2614,7 @@ impl Workbook {
             }
             return Err(error);
         }
-        self.undo.record(Delta::Table {
+        self.record_undo(Delta::Table {
             before,
             after: Some(table),
         });
@@ -2662,7 +2683,7 @@ impl Workbook {
         }
         let after = self.tables.get(id).cloned();
         if Some(&before) != after.as_ref() {
-            self.undo.record(Delta::Table {
+            self.record_undo(Delta::Table {
                 before: Some(before),
                 after,
             });
@@ -2882,7 +2903,7 @@ impl Workbook {
         self.rewrite_pivots_after_row_shift(id, at, n)?;
         self.sheet_mut(id)?.store.shift_rows(at, n)?;
         self.recount_ref_errors();
-        self.undo.record(Delta::ShiftRows {
+        self.record_undo(Delta::ShiftRows {
             sheet: id,
             at,
             count: n,
@@ -2914,7 +2935,7 @@ impl Workbook {
             .collect();
         self.sheet_mut(id)?.store.shift_rows(at, -n)?;
         self.recount_ref_errors();
-        self.undo.record(Delta::ShiftRows {
+        self.record_undo(Delta::ShiftRows {
             sheet: id,
             at,
             count: -n,
@@ -2932,7 +2953,7 @@ impl Workbook {
         self.rewrite_pivots_after_col_shift(id, at, n)?;
         self.sheet_mut(id)?.store.shift_cols(at, n)?;
         self.recount_ref_errors();
-        self.undo.record(Delta::ShiftCols {
+        self.record_undo(Delta::ShiftCols {
             sheet: id,
             at,
             count: n,
@@ -2960,7 +2981,7 @@ impl Workbook {
             .collect();
         self.sheet_mut(id)?.store.shift_cols(at, -n)?;
         self.recount_ref_errors();
-        self.undo.record(Delta::ShiftCols {
+        self.record_undo(Delta::ShiftCols {
             sheet: id,
             at,
             count: -n,
