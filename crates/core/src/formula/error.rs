@@ -2,12 +2,12 @@
 
 use crate::error::CoreError;
 
-/// Stable machine codes for formula errors. These are **not** WP-01 `codes::*`.
+/// Stable machine codes for formula errors.
 pub mod codes {
     /// Formula source could not be parsed.
     pub const PARSE: &str = "formula.parse";
     /// Source is longer than [`crate::limits::MAX_FORMULA_LEN`].
-    pub const LENGTH: &str = "formula.length";
+    pub const LENGTH: &str = crate::error::codes::FORMULA_LEN;
     /// Function nesting or the parser's recursion safety limit was exceeded.
     pub const DEPTH: &str = "formula.depth";
 }
