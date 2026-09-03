@@ -9,3 +9,5 @@
 =QUARTILE.EXC({5,5,5,5,5,5},2)	5	constant
 =QUARTILE.EXC({1,2,3,4,5,6},2)*2	7	median*2
 =ISNUMBER(QUARTILE.EXC({1,2,3,4,5,6},1))	TRUE	finite; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=QUARTILE.EXC({1,2,3},1)	1	Q1 lands exactly on rank 1; Microsoft PERCENTILE.EXC documentation
+=QUARTILE.EXC({1,2,3},3)	3	Q3 lands exactly on rank n; Microsoft PERCENTILE.EXC documentation

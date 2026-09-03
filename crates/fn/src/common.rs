@@ -498,7 +498,7 @@ pub fn percentile_exc(sorted_vals: &[f64], k: f64) -> Result<f64, ErrorKind> {
     }
     let lo = 1.0 / (n as f64 + 1.0);
     let hi = n as f64 / (n as f64 + 1.0);
-    if !k.is_finite() || k <= lo || k >= hi {
+    if !k.is_finite() || k < lo || k > hi {
         return Err(ErrorKind::Num);
     }
     let pos = k * (n as f64 + 1.0) - 1.0;

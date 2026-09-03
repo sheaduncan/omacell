@@ -6,6 +6,9 @@
 =PERCENTILE.EXC({1,#N/A},0.5)	#N/A	error
 =PERCENTILE.EXC({1,2,3,4,5},0.5)	3	n=5
 =PERCENTILE.EXC({10,20,30,40},0.5)	25	even
-=PERCENTILE.EXC({1,2,3,4},0.2)	#NUM!	near low; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PERCENTILE.EXC({1,2,3,4},0.2)	1	exact lower supported rank 1/(n+1); Microsoft PERCENTILE.EXC documentation
 =PERCENTILE.EXC({5,5,5,5},0.5)	5	constant
 =PERCENTILE.EXC({1,2,3,4},0.25)	1.25	exclusive 25th
+=PERCENTILE.EXC({1,2,3,4},0.8)	4	exact upper supported rank n/(n+1); Microsoft PERCENTILE.EXC documentation
+=PERCENTILE.EXC({1,2,3,4},0.199999999)	#NUM!	below the first supported rank; Microsoft PERCENTILE.EXC documentation
+=PERCENTILE.EXC({1,2,3,4},0.800000001)	#NUM!	above the last supported rank; Microsoft PERCENTILE.EXC documentation
