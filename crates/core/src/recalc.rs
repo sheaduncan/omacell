@@ -538,6 +538,12 @@ impl RecalcEngine {
         } else if was_formula {
             self.graph.remove_node(coord);
         }
+        if was_formula || self.graph.calc_chain().contains(&coord) {
+            self.asts.note_formula_change();
+            if self.asts.needs_retain() {
+                self.retain_live_asts(wb);
+            }
+        }
         self.dirty.insert(coord);
         self.dirty.extend(dependents);
         // Dynamic cells that resolved to this cell last pass.
@@ -553,6 +559,20 @@ impl RecalcEngine {
             })
             .collect();
         self.dirty.extend(dyn_watchers);
+    }
+
+    fn retain_live_asts(&mut self, wb: &Workbook) {
+        let mut live = FxHashSet::default();
+        for sheet in wb.sheets() {
+            for (_, _, slot) in sheet.store.iter() {
+                if let Some(fid) = slot.formula
+                    && let Some(source) = wb.intern().formulas.get(fid)
+                {
+                    live.insert(source);
+                }
+            }
+        }
+        self.asts.retain_sources(live);
     }
 
     fn refresh_registry_volatility(&mut self, wb: &Workbook) {
@@ -1626,4 +1646,32 @@ pub fn format_cell(wb: &Workbook, sheet: crate::addr::SheetId, row: u32, col: u1
 fn _array_payload(values: Vec<Value>) -> Result<ArrayPayload, crate::error::CoreError> {
     let n = values.len() as u32;
     ArrayPayload::new(Array2D::new(1, n.max(1))?, values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ast_cache_releases_replaced_formula_sources_after_bounded_churn() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.active_sheet();
+        workbook.undo_log_mut().set_enabled(false);
+        workbook.set_formula_text(sheet, 0, 0, "=0").unwrap();
+        workbook.set_formula_text(sheet, 0, 1, "=42").unwrap();
+
+        let mut engine = RecalcEngine::new(FnRegistry::new());
+        engine.rebuild(&workbook);
+        for value in 1..=300 {
+            workbook
+                .set_formula_text(sheet, 0, 0, &format!("={value}"))
+                .unwrap();
+            engine.notify_edit(&workbook, CellCoord::new(sheet, 0, 0));
+        }
+
+        assert!(engine.asts.peek("=0").is_none());
+        assert!(engine.asts.peek("=300").is_some());
+        assert!(engine.asts.peek("=42").is_some());
+        assert!(engine.asts.len() <= AstCache::RETAIN_INTERVAL + 1);
+    }
 }
