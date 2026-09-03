@@ -164,6 +164,17 @@
   suites and strict Clippy, then run exact `just check` and reconcile this
   report.
 
+### 2026-09-03 legacy CEILING zero-significance plan (written before coding)
+
+- Change the existing `CEILING(4,0)` corpus expectation first and add a
+  negative-number regression proving zero significance returns zero for either
+  sign of the number.
+- Return zero before sign validation or division in the legacy two-argument
+  `CEILING` implementation. Keep `FLOOR`, the `.MATH`/`.PRECISE` variants,
+  nonzero significance rules, public interfaces, and dependencies unchanged.
+- Run the complete function/core suites and strict Clippy, then run exact
+  `just check` and reconcile this report with test-first evidence.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -474,11 +485,28 @@ Host: rustc 1.98.0, Linux.
   - Semantics follow Microsoft's [`PERCENTILE.EXC`](https://support.microsoft.com/en-us/excel/functions/percentile-exc-function)
     and [`QUARTILE.EXC`](https://support.microsoft.com/en-us/excel/functions/quartile-exc-function)
     documentation.
+- 2026-09-03 legacy `CEILING` zero-significance test-first evidence:
+  - The positive and negative cases `CEILING(4,0)` and `CEILING(-4,0)` both
+    initially returned `#DIV/0!`; they now return numeric zero.
+  - Existing zero-number, exact-multiple, coercion, error-propagation, and
+    Excel 2010+ asymmetric-sign cases remain green. `FLOOR` and the
+    `.MATH`/`.PRECISE` implementations are unchanged.
+  - The complete function/core suites pass (22 function integration tests, 73
+    core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - The optional LibreOffice cross-check skipped because no LibreOffice
+    converter is installed; no runtime or test dependency was introduced.
+  - The zero result follows the independently verified Excel audit case;
+    retained nonzero behavior follows Microsoft's [`CEILING`](https://support.microsoft.com/en-us/excel/functions/ceiling-function)
+    documentation.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1578** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1579** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -521,6 +549,8 @@ Host: rustc 1.98.0, Linux.
     remain ignored.
 11. **Resolved 2026-09-03:** exclusive-percentile ranks exactly one and n are
     valid endpoints; only ranks below one or above n are rejected.
+12. **Resolved 2026-09-03:** legacy `CEILING` returns numeric zero when its
+    significance is zero, for positive and negative numbers alike.
 
 ## RFC (only if a frozen contract changed)
 
@@ -541,6 +571,9 @@ The `SUMPRODUCT` follow-up changes no public signature or frozen contract.
 The `PERCENTRANK` follow-up changes no public signature or frozen contract.
 
 The explicit omitted numeric argument follow-up changes no public signature or
+frozen contract.
+
+The legacy `CEILING` zero-significance follow-up changes no public signature or
 frozen contract.
 
 The exclusive-percentile endpoint follow-up changes no public signature or

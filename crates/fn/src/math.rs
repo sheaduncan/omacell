@@ -1263,11 +1263,7 @@ fn floor_precise_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
 fn ceiling_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     binary(ctx, args, |n, sig| {
         if sig == 0.0 {
-            return if n == 0.0 {
-                Ok(0.0)
-            } else {
-                Err(ErrorKind::Div0)
-            };
+            return Ok(0.0);
         }
         if n > 0.0 && sig < 0.0 {
             return Err(ErrorKind::Num);
