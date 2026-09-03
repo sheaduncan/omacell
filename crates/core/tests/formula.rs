@@ -6,7 +6,7 @@ use omacell_core::formula::{
     BinOp, ExprKind, MAX_FORMULA_DEPTH, ParseOptions, PostfixOp, PrefixOp, RefStyle, RewriteOp,
     TableColumns, collect_deps, parse, parse_editor, parse_with, print, rewrite_print,
 };
-use omacell_core::limits::{MAX_COLS, MAX_ROWS};
+use omacell_core::limits::{MAX_COLS, MAX_FORMULA_LEN, MAX_ROWS};
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
 
@@ -124,6 +124,25 @@ fn numeric_literals_remain_finite_and_stable_at_excel_boundary() {
     let canonical = print(&parsed);
     let reparsed = parse(&canonical).expect("canonical maximum must reparse");
     assert_eq!(print(&reparsed), canonical);
+}
+
+#[test]
+fn oversized_formula_uses_one_stable_engine_code() {
+    let source = format!("={}", "1".repeat(MAX_FORMULA_LEN));
+    let parse_error = parse(&source).expect_err("parser must enforce the formula limit");
+    let interner_error = omacell_core::workbook::Workbook::new()
+        .intern_formula(&source)
+        .expect_err("interner must enforce the formula limit");
+
+    assert_eq!(
+        parse_error.error.code,
+        omacell_core::error::codes::FORMULA_LEN
+    );
+    assert_eq!(interner_error.code, omacell_core::error::codes::FORMULA_LEN);
+    assert_eq!(
+        omacell_core::formula::codes::LENGTH,
+        omacell_core::error::codes::FORMULA_LEN
+    );
 }
 
 #[test]

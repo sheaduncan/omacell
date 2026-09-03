@@ -56,7 +56,7 @@ JSON of `Value::Number` is a JSON number. That is not bit-exact for every IEEE v
 |---|---|
 | `ErrorKind` (Excel cell errors, exact display strings, `error_type()`) | [`error.rs`](../crates/core/src/error.rs) |
 | `CoreError` `{code, message, hint}` | same |
-| `codes::*` (`addr.ref`, `addr.parse`, `command.id`, `changeset.id`, `changeset.inverse`, `value.array_shape`) | same |
+| `codes::*` (`addr.*`, `command.id`, `changeset.*`, `value.array_shape`, `sheet.*`, `name.defined`, `table.name`, `undo.empty`, `formula.len`, `numfmt.parse`) | same |
 
 `ERROR.TYPE` follows the Excel 365 extended table: classic errors and
 `#GETTING_DATA` use 1–8, then `#SPILL!` 9, `#CONNECT!` 10, `#BLOCKED!` 11,
