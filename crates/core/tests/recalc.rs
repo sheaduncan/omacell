@@ -359,7 +359,7 @@ fn overlapping_spills_preserve_the_first_owner_and_block_the_second() {
 }
 
 #[test]
-fn fixed_cse_range_truncates_pads_and_orders_dependents() {
+fn fixed_cse_range_truncates_broadcasts_and_orders_dependents() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
     let range = RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(1, 1).unwrap());
@@ -371,8 +371,8 @@ fn fixed_cse_range_truncates_pads_and_orders_dependents() {
 
     assert_eq!(display(&wb, 0, 0), "1");
     assert_eq!(display(&wb, 0, 1), "2");
-    assert_eq!(display(&wb, 1, 0), "#N/A");
-    assert_eq!(display(&wb, 1, 1), "#N/A");
+    assert_eq!(display(&wb, 1, 0), "1");
+    assert_eq!(display(&wb, 1, 1), "2");
     assert_eq!(display(&wb, 0, 2), "20");
     for row in 0..=1 {
         for col in 0..=1 {
@@ -385,6 +385,49 @@ fn fixed_cse_range_truncates_pads_and_orders_dependents() {
     assert_eq!(cse.anchor, CellRef::new(0, 0).unwrap());
     assert_eq!(cse.range, range);
     assert_eq!(wb.formula_text_at(s, 1, 1).as_deref(), Some("{={1,2,3}}"));
+}
+
+#[test]
+fn fixed_cse_broadcasts_singleton_dimensions_and_pads_missing_coordinates() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+
+    let scalar_range =
+        RangeRef::from_corners(CellRef::new(0, 3).unwrap(), CellRef::new(1, 5).unwrap());
+    wb.set_array_formula_text(sheet, scalar_range, "=9")
+        .unwrap();
+
+    let column_range =
+        RangeRef::from_corners(CellRef::new(0, 7).unwrap(), CellRef::new(2, 8).unwrap());
+    wb.set_array_formula_text(sheet, column_range, "={1;2;3}")
+        .unwrap();
+
+    let matrix_range =
+        RangeRef::from_corners(CellRef::new(0, 10).unwrap(), CellRef::new(2, 12).unwrap());
+    wb.set_array_formula_text(sheet, matrix_range, "={1,2;3,4}")
+        .unwrap();
+
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_full(&mut wb);
+
+    for row in 0..=1 {
+        for col in 3..=5 {
+            assert_eq!(display(&wb, row, col), "9");
+        }
+    }
+    for (row, expected) in [(0, "1"), (1, "2"), (2, "3")] {
+        assert_eq!(display(&wb, row, 7), expected);
+        assert_eq!(display(&wb, row, 8), expected);
+    }
+    for (row, expected) in [
+        (0, ["1", "2", "#N/A"]),
+        (1, ["3", "4", "#N/A"]),
+        (2, ["#N/A", "#N/A", "#N/A"]),
+    ] {
+        for (offset, expected) in expected.into_iter().enumerate() {
+            assert_eq!(display(&wb, row, 10 + offset as u16), expected);
+        }
+    }
 }
 
 #[test]

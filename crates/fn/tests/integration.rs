@@ -39,6 +39,21 @@ fn lazy_if_family_skips_unselected_error_volatile_and_async() {
 }
 
 #[test]
+fn let_bindings_keep_error_values_for_error_handlers() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_formula_text(sheet, 0, 0, "=LET(x,1/0,IFERROR(x,5))")
+        .unwrap();
+    wb.set_formula_text(sheet, 1, 0, "=LET(x,1/0,x+1)").unwrap();
+
+    let mut engine = engine();
+    engine.recalc_full(&mut wb);
+
+    assert_eq!(display(&wb, 0, 0), "5");
+    assert_eq!(display(&wb, 1, 0), "#DIV/0!");
+}
+
+#[test]
 fn and_or_do_not_short_circuit() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
