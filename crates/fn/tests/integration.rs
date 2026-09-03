@@ -2,7 +2,7 @@
 
 use omacell_core::coerce::Scalar;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeArray, RuntimeValue};
-use omacell_core::graph::CellCoord;
+use omacell_core::graph::{CellCoord, Precedent};
 use omacell_core::recalc::{RecalcEngine, format_cell};
 use omacell_core::spill::SpillTable;
 use omacell_core::workbook::Workbook;
@@ -120,6 +120,81 @@ fn random_is_deterministic_across_thread_counts() {
     let eight = snapshot(8);
     assert_eq!(one, eight);
     assert_ne!(one[0], one[1]);
+}
+
+#[test]
+fn dynamic_references_order_targets_and_chains_in_the_same_pass() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_formula_text(sheet, 0, 0, "=INDIRECT(\"B1\")")
+        .unwrap();
+    wb.set_formula_text(sheet, 0, 1, "=C1*2").unwrap();
+    wb.set_number(sheet, 0, 2, 3.0).unwrap();
+    wb.set_formula_text(sheet, 0, 3, "=INDIRECT(\"A1\")+1")
+        .unwrap();
+    wb.set_formula_text(sheet, 0, 4, "=OFFSET(C1,0,-1)")
+        .unwrap();
+    wb.set_formula_text(sheet, 0, 5, "=ROWS(INDIRECT(\"F1:F3\"))")
+        .unwrap();
+    wb.set_formula_text(sheet, 0, 6, "=SUM(INDIRECT(\"C:C\"))")
+        .unwrap();
+
+    let mut engine = engine();
+    let result = engine.recalc_full(&mut wb);
+
+    assert!(result.circular.is_empty());
+    assert_eq!(display(&wb, 0, 0), "6");
+    assert_eq!(display(&wb, 0, 1), "6");
+    assert_eq!(display(&wb, 0, 3), "7");
+    assert_eq!(display(&wb, 0, 4), "6");
+    assert_eq!(display(&wb, 0, 5), "3");
+    assert_eq!(display(&wb, 0, 6), "3");
+    assert!(
+        engine
+            .graph()
+            .precedents(CellCoord::new(sheet, 0, 0))
+            .contains(&Precedent::Cell(CellCoord::new(sheet, 0, 1)))
+    );
+    assert!(
+        engine
+            .graph()
+            .precedents(CellCoord::new(sheet, 0, 5))
+            .is_empty(),
+        "shape-only dynamic references must not create value-ordering edges"
+    );
+    assert!(
+        engine
+            .graph()
+            .precedents(CellCoord::new(sheet, 0, 6))
+            .iter()
+            .any(|precedent| matches!(
+                precedent,
+                Precedent::Range {
+                    whole_col: true,
+                    ..
+                }
+            ))
+    );
+}
+
+#[test]
+fn dynamically_resolved_cycles_use_the_circular_policy() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_formula_text(sheet, 0, 0, "=INDIRECT(\"B1\")+1")
+        .unwrap();
+    wb.set_formula_text(sheet, 0, 1, "=INDIRECT(\"A1\")+1")
+        .unwrap();
+
+    let mut engine = engine();
+    let result = engine.recalc_full(&mut wb);
+
+    assert_eq!(
+        result.circular,
+        vec![CellCoord::new(sheet, 0, 0), CellCoord::new(sheet, 0, 1)]
+    );
+    assert_eq!(display(&wb, 0, 0), "0");
+    assert_eq!(display(&wb, 0, 1), "0");
 }
 
 #[test]

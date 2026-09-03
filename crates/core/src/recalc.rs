@@ -281,6 +281,14 @@ enum CseTarget {
     Range(crate::addr::RangeRef),
 }
 
+struct CellEval {
+    cell: CellCoord,
+    value: RuntimeValue,
+    flags: EvalFlags,
+    dynamic_reads: Vec<Reference>,
+    cse: Option<CseTarget>,
+}
+
 /// Recalculation engine: graph, AST cache, registry, spill table, thread pool.
 ///
 /// ```
@@ -311,6 +319,8 @@ pub struct RecalcEngine {
     last_changed_cell: Option<CellCoord>,
     /// Last dynamic-resolved refs per cell.
     dynamic_edges: FxHashMap<CellCoord, Vec<Reference>>,
+    /// Dynamic-resolved refs whose values determine recalculation order.
+    dynamic_precedents: FxHashMap<CellCoord, Vec<Reference>>,
     orphaned_spills: FxHashSet<CellCoord>,
     cse_ranges: FxHashMap<CellCoord, RangeRef>,
     orphaned_cse_ranges: FxHashMap<CellCoord, RangeRef>,
@@ -372,6 +382,7 @@ impl RecalcEngine {
             async_provider: None,
             last_changed_cell: None,
             dynamic_edges: FxHashMap::default(),
+            dynamic_precedents: FxHashMap::default(),
             orphaned_spills: FxHashSet::default(),
             cse_ranges: FxHashMap::default(),
             orphaned_cse_ranges: FxHashMap::default(),
@@ -467,6 +478,7 @@ impl RecalcEngine {
                 .filter(|origin| !formula_set.contains(origin)),
         );
         self.dynamic_edges.clear();
+        self.dynamic_precedents.clear();
     }
 
     /// Rebuild dependency state after an outer workbook transaction rolls back.
@@ -580,6 +592,33 @@ impl RecalcEngine {
         });
         self.graph
             .set_volatile(cell, self.graph.is_volatile(cell) || registry_volatile);
+    }
+
+    fn refresh_dynamic_precedents(&mut self) -> Vec<CellCoord> {
+        let updates: Vec<(CellCoord, Vec<Reference>)> = self
+            .graph
+            .dynamics()
+            .into_iter()
+            .map(|cell| {
+                let references = self
+                    .dynamic_precedents
+                    .get(&cell)
+                    .cloned()
+                    .unwrap_or_default();
+                (cell, references)
+            })
+            .collect();
+        self.graph.replace_dynamic_precedents(&updates)
+    }
+
+    fn store_dynamic_references(
+        &mut self,
+        cell: CellCoord,
+        resolved: Vec<Reference>,
+        read: Vec<Reference>,
+    ) {
+        store_references(&mut self.dynamic_edges, cell, resolved);
+        store_references(&mut self.dynamic_precedents, cell, read);
     }
 
     /// Mark a completed async node for its second recalculation wave.
@@ -728,6 +767,7 @@ impl RecalcEngine {
         let recalc_undo = wb.undo_log_mut().is_enabled();
         wb.undo_log_mut().set_enabled(false);
         let mut circular = self.graph.circular_set(&dirty);
+        let mut cycle_nodes = circular.clone();
         let iteration = wb.settings().iteration;
         let mut evaluated = 0u64;
         let mut accum = RecalcAccum::default();
@@ -758,7 +798,6 @@ impl RecalcEngine {
             }
         }
 
-        let circular_nodes = circular.clone();
         if iteration.enabled && !circular.is_empty() {
             let (count, stopped) = self.iterate_cycle(
                 wb,
@@ -775,11 +814,80 @@ impl RecalcEngine {
             circular.clear();
         }
 
+        let mut dynamic_waves_left = self.graph.formula_cells().len().max(1);
+        loop {
+            let changed = self.refresh_dynamic_precedents();
+            if changed.is_empty() {
+                break;
+            }
+            if dynamic_waves_left == 0 {
+                let affected = self.graph.propagate(changed);
+                for cell in &affected {
+                    commit_scalar(wb, *cell, Scalar::Error(ErrorKind::Num), CellFlags::DEFAULT);
+                }
+                evaluated += affected.len() as u64;
+                break;
+            }
+            dynamic_waves_left -= 1;
+
+            let wave = self.graph.propagate(changed);
+            if wave.is_empty() {
+                break;
+            }
+            let wave_circular = self.graph.circular_set(&wave);
+            cycle_nodes.extend(wave_circular.iter().copied());
+            if !wave_circular.is_empty() && !iteration.enabled {
+                for cell in &wave_circular {
+                    if cancelled(cancel) {
+                        return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+                    }
+                    commit_scalar(wb, *cell, Scalar::Number(0.0), CellFlags::DEFAULT);
+                }
+                evaluated += wave_circular.len() as u64;
+                circular.extend(wave_circular.iter().copied());
+            }
+
+            let mut wave_accum = RecalcAccum::default();
+            for generation in self.graph.generations(&wave) {
+                let (count, stopped) =
+                    self.eval_generation(wb, &generation, &mut wave_accum, cancel);
+                if stopped {
+                    return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+                }
+                evaluated += count as u64;
+            }
+            accum.spill_blocked.extend(wave_accum.spill_blocked);
+            accum.pending_async.extend(wave_accum.pending_async);
+            accum.stale.extend(wave_accum.stale);
+            accum.async_hints.extend(wave_accum.async_hints);
+            accum.spill_follow.extend(wave_accum.spill_follow);
+
+            if iteration.enabled && !wave_circular.is_empty() {
+                let (count, stopped) = self.iterate_cycle(
+                    wb,
+                    &wave_circular,
+                    iteration.max_iterations,
+                    iteration.max_change,
+                    cancel,
+                );
+                if stopped {
+                    return self.restore_cancelled(wb, backup.as_ref(), t0, evaluated);
+                }
+                evaluated += count as u64;
+                accum.spill_follow.extend(wave_circular);
+            }
+        }
+
+        circular.sort_unstable();
+        circular.dedup();
+        cycle_nodes.sort_unstable();
+        cycle_nodes.dedup();
+
         // A direct reference to a spill ghost is statically an edge to that
         // cell, not to the spill origin. Re-run affected formulas after the
         // origin commits, and likewise re-run dependents after an iterative
         // cycle has converged. Chained spills may require several bounded waves.
-        let circular_set: FxHashSet<CellCoord> = circular_nodes.into_iter().collect();
+        let circular_set: FxHashSet<CellCoord> = cycle_nodes.into_iter().collect();
         let mut waves_left = self.graph.formula_cells().len().max(1);
         while !accum.spill_follow.is_empty() && waves_left > 0 {
             waves_left -= 1;
@@ -855,7 +963,7 @@ impl RecalcEngine {
         if generation.is_empty() {
             return (0, false);
         }
-        let mut results: Vec<(CellCoord, RuntimeValue, EvalFlags, Option<CseTarget>)> = {
+        let mut results: Vec<CellEval> = {
             let wb_ref: &Workbook = wb;
             let registry = &self.registry;
             let spill = &self.spill;
@@ -891,11 +999,18 @@ impl RecalcEngine {
         if cancelled(cancel) {
             return (0, true);
         }
-        results.sort_by_key(|(c, _, _, _)| *c);
+        results.sort_by_key(|result| result.cell);
 
         let undo = wb.undo_log_mut().is_enabled();
         wb.undo_log_mut().set_enabled(false);
-        for (cell, value, flags, cse) in results {
+        for CellEval {
+            cell,
+            value,
+            flags,
+            dynamic_reads,
+            cse,
+        } in results
+        {
             if cancelled(cancel) {
                 return (0, true);
             }
@@ -908,17 +1023,7 @@ impl RecalcEngine {
             if let Some(h) = flags.hint {
                 accum.async_hints.push((cell, h));
             }
-            if flags.dynamic.is_empty() {
-                self.dynamic_edges.remove(&cell);
-            } else {
-                let mut refs = Vec::new();
-                for reference in flags.dynamic {
-                    if !refs.contains(&reference) {
-                        refs.push(reference);
-                    }
-                }
-                self.dynamic_edges.insert(cell, refs);
-            }
+            self.store_dynamic_references(cell, flags.dynamic, dynamic_reads);
             let old_spill = self.spill.get(cell);
             let blocked = commit_value(wb, &mut self.spill, cell, value, cse, flags.stale);
             if let Some(region) = old_spill {
@@ -971,7 +1076,7 @@ impl RecalcEngine {
                 let Ok(formula) = self.asts.get_or_parse(&src) else {
                     continue;
                 };
-                let (value, _) = eval_formula_in_session(
+                let (value, flags, dynamic_reads) = eval_formula_in_session(
                     wb,
                     &self.registry,
                     &self.spill,
@@ -981,6 +1086,7 @@ impl RecalcEngine {
                     self.pass_env,
                     self.last_changed_cell,
                 );
+                self.store_dynamic_references(cell, flags.dynamic, dynamic_reads);
                 let cse = cse_target(wb, cell);
                 let after = match &value {
                     RuntimeValue::Scalar(Scalar::Number(v)) => *v,
@@ -1017,6 +1123,24 @@ impl RecalcEngine {
     }
 }
 
+fn store_references(
+    map: &mut FxHashMap<CellCoord, Vec<Reference>>,
+    cell: CellCoord,
+    references: Vec<Reference>,
+) {
+    if references.is_empty() {
+        map.remove(&cell);
+        return;
+    }
+    let mut unique = Vec::new();
+    for reference in references {
+        if !unique.contains(&reference) {
+            unique.push(reference);
+        }
+    }
+    map.insert(cell, unique);
+}
+
 fn cancelled(cancel: Option<&std::sync::atomic::AtomicBool>) -> bool {
     cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
 }
@@ -1032,7 +1156,7 @@ fn eval_one_cell(
     last_changed_cell: Option<CellCoord>,
     provider: Option<&dyn AsyncNodeProvider>,
     cell: CellCoord,
-) -> Option<(CellCoord, RuntimeValue, EvalFlags, Option<CseTarget>)> {
+) -> Option<CellEval> {
     let slot = wb.get(cell.sheet, cell.row, cell.col).ok()??;
     let fid = slot.formula?;
     let src = wb.intern().formulas.get(fid)?;
@@ -1043,22 +1167,23 @@ fn eval_one_cell(
         .with_last_changed_cell(last_changed_cell)
         .with_async_provider(provider);
     let raw = eval_expr(&mut ctx, &formula.ast);
-    let (pending, is_stale, hint, dynamic) = ctx.take_flags();
     let value = match raw {
         RuntimeValue::Ref(r) => ctx.materialize(RuntimeValue::Ref(r)),
         other => other,
     };
-    Some((
+    let (pending, is_stale, hint, dynamic, dynamic_reads) = ctx.take_flags();
+    Some(CellEval {
         cell,
         value,
-        EvalFlags {
+        flags: EvalFlags {
             pending_async: pending,
             stale: is_stale,
             hint,
             dynamic,
         },
+        dynamic_reads,
         cse,
-    ))
+    })
 }
 
 fn reference_contains(r: &Reference, cell: CellCoord) -> bool {
