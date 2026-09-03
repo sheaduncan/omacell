@@ -350,7 +350,7 @@ impl Block {
         self.slots.is_empty()
     }
 
-    fn iter_cells(&self, coord: BlockCoord) -> impl Iterator<Item = (u32, u16, CellSlot)> + '_ {
+    fn iter_cells(&self, coord: BlockCoord) -> BlockIter<'_> {
         let (orow, ocol) = coord.origin();
         BlockIter {
             bits: &self.bits,
@@ -454,6 +454,46 @@ impl Iterator for BlockIter<'_> {
             let slot = self.slots[self.slot_i];
             self.slot_i += 1;
             return Some((self.orow + r, self.ocol + c, slot));
+        }
+        None
+    }
+}
+
+struct RegionIter<'a> {
+    block_rows: Vec<Vec<std::iter::Peekable<BlockIter<'a>>>>,
+    block_row: usize,
+    row0: u32,
+    col0: u16,
+    row1: u32,
+    col1: u16,
+}
+
+impl Iterator for RegionIter<'_> {
+    type Item = (u32, u16, CellSlot);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(blocks) = self.block_rows.get_mut(self.block_row) {
+            let mut next_block = None;
+            let mut next_coord = None;
+            for (index, cells) in blocks.iter_mut().enumerate() {
+                while cells.peek().is_some_and(|(row, col, _)| {
+                    *row < self.row0 || *row > self.row1 || *col < self.col0 || *col > self.col1
+                }) {
+                    let _ = cells.next();
+                }
+                let Some((row, col, _)) = cells.peek() else {
+                    continue;
+                };
+                let coord = (*row, *col);
+                if next_coord.is_none_or(|current| coord < current) {
+                    next_block = Some(index);
+                    next_coord = Some(coord);
+                }
+            }
+            if let Some(index) = next_block {
+                return blocks[index].next();
+            }
+            self.block_row += 1;
         }
         None
     }
@@ -588,17 +628,9 @@ impl SheetStore {
         self.used.map(|u| (u.max_row, u.max_col))
     }
 
-    /// Row-major iteration of occupied cells, in sorted block order.
+    /// Row-major iteration of occupied cells across sorted occupied blocks.
     pub fn iter(&self) -> impl Iterator<Item = (u32, u16, CellSlot)> + '_ {
-        let mut coords: Vec<BlockCoord> = self.blocks.keys().copied().collect();
-        coords.sort_unstable();
-        coords.into_iter().flat_map(|coord| {
-            self.blocks
-                .get(&coord)
-                .map(|b| b.iter_cells(coord))
-                .into_iter()
-                .flatten()
-        })
+        self.region_iter(0, 0, MAX_ROWS - 1, MAX_COLS - 1)
     }
 
     /// Occupied cells in one row, ordered by column.
@@ -664,8 +696,47 @@ impl SheetStore {
         } else {
             (col1, col0)
         };
-        self.iter()
-            .filter(move |(r, c, _)| *r >= r0 && *r <= r1 && *c >= c0 && *c <= c1)
+        self.region_iter(r0, c0, r1, c1)
+    }
+
+    fn region_iter(&self, row0: u32, col0: u16, row1: u32, col1: u16) -> RegionIter<'_> {
+        let first_block = BlockCoord::from_cell(row0, col0);
+        let last_block = BlockCoord::from_cell(row1, col1);
+        let mut coords = self
+            .blocks
+            .keys()
+            .copied()
+            .filter(|coord| {
+                coord.brow >= first_block.brow
+                    && coord.brow <= last_block.brow
+                    && coord.bcol >= first_block.bcol
+                    && coord.bcol <= last_block.bcol
+            })
+            .collect::<Vec<_>>();
+        coords.sort_unstable();
+
+        let mut block_rows: Vec<Vec<std::iter::Peekable<BlockIter<'_>>>> = Vec::new();
+        let mut current_row = None;
+        for coord in coords {
+            if current_row != Some(coord.brow) {
+                block_rows.push(Vec::new());
+                current_row = Some(coord.brow);
+            }
+            if let Some(block) = self.blocks.get(&coord)
+                && let Some(row) = block_rows.last_mut()
+            {
+                row.push(block.iter_cells(coord).peekable());
+            }
+        }
+
+        RegionIter {
+            block_rows,
+            block_row: 0,
+            row0,
+            col0,
+            row1,
+            col1,
+        }
     }
 
     /// Insert (`count > 0`) or delete (`count < 0`) rows at `at`.
@@ -903,6 +974,26 @@ mod tests {
         s.set(0, 0, CellSlot::number(3.0)).unwrap();
         let pos: Vec<_> = s.iter().map(|(r, c, _)| (r, c)).collect();
         assert_eq!(pos, vec![(0, 0), (0, 2), (1, 1)]);
+    }
+
+    #[test]
+    fn iter_and_region_are_row_major_across_column_blocks() {
+        let mut store = SheetStore::new();
+        for (row, col, value) in [(1, 1, 1.0), (0, 300, 2.0), (0, 2, 3.0), (300, 0, 4.0)] {
+            store.set(row, col, CellSlot::number(value)).unwrap();
+        }
+
+        let all = store
+            .iter()
+            .map(|(row, col, _)| (row, col))
+            .collect::<Vec<_>>();
+        assert_eq!(all, vec![(0, 2), (0, 300), (1, 1), (300, 0)]);
+
+        let region = store
+            .iter_region(0, 0, 1, 400)
+            .map(|(row, col, _)| (row, col))
+            .collect::<Vec<_>>();
+        assert_eq!(region, vec![(0, 2), (0, 300), (1, 1)]);
     }
 
     #[test]
