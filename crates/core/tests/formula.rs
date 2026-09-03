@@ -388,6 +388,22 @@ fn three_d_dependencies_keep_the_sheet_span() {
 }
 
 #[test]
+fn external_workbook_references_do_not_register_local_precedents() {
+    let formula = parse("=[Book.xlsx]Sheet1!A1+[Other.xlsx]Sheet2!ExternalRate+Local!B2+LocalRate")
+        .expect("mixed external and local references");
+    let deps = collect_deps(&formula.ast);
+
+    assert_eq!(deps.ranges.len(), 1);
+    let (sheet, range) = &deps.ranges[0];
+    let sheet = sheet.as_ref().expect("local sheet qualifier");
+    assert_eq!(sheet.start, "Local");
+    assert_eq!(sheet.end, None);
+    assert_eq!((range.start.row, range.start.col), (1, 1));
+    assert_eq!((range.end.row, range.end.col), (1, 1));
+    assert_eq!(deps.names, vec![(None, "LocalRate".into())]);
+}
+
+#[test]
 fn function_depth_matches_excel_and_is_independent_from_syntax_depth() {
     let nested = |levels: usize, inner: &str| {
         format!("={}{}{}", "SUM(".repeat(levels), inner, ")".repeat(levels))
