@@ -5,11 +5,25 @@ use std::sync::Arc;
 use crate::coerce::{self, CmpOp, Scalar, finite_or_num, first_error, to_number, to_text};
 use crate::error::ErrorKind;
 use crate::formula::BinOp;
+use crate::locale::LocaleId;
 
 use super::{RuntimeArray, RuntimeValue};
 
+#[derive(Clone, Copy)]
+pub(super) enum OperandOrigin {
+    Expression,
+    Reference,
+}
+
 /// Broadcast two values and apply a scalar operator.
-pub(super) fn binary(op: BinOp, left: RuntimeValue, right: RuntimeValue) -> RuntimeValue {
+pub(super) fn binary(
+    op: BinOp,
+    left: RuntimeValue,
+    right: RuntimeValue,
+    locale: LocaleId,
+    left_origin: OperandOrigin,
+    right_origin: OperandOrigin,
+) -> RuntimeValue {
     if let Some(e) = left.error_kind().or_else(|| right.error_kind()) {
         return RuntimeValue::error(e);
     }
@@ -25,66 +39,122 @@ pub(super) fn binary(op: BinOp, left: RuntimeValue, right: RuntimeValue) -> Runt
         BinOp::Le => lift2(left, right, |a, b| cmp_scalar(CmpOp::Le, a, b)),
         BinOp::Gt => lift2(left, right, |a, b| cmp_scalar(CmpOp::Gt, a, b)),
         BinOp::Ge => lift2(left, right, |a, b| cmp_scalar(CmpOp::Ge, a, b)),
-        BinOp::Add => lift2(left, right, |a, b| arith(a, b, |x, y| x + y)),
-        BinOp::Sub => lift2(left, right, |a, b| arith(a, b, |x, y| x - y)),
-        BinOp::Mul => lift2(left, right, |a, b| arith(a, b, |x, y| x * y)),
-        BinOp::Div => lift2(left, right, div_scalar),
-        BinOp::Pow => lift2(left, right, pow_scalar),
+        BinOp::Add => lift2(left, right, |a, b| {
+            arith(a, b, locale, left_origin, right_origin, |x, y| x + y)
+        }),
+        BinOp::Sub => lift2(left, right, |a, b| {
+            arith(a, b, locale, left_origin, right_origin, |x, y| x - y)
+        }),
+        BinOp::Mul => lift2(left, right, |a, b| {
+            arith(a, b, locale, left_origin, right_origin, |x, y| x * y)
+        }),
+        BinOp::Div => lift2(left, right, |a, b| {
+            div_scalar(a, b, locale, left_origin, right_origin)
+        }),
+        BinOp::Pow => lift2(left, right, |a, b| {
+            pow_scalar(a, b, locale, left_origin, right_origin)
+        }),
     }
 }
 
 /// Unary minus / plus, broadcasting over arrays.
-pub(super) fn unary_minus(v: RuntimeValue) -> RuntimeValue {
-    lift1(v, |s| match to_number(s) {
+pub(super) fn unary_minus(
+    v: RuntimeValue,
+    locale: LocaleId,
+    origin: OperandOrigin,
+) -> RuntimeValue {
+    lift1(v, |s| match arithmetic_number(s, locale, origin) {
         Ok(n) => finite_or_num(-n),
         Err(e) => Scalar::Error(e),
     })
 }
 
 /// Unary plus, with the same arithmetic coercion as unary minus.
-pub(super) fn unary_plus(v: RuntimeValue) -> RuntimeValue {
-    lift1(v, |s| match to_number(s) {
+pub(super) fn unary_plus(v: RuntimeValue, locale: LocaleId, origin: OperandOrigin) -> RuntimeValue {
+    lift1(v, |s| match arithmetic_number(s, locale, origin) {
         Ok(n) => finite_or_num(n),
         Err(e) => Scalar::Error(e),
     })
 }
 
 /// Percent postfix.
-pub(super) fn percent(v: RuntimeValue) -> RuntimeValue {
-    lift1(v, |s| match to_number(s) {
+pub(super) fn percent(v: RuntimeValue, locale: LocaleId, origin: OperandOrigin) -> RuntimeValue {
+    lift1(v, |s| match arithmetic_number(s, locale, origin) {
         Ok(n) => finite_or_num(n / 100.0),
         Err(e) => Scalar::Error(e),
     })
 }
 
-fn arith(a: &Scalar, b: &Scalar, f: impl Fn(f64, f64) -> f64) -> Scalar {
+fn arith(
+    a: &Scalar,
+    b: &Scalar,
+    locale: LocaleId,
+    left_origin: OperandOrigin,
+    right_origin: OperandOrigin,
+    f: impl Fn(f64, f64) -> f64,
+) -> Scalar {
     if let Some(e) = first_error(a, b) {
         return Scalar::Error(e);
     }
-    match (to_number(a), to_number(b)) {
+    match (
+        arithmetic_number(a, locale, left_origin),
+        arithmetic_number(b, locale, right_origin),
+    ) {
         (Ok(x), Ok(y)) => finite_or_num(f(x, y)),
         (Err(e), _) | (_, Err(e)) => Scalar::Error(e),
     }
 }
 
-fn div_scalar(a: &Scalar, b: &Scalar) -> Scalar {
+fn div_scalar(
+    a: &Scalar,
+    b: &Scalar,
+    locale: LocaleId,
+    left_origin: OperandOrigin,
+    right_origin: OperandOrigin,
+) -> Scalar {
     if let Some(e) = first_error(a, b) {
         return Scalar::Error(e);
     }
-    match (to_number(a), to_number(b)) {
+    match (
+        arithmetic_number(a, locale, left_origin),
+        arithmetic_number(b, locale, right_origin),
+    ) {
         (Ok(_), Ok(0.0)) => Scalar::Error(ErrorKind::Div0),
         (Ok(x), Ok(y)) => finite_or_num(x / y),
         (Err(e), _) | (_, Err(e)) => Scalar::Error(e),
     }
 }
 
-fn pow_scalar(a: &Scalar, b: &Scalar) -> Scalar {
+fn pow_scalar(
+    a: &Scalar,
+    b: &Scalar,
+    locale: LocaleId,
+    left_origin: OperandOrigin,
+    right_origin: OperandOrigin,
+) -> Scalar {
     if let Some(e) = first_error(a, b) {
         return Scalar::Error(e);
     }
-    match (to_number(a), to_number(b)) {
+    match (
+        arithmetic_number(a, locale, left_origin),
+        arithmetic_number(b, locale, right_origin),
+    ) {
         (Ok(x), Ok(y)) => pow_excel(x, y),
         (Err(e), _) | (_, Err(e)) => Scalar::Error(e),
+    }
+}
+
+fn arithmetic_number(
+    scalar: &Scalar,
+    locale: LocaleId,
+    origin: OperandOrigin,
+) -> Result<f64, ErrorKind> {
+    match scalar {
+        Scalar::Text(_) if matches!(origin, OperandOrigin::Reference) => Err(ErrorKind::Value),
+        Scalar::Text(text) => {
+            coerce::parse_numeric_text_with_locale(text, locale).ok_or(ErrorKind::Value)
+        }
+        other => to_number(other),
     }
 }
 

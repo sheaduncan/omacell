@@ -12,6 +12,7 @@ use omacell_core::eval::{
 };
 use omacell_core::formula::Expr;
 use omacell_core::graph::CellCoord;
+use omacell_core::locale::LocaleId;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::recalc::{AsyncNodeProvider, RecalcEngine, RecalcResult, format_cell};
 use omacell_core::storage::CellFlags;
@@ -661,6 +662,24 @@ fn spill_display(eng: &RecalcEngine, wb: &Workbook, sheet: SheetId, row: u32, co
 #[test]
 fn coerce_corpus() {
     run_tsv(&corpus("eval/coerce.tsv"));
+}
+
+#[test]
+fn coerce_reference_corpus() {
+    run_omc(&corpus("eval/coerce_references.omc.txt"));
+}
+
+#[test]
+fn operator_numeric_text_uses_the_calculation_locale() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_formula_text(sheet, 0, 0, "=\"1.234,5\"+0").unwrap();
+    wb.set_formula_text(sheet, 1, 0, "=\"1.234,5%\"+0").unwrap();
+    let mut eng = engine();
+    eng.set_locale(LocaleId::DE_DE);
+    eng.recalc_full(&mut wb);
+    assert_eq!(display(&wb, sheet, 0, 0), "1234.5");
+    assert_eq!(display(&wb, sheet, 1, 0), "12.345");
 }
 
 #[test]

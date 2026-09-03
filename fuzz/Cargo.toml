@@ -63,6 +63,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "parse_numeric_text"
+path = "fuzz_targets/parse_numeric_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "pivot_calc"
 path = "fuzz_targets/pivot_calc.rs"
 test = false
