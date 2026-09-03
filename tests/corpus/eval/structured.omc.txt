@@ -25,3 +25,36 @@ expect F1 Item
 
 set G1 =SUM(Sales[Amt])
 expect G1 30
+
+set A6 #OfItems
+set B6 O'Brien
+set C6 [Bracket]
+set D6 @Owner
+set A7 11
+set B7 12
+set C7 13
+set D7 14
+set A8 21
+set B8 22
+set C8 23
+set D8 24
+
+table Escapes A6:D8 #OfItems O'Brien [Bracket] @Owner
+
+set F6 =SUM(Escapes['#OfItems])
+expect F6 32
+
+set G6 =SUM(Escapes[O''Brien])
+expect G6 34
+
+set H6 =SUM(Escapes['[Bracket']])
+expect H6 36
+
+set I6 =SUM(Escapes['@Owner])
+expect I6 38
+
+set J6 =SUM(Escapes[[#Data],['#OfItems]])
+expect J6 32
+
+set K6 =SUM(Escapes[['#OfItems]:['@Owner]])
+expect K6 140
