@@ -155,18 +155,22 @@ pub fn copy_delta(expr: &Expr, drow: i32, dcol: i32) -> Expr {
     )
 }
 
-/// Cut-paste: refs fully inside `src` retarget by dest − src.start (absolute too).
+/// Cut-paste: refs fully inside `src` retarget by dest − src.start (absolute too),
+/// while refs fully inside the overwritten destination become `#REF!`.
 #[must_use]
 pub fn move_range(expr: &Expr, src: RangeRef, dest: CellRef) -> Expr {
     let drow = i32::try_from(dest.row)
         .unwrap_or(0)
         .saturating_sub(i32::try_from(src.start.row).unwrap_or(0));
     let dcol = i32::from(dest.col).saturating_sub(i32::from(src.start.col));
+    let destination = shift_range(src, drow, dcol, false).ok();
     map_refs(
         expr,
         &mut |cell| {
             if cell_in_range(*cell, src) {
                 shift_cell(*cell, drow, dcol, false)
+            } else if destination.is_some_and(|range| cell_in_range(*cell, range)) {
+                Err(ErrorKind::Ref)
             } else {
                 Ok(*cell)
             }
@@ -174,6 +178,8 @@ pub fn move_range(expr: &Expr, src: RangeRef, dest: CellRef) -> Expr {
         &mut |r| {
             if range_fully_in(*r, src) {
                 shift_range(*r, drow, dcol, false)
+            } else if destination.is_some_and(|range| range_fully_in(*r, range)) {
+                Err(ErrorKind::Ref)
             } else {
                 Ok(*r)
             }

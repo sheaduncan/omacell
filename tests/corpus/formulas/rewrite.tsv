@@ -55,6 +55,9 @@ move	=A1:C1	A1:B1	E1		=A1:C1	partial overlap: leave unchanged (WP-03 decision)
 move	=SUM(A1,B1)	A1	D1		=SUM(D1,B1)	only the referent that was cut moves
 move	=Sheet1!A1	A1	C1		=Sheet1!C1	sheet-qualified cut retarget keeps the sheet
 move	=A1+A1	A1	B1		=B1+B1	every occurrence of the cut cell is rewritten
+move	=A1+B1	A1	B1		=B1+#REF!	Excel cut-paste retargets the source reference and invalidates the overwritten destination reference
+move	=$B$1	A1	B1		=#REF!	Excel cut-paste invalidates an absolute reference to the overwritten destination too
+move	=D1:E1	A1:B1	D1		=#REF!	Excel cut-paste invalidates a range fully contained in the overwritten destination
 move	=A2	A1:A3	C1		=C2	interior cell of a cut vertical range
 move	=B2	A1:C3	E5		=F6	cut block A1:C3 to E5: A1→E5 so B2→F6
 move	=Revenue	A1	C1		=Revenue	names are not retargeted by cut

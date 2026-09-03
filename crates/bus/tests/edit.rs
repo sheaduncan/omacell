@@ -159,10 +159,22 @@ fn cut_paste_moves_once_and_retargets_dependents() {
             .ok
     );
     assert!(
+        bus.execute(Origin::User, "cell.set", json!({"ref": "B1", "input": "2"}))
+            .ok
+    );
+    assert!(
         bus.execute(
             Origin::User,
             "cell.set",
             json!({"ref": "D1", "input": "=A1"})
+        )
+        .ok
+    );
+    assert!(
+        bus.execute(
+            Origin::User,
+            "cell.set",
+            json!({"ref": "E1", "input": "=B1"})
         )
         .ok
     );
@@ -177,6 +189,10 @@ fn cut_paste_moves_once_and_retargets_dependents() {
     assert_eq!(
         formula_src(bus.workbook(), bus.workbook().active_sheet(), 0, 3),
         "=B1"
+    );
+    assert_eq!(
+        formula_src(bus.workbook(), bus.workbook().active_sheet(), 0, 4),
+        "=#REF!"
     );
 }
 

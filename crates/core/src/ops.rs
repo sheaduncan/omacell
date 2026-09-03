@@ -2514,6 +2514,10 @@ fn rewrite_formulas_move_between(
         .sheet(dest_sheet)
         .map(|sheet| sheet.name.clone())
         .ok_or_else(|| CoreError::sheet_id("unknown destination sheet"))?;
+    let destination = RangeRef::from_corners(
+        dest,
+        CellRef::new(dest.row + height - 1, dest.col + width - 1)?,
+    );
     let sheet_ids: Vec<_> = wb.sheets().map(|sheet| sheet.id).collect();
     let mut updates = Vec::new();
     for id in sheet_ids {
@@ -2553,6 +2557,7 @@ fn rewrite_formulas_move_between(
                 &dest_name,
                 src,
                 dest,
+                destination,
             );
             let printed = print(&Formula {
                 ast,
@@ -2580,6 +2585,7 @@ fn map_sheet_move_between(
     dest_name: &str,
     src: RangeRef,
     dest: CellRef,
+    destination: RangeRef,
 ) -> Expr {
     expr.clone().map_local(&mut |item| {
         let kind = match item.kind {
@@ -2589,31 +2595,36 @@ fn map_sheet_move_between(
                     .map(|spec| spec.start.as_str())
                     .unwrap_or(logical_home);
                 if resolved.eq_ignore_ascii_case(source_name) {
-                    let moved = move_range(
-                        &Expr {
-                            kind: ExprKind::Cell { sheet: None, cell },
-                            span: item.span,
-                        },
-                        src,
-                        dest,
-                    );
-                    match moved.kind {
-                        ExprKind::Cell {
-                            cell: moved_cell, ..
-                        } if moved_cell != cell => ExprKind::Cell {
-                            sheet: qualifier_for(current_home, dest_name),
-                            cell: moved_cell,
-                        },
-                        _ if sheet.is_none()
-                            && !logical_home.eq_ignore_ascii_case(current_home) =>
-                        {
+                    if range_contains_cell(src, cell) {
+                        let moved = move_range(
+                            &Expr {
+                                kind: ExprKind::Cell { sheet: None, cell },
+                                span: item.span,
+                            },
+                            src,
+                            dest,
+                        );
+                        match moved.kind {
                             ExprKind::Cell {
-                                sheet: qualifier_for(current_home, source_name),
-                                cell,
-                            }
+                                cell: moved_cell, ..
+                            } => ExprKind::Cell {
+                                sheet: qualifier_for(current_home, dest_name),
+                                cell: moved_cell,
+                            },
+                            other => other,
                         }
-                        _ => ExprKind::Cell { sheet, cell },
+                    } else if sheet.is_none() && !logical_home.eq_ignore_ascii_case(current_home) {
+                        ExprKind::Cell {
+                            sheet: qualifier_for(current_home, source_name),
+                            cell,
+                        }
+                    } else {
+                        ExprKind::Cell { sheet, cell }
                     }
+                } else if resolved.eq_ignore_ascii_case(dest_name)
+                    && range_contains_cell(destination, cell)
+                {
+                    ExprKind::Error(ErrorKind::Ref)
                 } else {
                     ExprKind::Cell { sheet, cell }
                 }
@@ -2624,31 +2635,36 @@ fn map_sheet_move_between(
                     .map(|spec| spec.start.as_str())
                     .unwrap_or(logical_home);
                 if resolved.eq_ignore_ascii_case(source_name) {
-                    let moved = move_range(
-                        &Expr {
-                            kind: ExprKind::Range { sheet: None, range },
-                            span: item.span,
-                        },
-                        src,
-                        dest,
-                    );
-                    match moved.kind {
-                        ExprKind::Range {
-                            range: moved_range, ..
-                        } if moved_range != range => ExprKind::Range {
-                            sheet: qualifier_for(current_home, dest_name),
-                            range: moved_range,
-                        },
-                        _ if sheet.is_none()
-                            && !logical_home.eq_ignore_ascii_case(current_home) =>
-                        {
+                    if range_contains_range(src, range) {
+                        let moved = move_range(
+                            &Expr {
+                                kind: ExprKind::Range { sheet: None, range },
+                                span: item.span,
+                            },
+                            src,
+                            dest,
+                        );
+                        match moved.kind {
                             ExprKind::Range {
-                                sheet: qualifier_for(current_home, source_name),
-                                range,
-                            }
+                                range: moved_range, ..
+                            } => ExprKind::Range {
+                                sheet: qualifier_for(current_home, dest_name),
+                                range: moved_range,
+                            },
+                            other => other,
                         }
-                        _ => ExprKind::Range { sheet, range },
+                    } else if sheet.is_none() && !logical_home.eq_ignore_ascii_case(current_home) {
+                        ExprKind::Range {
+                            sheet: qualifier_for(current_home, source_name),
+                            range,
+                        }
+                    } else {
+                        ExprKind::Range { sheet, range }
                     }
+                } else if resolved.eq_ignore_ascii_case(dest_name)
+                    && range_contains_range(destination, range)
+                {
+                    ExprKind::Error(ErrorKind::Ref)
                 } else {
                     ExprKind::Range { sheet, range }
                 }
@@ -2660,6 +2676,17 @@ fn map_sheet_move_between(
             span: item.span,
         }
     })
+}
+
+fn range_contains_cell(range: RangeRef, cell: CellRef) -> bool {
+    let (r0, c0, r1, c1) = norm(range);
+    cell.row >= r0 && cell.row <= r1 && cell.col >= c0 && cell.col <= c1
+}
+
+fn range_contains_range(outer: RangeRef, inner: RangeRef) -> bool {
+    let (or0, oc0, or1, oc1) = norm(outer);
+    let (ir0, ic0, ir1, ic1) = norm(inner);
+    ir0 >= or0 && ir1 <= or1 && ic0 >= oc0 && ic1 <= oc1
 }
 
 fn qualifier_for(home: &str, target: &str) -> Option<SheetSpec> {

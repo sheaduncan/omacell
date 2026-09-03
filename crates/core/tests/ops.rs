@@ -677,13 +677,32 @@ fn cross_sheet_move_retargets_local_references_but_not_external_workbooks() {
     wb.set_number(source, 0, 0, 1.0).unwrap();
     wb.set_number(source, 0, 1, 2.0).unwrap();
     wb.set_cell_contents(source, 1, 0, "=B1").unwrap();
+    wb.set_number(target, 2, 2, 99.0).unwrap();
     wb.set_cell_contents(target, 0, 3, "=Sheet1!A1").unwrap();
     wb.set_cell_contents(target, 0, 4, "=[Book.xlsx]Sheet1!A1")
         .unwrap();
+    wb.set_cell_contents(target, 0, 5, "=C3").unwrap();
     move_range_cells_between(&mut wb, source, range(0, 0, 1, 0), target, cell(2, 2)).unwrap();
     assert_eq!(formula_src(&wb, target, 0, 3), "=C3");
     assert_eq!(formula_src(&wb, target, 0, 4), "=[Book.xlsx]Sheet1!A1");
+    assert_eq!(formula_src(&wb, target, 0, 5), "=#REF!");
     assert_eq!(formula_src(&wb, target, 3, 2), "=Sheet1!B1");
+}
+
+#[test]
+fn cross_sheet_same_coordinate_move_distinguishes_source_and_destination() {
+    let mut wb = Workbook::new();
+    let source = wb.active_sheet();
+    let target = wb.add_sheet("Target").unwrap();
+    let observer = wb.add_sheet("Observer").unwrap();
+    wb.set_number(source, 0, 0, 1.0).unwrap();
+    wb.set_number(target, 0, 0, 2.0).unwrap();
+    wb.set_cell_contents(observer, 0, 0, "=Target!A1+Sheet1!A1")
+        .unwrap();
+
+    move_range_cells_between(&mut wb, source, range(0, 0, 0, 0), target, cell(0, 0)).unwrap();
+
+    assert_eq!(formula_src(&wb, observer, 0, 0), "=#REF!+Target!A1");
 }
 
 #[test]
