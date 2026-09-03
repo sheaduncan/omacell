@@ -84,6 +84,8 @@ struct SheetBuckets {
     sheet: Vec<CellCoord>,
     cols: FxHashMap<u16, Vec<CellCoord>>,
     rows: FxHashMap<u32, Vec<CellCoord>>,
+    col_blocks: FxHashMap<u16, Vec<(CellCoord, RangeRef)>>,
+    row_blocks: FxHashMap<u32, Vec<(CellCoord, RangeRef)>>,
     blocks: FxHashMap<(u32, u16), Vec<(CellCoord, RangeRef)>>,
 }
 
@@ -277,6 +279,20 @@ impl DepGraph {
             }
             let br = cell.row / BLOCK_SIZE;
             let bc = u32::from(cell.col) / BLOCK_SIZE;
+            if let Some(v) = b.col_blocks.get(&(bc as u16)) {
+                for (dep, range) in v {
+                    if range_contains(*range, cell.row, cell.col) {
+                        out.insert(*dep);
+                    }
+                }
+            }
+            if let Some(v) = b.row_blocks.get(&br) {
+                for (dep, range) in v {
+                    if range_contains(*range, cell.row, cell.col) {
+                        out.insert(*dep);
+                    }
+                }
+            }
             if let Some(v) = b.blocks.get(&(br, bc as u16)) {
                 for (dep, range) in v {
                     if range_contains(*range, cell.row, cell.col) {
@@ -305,6 +321,11 @@ impl DepGraph {
         for (coord, fid) in &cells {
             self.add_node(wb, asts, *coord, *fid);
         }
+        asts.retain_sources(
+            cells
+                .iter()
+                .filter_map(|(_, fid)| wb.intern().formulas.get(*fid)),
+        );
         self.chain = cells.into_iter().map(|(c, _)| c).collect();
         self.finish_edges();
     }
@@ -342,6 +363,12 @@ impl DepGraph {
             }
             for v in b.rows.values_mut() {
                 v.retain(|c| *c != coord);
+            }
+            for v in b.col_blocks.values_mut() {
+                v.retain(|(c, _)| *c != coord);
+            }
+            for v in b.row_blocks.values_mut() {
+                v.retain(|(c, _)| *c != coord);
             }
             for v in b.blocks.values_mut() {
                 v.retain(|(c, _)| *c != coord);
@@ -428,12 +455,27 @@ impl DepGraph {
                 whole_row,
             } => {
                 let b = self.buckets.entry(*sheet).or_default();
-                if *whole_col && range.start.col == range.end.col {
+                if *whole_col && *whole_row {
+                    b.sheet.push(dep);
+                } else if *whole_col && range.start.col == range.end.col {
                     b.cols.entry(range.start.col).or_default().push(dep);
                 } else if *whole_row && range.start.row == range.end.row {
                     b.rows.entry(range.start.row).or_default().push(dep);
-                } else if *whole_col && *whole_row {
-                    b.sheet.push(dep);
+                } else if *whole_col {
+                    let first = u32::from(range.start.col.min(range.end.col)) / BLOCK_SIZE;
+                    let last = u32::from(range.start.col.max(range.end.col)) / BLOCK_SIZE;
+                    for block in first..=last {
+                        b.col_blocks
+                            .entry(block as u16)
+                            .or_default()
+                            .push((dep, *range));
+                    }
+                } else if *whole_row {
+                    let first = range.start.row.min(range.end.row) / BLOCK_SIZE;
+                    let last = range.start.row.max(range.end.row) / BLOCK_SIZE;
+                    for block in first..=last {
+                        b.row_blocks.entry(block).or_default().push((dep, *range));
+                    }
                 } else {
                     for block in blocks_of(*range) {
                         b.blocks.entry(block).or_default().push((dep, *range));
@@ -979,5 +1021,68 @@ fn resolve_sheet_spec(wb: &Workbook, spec: Option<&SheetSpec>, default: SheetId)
                 _ => SheetResolve::Missing,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multi_column_whole_column_range_skips_two_dimensional_blocks() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.active_sheet();
+        workbook.set_formula_text(sheet, 0, 2, "=SUM(A:B)").unwrap();
+
+        let mut graph = DepGraph::new();
+        graph.rebuild(&workbook, &mut AstCache::new());
+        let buckets = graph.buckets.get(&sheet).unwrap();
+        let two_dimensional_entries = buckets.blocks.values().map(Vec::len).sum::<usize>();
+        assert_eq!(two_dimensional_entries, 0);
+        assert_eq!(buckets.col_blocks.values().map(Vec::len).sum::<usize>(), 1);
+
+        let formula = CellCoord::new(sheet, 0, 2);
+        assert_eq!(
+            graph.dependents(CellCoord::new(sheet, MAX_ROWS - 1, 0)),
+            vec![formula]
+        );
+        assert_eq!(
+            graph.dependents(CellCoord::new(sheet, MAX_ROWS - 1, 1)),
+            vec![formula]
+        );
+        assert!(
+            graph
+                .dependents(CellCoord::new(sheet, MAX_ROWS - 1, 2))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn multi_row_whole_row_range_skips_two_dimensional_blocks() {
+        let mut workbook = Workbook::new();
+        let sheet = workbook.active_sheet();
+        workbook.set_formula_text(sheet, 2, 0, "=SUM(1:2)").unwrap();
+
+        let mut graph = DepGraph::new();
+        graph.rebuild(&workbook, &mut AstCache::new());
+        let buckets = graph.buckets.get(&sheet).unwrap();
+        let two_dimensional_entries = buckets.blocks.values().map(Vec::len).sum::<usize>();
+        assert_eq!(two_dimensional_entries, 0);
+        assert_eq!(buckets.row_blocks.values().map(Vec::len).sum::<usize>(), 1);
+
+        let formula = CellCoord::new(sheet, 2, 0);
+        assert_eq!(
+            graph.dependents(CellCoord::new(sheet, 0, MAX_COLS - 1)),
+            vec![formula]
+        );
+        assert_eq!(
+            graph.dependents(CellCoord::new(sheet, 1, MAX_COLS - 1)),
+            vec![formula]
+        );
+        assert!(
+            graph
+                .dependents(CellCoord::new(sheet, 2, MAX_COLS - 1))
+                .is_empty()
+        );
     }
 }

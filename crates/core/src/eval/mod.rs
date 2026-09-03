@@ -7,7 +7,7 @@ pub use registry::{ArrayLift, DynamicFn, DynamicFnBody, FnBody, FnDef, FnRegistr
 
 use std::sync::{Arc, Mutex};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::addr::{CellRef, RangeRef, SheetId, SheetSpec, col_to_letters};
 use crate::coerce::Scalar;
@@ -1971,12 +1971,19 @@ pub fn a1_of(row: u32, col: u16) -> String {
 }
 
 /// Shared AST cache keyed by interned source.
+///
+/// The recalculation engine periodically reconciles entries with formula
+/// sources still present in workbook cells so replaced formulas do not
+/// accumulate for the lifetime of a session.
 #[derive(Clone, Debug, Default)]
 pub struct AstCache {
     by_source: FxHashMap<String, Formula>,
+    formula_changes_since_retain: usize,
 }
 
 impl AstCache {
+    pub(crate) const RETAIN_INTERVAL: usize = 256;
+
     /// Empty cache.
     #[must_use]
     pub fn new() -> Self {
@@ -1997,6 +2004,26 @@ impl AstCache {
     #[must_use]
     pub fn peek(&self, source: &str) -> Option<&Formula> {
         self.by_source.get(source)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.by_source.len()
+    }
+
+    pub(crate) fn note_formula_change(&mut self) {
+        self.formula_changes_since_retain = self.formula_changes_since_retain.saturating_add(1);
+    }
+
+    pub(crate) fn needs_retain(&self) -> bool {
+        self.formula_changes_since_retain >= Self::RETAIN_INTERVAL
+    }
+
+    pub(crate) fn retain_sources<'a>(&mut self, sources: impl IntoIterator<Item = &'a str>) {
+        let live: FxHashSet<&str> = sources.into_iter().collect();
+        self.by_source
+            .retain(|source, _| live.contains(source.as_str()));
+        self.formula_changes_since_retain = 0;
     }
 }
 
