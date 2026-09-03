@@ -4148,6 +4148,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "omacell-xls-worker"
+version = "0.0.0"
+dependencies = [
+ "calamine",
+ "omacell-core",
+ "omacell-io",
+ "rustix 1.1.4",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

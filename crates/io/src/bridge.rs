@@ -1,45 +1,49 @@
-//! Native legacy BIFF `.xls` reader.
+//! Isolated native legacy BIFF `.xls` reader.
 
-use std::collections::BTreeMap;
-use std::io::{Cursor, Read, Seek};
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
-use calamine::{CellErrorType, Data, Reader, SheetType, SheetVisible, Xls, open_workbook};
-use omacell_core::addr::{CellRef, RangeRef, RefKind, parse_a1};
-use omacell_core::error::{CoreError, ErrorKind};
-use omacell_core::limits::{MAX_COLS, MAX_ROWS};
-use omacell_core::names::{DefinedName, NameReferent, NameScope};
-use omacell_core::sheet::SheetVisibility;
-use omacell_core::storage::{CellFlags, CellSlot};
-use omacell_core::style::{NumFmtId, Style};
-use omacell_core::value::Value;
-use omacell_core::workbook::{DateSystem, Workbook};
+use omacell_core::error::CoreError;
+use omacell_core::workbook::Workbook;
 
 use crate::error;
-use crate::xlsx::peer_lock_blocks;
+use crate::xlsx::{open_bytes, peer_lock_blocks};
 
 /// Maximum accepted legacy workbook size before BIFF parsing.
 pub const MAX_XLS_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_XLS_SHEETS: usize = 1_024;
 
-/// Open a legacy BIFF `.xls` workbook without launching an external converter.
+const WORKER_NAME: &str = "omacell-xls-worker";
+const WORKER_PROTOCOL: &str = "--stdio-v1";
+const WORKER_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_WORKER_OUTPUT: usize = 256 * 1024 * 1024;
+const MAX_WORKER_DIAGNOSTIC: usize = 64 * 1024;
+
+/// Open a legacy BIFF `.xls` workbook through Omacell's resource-limited
+/// companion parser. LibreOffice is not used.
 pub fn open_xls(path: &Path) -> Result<Workbook, CoreError> {
     peer_lock_blocks(path)?;
-    let len = std::fs::metadata(path)
-        .map_err(|err| error::xls_bridge(format!("{}: {err}", path.display())))?
-        .len();
-    validate_size(len)?;
-
-    let source: Xls<_> =
-        open_workbook::<Xls<_>, _>(path).map_err(|err| error::xls_bridge(err.to_string()))?;
-    load_xls(source)
+    let file = std::fs::File::open(path)
+        .map_err(|source| error::xls_bridge(format!("{}: {source}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_XLS_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| error::xls_bridge(format!("{}: {source}", path.display())))?;
+    validate_size(bytes.len() as u64)?;
+    open_xls_bytes(&bytes)
 }
 
-/// Open legacy BIFF `.xls` bytes without an external converter.
+/// Open legacy BIFF `.xls` bytes through Omacell's resource-limited companion
+/// parser. LibreOffice is not used.
 pub fn open_xls_bytes(bytes: &[u8]) -> Result<Workbook, CoreError> {
     validate_size(bytes.len() as u64)?;
-    let source = Xls::new(Cursor::new(bytes)).map_err(|err| error::xls_bridge(err.to_string()))?;
-    load_xls(source)
+    validate_cfb_difat(bytes)?;
+    let worker = find_worker()?;
+    let output = run_worker(&worker, bytes, WORKER_TIMEOUT, MAX_WORKER_OUTPUT)?;
+    Ok(open_bytes(&output)?.workbook)
 }
 
 fn validate_size(len: u64) -> Result<(), CoreError> {
@@ -51,329 +55,329 @@ fn validate_size(len: u64) -> Result<(), CoreError> {
     Ok(())
 }
 
-fn load_xls<RS: Read + Seek>(mut source: Xls<RS>) -> Result<Workbook, CoreError> {
-    let metadata = source.sheets_metadata().to_vec();
-    if metadata.is_empty() {
-        return Err(error::xls_bridge("workbook contains no sheets"));
+fn validate_cfb_difat(bytes: &[u8]) -> Result<(), CoreError> {
+    const SIGNATURE: &[u8; 8] = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1";
+    const MAX_REGULAR_SECTOR: u32 = 0xFFFF_FFFA;
+    const END_OF_CHAIN: u32 = 0xFFFF_FFFE;
+    const FREE_SECTOR: u32 = 0xFFFF_FFFF;
+
+    if bytes.len() < 512 || &bytes[..8] != SIGNATURE {
+        return Err(error::xls_bridge("invalid OLE compound-file header"));
     }
-    if metadata.len() > MAX_XLS_SHEETS {
-        return Err(error::xlsx_limit(format!(
-            "legacy .xls workbook has {} sheets; maximum is {MAX_XLS_SHEETS}",
-            metadata.len()
-        )));
-    }
-    if !metadata
-        .iter()
-        .any(|sheet| sheet.visible == SheetVisible::Visible)
-    {
+    if read_u16(bytes, 28) != Some(0xFFFE) || read_u16(bytes, 32) != Some(6) {
         return Err(error::xls_bridge(
-            "workbook must contain at least one visible sheet",
+            "invalid OLE compound-file byte order or mini-sector size",
+        ));
+    }
+    let sector_shift = read_u16(bytes, 30)
+        .ok_or_else(|| error::xls_bridge("truncated OLE compound-file header"))?;
+    let sector_size = match sector_shift {
+        9 => 512_usize,
+        12 => 4_096_usize,
+        _ => return Err(error::xls_bridge("invalid OLE compound-file sector size")),
+    };
+    if bytes.len() < sector_size || !(bytes.len() - sector_size).is_multiple_of(sector_size) {
+        return Err(error::xls_bridge("truncated OLE compound-file sector"));
+    }
+    let sector_count = (bytes.len() - sector_size) / sector_size;
+    let fat_count = read_u32(bytes, 44)
+        .ok_or_else(|| error::xls_bridge("truncated OLE compound-file header"))?
+        as usize;
+    let difat_count = read_u32(bytes, 72)
+        .ok_or_else(|| error::xls_bridge("truncated OLE compound-file header"))?
+        as usize;
+    if fat_count > sector_count || difat_count > sector_count {
+        return Err(error::xls_bridge(
+            "OLE compound-file allocation table exceeds the file",
         ));
     }
 
-    let mut workbook = Workbook::new();
-    workbook.settings_mut().date_system = if source.has_1904_epoch() {
-        DateSystem::Excel1904
-    } else {
-        DateSystem::Excel1900
-    };
-    let first = workbook.active_sheet();
-    let mut sheets = Vec::with_capacity(metadata.len());
-    for (index, sheet) in metadata.iter().enumerate() {
-        let id = if index == 0 {
-            workbook.rename_sheet(first, &sheet.name)?;
-            first
-        } else {
-            workbook.add_sheet(&sheet.name)?
-        };
-        sheets.push(id);
-    }
-    for (sheet, &id) in metadata.iter().zip(&sheets) {
-        workbook.set_visibility(id, map_visibility(sheet.visible))?;
-    }
-    if let Some(id) = metadata
-        .iter()
-        .zip(&sheets)
-        .find(|(sheet, _)| sheet.visible == SheetVisible::Visible)
-        .map(|(_, id)| *id)
-    {
-        workbook.set_active_sheet(id)?;
+    let mut fat_sectors = BTreeSet::new();
+    for offset in (76..512).step_by(4) {
+        record_fat_sector(bytes, offset, sector_count, &mut fat_sectors)?;
     }
 
-    let undo_enabled = workbook.undo_log().is_enabled();
-    workbook.undo_log_mut().set_enabled(false);
-    let result = (|| {
-        for (sheet, &id) in metadata.iter().zip(&sheets) {
-            if sheet.typ == SheetType::WorkSheet {
-                load_sheet(&mut source, &mut workbook, &sheet.name, id)?;
-            }
+    let mut seen_difat = BTreeSet::new();
+    let mut difat_sector = read_u32(bytes, 68)
+        .ok_or_else(|| error::xls_bridge("truncated OLE compound-file header"))?;
+    for index in 0..difat_count {
+        let id = regular_sector(difat_sector, sector_count, "DIFAT")?;
+        if !seen_difat.insert(id) {
+            return Err(error::xls_bridge("cyclic OLE compound-file DIFAT chain"));
         }
-        load_defined_names(&source, &mut workbook);
-        Ok(())
-    })();
-    workbook.undo_log_mut().set_enabled(undo_enabled);
-    result?;
-    Ok(workbook)
-}
-
-fn load_sheet<RS: Read + Seek>(
-    source: &mut Xls<RS>,
-    workbook: &mut Workbook,
-    name: &str,
-    sheet: omacell_core::addr::SheetId,
-) -> Result<(), CoreError> {
-    let values = source
-        .worksheet_range(name)
-        .map_err(|err| error::xls_bridge(format!("sheet {name:?}: {err}")))?;
-    let formulas = source
-        .worksheet_formula(name)
-        .map_err(|err| error::xls_bridge(format!("sheet {name:?} formulas: {err}")))?;
-    let mut formulas_by_cell = BTreeMap::new();
-    if let Some((start_row, start_col)) = formulas.start() {
-        for (relative_row, relative_col, formula) in formulas.used_cells() {
-            if !formula.trim().is_empty() {
-                formulas_by_cell.insert(
-                    (
-                        start_row + relative_row as u32,
-                        start_col + relative_col as u32,
-                    ),
-                    formula.to_string(),
-                );
-            }
+        let start = sector_size
+            .checked_add(
+                id.checked_mul(sector_size)
+                    .ok_or_else(|| error::xls_bridge("OLE compound-file sector offset overflow"))?,
+            )
+            .ok_or_else(|| error::xls_bridge("OLE compound-file sector offset overflow"))?;
+        let next_offset = start + sector_size - 4;
+        for offset in (start..next_offset).step_by(4) {
+            record_fat_sector(bytes, offset, sector_count, &mut fat_sectors)?;
+        }
+        difat_sector = read_u32(bytes, next_offset)
+            .ok_or_else(|| error::xls_bridge("truncated OLE compound-file DIFAT sector"))?;
+        if index + 1 < difat_count && difat_sector >= MAX_REGULAR_SECTOR {
+            return Err(error::xls_bridge("short OLE compound-file DIFAT chain"));
         }
     }
-
-    if let Some((start_row, start_col)) = values.start() {
-        for (relative_row, relative_col, value) in values.used_cells() {
-            let row = start_row + relative_row as u32;
-            let col = start_col + relative_col as u32;
-            validate_cell(row, col)?;
-            let formula = formulas_by_cell.remove(&(row, col));
-            write_cell(workbook, sheet, row, col as u16, value, formula.as_deref())?;
+    if difat_count == 0 {
+        if difat_sector != END_OF_CHAIN && difat_sector != FREE_SECTOR {
+            return Err(error::xls_bridge(
+                "unexpected OLE compound-file DIFAT chain",
+            ));
         }
+    } else if difat_sector != END_OF_CHAIN {
+        return Err(error::xls_bridge(
+            "long or cyclic OLE compound-file DIFAT chain",
+        ));
     }
-    for ((row, col), formula) in formulas_by_cell {
-        validate_cell(row, col)?;
-        write_cell(
-            workbook,
-            sheet,
-            row,
-            col as u16,
-            &Data::Empty,
-            Some(&formula),
-        )?;
-    }
-
-    let merges = source
-        .merge_cells_by_sheet_name(name)
-        .map_err(|err| error::xls_bridge(format!("sheet {name:?} merges: {err}")))?
-        .into_iter()
-        .map(|dimensions| {
-            validate_cell(dimensions.start.0, dimensions.start.1)?;
-            validate_cell(dimensions.end.0, dimensions.end.1)?;
-            Ok(RangeRef::from_corners(
-                CellRef::new(dimensions.start.0, dimensions.start.1 as u16)?.on_sheet(sheet),
-                CellRef::new(dimensions.end.0, dimensions.end.1 as u16)?.on_sheet(sheet),
-            ))
-        })
-        .collect::<Result<Vec<_>, CoreError>>()?;
-    workbook.set_sheet_merges(sheet, merges)?;
-    Ok(())
-}
-
-fn write_cell(
-    workbook: &mut Workbook,
-    sheet: omacell_core::addr::SheetId,
-    row: u32,
-    col: u16,
-    value: &Data,
-    formula: Option<&str>,
-) -> Result<(), CoreError> {
-    let formula = formula.and_then(normalize_formula);
-    if let Some(formula) = formula {
-        workbook.set_formula_text(sheet, row, col, &formula)?;
-        set_cached_value(workbook, sheet, row, col, value)?;
-    } else {
-        set_literal_value(workbook, sheet, row, col, value)?;
-    }
-    apply_date_style(workbook, sheet, row, col, value)
-}
-
-fn set_literal_value(
-    workbook: &mut Workbook,
-    sheet: omacell_core::addr::SheetId,
-    row: u32,
-    col: u16,
-    value: &Data,
-) -> Result<(), CoreError> {
-    if matches!(value, Data::Empty) {
-        return Ok(());
-    }
-    let (value, held_text) = core_value(workbook, value)?;
-    workbook.set_slot(
-        sheet,
-        row,
-        col,
-        CellSlot {
-            value,
-            formula: None,
-            style: omacell_core::style::StyleId::DEFAULT,
-            flags: CellFlags::DEFAULT,
-        },
-    )?;
-    if let Some(text) = held_text {
-        workbook.release_text(text);
-    }
-    Ok(())
-}
-
-fn set_cached_value(
-    workbook: &mut Workbook,
-    sheet: omacell_core::addr::SheetId,
-    row: u32,
-    col: u16,
-    value: &Data,
-) -> Result<(), CoreError> {
-    let mut slot = workbook
-        .get(sheet, row, col)?
-        .copied()
-        .unwrap_or_else(CellSlot::empty);
-    let (value, held_text) = core_value(workbook, value)?;
-    slot.value = value;
-    workbook.set_slot(sheet, row, col, slot)?;
-    if let Some(text) = held_text {
-        workbook.release_text(text);
-    }
-    Ok(())
-}
-
-fn core_value(
-    workbook: &mut Workbook,
-    value: &Data,
-) -> Result<(Value, Option<omacell_core::value::StrId>), CoreError> {
-    let result = match value {
-        Data::Empty => (Value::Empty, None),
-        Data::Int(value) => (Value::Number(*value as f64), None),
-        Data::Float(value) => (finite_number(*value)?, None),
-        Data::Bool(value) => (Value::Bool(*value), None),
-        Data::String(value) | Data::DateTimeIso(value) | Data::DurationIso(value) => {
-            let id = workbook.intern_text(value);
-            (Value::Text(id), Some(id))
-        }
-        Data::DateTime(value) => (finite_number(value.as_f64())?, None),
-        Data::Error(error) => (Value::Error(map_error(error)), None),
-    };
-    Ok(result)
-}
-
-fn finite_number(value: f64) -> Result<Value, CoreError> {
-    if value.is_finite() {
-        Ok(Value::Number(value))
-    } else {
-        Err(error::xls_bridge("cell contains a non-finite number"))
-    }
-}
-
-fn apply_date_style(
-    workbook: &mut Workbook,
-    sheet: omacell_core::addr::SheetId,
-    row: u32,
-    col: u16,
-    value: &Data,
-) -> Result<(), CoreError> {
-    let Data::DateTime(value) = value else {
-        return Ok(());
-    };
-    let num_fmt = if value.is_duration() {
-        NumFmtId::new(46)
-    } else if value.as_f64().abs() < 1.0 {
-        NumFmtId::new(21)
-    } else if value.as_f64().fract().abs() > f64::EPSILON {
-        NumFmtId::new(22)
-    } else {
-        NumFmtId::new(14)
-    };
-    let style = Style {
-        num_fmt,
-        ..Style::default()
-    };
-    workbook.set_cell_style(sheet, row, col, style)?;
-    Ok(())
-}
-
-fn normalize_formula(formula: &str) -> Option<String> {
-    let formula = formula.trim();
-    if formula.is_empty() || formula.starts_with("Unrecognised formula") {
-        return None;
-    }
-    let formula = if formula.starts_with('=') {
-        formula.to_string()
-    } else {
-        format!("={formula}")
-    };
-    omacell_core::formula::parse(&formula).ok().map(|_| formula)
-}
-
-fn load_defined_names<RS: Read + Seek>(source: &Xls<RS>, workbook: &mut Workbook) {
-    for (name, formula) in source.defined_names() {
-        let referent = name_referent(workbook, formula);
-        let _ = workbook.define_name(DefinedName {
-            name: name.clone(),
-            scope: NameScope::Workbook,
-            referent,
-            comment: None,
-        });
-    }
-}
-
-fn name_referent(workbook: &mut Workbook, formula: &str) -> NameReferent {
-    let formula = formula.trim().strip_prefix('=').unwrap_or(formula.trim());
-    if let Ok(parsed) = parse_a1(formula)
-        && let Ok(resolved) = workbook.resolve_parsed(parsed)
-    {
-        return match resolved {
-            RefKind::Cell(cell) => NameReferent::Range(RangeRef::from_corners(cell, cell)),
-            RefKind::Range(range) => NameReferent::Range(range),
-        };
-    }
-    if let Some(value) = formula
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite())
-    {
-        return NameReferent::Constant(Value::Number(value));
-    }
-    NameReferent::Formula(formula.to_string())
-}
-
-fn map_error(error: &CellErrorType) -> ErrorKind {
-    match error {
-        CellErrorType::Div0 => ErrorKind::Div0,
-        CellErrorType::NA => ErrorKind::Na,
-        CellErrorType::Name => ErrorKind::Name,
-        CellErrorType::Null => ErrorKind::Null,
-        CellErrorType::Num => ErrorKind::Num,
-        CellErrorType::Ref => ErrorKind::Ref,
-        CellErrorType::Value => ErrorKind::Value,
-        CellErrorType::GettingData => ErrorKind::GettingData,
-    }
-}
-
-fn map_visibility(visible: SheetVisible) -> SheetVisibility {
-    match visible {
-        SheetVisible::Visible => SheetVisibility::Visible,
-        SheetVisible::Hidden => SheetVisibility::Hidden,
-        SheetVisible::VeryHidden => SheetVisibility::VeryHidden,
-    }
-}
-
-fn validate_cell(row: u32, col: u32) -> Result<(), CoreError> {
-    if row >= MAX_ROWS || col >= u32::from(MAX_COLS) {
-        return Err(error::xlsx_limit(format!(
-            "legacy .xls cell r{}c{} exceeds the worksheet grid",
-            row + 1,
-            col + 1
+    if fat_sectors.len() != fat_count {
+        return Err(error::xls_bridge(format!(
+            "OLE compound-file declares {fat_count} FAT sectors but lists {}",
+            fat_sectors.len()
         )));
     }
     Ok(())
+}
+
+fn record_fat_sector(
+    bytes: &[u8],
+    offset: usize,
+    sector_count: usize,
+    sectors: &mut BTreeSet<usize>,
+) -> Result<(), CoreError> {
+    const MAX_REGULAR_SECTOR: u32 = 0xFFFF_FFFA;
+    let id = read_u32(bytes, offset)
+        .ok_or_else(|| error::xls_bridge("truncated OLE compound-file DIFAT entry"))?;
+    if id < MAX_REGULAR_SECTOR {
+        let id = regular_sector(id, sector_count, "FAT")?;
+        if !sectors.insert(id) {
+            return Err(error::xls_bridge("duplicate OLE compound-file FAT sector"));
+        }
+    }
+    Ok(())
+}
+
+fn regular_sector(id: u32, sector_count: usize, kind: &str) -> Result<usize, CoreError> {
+    let id = usize::try_from(id).map_err(|_| error::xls_bridge("invalid OLE sector id"))?;
+    if id >= sector_count {
+        return Err(error::xls_bridge(format!(
+            "OLE compound-file {kind} sector points past end of file"
+        )));
+    }
+    Ok(id)
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let raw: [u8; 2] = bytes.get(offset..offset + 2)?.try_into().ok()?;
+    Some(u16::from_le_bytes(raw))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let raw: [u8; 4] = bytes.get(offset..offset + 4)?.try_into().ok()?;
+    Some(u32::from_le_bytes(raw))
+}
+
+fn find_worker() -> Result<PathBuf, CoreError> {
+    let executable = std::env::current_exe().map_err(|source| {
+        error::xls_bridge(format!("cannot locate Omacell executable: {source}"))
+    })?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| error::xls_bridge("Omacell executable has no parent directory"))?;
+    let mut candidates = vec![directory.join(WORKER_NAME)];
+    if directory.file_name() == Some(std::ffi::OsStr::new("deps"))
+        && let Some(target_dir) = directory.parent()
+    {
+        candidates.push(target_dir.join(WORKER_NAME));
+    }
+    if let Some(prefix) = directory.parent() {
+        candidates.push(prefix.join("lib/omacell").join(WORKER_NAME));
+    }
+    for candidate in candidates {
+        let Ok(metadata) = std::fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if metadata.file_type().is_file() && worker_is_executable(&metadata) {
+            return Ok(candidate);
+        }
+    }
+    Err(error::xls_bridge(
+        "the private omacell-xls-worker companion is missing; reinstall Omacell",
+    ))
+}
+
+#[cfg(unix)]
+fn worker_is_executable(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn worker_is_executable(_metadata: &std::fs::Metadata) -> bool {
+    true
+}
+
+fn run_worker(
+    worker: &Path,
+    bytes: &[u8],
+    timeout: Duration,
+    max_output: usize,
+) -> Result<Vec<u8>, CoreError> {
+    let mut command = Command::new(worker);
+    command.arg(WORKER_PROTOCOL);
+    run_worker_command(&mut command, bytes, timeout, max_output)
+}
+
+fn run_worker_command(
+    command: &mut Command,
+    bytes: &[u8],
+    timeout: Duration,
+    max_output: usize,
+) -> Result<Vec<u8>, CoreError> {
+    let mut child = command
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|source| error::xls_bridge(format!("cannot start XLS worker: {source}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| error::xls_bridge("XLS worker stdout was not captured"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| error::xls_bridge("XLS worker stderr was not captured"))?;
+    let stdout_reader = read_stdout(stdout, max_output);
+    let stderr_reader = read_stderr(stderr);
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| error::xls_bridge("XLS worker stdin was not captured"))?;
+    let (status, write_result) = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            let mut stdin = stdin;
+            stdin.write_all(bytes)
+        });
+        let status = wait_for_worker(&mut child, timeout);
+        let write_result = writer
+            .join()
+            .map_err(|_| error::xls_bridge("XLS worker stdin writer panicked"))?;
+        Ok::<_, CoreError>((status, write_result))
+    })?;
+    let stdout = join_reader(stdout_reader, "stdout")?;
+    let stderr = join_reader(stderr_reader, "stderr")?;
+    let status = status?;
+    if !status.success() {
+        let diagnostic = String::from_utf8_lossy(&stderr);
+        let diagnostic = diagnostic.trim();
+        return Err(error::xls_bridge(if diagnostic.is_empty() {
+            format!("XLS worker terminated with {status}")
+        } else {
+            format!("XLS worker terminated with {status}: {diagnostic}")
+        }));
+    }
+    write_result.map_err(|source| {
+        error::xls_bridge(format!("cannot send workbook to XLS worker: {source}"))
+    })?;
+    Ok(stdout)
+}
+
+fn wait_for_worker(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<ExitStatus, CoreError> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(source) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error::xls_bridge(format!(
+                    "cannot wait for XLS worker: {source}"
+                )));
+            }
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error::xls_bridge(format!(
+                "XLS worker exceeded the {} second wall-time limit",
+                timeout.as_secs_f64()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn read_stdout(reader: ChildStdout, max_output: usize) -> JoinHandle<std::io::Result<Vec<u8>>> {
+    std::thread::spawn(move || read_bounded(reader, max_output))
+}
+
+fn read_stderr(reader: ChildStderr) -> JoinHandle<std::io::Result<Vec<u8>>> {
+    std::thread::spawn(move || read_bounded(reader, MAX_WORKER_DIAGNOSTIC))
+}
+
+fn read_bounded(mut reader: impl Read, maximum: usize) -> std::io::Result<Vec<u8>> {
+    let limit = u64::try_from(maximum)
+        .map_err(|_| std::io::Error::other("worker stream limit is not representable"))?
+        .saturating_add(1);
+    let mut bytes = Vec::new();
+    reader.by_ref().take(limit).read_to_end(&mut bytes)?;
+    if bytes.len() > maximum {
+        return Err(std::io::Error::other("worker stream exceeded its limit"));
+    }
+    Ok(bytes)
+}
+
+fn join_reader(
+    reader: JoinHandle<std::io::Result<Vec<u8>>>,
+    stream: &str,
+) -> Result<Vec<u8>, CoreError> {
+    reader
+        .join()
+        .map_err(|_| error::xls_bridge(format!("XLS worker {stream} reader panicked")))?
+        .map_err(|source| error::xls_bridge(format!("cannot read XLS worker {stream}: {source}")))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abnormal_worker_exit_is_a_typed_error() {
+        let error = run_worker(
+            Path::new("/bin/false"),
+            b"input",
+            Duration::from_secs(1),
+            1_024,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, crate::error::codes::XLS_BRIDGE);
+    }
+
+    #[test]
+    fn worker_timeout_and_oversized_output_are_bounded() {
+        let input = vec![0_u8; 256 * 1_024];
+        let mut hang = Command::new("/bin/sh");
+        hang.args(["-c", "while :; do :; done"]);
+        let error =
+            run_worker_command(&mut hang, &input, Duration::from_millis(50), 1_024).unwrap_err();
+        assert!(error.message.contains("wall-time"), "{error}");
+
+        let mut oversized = Command::new("/bin/sh");
+        oversized.args([
+            "-c",
+            "i=0; while [ \"$i\" -lt 2048 ]; do printf x; i=$((i + 1)); done",
+        ]);
+        let error =
+            run_worker_command(&mut oversized, b"", Duration::from_secs(1), 1_024).unwrap_err();
+        assert!(error.message.contains("exceeded its limit"), "{error}");
+    }
 }

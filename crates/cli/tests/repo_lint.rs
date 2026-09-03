@@ -318,6 +318,7 @@ fn wp28_distribution_assets_are_complete() {
         "PKGBUILD_SOURCE_SHA256",
         "export CARGO_TARGET_DIR=\"${srcdir}/${pkgname}-${pkgver}/target\"",
         "install -d \"${pkgdir}/usr/share/omacell\"",
+        "${pkgdir}/usr/lib/omacell/omacell-xls-worker",
         "cp -a book/. \"${pkgdir}/usr/share/doc/${pkgname}/manual/\"",
         "ttf-carlito",
         "ttf-liberation",
@@ -464,6 +465,7 @@ fn wp28_manual_and_release_automation_are_present() {
     let release =
         fs::read_to_string(root.join(".github/workflows/release.yml")).expect("read release");
     assert!(release.contains("install -d \"$root/share/omacell\""));
+    assert!(release.contains("$root/lib/omacell/omacell-xls-worker"));
     assert!(release.contains("cp -a book/. \"$root/share/doc/omacell/manual/\""));
     assert!(!release.contains("book/html"));
 }

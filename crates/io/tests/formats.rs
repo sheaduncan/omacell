@@ -355,6 +355,32 @@ fn native_xls_import_is_bounded_and_reports_parse_errors() {
     );
 }
 
+#[test]
+fn native_xls_rejects_a_cyclic_difat_without_entering_the_parser() {
+    let started = std::time::Instant::now();
+    let err = bridge::open_xls_bytes(&cyclic_difat_cfb()).unwrap_err();
+    assert_eq!(err.code, codes::XLS_BRIDGE);
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}
+
+fn cyclic_difat_cfb() -> Vec<u8> {
+    let mut bytes = vec![0_u8; 1_024];
+    bytes[..8].copy_from_slice(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1");
+    bytes[26..28].copy_from_slice(&3_u16.to_le_bytes());
+    bytes[28..30].copy_from_slice(&0xFFFE_u16.to_le_bytes());
+    bytes[30..32].copy_from_slice(&9_u16.to_le_bytes());
+    bytes[32..34].copy_from_slice(&6_u16.to_le_bytes());
+    bytes[48..52].copy_from_slice(&0xFFFF_FFFE_u32.to_le_bytes());
+    bytes[60..64].copy_from_slice(&0xFFFF_FFFE_u32.to_le_bytes());
+    bytes[68..72].copy_from_slice(&0_u32.to_le_bytes());
+    bytes[72..76].copy_from_slice(&1_u32.to_le_bytes());
+    for chunk in bytes[76..].as_chunks_mut::<4>().0 {
+        chunk.copy_from_slice(&0xFFFF_FFFF_u32.to_le_bytes());
+    }
+    bytes[1_020..1_024].copy_from_slice(&0_u32.to_le_bytes());
+    bytes
+}
+
 fn ods_package(content: &str) -> Vec<u8> {
     let mut cursor = Cursor::new(Vec::new());
     {

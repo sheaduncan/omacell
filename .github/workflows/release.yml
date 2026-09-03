@@ -47,7 +47,7 @@ jobs:
         shell: bash
         run: |
           cargo test --locked --workspace
-          cargo build --locked --release -p omacell-cli
+          cargo build --locked --release -p omacell-cli -p omacell-xls-worker
           cargo test --locked -p omacell-cli --test dist generate_completions_and_man
           cargo install mdbook --locked --version 0.4.52
           cargo run --locked -p omacell-cli --example generate-docs -- docs/book/cli-reference.md
@@ -56,6 +56,8 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           root="release-tree/usr"
           install -Dm755 target/release/omacell "$root/bin/omacell"
+          install -Dm755 target/release/omacell-xls-worker \
+            "$root/lib/omacell/omacell-xls-worker"
           install -Dm644 LICENSE "release-tree/usr/share/licenses/omacell/LICENSE"
           install -Dm644 packaging/omacell.desktop "$root/share/applications/omacell.desktop"
           install -Dm644 packaging/omacell.xml "$root/share/mime/packages/omacell.xml"
