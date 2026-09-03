@@ -95,6 +95,24 @@ fn excel_unary_precedence_shapes_the_ast() {
 }
 
 #[test]
+fn whitespace_intersects_parenthesized_ranges_instead_of_calling_them() {
+    let parsed = parse("=(A1:B2) (B2:C3)").expect("parenthesized intersection");
+    assert!(matches!(
+        &parsed.ast.kind,
+        ExprKind::Binary {
+            op: BinOp::Isect,
+            left,
+            right,
+        } if matches!(&left.kind, ExprKind::Paren(_))
+            && matches!(&right.kind, ExprKind::Paren(_))
+    ));
+    assert_eq!(print(&parsed), "=(A1:B2) (B2:C3)");
+
+    let lambda_call = parse("=(LAMBDA(x,x+1))(2)").expect("no-space higher-order call");
+    assert!(matches!(lambda_call.ast.kind, ExprKind::Call { .. }));
+}
+
+#[test]
 fn numeric_literals_remain_finite_and_stable_at_excel_boundary() {
     let parsed = parse("=1.7976931348623158e308").expect("largest formula result");
     let ExprKind::Number(number) = parsed.ast.kind else {

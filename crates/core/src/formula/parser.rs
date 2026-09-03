@@ -194,7 +194,10 @@ impl<'a> Parser<'a> {
                 self.partial = Some(lhs.clone());
                 continue;
             }
-            if matches!(self.peek_kind(), TokenKind::LParen) && can_call(&lhs.kind) {
+            if matches!(self.peek_kind(), TokenKind::LParen)
+                && !self.peek().leading_ws
+                && can_call(&lhs.kind)
+            {
                 let (lbp, _) = (CALL_BP, CALL_BP);
                 if lbp < min_bp {
                     break;

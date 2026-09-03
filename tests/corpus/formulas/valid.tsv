@@ -416,6 +416,7 @@
 ={""}	={""}	a1	empty string in array
 ={+1}	={+1}	a1	unary plus in array constant
 =A1:B2 B2:C3	=A1:B2 B2:C3	a1	F-3.1 whitespace is intersection
+=(A1:B2) (B2:C3)	=(A1:B2) (B2:C3)	a1	Microsoft reference operators: whitespace intersects parenthesized ranges rather than calling the first range
 =A:A 1:1	=A:A 1:1	a1	intersect whole column with whole row (Excel: the cell)
 =(A1,C3)	=(A1,C3)	a1	F-3.1 comma union; parens required as a single arg/value
 =A1,C3	=A1,C3	a1	top-level union operator
