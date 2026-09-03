@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use omacell_core::formula::{
-    BinOp, ExprKind, ParseOptions, PostfixOp, PrefixOp, RefStyle, RewriteOp, TableColumns,
-    collect_deps, parse, parse_editor, parse_with, print, rewrite_print,
+    BinOp, ExprKind, MAX_FORMULA_DEPTH, ParseOptions, PostfixOp, PrefixOp, RefStyle, RewriteOp,
+    TableColumns, collect_deps, parse, parse_editor, parse_with, print, rewrite_print,
 };
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use proptest::prelude::*;
@@ -340,8 +340,29 @@ fn three_d_dependencies_keep_the_sheet_span() {
 }
 
 #[test]
-fn parser_depth_limit_covers_array_prefixes() {
-    let src = format!("={{{}1}}", "-".repeat(70));
+fn function_depth_matches_excel_and_is_independent_from_syntax_depth() {
+    let nested = |levels: usize, inner: &str| {
+        format!("={}{}{}", "SUM(".repeat(levels), inner, ")".repeat(levels))
+    };
+
+    let exactly_64 = nested(MAX_FORMULA_DEPTH as usize, "1");
+    parse(&exactly_64).expect("Excel permits 64 nested function levels");
+
+    let too_many = nested(MAX_FORMULA_DEPTH as usize + 1, "1");
+    let err = parse(&too_many).expect_err("the 65th nested function must fail");
+    assert_eq!(err.error.code, omacell_core::formula::codes::DEPTH);
+    assert_eq!(err.offset, 1 + MAX_FORMULA_DEPTH as usize * 4);
+
+    let unary_inside_63 = nested(MAX_FORMULA_DEPTH as usize - 1, "-1");
+    parse(&unary_inside_63).expect("an operator does not consume a function level");
+
+    let grouped = format!("={}1{}", "(".repeat(70), ")".repeat(70));
+    parse(&grouped).expect("parentheses do not consume function levels");
+}
+
+#[test]
+fn parser_recursion_limit_covers_array_prefixes() {
+    let src = format!("={{{}1}}", "-".repeat(300));
     let err = parse(&src).unwrap_err();
     assert_eq!(err.error.code, omacell_core::formula::codes::DEPTH);
 }

@@ -8,7 +8,7 @@ pub mod codes {
     pub const PARSE: &str = "formula.parse";
     /// Source is longer than [`crate::limits::MAX_FORMULA_LEN`].
     pub const LENGTH: &str = "formula.length";
-    /// Nesting exceeded [`crate::formula::MAX_FORMULA_DEPTH`].
+    /// Function nesting or the parser's recursion safety limit was exceeded.
     pub const DEPTH: &str = "formula.depth";
 }
 
@@ -55,6 +55,11 @@ impl ParseError {
     pub(crate) fn depth(message: impl Into<String>, offset: usize) -> Self {
         Self::new(codes::DEPTH, message, offset, Vec::new())
             .with_hint("Excel allows at most 64 nested functions")
+    }
+
+    pub(crate) fn recursion(message: impl Into<String>, offset: usize) -> Self {
+        Self::new(codes::DEPTH, message, offset, Vec::new())
+            .with_hint("Reduce nested parentheses or prefix operators")
     }
 
     fn with_hint(mut self, hint: impl Into<String>) -> Self {

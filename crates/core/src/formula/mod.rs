@@ -25,7 +25,7 @@ pub use rewrite::{
     rewrite_print,
 };
 
-/// Maximum AST nesting (Excel nested-function limit).
+/// Maximum nested function levels supported by Excel.
 pub const MAX_FORMULA_DEPTH: u32 = 64;
 
 /// A1 vs R1C1 reference style.
