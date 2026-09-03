@@ -33,6 +33,11 @@ Indices are 0-based. Valid rows are `0..MAX_ROWS`; valid columns `0..MAX_COLS`.
 
 `CellRef.sheet` is a resolved id. Parsers put names in `SheetSpec`; WP-02 maps names to ids. The cell-only parsers reject sheet-qualified input so they cannot silently discard a name. R1C1 relative offsets resolve against a validated base cell into the same `CellRef` (grid index + abs flags). Invalid `CellRef` wire values are rejected; formatting a directly constructed out-of-grid value produces `#REF!` rather than panicking.
 
+`quote_sheet_name` produces formula-safe qualifiers. In addition to names with
+spaces, punctuation, or address-shaped text, it quotes the case-insensitive
+formula keywords `TRUE` and `FALSE` so generated references remain
+unambiguous.
+
 ## Values — `omacell_core::value`
 
 | Type | Source |

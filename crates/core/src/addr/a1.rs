@@ -265,7 +265,16 @@ impl SheetSpec {
     }
 }
 
-/// Quote a sheet name if Excel would.
+/// Quote a sheet name when required for an unambiguous Excel reference.
+///
+/// Formula keywords such as `TRUE` and `FALSE` require quotes when used as
+/// sheet names.
+///
+/// ```
+/// use omacell_core::addr::quote_sheet_name;
+/// assert_eq!(quote_sheet_name("Data"), "Data");
+/// assert_eq!(quote_sheet_name("TRUE"), "'TRUE'");
+/// ```
 #[must_use]
 pub fn quote_sheet_name(name: &str) -> String {
     if sheet_name_needs_quote(name) {

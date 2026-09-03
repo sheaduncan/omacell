@@ -220,6 +220,9 @@ pub(crate) fn sheet_name_needs_quote(name: &str) -> bool {
     if name.is_empty() {
         return true;
     }
+    if name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE") {
+        return true;
+    }
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return true;

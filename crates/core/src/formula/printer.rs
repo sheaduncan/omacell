@@ -255,10 +255,10 @@ fn write_sheet(s: &mut String, sheet: Option<&SheetSpec>) {
 
 fn formula_sheet_prefix(sheet: &SheetSpec) -> String {
     match &sheet.end {
-        None => format!("{}!", formula_quote_sheet(&sheet.start)),
+        None => format!("{}!", quote_sheet_name(&sheet.start)),
         Some(end) => {
-            let a = formula_quote_sheet(&sheet.start);
-            let b = formula_quote_sheet(end);
+            let a = quote_sheet_name(&sheet.start);
+            let b = quote_sheet_name(end);
             if a.starts_with('\'') || b.starts_with('\'') {
                 format!(
                     "'{}:{}'!",
@@ -269,14 +269,6 @@ fn formula_sheet_prefix(sheet: &SheetSpec) -> String {
                 format!("{}:{}!", sheet.start, end)
             }
         }
-    }
-}
-
-fn formula_quote_sheet(name: &str) -> String {
-    if name.eq_ignore_ascii_case("TRUE") || name.eq_ignore_ascii_case("FALSE") {
-        format!("'{}'", name.replace('\'', "''"))
-    } else {
-        quote_sheet_name(name)
     }
 }
 
