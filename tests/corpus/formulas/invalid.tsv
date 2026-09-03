@@ -114,6 +114,10 @@
 ===1	1	formula.parse	three equals: first starts formula, second unexpected
 =1:1:A1	1	formula.parse	whole-row range then colon then cell is mixed
 =A:A:1	1	formula.parse	whole-column then colon then number
+=0:0	1	formula.parse	Excel rows are one-based, so zero cannot be a whole-row endpoint
+=1.5:2	1	formula.parse	whole-row endpoints are integer row references, not fractional numbers
+=1:2.5	3	formula.parse	whole-row endpoints are integer row references, including the right endpoint
+=1048577:1048577	1	formula.parse	Microsoft worksheet limit is 1,048,576 rows
 =A1,	4	formula.parse	trailing union comma at top level with missing right operand
 =,A1	1	formula.parse	leading union comma
 =A1,,B1	4	formula.parse	empty union operand
