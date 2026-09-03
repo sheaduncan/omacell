@@ -31,7 +31,7 @@ use crate::resolve::{
 
 /// Register the WP-07a command set. Later packages call [`CommandRegistry::register`].
 pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "cell.set",
             doc: "Set a cell's contents from formula-bar text",
@@ -42,7 +42,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         cell_set,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "cell.clear",
             doc: "Clear a cell's contents, keeping style",
@@ -53,7 +53,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         cell_clear,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "range.set",
             doc: "Set range contents from values or a fill input",
@@ -64,7 +64,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         range_set,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "range.clear",
             doc: "Clear range contents, keeping styles",
@@ -75,7 +75,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         range_clear,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "sheet.add",
             doc: "Add a sheet",
@@ -86,7 +86,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         sheet_add,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "sheet.rename",
             doc: "Rename a sheet",
@@ -97,7 +97,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         sheet_rename,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "sheet.visibility",
             doc: "Set sheet visibility",
@@ -108,7 +108,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         sheet_visibility,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "name.define",
             doc: "Define a named range, constant, or formula",
@@ -119,7 +119,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         name_define,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "name.remove",
             doc: "Remove a defined name",
@@ -130,7 +130,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         name_remove,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "name.createfrom",
             doc: "Create workbook names from labels on selection edges",
@@ -141,7 +141,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         name_createfrom,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "format.number",
             doc: "Apply a number format to a range",
@@ -152,7 +152,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         format_number,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "style.set",
             doc: "Patch font, fill, alignment, or protection on a range",
@@ -174,7 +174,7 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
         },
         calc_recalc,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "calc.mode",
             doc: "Set calculation mode",

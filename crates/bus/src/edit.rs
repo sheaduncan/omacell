@@ -16,8 +16,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::handler::{CommandContext, Effect};
+use crate::logical::inverse_style;
 use crate::registry::{CommandKind, CommandRegistry, CommandSpec, Exposure};
-use crate::resolve::{resolve_cell, resolve_range, resolve_range_unbounded};
+use crate::resolve::{ResolvedCell, resolve_cell, resolve_range, resolve_range_unbounded};
 
 /// `edit.insert` / `edit.delcells`
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -1041,7 +1042,7 @@ pub fn register_edit_commands(registry: &mut CommandRegistry) -> Result<(), Core
         ("format.bordernone", "Remove borders", format_border_none),
     ];
     for &(id, doc, handler) in format_commands {
-        registry.register(
+        registry.register_with_local_inverse(
             CommandSpec {
                 id,
                 doc,
@@ -2600,8 +2601,17 @@ fn patch_action_styles(
     label: &str,
 ) -> Result<Effect, CoreError> {
     let mut count = 0u64;
+    let mut inverse = Vec::new();
     for row in range.min_row..=range.max_row {
         for col in range.min_col..=range.max_col {
+            inverse.push(inverse_style(
+                ctx.workbook_ref(),
+                ResolvedCell {
+                    sheet: range.sheet,
+                    row,
+                    col,
+                },
+            )?);
             let mut style = ctx
                 .workbook_ref()
                 .get(range.sheet, row, col)?
@@ -2615,6 +2625,7 @@ fn patch_action_styles(
         }
     }
     Ok(Effect {
+        inverse,
         result: serde_json::json!({"changed": count}),
         summary: ChangeSummary {
             cells: count,

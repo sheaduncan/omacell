@@ -200,7 +200,7 @@ struct SparklineRemoveArgs {
 
 /// Register chart commands.
 pub fn register_chart_commands(registry: &mut CommandRegistry) -> Result<(), CoreError> {
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "chart.fromselection",
             doc: "Create a chart from a range",
@@ -211,7 +211,7 @@ pub fn register_chart_commands(registry: &mut CommandRegistry) -> Result<(), Cor
         },
         chart_fromselection,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "sparkline.set",
             doc: "Place a sparkline in a cell",
@@ -222,7 +222,7 @@ pub fn register_chart_commands(registry: &mut CommandRegistry) -> Result<(), Cor
         },
         sparkline_set,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "chart.move",
             doc: "Move a chart to a new top-left cell",
@@ -233,7 +233,7 @@ pub fn register_chart_commands(registry: &mut CommandRegistry) -> Result<(), Cor
         },
         chart_move,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "chart.resize",
             doc: "Resize a chart to an inclusive cell range",
@@ -244,7 +244,7 @@ pub fn register_chart_commands(registry: &mut CommandRegistry) -> Result<(), Cor
         },
         chart_resize,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "chart.title",
             doc: "Set or clear a chart title",
@@ -255,7 +255,7 @@ pub fn register_chart_commands(registry: &mut CommandRegistry) -> Result<(), Cor
         },
         chart_title,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "chart.axistitle",
             doc: "Set or clear a chart axis title",

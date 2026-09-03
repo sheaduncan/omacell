@@ -57,6 +57,7 @@ pub struct RegisteredCommand {
     pub exposure: Exposure,
     /// Mutating vs query.
     pub kind: CommandKind,
+    snapshot_inverse: bool,
     handler: Handler,
 }
 
@@ -71,6 +72,10 @@ impl RegisteredCommand {
         args: serde_json::Value,
     ) -> Result<Effect, CoreError> {
         (self.handler)(ctx, args)
+    }
+
+    pub(crate) fn needs_snapshot_inverse(&self) -> bool {
+        self.snapshot_inverse
     }
 }
 
@@ -99,6 +104,36 @@ impl CommandRegistry {
     /// This is the extension API for later packages (WP-08–11, WP-14, WP-17, …).
     /// Argument type `A` must use `#[serde(deny_unknown_fields)]`.
     pub fn register<A, F>(&mut self, spec: CommandSpec, handler: F) -> Result<(), CoreError>
+    where
+        A: DeserializeOwned + JsonSchema + Send + 'static,
+        F: Fn(&mut CommandContext<'_>, A) -> Result<Effect, CoreError> + Send + Sync + 'static,
+    {
+        self.register_inner(spec, handler, true)
+    }
+
+    /// Register a handler that returns its own bounded logical inverse on
+    /// every mutating success path.
+    ///
+    /// Dispatch skips the compatibility snapshot used by [`Self::register`]
+    /// for this command. Query and no-op paths may return an empty inverse.
+    pub fn register_with_local_inverse<A, F>(
+        &mut self,
+        spec: CommandSpec,
+        handler: F,
+    ) -> Result<(), CoreError>
+    where
+        A: DeserializeOwned + JsonSchema + Send + 'static,
+        F: Fn(&mut CommandContext<'_>, A) -> Result<Effect, CoreError> + Send + Sync + 'static,
+    {
+        self.register_inner(spec, handler, false)
+    }
+
+    fn register_inner<A, F>(
+        &mut self,
+        spec: CommandSpec,
+        handler: F,
+        snapshot_inverse: bool,
+    ) -> Result<(), CoreError>
     where
         A: DeserializeOwned + JsonSchema + Send + 'static,
         F: Fn(&mut CommandContext<'_>, A) -> Result<Effect, CoreError> + Send + Sync + 'static,
@@ -138,6 +173,7 @@ impl CommandRegistry {
                 changeset_eligible: spec.changeset_eligible,
                 exposure: spec.exposure,
                 kind: spec.kind,
+                snapshot_inverse,
                 handler: Box::new(boxed),
             },
         );

@@ -270,6 +270,33 @@ fn wp17_changeset_apply_and_revert_are_exact() {
     assert_eq!(common::logical_dump(&bus), before);
 }
 
+#[test]
+fn format_changesets_keep_bounded_command_local_inverses() {
+    let mut bus = bus();
+    let sheet = bus.workbook().active_sheet();
+    for row in 0..10_000 {
+        bus.workbook_mut()
+            .set_number(sheet, row, 19, f64::from(row))
+            .unwrap();
+    }
+    let before = common::logical_dump(&bus);
+    let proposed = bus
+        .propose(
+            Origin::ExternalAgent,
+            vec![call("format.bold", json!({"range": "D5"}))],
+        )
+        .unwrap();
+
+    bus.apply(Origin::User, &proposed.id).unwrap();
+    let inverse = &bus.get_changeset(&proposed.id).unwrap().inverse;
+    assert_eq!(inverse.len(), 1);
+    assert_eq!(inverse[0].id.as_str(), "style.restore");
+    assert!(serde_json::to_vec(inverse).unwrap().len() < 2_048);
+
+    bus.revert(Origin::User, &proposed.id).unwrap();
+    assert_eq!(common::logical_dump(&bus), before);
+}
+
 fn seeded_bus(seed: i16) -> omacell_bus::Bus {
     let mut bus = bus();
     for (cell, input) in [

@@ -50,6 +50,24 @@
   2. Excel `+1` / `'text` formula-bar rules are not in this package.
   3. `sheet.remove` as a public command is WP-17; this package registers it internal-only as the inverse of `sheet.add`.
 
+### 2026-09-02 changeset preflight follow-up plan (written before coding)
+
+- Add a regression proving high-frequency formatting changesets retain bounded,
+  command-local `style.restore` inverses instead of the workbook-wide
+  `edit.restore` fallback, including exact apply/revert on a workbook with
+  unrelated populated cells.
+- Add an opt-in registry path for handlers that provide their own logical
+  inverses. Dispatch will not clone the workbook for those commands; the
+  existing `register` behavior remains the compatibility-safe fallback for
+  extension handlers that still need an exact snapshot diff.
+- Make the WP-07a cell, range, sheet, name, style, and calculation handlers use
+  the local-inverse path. Teach WP-17 format actions to build their existing
+  per-cell `style.restore` inverses before mutation, then register those actions
+  on the same path.
+- Preserve scratch preflight, live `transact_try` atomicity, effect limits,
+  event ordering, and the frozen command/effect wire contracts. Validate with
+  focused bus tests, strict bus Clippy, and the exact repository gate.
+
 ## What was built
 
 In-process command bus in `omacell-bus`: typed registry, origin policy, COW preflight, atomic live execution, changeset store, bounded events, and dry-run.
@@ -66,12 +84,19 @@ Key tests: [`crates/bus/tests/catalog.rs`](../crates/bus/tests/catalog.rs), [`co
 
 Review hardening validates changeset lifecycle state before dispatching commands, so repeated apply/revert attempts cannot mutate live state before returning `changeset.state`. Internal cell restore payloads now preserve the exact logical value (including error literals, whitespace text, arrays, flags, style, and number format) without depending on workbook-local intern handles. The catalog test also performs a real serde round trip for all 15 public argument types.
 
+The 2026-09-02 changeset-preflight follow-up makes snapshot inverses an
+explicit compatibility path instead of an unconditional cost. Thirty-seven
+commands with bounded handler-provided inverses now skip the redundant
+per-command workbook clone; WP-17 format actions produce per-cell
+`style.restore` commands before mutation. Legacy structural handlers retain
+the exact snapshot fallback until they gain command-local inverses.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
 |---|---|
 | `Bus::{execute, propose, apply, revert, dry_run, commands_json, subscribe, drain}` | `omacell_bus` |
-| `CommandRegistry::register<A, F>` | extension API for WP-08–11, WP-14, WP-17, … |
+| `CommandRegistry::{register, register_with_local_inverse}<A, F>` | compatibility-snapshot and bounded-local-inverse extension paths |
 | `CommandSpec`, `Exposure`, `CommandKind`, `CommandContext`, `Effect`, `MutationPolicy` | `omacell_bus` |
 | `SCHEMA = 1`, `commands_json()` | catalog envelope |
 | `EventBus`, `SubscriberId`, `ChangesetStore` | in-process events / store |
@@ -100,6 +125,12 @@ No CLI. `core ↛ bus`.
 Host: local Linux. `cargo test -p omacell-bus` — catalog 5, changeset 7, commands 11, events 3, policy 6, proptest 3, recalc 3 (all pass). `RUSTDOCFLAGS="-D warnings" cargo doc -p omacell-bus -p omacell-core --no-deps` — pass. Recalc integration: automatic `=A1+10` updates; manual stays empty until `calc.recalc`.
 
 No new crates.io dependencies. `proptest` is workspace-dev; `omacell-core` / `schemars` / `serde` / `serde_json` / `indexmap` are pre-approved.
+
+Changeset-preflight follow-up: the focused bounded-inverse regression first
+failed because `format.bold` retained `edit.restore`, then passed with one
+sub-2-KiB `style.restore` command on a workbook containing 10,000 unrelated
+cells. `cargo test -p omacell-bus`, strict bus Clippy, and the exact
+`CARGO_BUILD_JOBS=2 just check` gate pass.
 
 ## Open questions / decisions needed
 

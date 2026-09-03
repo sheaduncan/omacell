@@ -244,7 +244,7 @@ struct PivotRestoreArgs {
 
 /// Register WP-24 analysis commands.
 pub fn register_analysis_commands(registry: &mut CommandRegistry) -> Result<(), CoreError> {
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "pivot.create",
             doc: "Create a pivot table from a source range",
@@ -266,7 +266,7 @@ pub fn register_analysis_commands(registry: &mut CommandRegistry) -> Result<(), 
         },
         pivot_refresh,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "pivot.remove",
             doc: "Remove a pivot table and clear its output",
@@ -288,7 +288,7 @@ pub fn register_analysis_commands(registry: &mut CommandRegistry) -> Result<(), 
         },
         pivot_restore,
     )?;
-    registry.register(
+    registry.register_with_local_inverse(
         CommandSpec {
             id: "whatif.goalseek",
             doc: "Goal Seek: vary an input cell until a formula reaches a goal",
