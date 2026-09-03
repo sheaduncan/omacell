@@ -5,7 +5,7 @@ mod registry;
 
 pub use registry::{ArrayLift, DynamicFn, DynamicFnBody, FnBody, FnDef, FnRegistry};
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rustc_hash::FxHashMap;
 
@@ -354,6 +354,7 @@ pub struct EvalCtx<'a> {
     stale: bool,
     async_hint: Option<String>,
     resolved_dynamic: Vec<Reference>,
+    read_dynamic: Mutex<Vec<Reference>>,
     async_provider: Option<&'a dyn crate::recalc::AsyncNodeProvider>,
     last_changed_cell: Option<CellCoord>,
 }
@@ -382,6 +383,7 @@ impl<'a> EvalCtx<'a> {
             stale: false,
             async_hint: None,
             resolved_dynamic: Vec::new(),
+            read_dynamic: Mutex::new(Vec::new()),
             async_provider: None,
             last_changed_cell: None,
         }
@@ -470,12 +472,18 @@ impl<'a> EvalCtx<'a> {
             .random_unit_at(self.cell, self.pass, self.call_path, function, index)
     }
 
-    pub(crate) fn take_flags(&mut self) -> (bool, bool, Option<String>, Vec<Reference>) {
+    pub(crate) fn take_flags(
+        &mut self,
+    ) -> (bool, bool, Option<String>, Vec<Reference>, Vec<Reference>) {
         (
             self.pending_async,
             self.stale,
             self.async_hint.take(),
             std::mem::take(&mut self.resolved_dynamic),
+            std::mem::take(match self.read_dynamic.get_mut() {
+                Ok(reads) => reads,
+                Err(poisoned) => poisoned.into_inner(),
+            }),
         )
     }
 
@@ -575,6 +583,11 @@ impl<'a> EvalCtx<'a> {
     /// Read a stored cell as a runtime scalar (spill origin → top-left).
     #[must_use]
     pub fn read_cell(&self, sheet: SheetId, row: u32, col: u16) -> Scalar {
+        self.record_dynamic_read(&Reference::cell(sheet, row, col));
+        self.read_cell_untracked(sheet, row, col)
+    }
+
+    fn read_cell_untracked(&self, sheet: SheetId, row: u32, col: u16) -> Scalar {
         let Ok(Some(slot)) = self.wb.get(sheet, row, col) else {
             return Scalar::Empty;
         };
@@ -593,6 +606,7 @@ impl<'a> EvalCtx<'a> {
 
     /// Walk every cell in a reference with coordinates (row-major, sheets in order).
     pub fn for_each_cell_at(&self, r: &Reference, f: &mut impl FnMut(SheetId, u32, u16, Scalar)) {
+        self.record_dynamic_read(r);
         match r {
             Reference::Range {
                 sheet,
@@ -607,7 +621,7 @@ impl<'a> EvalCtx<'a> {
                 let c2 = (*start_col).max(*end_col);
                 for row in r1..=r2 {
                     for col in c1..=c2 {
-                        f(*sheet, row, col, self.read_cell(*sheet, row, col));
+                        f(*sheet, row, col, self.read_cell_untracked(*sheet, row, col));
                     }
                 }
             }
@@ -645,6 +659,7 @@ impl<'a> EvalCtx<'a> {
         r: &Reference,
         f: &mut impl FnMut(SheetId, u32, u16, Scalar),
     ) {
+        self.record_dynamic_read(r);
         match r {
             Reference::Range {
                 sheet,
@@ -661,7 +676,7 @@ impl<'a> EvalCtx<'a> {
                 let c1 = (*start_col).min(*end_col);
                 let c2 = (*start_col).max(*end_col);
                 for (row, col, _slot) in sheet_ref.store.iter_region(r1, c1, r2, c2) {
-                    f(*sheet, row, col, self.read_cell(*sheet, row, col));
+                    f(*sheet, row, col, self.read_cell_untracked(*sheet, row, col));
                 }
             }
             Reference::Union(parts) => {
@@ -768,7 +783,10 @@ impl<'a> EvalCtx<'a> {
     #[must_use]
     pub fn materialize(&self, v: RuntimeValue) -> RuntimeValue {
         match v {
-            RuntimeValue::Ref(r) => materialize_ref(self, &r),
+            RuntimeValue::Ref(r) => {
+                self.record_dynamic_read(&r);
+                materialize_ref(self, &r)
+            }
             other => other,
         }
     }
@@ -789,6 +807,93 @@ impl<'a> EvalCtx<'a> {
     pub fn record_dynamic_ref(&mut self, r: Reference) {
         self.resolved_dynamic.push(r);
     }
+
+    fn record_dynamic_read(&self, reference: &Reference) {
+        let mut reads = match self.read_dynamic.lock() {
+            Ok(reads) => reads,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for resolved in &self.resolved_dynamic {
+            for intersection in reference_intersections(resolved, reference) {
+                if !reads.contains(&intersection) {
+                    reads.push(intersection);
+                }
+            }
+        }
+    }
+}
+
+fn reference_intersections(left: &Reference, right: &Reference) -> Vec<Reference> {
+    let mut left_ranges = Vec::new();
+    let mut right_ranges = Vec::new();
+    flatten_reference(left, &mut left_ranges);
+    flatten_reference(right, &mut right_ranges);
+    let mut intersections = Vec::new();
+    for (left_sheet, left_r1, left_c1, left_r2, left_c2) in &left_ranges {
+        for (right_sheet, right_r1, right_c1, right_r2, right_c2) in &right_ranges {
+            if left_sheet != right_sheet {
+                continue;
+            }
+            let start_row = (*left_r1).max(*right_r1);
+            let start_col = (*left_c1).max(*right_c1);
+            let end_row = (*left_r2).min(*right_r2);
+            let end_col = (*left_c2).min(*right_c2);
+            if start_row > end_row || start_col > end_col {
+                continue;
+            }
+            let intersection = Reference::Range {
+                sheet: *left_sheet,
+                start_row,
+                start_col,
+                end_row,
+                end_col,
+            };
+            if !intersections.contains(&intersection) {
+                intersections.push(intersection);
+            }
+        }
+    }
+    intersections
+}
+
+fn flatten_reference(reference: &Reference, out: &mut Vec<(SheetId, u32, u16, u32, u16)>) {
+    match reference {
+        Reference::Range {
+            sheet,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        } => out.push((
+            *sheet,
+            (*start_row).min(*end_row),
+            (*start_col).min(*end_col),
+            (*start_row).max(*end_row),
+            (*start_col).max(*end_col),
+        )),
+        Reference::Union(parts) => {
+            for part in parts {
+                flatten_reference(part, out);
+            }
+        }
+        Reference::ThreeD {
+            sheets,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        } => {
+            for sheet in sheets {
+                out.push((
+                    *sheet,
+                    (*start_row).min(*end_row),
+                    (*start_col).min(*end_col),
+                    (*start_row).max(*end_row),
+                    (*start_col).max(*end_col),
+                ));
+            }
+        }
+    }
 }
 
 fn materialize_ref(ctx: &EvalCtx<'_>, r: &Reference) -> RuntimeValue {
@@ -807,7 +912,7 @@ fn materialize_ref(ctx: &EvalCtx<'_>, r: &Reference) -> RuntimeValue {
             let rows = r2.saturating_sub(r1) + 1;
             let cols = u32::from(c2.saturating_sub(c1) + 1);
             if rows == 1 && cols == 1 {
-                return RuntimeValue::Scalar(ctx.read_cell(*sheet, r1, c1));
+                return RuntimeValue::Scalar(ctx.read_cell_untracked(*sheet, r1, c1));
             }
             let Ok(len) = RuntimeArray::checked_len(rows, cols) else {
                 return RuntimeValue::error(ErrorKind::Num);
@@ -815,7 +920,7 @@ fn materialize_ref(ctx: &EvalCtx<'_>, r: &Reference) -> RuntimeValue {
             let mut values = Vec::with_capacity(len);
             for row in r1..=r2 {
                 for col in c1..=c2 {
-                    values.push(ctx.read_cell(*sheet, row, col));
+                    values.push(ctx.read_cell_untracked(*sheet, row, col));
                 }
             }
             RuntimeValue::array(rows, cols, values)
@@ -1706,7 +1811,9 @@ pub fn eval_formula_in(
     pass: u32,
     env: PassEnv,
 ) -> (RuntimeValue, EvalFlags) {
-    eval_formula_in_session(wb, registry, spill, cell, ast, pass, env, None)
+    let (value, flags, _) =
+        eval_formula_in_session(wb, registry, spill, cell, ast, pass, env, None);
+    (value, flags)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1719,13 +1826,13 @@ pub(crate) fn eval_formula_in_session(
     pass: u32,
     env: PassEnv,
     last_changed_cell: Option<CellCoord>,
-) -> (RuntimeValue, EvalFlags) {
+) -> (RuntimeValue, EvalFlags, Vec<Reference>) {
     let mut ctx = EvalCtx::new(wb, registry, spill, cell, pass)
         .with_pass_env(env)
         .with_last_changed_cell(last_changed_cell);
     let raw = eval_expr(&mut ctx, ast);
     let value = prepare_result(&ctx, raw);
-    let (pending, stale, hint, dynamic) = ctx.take_flags();
+    let (pending, stale, hint, dynamic, dynamic_reads) = ctx.take_flags();
     (
         value,
         EvalFlags {
@@ -1734,6 +1841,7 @@ pub(crate) fn eval_formula_in_session(
             hint,
             dynamic,
         },
+        dynamic_reads,
     )
 }
 

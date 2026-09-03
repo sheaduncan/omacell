@@ -6,8 +6,8 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::addr::{RangeRef, SheetId, SheetSpec};
-use crate::eval::AstCache;
+use crate::addr::{CellRef, RangeRef, SheetId, SheetSpec};
+use crate::eval::{AstCache, Reference};
 use crate::formula::{Deps, collect_deps};
 use crate::intern::FormulaId;
 use crate::limits::{MAX_COLS, MAX_ROWS};
@@ -72,6 +72,7 @@ struct Node {
     volatile: bool,
     dynamic: bool,
     precedents: Vec<Precedent>,
+    static_precedents: usize,
     /// Formula cells that directly depend on this cell (not via a range bucket).
     cell_dependents: Vec<CellCoord>,
 }
@@ -137,6 +138,31 @@ impl DepGraph {
         if let Some(node) = self.nodes.get_mut(&cell) {
             node.volatile = volatile;
         }
+    }
+
+    pub(crate) fn replace_dynamic_precedents(
+        &mut self,
+        updates: &[(CellCoord, Vec<Reference>)],
+    ) -> Vec<CellCoord> {
+        let mut changed = Vec::new();
+        for (cell, references) in updates {
+            let precedents = precedents_from_references(references);
+            let Some(node) = self.nodes.get_mut(cell) else {
+                continue;
+            };
+            let static_len = node.static_precedents.min(node.precedents.len());
+            if node.precedents[static_len..] == precedents {
+                continue;
+            }
+            node.precedents.truncate(static_len);
+            node.precedents.extend(precedents);
+            changed.push(*cell);
+        }
+        if !changed.is_empty() {
+            changed.sort_unstable();
+            self.finish_edges();
+        }
+        changed
     }
 
     /// Whether this formula contains `INDIRECT`/`OFFSET`.
@@ -277,6 +303,7 @@ impl DepGraph {
                     volatile: false,
                     dynamic: false,
                     precedents: Vec::new(),
+                    static_precedents: 0,
                     cell_dependents: Vec::new(),
                 },
             );
@@ -284,12 +311,14 @@ impl DepGraph {
         };
         let deps = collect_deps(&formula.ast);
         let precedents = resolve_deps(wb, coord.sheet, &deps);
+        let static_precedents = precedents.len();
         self.nodes.insert(
             coord,
             Node {
                 volatile: deps.volatile,
                 dynamic: deps.dynamic,
                 precedents,
+                static_precedents,
                 cell_dependents: Vec::new(),
             },
         );
@@ -609,6 +638,103 @@ fn range_contains(range: RangeRef, row: u32, col: u16) -> bool {
     let c1 = range.start.col.min(range.end.col);
     let c2 = range.start.col.max(range.end.col);
     row >= r1 && row <= r2 && col >= c1 && col <= c2
+}
+
+fn precedents_from_references(references: &[Reference]) -> Vec<Precedent> {
+    let mut precedents = Vec::new();
+    for reference in references {
+        push_reference_precedents(reference, &mut precedents);
+    }
+    precedents
+}
+
+fn push_reference_precedents(reference: &Reference, precedents: &mut Vec<Precedent>) {
+    match reference {
+        Reference::Range {
+            sheet,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        } => {
+            let (start_row, end_row) = ((*start_row).min(*end_row), (*start_row).max(*end_row));
+            let (start_col, end_col) = ((*start_col).min(*end_col), (*start_col).max(*end_col));
+            if start_row == end_row && start_col == end_col {
+                push_precedent(
+                    precedents,
+                    Precedent::Cell(CellCoord::new(*sheet, start_row, start_col)),
+                );
+                return;
+            }
+            let range = reference_range(start_row, start_col, end_row, end_col);
+            push_precedent(
+                precedents,
+                Precedent::Range {
+                    sheet: *sheet,
+                    range,
+                    whole_col: start_row == 0 && end_row == MAX_ROWS.saturating_sub(1),
+                    whole_row: start_col == 0 && end_col == MAX_COLS.saturating_sub(1),
+                },
+            );
+        }
+        Reference::Union(parts) => {
+            for part in parts {
+                push_reference_precedents(part, precedents);
+            }
+        }
+        Reference::ThreeD {
+            sheets,
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        } => {
+            if sheets.is_empty() {
+                return;
+            }
+            let range = reference_range(
+                (*start_row).min(*end_row),
+                (*start_col).min(*end_col),
+                (*start_row).max(*end_row),
+                (*start_col).max(*end_col),
+            );
+            push_precedent(
+                precedents,
+                Precedent::ThreeD {
+                    sheets: sheets.clone(),
+                    range,
+                },
+            );
+        }
+    }
+}
+
+fn reference_range(start_row: u32, start_col: u16, end_row: u32, end_col: u16) -> RangeRef {
+    let mut range = RangeRef::from_corners(
+        CellRef {
+            sheet: None,
+            row: start_row,
+            col: start_col,
+            row_abs: true,
+            col_abs: true,
+        },
+        CellRef {
+            sheet: None,
+            row: end_row,
+            col: end_col,
+            row_abs: true,
+            col_abs: true,
+        },
+    );
+    range.whole_col = start_row == 0 && end_row == MAX_ROWS.saturating_sub(1);
+    range.whole_row = start_col == 0 && end_col == MAX_COLS.saturating_sub(1);
+    range
+}
+
+fn push_precedent(precedents: &mut Vec<Precedent>, precedent: Precedent) {
+    if !precedents.contains(&precedent) {
+        precedents.push(precedent);
+    }
 }
 
 fn blocks_of(range: RangeRef) -> Vec<(u32, u16)> {
