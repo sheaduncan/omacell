@@ -136,6 +136,20 @@
   suites and strict Clippy, then run exact `just check` and reconcile this
   report.
 
+### 2026-09-03 explicit omitted numeric arguments plan (written before coding)
+
+- Change the existing `AVERAGE`, `PRODUCT`, and `COUNT` trailing-omission
+  corpus expectations first, add internal-omission and representative
+  statistical aggregate cases, and add a sheet regression proving referenced
+  empty cells remain ignored.
+- Treat an explicitly omitted `ArgVal` as a literal numeric zero only in the
+  shared numeric-list collectors and `COUNT`. Keep the generic value walker,
+  reference/array coercion, optional positional defaults, lazy functions, and
+  `ISOMITTED` behavior unchanged.
+- Preserve public interfaces and dependencies; cite the Excel omission and
+  empty-reference behavior, run the complete function/core suites and strict
+  Clippy, then run exact `just check` and reconcile this report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -253,6 +267,12 @@ The 2026-09-03 `PERCENTRANK` follow-up truncates inclusive and exclusive ranks
 to the requested decimal significance and returns `#NUM!` when the truncated
 significance is below one, matching Microsoft's examples and documented error
 behavior.
+
+The 2026-09-03 explicit-omission follow-up treats an empty numeric argument
+slot as a direct zero for the shared numeric-list aggregates and `COUNT`.
+Empty cells reached through arrays or references remain ignored, and generic
+argument walking, positional defaults, lazy functions, and `ISOMITTED` are
+unchanged.
 
 ## Interfaces exposed (for dependents)
 
@@ -396,11 +416,31 @@ Host: rustc 1.98.0, Linux.
   - Semantics follow Microsoft's [`PERCENTRANK.INC`](https://support.microsoft.com/en-us/excel/functions/percentrank-inc-function)
     and [`PERCENTRANK.EXC`](https://support.microsoft.com/en-us/excel/functions/percentrank-exc-function)
     documentation.
+- 2026-09-03 explicit omitted numeric argument test-first evidence:
+  - The nine changed corpus cases initially failed: `AVERAGE(1,2,)` returned
+    **1.5** instead of **1**, and `PRODUCT`, `COUNT`, `AVERAGEA`, `MIN`, `MAX`,
+    `MEDIAN`, and `STDEV.P` all dropped the explicit empty slot. All nine now
+    pass, including an internal omitted slot in `AVERAGE(1,,3)`.
+  - The sheet regression initially returned **2** for
+    `AVERAGE(A1:A2,2,)`; it now returns **1**, while `AVERAGE(A1:A2)` over the
+    same empty reference remains `#DIV/0!`.
+  - The complete function/core suites pass (22 function integration tests, 73
+    core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - The optional LibreOffice cross-check skipped because no LibreOffice
+    converter is installed; no runtime or test dependency was introduced.
+  - Omitted-slot behavior follows the verified Excel audit case and the
+    [Microsoft Q&A trailing-comma example](https://learn.microsoft.com/en-us/answers/questions/4892755/impact-of-extra-comma-in-formulas);
+    referenced empty cells follow Microsoft's [`AVERAGE`](https://support.microsoft.com/en-us/excel/functions/average-function)
+    documentation.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1567** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1573** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -438,6 +478,9 @@ Host: rustc 1.98.0, Linux.
 9. **Resolved 2026-09-03:** `PERCENTRANK.INC` and `PERCENTRANK.EXC` truncate,
    rather than round, to the requested significance and reject significance
    below one with `#NUM!`.
+10. **Resolved 2026-09-03:** explicitly omitted numeric aggregate arguments
+    contribute zero, while empty cells reached through arrays or references
+    remain ignored.
 
 ## RFC (only if a frozen contract changed)
 
@@ -456,6 +499,9 @@ contract.
 The `SUMPRODUCT` follow-up changes no public signature or frozen contract.
 
 The `PERCENTRANK` follow-up changes no public signature or frozen contract.
+
+The explicit omitted numeric argument follow-up changes no public signature or
+frozen contract.
 
 ## Checklist
 

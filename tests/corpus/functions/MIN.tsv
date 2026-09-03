@@ -10,3 +10,4 @@
 =MIN(10,2,8)	2	three
 =MIN("2",3)	2	numeric text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =MIN({""})	0	Microsoft MIN: arguments containing no numbers return zero
+=MIN(2,)	0	explicit omitted argument is zero; Microsoft Excel omission semantics; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

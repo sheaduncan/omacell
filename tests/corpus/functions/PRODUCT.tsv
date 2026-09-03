@@ -7,6 +7,6 @@
 =PRODUCT(2,#DIV/0!)	#DIV/0!	error propagates
 =PRODUCT(0,5)	0	zero factor
 =PRODUCT(-2,-3)	6	two negatives
-=PRODUCT(1,2,)	2	omitted arg skipped; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=PRODUCT(1,2,)	0	explicit omitted argument is zero; Microsoft Excel omission semantics; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =PRODUCT("2",3)	6	numeric text literal; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =PRODUCT("x")	#VALUE!	non-numeric text literal

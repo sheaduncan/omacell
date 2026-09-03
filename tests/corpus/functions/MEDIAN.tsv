@@ -9,3 +9,4 @@
 =MEDIAN(TRUE,2)	1.5	TRUE is 1
 =MEDIAN(0,0,0)	0	zeros
 =MEDIAN(9,1)	5	two values
+=MEDIAN(2,)	1	explicit omitted argument is zero; Microsoft Excel omission semantics; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

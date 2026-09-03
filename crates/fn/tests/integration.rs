@@ -193,6 +193,21 @@ fn empty_min_max_family_and_aggregate_forms_return_zero() {
 }
 
 #[test]
+fn explicit_omitted_numeric_argument_is_zero_but_empty_reference_is_ignored() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_formula_text(s, 0, 2, "=AVERAGE(A1:A2)").unwrap();
+    wb.set_formula_text(s, 1, 2, "=AVERAGE(A1:A2,2,)").unwrap();
+
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+
+    assert_eq!(display(&wb, 0, 2), "#DIV/0!");
+    assert_eq!(display(&wb, 1, 2), "1");
+}
+
+#[test]
 fn subtotal_always_skips_filtered_rows_but_only_101_family_skips_manual_rows() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
