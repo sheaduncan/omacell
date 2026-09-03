@@ -1,8 +1,8 @@
 //! Shared GUI test harness (no second config load).
 #![allow(dead_code)]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use omacell_bus::{Bus, CommandKind, CommandSpec, Effect, Exposure, LongOps};
 use omacell_conf::{ConfigStore, LoadOptions, Paths};
@@ -11,13 +11,16 @@ use omacell_core::event::Event;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
-use omacell_gui::{Gui, Launch};
+use omacell_gui::Launch;
 use omacell_ui::{KeymapRoots, UiSession, register_ui_commands};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+static GUI_HARNESS_LOCK: Mutex<()> = Mutex::new(());
+
 pub struct HarnessParts {
+    _harness_permit: MutexGuard<'static, ()>,
     pub _dir: tempfile::TempDir,
     pub launch: Launch,
     pub open_count: Arc<AtomicUsize>,
@@ -400,6 +403,9 @@ fn launch_opts_with_script(
     watch: bool,
     script: Option<&str>,
 ) -> HarnessParts {
+    let harness_permit = GUI_HARNESS_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
     std::fs::create_dir_all(&paths.user_config).unwrap();
@@ -459,6 +465,7 @@ fn launch_opts_with_script(
         assert!(result.ok, "{cell}: {:?}", result.error);
     }
     HarnessParts {
+        _harness_permit: harness_permit,
         _dir: dir,
         open_count,
         launch: Launch {
@@ -473,8 +480,4 @@ fn launch_opts_with_script(
             use_shell_font: false,
         },
     }
-}
-
-pub fn gui_from(parts: HarnessParts, ctx: &egui::Context) -> Gui {
-    Gui::new(parts.launch, false, ctx).unwrap()
 }
