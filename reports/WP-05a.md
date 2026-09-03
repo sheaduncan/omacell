@@ -150,6 +150,20 @@
   empty-reference behavior, run the complete function/core suites and strict
   Clippy, then run exact `just check` and reconcile this report.
 
+### 2026-09-03 exclusive-percentile endpoint plan (written before coding)
+
+- Change the existing `PERCENTILE.EXC` lower-rank boundary corpus expectation
+  first; add its exact upper endpoint, adjacent out-of-range controls, and
+  `QUARTILE.EXC` cases whose first and third quartiles land exactly on ranks
+  one and n.
+- Admit `k = 1/(n+1)` and `k = n/(n+1)` in the shared exclusive-percentile
+  helper so interpolation returns the first and last values. Retain `#NUM!`
+  for non-finite k, samples smaller than two, and ranks outside those bounds.
+- Preserve inclusive-percentile behavior, public interfaces, and dependencies;
+  cite Microsoft's exclusive-percentile rule, run the complete function/core
+  suites and strict Clippy, then run exact `just check` and reconcile this
+  report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -273,6 +287,11 @@ slot as a direct zero for the shared numeric-list aggregates and `COUNT`.
 Empty cells reached through arrays or references remain ignored, and generic
 argument walking, positional defaults, lazy functions, and `ISOMITTED` are
 unchanged.
+
+The 2026-09-03 exclusive-percentile endpoint follow-up admits exact rank one
+and rank n in the shared `PERCENTILE.EXC` interpolation helper. Those ranks
+return the first and last sample values, including the corresponding
+`QUARTILE.EXC` endpoints; ranks outside that interval still return `#NUM!`.
 
 ## Interfaces exposed (for dependents)
 
@@ -436,11 +455,30 @@ Host: rustc 1.98.0, Linux.
     [Microsoft Q&A trailing-comma example](https://learn.microsoft.com/en-us/answers/questions/4892755/impact-of-extra-comma-in-formulas);
     referenced empty cells follow Microsoft's [`AVERAGE`](https://support.microsoft.com/en-us/excel/functions/average-function)
     documentation.
+- 2026-09-03 exclusive-percentile endpoint test-first evidence:
+  - Four cases initially returned `#NUM!`: lower and upper
+    `PERCENTILE.EXC` endpoints for a four-value sample, plus `QUARTILE.EXC`
+    quartiles one and three for a three-value sample. They now return the
+    sample endpoints **1** and **4**, or **1** and **3**, respectively.
+  - Values immediately below `1/(n+1)` and above `n/(n+1)` remain `#NUM!`;
+    existing invalid-k, undersized-sample, error-propagation, and interpolation
+    cases remain green.
+  - The complete function/core suites pass (22 function integration tests, 73
+    core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - The optional LibreOffice cross-check skipped because no LibreOffice
+    converter is installed; no runtime or test dependency was introduced.
+  - Semantics follow Microsoft's [`PERCENTILE.EXC`](https://support.microsoft.com/en-us/excel/functions/percentile-exc-function)
+    and [`QUARTILE.EXC`](https://support.microsoft.com/en-us/excel/functions/quartile-exc-function)
+    documentation.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1573** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **1578** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -481,6 +519,8 @@ Host: rustc 1.98.0, Linux.
 10. **Resolved 2026-09-03:** explicitly omitted numeric aggregate arguments
     contribute zero, while empty cells reached through arrays or references
     remain ignored.
+11. **Resolved 2026-09-03:** exclusive-percentile ranks exactly one and n are
+    valid endpoints; only ranks below one or above n are rejected.
 
 ## RFC (only if a frozen contract changed)
 
@@ -501,6 +541,9 @@ The `SUMPRODUCT` follow-up changes no public signature or frozen contract.
 The `PERCENTRANK` follow-up changes no public signature or frozen contract.
 
 The explicit omitted numeric argument follow-up changes no public signature or
+frozen contract.
+
+The exclusive-percentile endpoint follow-up changes no public signature or
 frozen contract.
 
 ## Checklist
