@@ -8,6 +8,35 @@ use super::error::ParseError;
 use super::lexer::{Lexer, Token, TokenKind};
 use super::{Formula, MAX_FORMULA_DEPTH, ParseOptions, PartialParse, RefStyle};
 
+const MAX_PARSER_RECURSION: u32 = 256;
+
+#[derive(Clone, Copy)]
+struct ParseDepth {
+    recursion: u32,
+    functions: u32,
+}
+
+impl ParseDepth {
+    const ROOT: Self = Self {
+        recursion: 0,
+        functions: 0,
+    };
+
+    fn descend(self) -> Self {
+        Self {
+            recursion: self.recursion.saturating_add(1),
+            ..self
+        }
+    }
+
+    fn enter_function(self) -> Self {
+        Self {
+            functions: self.functions.saturating_add(1),
+            ..self
+        }
+    }
+}
+
 /// Parse a formula in A1 style.
 ///
 /// ```
@@ -97,7 +126,7 @@ impl<'a> Parser<'a> {
         if matches!(self.peek_kind(), TokenKind::Eof) {
             return Err(self.err("empty formula", expected_primary()));
         }
-        let ast = self.parse_expr(0, 0)?;
+        let ast = self.parse_expr(0, ParseDepth::ROOT)?;
         if !matches!(self.peek_kind(), TokenKind::Eof) {
             return Err(self.err(
                 "unexpected token after expression",
@@ -112,13 +141,28 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_expr(&mut self, min_bp: u8, depth: u32) -> Result<Expr, ParseError> {
-        if depth >= MAX_FORMULA_DEPTH {
-            return Err(ParseError::depth(
-                "formula nesting exceeds 64",
+    fn check_recursion(&self, depth: ParseDepth) -> Result<(), ParseError> {
+        if depth.recursion > MAX_PARSER_RECURSION {
+            return Err(ParseError::recursion(
+                format!("formula syntax nesting exceeds {MAX_PARSER_RECURSION}"),
                 self.peek_offset(),
             ));
         }
+        Ok(())
+    }
+
+    fn enter_function(&self, depth: ParseDepth, offset: usize) -> Result<ParseDepth, ParseError> {
+        if depth.functions >= MAX_FORMULA_DEPTH {
+            return Err(ParseError::depth(
+                format!("formula function nesting exceeds {MAX_FORMULA_DEPTH}"),
+                offset,
+            ));
+        }
+        Ok(depth.enter_function())
+    }
+
+    fn parse_expr(&mut self, min_bp: u8, depth: ParseDepth) -> Result<Expr, ParseError> {
+        self.check_recursion(depth)?;
         let mut lhs = self.parse_prefix(depth)?;
         self.partial = Some(lhs.clone());
         loop {
@@ -165,7 +209,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 self.bump();
-                let right = self.parse_expr(rbp, depth + 1)?;
+                let right = self.parse_expr(rbp, depth.descend())?;
                 lhs = self.make_binary(op, lhs, right)?;
                 self.partial = Some(lhs.clone());
                 continue;
@@ -175,7 +219,7 @@ impl<'a> Parser<'a> {
                 if lbp < min_bp {
                     break;
                 }
-                let right = self.parse_expr(rbp, depth + 1)?;
+                let right = self.parse_expr(rbp, depth.descend())?;
                 lhs = self.make_binary(BinOp::Isect, lhs, right)?;
                 self.partial = Some(lhs.clone());
                 continue;
@@ -185,18 +229,13 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    fn parse_prefix(&mut self, depth: u32) -> Result<Expr, ParseError> {
-        if depth >= MAX_FORMULA_DEPTH {
-            return Err(ParseError::depth(
-                "formula nesting exceeds 64",
-                self.peek_offset(),
-            ));
-        }
+    fn parse_prefix(&mut self, depth: ParseDepth) -> Result<Expr, ParseError> {
+        self.check_recursion(depth)?;
         let tok = self.peek().clone();
         match &tok.kind {
             TokenKind::Plus => {
                 self.bump();
-                let expr = self.parse_expr(prefix_bp(PrefixOp::Plus), depth + 1)?;
+                let expr = self.parse_expr(prefix_bp(PrefixOp::Plus), depth.descend())?;
                 let span = tok.span.union(expr.span);
                 Ok(Expr::new(
                     ExprKind::Prefix {
@@ -208,7 +247,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Minus => {
                 self.bump();
-                let expr = self.parse_expr(prefix_bp(PrefixOp::Minus), depth + 1)?;
+                let expr = self.parse_expr(prefix_bp(PrefixOp::Minus), depth.descend())?;
                 let span = tok.span.union(expr.span);
                 Ok(Expr::new(
                     ExprKind::Prefix {
@@ -223,7 +262,8 @@ impl<'a> Parser<'a> {
                     return Err(self.err("double @", vec!["reference".into()]));
                 }
                 self.bump();
-                let expr = self.parse_expr(prefix_bp(PrefixOp::ImplicitIntersect), depth + 1)?;
+                let expr =
+                    self.parse_expr(prefix_bp(PrefixOp::ImplicitIntersect), depth.descend())?;
                 let span = tok.span.union(expr.span);
                 Ok(Expr::new(
                     ExprKind::Prefix {
@@ -262,7 +302,7 @@ impl<'a> Parser<'a> {
                 }
                 let saved = self.in_args;
                 self.in_args = false;
-                let inner = self.parse_expr(0, depth + 1)?;
+                let inner = self.parse_expr(0, depth.descend())?;
                 self.in_args = saved;
                 self.expect_rparen()?;
                 let span = tok.span.union(self.prev_span());
@@ -304,7 +344,7 @@ impl<'a> Parser<'a> {
         &mut self,
         name: String,
         name_span: Span,
-        depth: u32,
+        depth: ParseDepth,
     ) -> Result<Expr, ParseError> {
         let (book, sheet) = split_quoted_external(&name);
         self.expect_bang()?;
@@ -327,7 +367,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_sheet_qualified(&mut self, depth: u32) -> Result<Expr, ParseError> {
+    fn parse_sheet_qualified(&mut self, depth: ParseDepth) -> Result<Expr, ParseError> {
         match self.peek_kind().clone() {
             TokenKind::SheetQuoted(name) => {
                 let span = self.peek().span;
@@ -339,7 +379,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_ref_or_call(&mut self, depth: u32) -> Result<Expr, ParseError> {
+    fn parse_ref_or_call(&mut self, depth: ParseDepth) -> Result<Expr, ParseError> {
         if let TokenKind::Ident(start) = self.peek_kind().clone() {
             if self.looks_like_3d() {
                 self.bump();
@@ -382,7 +422,7 @@ impl<'a> Parser<'a> {
         self.parse_ref_atom()
     }
 
-    fn parse_ref_body(&mut self, depth: u32) -> Result<Expr, ParseError> {
+    fn parse_ref_body(&mut self, depth: ParseDepth) -> Result<Expr, ParseError> {
         self.parse_expr(BP_RANGE, depth)
     }
 
@@ -441,8 +481,9 @@ impl<'a> Parser<'a> {
         &mut self,
         name: String,
         name_span: Span,
-        depth: u32,
+        depth: ParseDepth,
     ) -> Result<Expr, ParseError> {
+        let depth = self.enter_function(depth, name_span.start as usize)?;
         self.expect_lparen()?;
         let args = self.parse_args(depth)?;
         let span = name_span.union(self.prev_span());
@@ -455,7 +496,8 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn finish_call(&mut self, lhs: Expr, depth: u32) -> Result<Expr, ParseError> {
+    fn finish_call(&mut self, lhs: Expr, depth: ParseDepth) -> Result<Expr, ParseError> {
+        let depth = self.enter_function(depth, lhs.span.start as usize)?;
         self.expect_lparen()?;
         let args = self.parse_args(depth)?;
         let span = lhs.span.union(self.prev_span());
@@ -466,7 +508,7 @@ impl<'a> Parser<'a> {
         Ok(Expr::new(ExprKind::Call { callee, args }, span))
     }
 
-    fn parse_args(&mut self, depth: u32) -> Result<Vec<Option<Expr>>, ParseError> {
+    fn parse_args(&mut self, depth: ParseDepth) -> Result<Vec<Option<Expr>>, ParseError> {
         let mut args = Vec::new();
         if matches!(self.peek_kind(), TokenKind::RParen) {
             self.bump();
@@ -482,14 +524,14 @@ impl<'a> Parser<'a> {
 
     fn parse_args_inner(
         &mut self,
-        depth: u32,
+        depth: ParseDepth,
         args: &mut Vec<Option<Expr>>,
     ) -> Result<(), ParseError> {
         loop {
             if matches!(self.peek_kind(), TokenKind::Comma | TokenKind::RParen) {
                 args.push(None);
             } else {
-                args.push(Some(self.parse_expr(0, depth + 1)?));
+                args.push(Some(self.parse_expr(0, depth.descend())?));
             }
             if matches!(self.peek_kind(), TokenKind::Comma) {
                 self.bump();
@@ -511,7 +553,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_array(&mut self, depth: u32) -> Result<Expr, ParseError> {
+    fn parse_array(&mut self, depth: ParseDepth) -> Result<Expr, ParseError> {
         let start = self.peek().span;
         self.bump();
         if matches!(self.peek_kind(), TokenKind::RBrace) {
@@ -569,13 +611,8 @@ impl<'a> Parser<'a> {
         Ok(Expr::new(ExprKind::Array(rows), span))
     }
 
-    fn parse_array_scalar(&mut self, depth: u32) -> Result<Expr, ParseError> {
-        if depth >= MAX_FORMULA_DEPTH {
-            return Err(ParseError::depth(
-                "formula nesting exceeds 64",
-                self.peek_offset(),
-            ));
-        }
+    fn parse_array_scalar(&mut self, depth: ParseDepth) -> Result<Expr, ParseError> {
+        self.check_recursion(depth)?;
         let tok = self.peek().clone();
         match tok.kind {
             TokenKind::Plus | TokenKind::Minus => {
@@ -585,7 +622,7 @@ impl<'a> Parser<'a> {
                     PrefixOp::Minus
                 };
                 self.bump();
-                let expr = self.parse_array_scalar(depth + 1)?;
+                let expr = self.parse_array_scalar(depth.descend())?;
                 if !matches!(
                     expr.kind,
                     ExprKind::Number(_) | ExprKind::Postfix { .. } | ExprKind::Prefix { .. }
