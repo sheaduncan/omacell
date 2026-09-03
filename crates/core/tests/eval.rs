@@ -10,6 +10,7 @@ use omacell_core::eval::{
     ArgVal, ArrayLift, DynamicFn, DynamicFnBody, EvalCtx, FnDef, FnRegistry, RuntimeValue,
     format_runtime,
 };
+use omacell_core::formula::Expr;
 use omacell_core::graph::CellCoord;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::recalc::{AsyncNodeProvider, RecalcEngine, RecalcResult, format_cell};
@@ -158,6 +159,26 @@ fn eval_if(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         ctx.materialize(a.value.clone())
     } else {
         RuntimeValue::Scalar(Scalar::Bool(false))
+    }
+}
+
+fn eval_lazy_if(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
+    let Some(Some(condition)) = args.first() else {
+        return RuntimeValue::error(ErrorKind::Value);
+    };
+    let condition = omacell_core::eval::eval_expr(ctx, condition);
+    let condition = ctx.materialize(condition);
+    let RuntimeValue::Scalar(condition) = condition else {
+        return RuntimeValue::error(ErrorKind::Value);
+    };
+    let branch = match coerce::to_bool(&condition) {
+        Ok(true) => args.get(1),
+        Ok(false) => args.get(2),
+        Err(error) => return RuntimeValue::error(error),
+    };
+    match branch {
+        Some(Some(expr)) => omacell_core::eval::eval_expr(ctx, expr),
+        Some(None) | None => RuntimeValue::Scalar(Scalar::Bool(false)),
     }
 }
 
@@ -690,6 +711,30 @@ fn cycles_corpus() {
 #[test]
 fn cycles_iter_corpus() {
     run_omc(&corpus("eval/cycles_iter.omc.txt"));
+}
+
+#[test]
+fn recursive_named_lambda_resolves_between_calls() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .define_name(DefinedName {
+            name: "Countdown".to_string(),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Formula("=LAMBDA(n,IF(n=0,0,Countdown(n-1)))".to_string()),
+            comment: None,
+        })
+        .unwrap();
+    workbook
+        .set_formula_text(sheet, 0, 0, "=Countdown(5)")
+        .unwrap();
+
+    let mut registry = FnRegistry::new();
+    registry.register(FnDef::lazy("IF", 2, 3, false, eval_lazy_if));
+    let mut engine = RecalcEngine::new(registry);
+    engine.recalc_full(&mut workbook);
+
+    assert_eq!(display(&workbook, sheet, 0, 0), "0");
 }
 
 #[test]

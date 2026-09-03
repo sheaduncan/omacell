@@ -8,6 +8,9 @@ name Rate 0.2
 name Pair A1:A2
 name PlusOne =A1+1
 name Double =LAMBDA(x,x*2)
+name SelfCycle =selfcycle+1
+name MutualA =mutualb+1
+name MutualB =MUTUALA+1
 
 set B1 =Rate
 expect B1 0.2
@@ -23,3 +26,10 @@ expect B4 18
 
 set B5 =NoSuchName
 expect B5 #NAME?
+
+# Recursive formula names are invalid calculations, not unbounded host recursion.
+set B6 =SelfCycle
+expect B6 #NUM!
+
+set B7 =MutualA
+expect B7 #NUM!

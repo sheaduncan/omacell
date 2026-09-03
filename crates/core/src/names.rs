@@ -10,6 +10,9 @@ use crate::addr::{RangeRef, SheetId, parse_a1_cell, parse_r1c1_cell};
 use crate::error::CoreError;
 use crate::value::Value;
 
+/// Maximum nested formula-name expansions before evaluation fails closed.
+pub(crate) const MAX_DEFINED_NAME_DEPTH: usize = 512;
+
 /// Workbook-wide or sheet-local name.
 ///
 /// ```

@@ -21,7 +21,7 @@ use crate::intern::Interners;
 use crate::lambda::{self, Lambda};
 use crate::limits::{MAX_COLS, MAX_ROWS};
 use crate::locale::LocaleId;
-use crate::names::{NameReferent, NameScope};
+use crate::names::{MAX_DEFINED_NAME_DEPTH, NameReferent, NameScope};
 use crate::recalc::{AsyncRequest, AsyncState, ContentHash};
 use crate::spill::SpillTable;
 use crate::tables::Table;
@@ -29,7 +29,7 @@ use crate::value::Value;
 use crate::workbook::Workbook;
 
 /// Maximum nested LAMBDA / call depth before `#NUM!`.
-const MAX_CALL_DEPTH: u32 = 512;
+const MAX_CALL_DEPTH: u32 = MAX_DEFINED_NAME_DEPTH as u32;
 
 /// Shape of a runtime array.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -346,6 +346,7 @@ pub struct EvalCtx<'a> {
     pub cell: CellCoord,
     depth: u32,
     frames: Vec<ScopeFrame>,
+    active_names: Vec<(NameScope, String)>,
     pass: u32,
     env: PassEnv,
     call_path: u64,
@@ -373,6 +374,7 @@ impl<'a> EvalCtx<'a> {
             cell,
             depth: 0,
             frames: Vec::new(),
+            active_names: Vec::new(),
             pass,
             env: PassEnv::default(),
             call_path: 0,
@@ -548,6 +550,26 @@ impl<'a> EvalCtx<'a> {
             }
         }
         None
+    }
+
+    fn enter_defined_name(&mut self, scope: NameScope, name: &str) -> bool {
+        if self.active_names.len() >= MAX_DEFINED_NAME_DEPTH {
+            return false;
+        }
+        let normalized = name.to_lowercase();
+        if self
+            .active_names
+            .iter()
+            .any(|(active_scope, active_name)| *active_scope == scope && *active_name == normalized)
+        {
+            return false;
+        }
+        self.active_names.push((scope, normalized));
+        true
+    }
+
+    fn leave_defined_name(&mut self) {
+        self.active_names.pop();
     }
 
     /// Read a stored cell as a runtime scalar (spill origin → top-left).
@@ -1026,12 +1048,35 @@ fn eval_name(ctx: &mut EvalCtx<'_>, spec: Option<&SheetSpec>, name: &str) -> Run
     if spec.is_some()
         && let Some(n) = ctx.wb.names().get(NameScope::Sheet(sheet), name)
     {
-        return eval_referent(ctx, n.referent.clone());
+        let scope = n.scope;
+        let resolved_name = n.name.clone();
+        let referent = n.referent.clone();
+        return eval_defined_name(ctx, scope, &resolved_name, referent);
     }
     if let Some(n) = ctx.wb.names().resolve(sheet, name) {
-        return eval_referent(ctx, n.referent.clone());
+        let scope = n.scope;
+        let resolved_name = n.name.clone();
+        let referent = n.referent.clone();
+        return eval_defined_name(ctx, scope, &resolved_name, referent);
     }
     RuntimeValue::error(ErrorKind::Name)
+}
+
+fn eval_defined_name(
+    ctx: &mut EvalCtx<'_>,
+    scope: NameScope,
+    name: &str,
+    referent: NameReferent,
+) -> RuntimeValue {
+    let is_formula = matches!(referent, NameReferent::Formula(_));
+    if is_formula && !ctx.enter_defined_name(scope, name) {
+        return RuntimeValue::error(ErrorKind::Num);
+    }
+    let result = eval_referent(ctx, referent);
+    if is_formula {
+        ctx.leave_defined_name();
+    }
+    result
 }
 
 fn eval_referent(ctx: &mut EvalCtx<'_>, referent: NameReferent) -> RuntimeValue {
@@ -1468,8 +1513,10 @@ fn eval_named_call(ctx: &mut EvalCtx<'_>, name: &str, args: &[Option<Expr>]) -> 
     }
     // Defined name that is a lambda / formula.
     if let Some(n) = ctx.wb.names().resolve(ctx.cell.sheet, name) {
+        let scope = n.scope;
+        let resolved_name = n.name.clone();
         let referent = n.referent.clone();
-        let callee_v = eval_referent(ctx, referent);
+        let callee_v = eval_defined_name(ctx, scope, &resolved_name, referent);
         let argv = eval_args(ctx, args);
         return lambda::apply_value(ctx, callee_v, &argv);
     }
