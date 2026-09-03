@@ -1,6 +1,6 @@
 //! Layered load, provenance, env, and CLI `--set`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ pub enum Layer {
     User,
     /// Workbook-stored settings.
     Workbook,
-    /// `OMACELL_*`.
+    /// Recognized `OMACELL_SECTION__KEY` configuration variables.
     Env,
     /// CLI `--set`.
     Cli,
@@ -83,7 +83,9 @@ pub struct LoadOptions {
     pub cli_sets: Vec<String>,
     /// Workbook-stored configuration overlay.
     pub workbook: Option<Value>,
-    /// Environment snapshot, including an optional `OMACELL_THEME`.
+    /// Environment snapshot. Recognized config keys use
+    /// `OMACELL_SECTION__KEY`; `OMACELL_THEME` is handled separately and
+    /// unrelated `OMACELL_*` process controls are ignored.
     pub env: Vec<(String, String)>,
     /// Explicit CLI `--theme` path; wins over `OMACELL_THEME`.
     pub theme_override: Option<PathBuf>,
@@ -202,6 +204,7 @@ pub fn load_with_options(
         "<package-default>",
         &mut provenance,
     );
+    let env_keys: BTreeSet<String> = provenance.keys().cloned().collect();
     let user = options
         .config_file
         .clone()
@@ -236,7 +239,12 @@ pub fn load_with_options(
             &mut provenance,
         );
     }
-    merge_env_pairs(&mut value, options.env.iter().cloned(), &mut provenance)?;
+    merge_env_pairs(
+        &mut value,
+        options.env.iter().cloned(),
+        &env_keys,
+        &mut provenance,
+    )?;
     merge_cli(&mut value, &options.cli_sets, &mut provenance)?;
     let env_theme = options
         .env
@@ -511,6 +519,7 @@ fn mark_leaves(
 fn merge_env_pairs(
     dst: &mut Value,
     env: impl IntoIterator<Item = (String, String)>,
+    known_keys: &BTreeSet<String>,
     prov: &mut BTreeMap<String, Provenance>,
 ) -> Result<(), omacell_core::error::CoreError> {
     let mut pairs: Vec<(String, String)> = env
@@ -522,7 +531,7 @@ fn merge_env_pairs(
     pairs.sort();
     for (k, v) in pairs {
         let dotted = env_key_to_dotted(&k);
-        if dotted.is_empty() {
+        if !known_keys.contains(&dotted) {
             continue;
         }
         set_dotted(dst, &dotted, parse_scalar(&v), Layer::Env, &k, prov)?;

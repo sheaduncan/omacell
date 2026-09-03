@@ -60,6 +60,29 @@ fn env_overrides_user() {
 }
 
 #[test]
+fn non_config_omacell_environment_variables_are_ignored() {
+    let (_t, paths) = temp_paths();
+    let loaded = load_with_env(
+        &paths,
+        &[],
+        None,
+        [
+            ("OMACELL_REDUCED_MOTION".into(), "1".into()),
+            ("OMACELL_FUTURE_RUNTIME_CONTROL".into(), "enabled".into()),
+            ("OMACELL_APPEARANCE__GRID_LINES".into(), "false".into()),
+        ],
+    )
+    .unwrap();
+
+    assert!(!loaded.config.appearance.grid_lines);
+    let explanation = loaded.explain("appearance.grid_lines").unwrap();
+    assert_eq!(explanation.layer, Layer::Env);
+    assert_eq!(explanation.source, "OMACELL_APPEARANCE__GRID_LINES");
+    assert!(!loaded.provenance.contains_key("reduced_motion"));
+    assert!(!loaded.provenance.contains_key("future_runtime_control"));
+}
+
+#[test]
 fn cli_overrides_env() {
     let (_t, paths) = temp_paths();
     let loaded = load_with_env(
