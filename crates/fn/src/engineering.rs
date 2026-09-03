@@ -1044,6 +1044,7 @@ fn hex2dec_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
 // ----- bits -----
 
 const BIT_MAX: u64 = (1u64 << 48) - 1;
+const BIT_SHIFT_MAX: u64 = 53;
 
 fn bit_int(n: f64) -> Result<u64, ErrorKind> {
     let v = args::trunc_i64(n)?;
@@ -1086,7 +1087,7 @@ fn bitxor_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
 }
 
 fn shift(number: u64, amount: i64, left: bool) -> Result<u64, ErrorKind> {
-    if amount.unsigned_abs() > 48 {
+    if amount.unsigned_abs() > BIT_SHIFT_MAX {
         return Err(ErrorKind::Num);
     }
     let left = if amount < 0 { !left } else { left };

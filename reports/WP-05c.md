@@ -2,6 +2,18 @@
 
 ## Plan (written before coding)
 
+### 2026-09-03 bit-shift boundary follow-up (written before coding)
+
+- Update the `BITLSHIFT` and `BITRSHIFT` corpora first with cases at 49,
+  positive and negative 53, and 54 bits, using values whose results do not
+  independently exceed Excel's 48-bit value ceiling.
+- Raise only the shared absolute shift-amount limit from 48 to 53; retain the
+  existing `(2^48)-1` input/result checks and checked Rust shifts.
+- Correct the compatibility note to distinguish the 53-bit shift-amount limit
+  from the 48-bit value limit, preserve public interfaces, add no dependency,
+  run the complete function/core suites and strict Clippy, then run exact
+  `just check` and reconcile this report.
+
 - Files/modules to create:
   - `crates/fn/src/args.rs` — private helpers: scalar/number/int extraction, first-error walk, `Reference`/`RuntimeValue` → checked array, wildcard match, 1-based indexing, shape checks via `RuntimeArray::checked_len` **before** allocation. Named `args` (not `common`/`util`) so parallel WP-05a/05b helpers do not collide.
   - `crates/fn/src/lookup.rs` — `XLOOKUP`, `XMATCH`, `INDEX`, `MATCH`, `VLOOKUP`, `HLOOKUP`, `LOOKUP`, `CHOOSE`, `OFFSET`, `INDIRECT`, `ROW`, `ROWS`, `COLUMN`, `COLUMNS`, `ADDRESS`, `AREAS`. `OFFSET`/`INDIRECT` are volatile and call `EvalCtx::record_dynamic_ref`. `ROWS`/`COLUMNS`/`INDEX`/`OFFSET` operate on `Reference` dimensions without materializing whole-column payloads. `register_lookup`.
@@ -61,7 +73,7 @@ Key files:
 - `crates/fn/src/{lib,metadata,corpus,probes}.rs` — `all_specs` / `register_all`; SEQUENCE probe removed
 - `crates/fn/tests/wp05c.rs` — corpus (≥10 rows × 77 names), shape limits, solvers, RANDARRAY determinism, eager smoke
 - `crates/fn/benches/lookup_array.rs` — 1M-row `XLOOKUP`/`XMATCH`/`FILTER`/`SORT`/`UNIQUE`, `MAP`, `IRR`/`RATE`
-- `tests/corpus/functions/<NAME>.tsv` — 861 cited rows
+- `tests/corpus/functions/<NAME>.tsv` — 868 cited rows
 - `docs/compat/known-differences.md` — append-only
 - `scripts/lo-crosscheck.py` — `_xlfn.` prefix + CSV error/percent mapping
 - `fuzz/fuzz_targets/fn_eager.rs` — every eager registered spec
@@ -69,6 +81,10 @@ Key files:
 Key tests: `crates/fn/tests/wp05c.rs`, `crates/fn/tests/probes.rs`.
 
 Review hardening replaces quadratic `UNIQUE`/mode-style scans with first-seen hash indexes, preserves deterministic output order, validates output shapes before allocation, and handles extreme integer arguments without panicking. `DB`, `DDB`, `CUMIPMT`, and `CUMPRINC` now use constant-time closed forms instead of user-sized loops; `EFFECT` uses stable `ln_1p`/`exp_m1` compounding. `XNPV` accepts dates in any order provided none precedes the first date, matching Excel.
+
+The 2026-09-03 bit-shift follow-up accepts absolute shift amounts through 53
+for `BITLSHIFT` and `BITRSHIFT`, while retaining the independent 48-bit
+input/result ceiling and returning `#NUM!` above 53.
 
 ## Interfaces exposed (for dependents)
 
@@ -103,13 +119,27 @@ Host: rustc 1.98.0, Linux.
 - `just check` — pass
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — pass
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
-- Corpus: **77** function files, **862** rows, all ≥10, all pass (`cargo test -p omacell-fn --test wp05c`; 11 tests after review hardening)
+- Corpus: **77** function files, **868** rows, all ≥10, all pass (`cargo test -p omacell-fn --test wp05c`; 11 tests after review hardening)
 - Catalog: **82** specs (`all_specs`); **79** registered (`LET`/`LAMBDA`/`ISOMITTED` catalog-only); **5** remaining probes (`ABS`/`SUM`/`IF`/`NOW`/`RAND`)
 - Implemented WP-05c functions: **74** (16 lookup + 18 array + 6 lambda helpers + 20 financial + 14 engineering) + **3** metadata-only language constructs
 - `scripts/lo-crosscheck.py` on the original 77-file set: 861 evaluated, **0 unexplained**, 186 known (LibreOffice CSV/`_xlfn` gaps). Review re-check of updated `XNPV.tsv`: 12 evaluated, 10 known, **0 unexplained**.
 - Eager smoke: `eager_functions_do_not_panic_on_garbage_args` — pass
 - Criterion `crates/fn/benches/lookup_array.rs`: 1M-row `XLOOKUP`/`XMATCH`/`FILTER`/`SORT`/`UNIQUE`, 10k `MAP`, `IRR`/`RATE`. Not part of `just check`. Run `cargo bench -p omacell-fn --bench lookup_array`. Review: regressions over 10% vs this harness fail review.
 - Review measurement: optimized `unique_1m --quick` **469.34 ms** midpoint on the review host.
+- 2026-09-03 bit-shift test-first evidence:
+  - Six cases at 49 and ±53 bits initially returned `#NUM!`; they now return
+    zero when the input/result remains within the 48-bit value ceiling.
+  - Both 54-bit cases return `#NUM!`, as do existing shifts whose result exceeds
+    `(2^48)-1`.
+  - The updated corpus and complete function/core suites pass (21 function
+    integration tests, 73 core unit tests, every integration suite, and 103
+    core doctests); strict all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - Semantics follow Microsoft's [`BITLSHIFT`](https://support.microsoft.com/en-us/excel/functions/bitlshift-function)
+    and [`BITRSHIFT`](https://support.microsoft.com/en-us/office/bitrshift-function-274d6996-f42c-4743-abdb-4ff95351222c)
+    documentation.
 
 ## Open questions / decisions needed
 
@@ -119,10 +149,15 @@ Host: rustc 1.98.0, Linux.
    functions; record the remaining rows against live Excel 365.
 3. **Human / WP-28 fixed host:** record the full 1M-row lookup-array Criterion
    sample and committed baseline.
+4. **Resolved 2026-09-03:** bit-operation values/results remain limited to 48
+   bits, while `BITLSHIFT`/`BITRSHIFT` shift magnitudes are allowed through 53.
 
 ## RFC (only if a frozen contract changed)
 
 None. WP-01 types unchanged.
+
+The bit-shift boundary follow-up changes no public signature or frozen
+contract.
 
 ## Checklist
 

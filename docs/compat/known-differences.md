@@ -37,7 +37,7 @@ encode.
 | Sort of formula cells | Cells move as units; relative refs adjust by the row/col delta of the move (same as copy/fill) | Same: `RewriteOp::Copy { drow, dcol }` after the permutation. Absolute refs stay. Notes/comments do not follow the sort. | WP-18 |
 | `CONVERT` unknown/incompatible unit | `#N/A` | LibreOffice `Err:502` | WP-05c |
 | `CONVERT` `lbm`→`g` | Microsoft factor `453.59237` | LibreOffice uses a slightly different mass factor | WP-05c |
-| `BITLSHIFT` beyond 48 bits | `#NUM!` (`0..2^48-1`) | LibreOffice may return the untruncated shift | WP-05c |
+| LibreOffice bit shifts at Excel limits | Shift amounts through ±53 are allowed, but input/results above `(2^48)-1` are `#NUM!` | Same; LibreOffice may return an out-of-range shift result | WP-05c |
 | Pivot compact layout | Nested row fields indent in one column; outer keys get a group header row | Same: two spaces per depth, group header when an outer key changes; outline blanks repeated outer labels; tabular repeats them | WP-24a |
 | Pivot Distinct Count | Excel 2013+ `x14:dataField pivotShowAs="distinctCount"` | Aggregates distinctly and writes the x14 extension; `subtotal="count"` remains the base attribute | WP-24a |
 | Structural edits around pivots | Excel rewrites pivot source/output references as rows and columns move | Whole-row/column inserts and deletes, and cell shifts that cover a pivot range, rewrite source and output; partial bands that would split a pivot still error `pivot.struct` | WP-24a |
