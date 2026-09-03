@@ -9,3 +9,5 @@
 =POWER("2",3)	8	numeric text
 =POWER(#N/A,1)	#N/A	error
 =POWER(10,-1)	0.1	negative exponent
+=POWER(0,-1)	#DIV/0!	zero base with negative integer exponent
+=POWER(0,-0.5)	#DIV/0!	zero base with negative fractional exponent

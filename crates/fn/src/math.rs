@@ -1035,8 +1035,11 @@ fn log_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     let out = (|| {
         let n = arg_number(ctx, args, 0)?;
         let base = arg_number_or(ctx, args, 1, 10.0)?;
-        if n <= 0.0 || base <= 0.0 || base == 1.0 {
+        if n <= 0.0 || base <= 0.0 {
             return Err(ErrorKind::Num);
+        }
+        if base == 1.0 {
+            return Err(ErrorKind::Div0);
         }
         finite_trig(n.log(base))
     })();
@@ -1120,7 +1123,9 @@ fn quotient_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
 }
 fn power_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     binary(ctx, args, |n, p| {
-        if (n == 0.0 && p == 0.0) || (n < 0.0 && p.fract() != 0.0) {
+        if n == 0.0 && p < 0.0 {
+            Err(ErrorKind::Div0)
+        } else if (n == 0.0 && p == 0.0) || (n < 0.0 && p.fract() != 0.0) {
             Err(ErrorKind::Num)
         } else {
             finite_trig(n.powf(p))
