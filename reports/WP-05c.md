@@ -14,6 +14,20 @@
   run the complete function/core suites and strict Clippy, then run exact
   `just check` and reconcile this report.
 
+### 2026-09-03 CONVERT unit-table follow-up (written before coding)
+
+- Add failing corpus rows first for Microsoft's case-sensitive `Pica`/`Picapt`
+  factors, pound-force, every currently missing documented unit alias, all
+  eight binary prefixes on information units, and binary-prefix rejection on
+  unsupported units.
+- Introduce a private canonical-alias table reused by direct and SI-prefixed
+  lookup, correct linear/square Pica factors, add cubic Pica and cubic nautical
+  mile units, and recognize binary prefixes only for bit and byte.
+- Preserve existing temperature-offset handling and the current decimal-prefix
+  behavior, public interfaces, and dependencies; update compatibility notes,
+  run the complete function/core suites and strict Clippy, then run exact
+  `just check` and reconcile this report.
+
 - Files/modules to create:
   - `crates/fn/src/args.rs` — private helpers: scalar/number/int extraction, first-error walk, `Reference`/`RuntimeValue` → checked array, wildcard match, 1-based indexing, shape checks via `RuntimeArray::checked_len` **before** allocation. Named `args` (not `common`/`util`) so parallel WP-05a/05b helpers do not collide.
   - `crates/fn/src/lookup.rs` — `XLOOKUP`, `XMATCH`, `INDEX`, `MATCH`, `VLOOKUP`, `HLOOKUP`, `LOOKUP`, `CHOOSE`, `OFFSET`, `INDIRECT`, `ROW`, `ROWS`, `COLUMN`, `COLUMNS`, `ADDRESS`, `AREAS`. `OFFSET`/`INDIRECT` are volatile and call `EvalCtx::record_dynamic_ref`. `ROWS`/`COLUMNS`/`INDEX`/`OFFSET` operate on `Reference` dimensions without materializing whole-column payloads. `register_lookup`.
@@ -73,7 +87,7 @@ Key files:
 - `crates/fn/src/{lib,metadata,corpus,probes}.rs` — `all_specs` / `register_all`; SEQUENCE probe removed
 - `crates/fn/tests/wp05c.rs` — corpus (≥10 rows × 77 names), shape limits, solvers, RANDARRAY determinism, eager smoke
 - `crates/fn/benches/lookup_array.rs` — 1M-row `XLOOKUP`/`XMATCH`/`FILTER`/`SORT`/`UNIQUE`, `MAP`, `IRR`/`RATE`
-- `tests/corpus/functions/<NAME>.tsv` — 868 cited rows
+- `tests/corpus/functions/<NAME>.tsv` — 934 cited rows
 - `docs/compat/known-differences.md` — append-only
 - `scripts/lo-crosscheck.py` — `_xlfn.` prefix + CSV error/percent mapping
 - `fuzz/fuzz_targets/fn_eager.rs` — every eager registered spec
@@ -85,6 +99,11 @@ Review hardening replaces quadratic `UNIQUE`/mode-style scans with first-seen ha
 The 2026-09-03 bit-shift follow-up accepts absolute shift amounts through 53
 for `BITLSHIFT` and `BITRSHIFT`, while retaining the independent 48-bit
 input/result ceiling and returning `#NUM!` above 53.
+
+The 2026-09-03 `CONVERT` follow-up completes the aliases in Microsoft's
+documented unit table, distinguishes case-sensitive 1/72-inch `Pica`/`Picapt`
+from 1/6-inch `pica`, adds pound-force and the missing cubic units, and supports
+the eight binary prefixes on bit/byte units only.
 
 ## Interfaces exposed (for dependents)
 
@@ -119,7 +138,7 @@ Host: rustc 1.98.0, Linux.
 - `just check` — pass
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — pass
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
-- Corpus: **77** function files, **868** rows, all ≥10, all pass (`cargo test -p omacell-fn --test wp05c`; 11 tests after review hardening)
+- Corpus: **77** function files, **934** rows, all ≥10, all pass (`cargo test -p omacell-fn --test wp05c`; 11 tests after review hardening)
 - Catalog: **82** specs (`all_specs`); **79** registered (`LET`/`LAMBDA`/`ISOMITTED` catalog-only); **5** remaining probes (`ABS`/`SUM`/`IF`/`NOW`/`RAND`)
 - Implemented WP-05c functions: **74** (16 lookup + 18 array + 6 lambda helpers + 20 financial + 14 engineering) + **3** metadata-only language constructs
 - `scripts/lo-crosscheck.py` on the original 77-file set: 861 evaluated, **0 unexplained**, 186 known (LibreOffice CSV/`_xlfn` gaps). Review re-check of updated `XNPV.tsv`: 12 evaluated, 10 known, **0 unexplained**.
@@ -140,6 +159,27 @@ Host: rustc 1.98.0, Linux.
   - Semantics follow Microsoft's [`BITLSHIFT`](https://support.microsoft.com/en-us/excel/functions/bitlshift-function)
     and [`BITRSHIFT`](https://support.microsoft.com/en-us/office/bitrshift-function-274d6996-f42c-4743-abdb-4ff95351222c)
     documentation.
+- 2026-09-03 `CONVERT` test-first evidence:
+  - The added 66-row matrix initially had 63 mismatches: missing aliases/units
+    and binary prefixes returned `#N/A`, uppercase `Pica` converted as 1/6 inch
+    and returned **12** inches for 72 Pica, and square Pica returned **144**
+    square inches for 5,184 Pica². All 66 rows now pass.
+  - The matrix covers every alias currently listed by Microsoft across mass,
+    distance, time, pressure, force, energy, power, temperature, volume, area,
+    and speed; all eight binary prefixes are checked as adjacent 1024× ratios.
+  - The exact internal pound-force factor is **4.4482216152605 N**; General
+    formatting displays **4.448221615** in the corpus.
+  - The complete function/core suites pass (21 function integration tests, 73
+    core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - `scripts/lo-crosscheck.py --help` skipped because a LibreOffice converter
+    is unavailable; no runtime/test dependency on LibreOffice was introduced.
+  - Unit names and prefixes follow Microsoft's [`CONVERT`](https://support.microsoft.com/en-us/excel/functions/convert-function)
+    documentation; the pound-force constant follows the exact factor in
+    [NIST SP 811](https://physics.nist.gov/cuu/pdf/sp811.pdf).
 
 ## Open questions / decisions needed
 
@@ -151,12 +191,17 @@ Host: rustc 1.98.0, Linux.
    sample and committed baseline.
 4. **Resolved 2026-09-03:** bit-operation values/results remain limited to 48
    bits, while `BITLSHIFT`/`BITRSHIFT` shift magnitudes are allowed through 53.
+5. **Resolved 2026-09-03:** `CONVERT` recognizes Microsoft's complete current
+   alias table and binary prefixes, including case-sensitive Pica semantics.
 
 ## RFC (only if a frozen contract changed)
 
 None. WP-01 types unchanged.
 
 The bit-shift boundary follow-up changes no public signature or frozen
+contract.
+
+The `CONVERT` unit-table follow-up changes no public signature or frozen
 contract.
 
 ## Checklist
