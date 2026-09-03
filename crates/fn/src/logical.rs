@@ -197,10 +197,20 @@ fn if_impl(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
         Err(error) => return RuntimeValue::error(error),
     };
     let branch = if cond { 1 } else { 2 };
-    match args.get(branch) {
+    eval_if_branch(ctx, args, branch, cond)
+}
+
+fn eval_if_branch(
+    ctx: &mut EvalCtx<'_>,
+    args: &[Option<Expr>],
+    index: usize,
+    true_branch: bool,
+) -> RuntimeValue {
+    match args.get(index) {
         Some(Some(expr)) => eval_expr(ctx, expr),
-        Some(None) | None if !cond => RuntimeValue::Scalar(Scalar::Bool(false)),
-        _ => RuntimeValue::Scalar(Scalar::Empty),
+        Some(None) => RuntimeValue::Scalar(Scalar::Number(0.0)),
+        None if !true_branch => RuntimeValue::Scalar(Scalar::Bool(false)),
+        None => RuntimeValue::Scalar(Scalar::Empty),
     }
 }
 
@@ -258,14 +268,8 @@ fn eval_array_if_branch(
     index: usize,
     true_branch: bool,
 ) -> RuntimeValue {
-    match args.get(index) {
-        Some(Some(expr)) => {
-            let value = eval_expr(ctx, expr);
-            ctx.materialize(value)
-        }
-        Some(None) | None if !true_branch => RuntimeValue::Scalar(Scalar::Bool(false)),
-        _ => RuntimeValue::Scalar(Scalar::Empty),
-    }
+    let value = eval_if_branch(ctx, args, index, true_branch);
+    ctx.materialize(value)
 }
 
 fn value_shape(value: &RuntimeValue) -> Result<(u32, u32), ErrorKind> {

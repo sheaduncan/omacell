@@ -10,3 +10,10 @@
 =IF(#N/A,1,2)	#N/A	test error propagates
 =IF("x",1,2)	#VALUE!	non-bool text
 =IF(TRUE,#N/A,2)	#N/A	selected error propagates
+=IF(TRUE,,2)	0	explicitly omitted selected true result is zero
+=IF(FALSE,1,)	0	explicitly omitted selected false result is zero
+=IF(TRUE,,1/0)	0	explicitly omitted true result stays lazy
+=IF(FALSE,1/0,)	0	explicitly omitted false result stays lazy
+=IF({TRUE,FALSE},,5)	{0,5}	array condition uses zero for an explicitly omitted true result
+=IF({TRUE,FALSE},5,)	{5,0}	array condition uses zero for an explicitly omitted false result
+=IF({TRUE,FALSE},5)	{5,FALSE}	an absent optional false result remains Boolean FALSE

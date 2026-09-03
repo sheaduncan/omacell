@@ -215,6 +215,19 @@
   run the complete function/core suites and strict Clippy, then run exact
   `just check` and reconcile this report.
 
+### 2026-09-03 IF explicit-omission plan (written before coding)
+
+- Add failing `IF` corpus rows first for explicitly omitted selected true and
+  false results in scalar and array conditions, plus lazy unselected-error and
+  absent-optional-false controls.
+- Return numeric zero for `Some(None)`, which represents an explicitly empty
+  result slot. Keep a genuinely absent optional false result as Boolean
+  `FALSE`, and share that distinction between scalar and array `IF` paths.
+- Preserve branch laziness, broadcasting, public interfaces, and dependencies;
+  cite Microsoft's omitted-result behavior, run the complete function/core
+  suites and strict Clippy, then run exact `just check` and reconcile this
+  report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -360,6 +373,12 @@ replace handled errors cell by cell when their checked value is an array.
 preserves other errors in place. A fallback is evaluated once only when at
 least one cell needs it, then uses the existing scalar and singleton-dimension
 broadcasting rules. The shared path also removes panicking argument access.
+
+The 2026-09-03 `IF` explicit-omission follow-up distinguishes an explicitly
+empty selected result from an absent optional false result. Explicit omissions
+return numeric zero in both scalar and array conditions. An absent third
+argument continues to return Boolean `FALSE`, and unselected branches remain
+unevaluated. Both paths now share one branch-evaluation helper.
 
 ## Interfaces exposed (for dependents)
 
@@ -627,11 +646,34 @@ Host: rustc 1.98.0, Linux.
     [`IFERROR`](https://support.microsoft.com/en-us/excel/functions/iferror-function)
     and [`IFNA`](https://support.microsoft.com/en-us/excel/functions/ifna-function)
     documentation; `IFNA` retains its narrower error selection.
+- 2026-09-03 `IF` explicit-omission test-first evidence:
+  - Six new cases initially failed: selected explicit omissions returned empty
+    text or Boolean `FALSE` in scalar and array conditions. They now return
+    numeric zero.
+  - Lazy controls prove `IF(TRUE,,1/0)` and `IF(FALSE,1/0,)` do not evaluate
+    the unselected error branch. `IF({TRUE,FALSE},5)` remains `{5,FALSE}`,
+    preserving the distinct absent-optional-false behavior.
+  - The complete function/core suites pass (23 function integration tests, 73
+    core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - The optional LibreOffice cross-check skipped because Calc conversion was
+    unavailable in its sandboxed run; no runtime or test dependency was
+    introduced.
+  - Numeric-zero behavior for an omitted selected result follows Microsoft's
+    [`IF`](https://support.microsoft.com/en-us/excel/functions/if-function)
+    documentation.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
 - Catalog: **156** specs in `all_specs()` / `functions.json` (67 math + 48 statistical + 11 logical + 17 information + 10 aggregate + 2 probes `NOW`/`SEQUENCE` + `ISOMITTED` catalog). Compatibility aliases: `MODE`, `STDEV`, `STDEVP`, `VAR`, `VARP`, `RANK`, `PERCENTILE`, `PERCENTRANK`, `QUARTILE`, `COVAR`, `FORECAST` (11 extra registry names).
-- Corpus: **155** TSV files, **1590** data rows; `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows (`NOW` has no TSV — not owned).
+- Corpus: **155** TSV files, **3270** data rows;
+  `crates/fn/tests/corpus.rs` all pass. Owned functions each have ≥10 rows
+  (`NOW` has no TSV — not owned). This reconciles the inherited stale
+  hand-maintained total with the corpus runner's non-comment, nonblank row
+  rule.
 - `scripts/lo-crosscheck.py` — LibreOffice 26.x via `soffice`: **1549 evaluated, 166 known difference(s), 0 unexplained**.
 - Focused review cross-check (`AGGREGATE`, `COUNTIF`, `GCD`, `LCM`): **45 evaluated, 5 known, 0 unexplained**.
 - Criterion `--quick --save-baseline wp05a` (`crates/fn/benches/aggregates.rs`, 10k occupied rows, whole column):
@@ -685,6 +727,9 @@ Host: rustc 1.98.0, Linux.
 15. **Resolved 2026-09-03:** array-valued `IFERROR` and `IFNA` replace handled
     errors per cell. Their fallback stays lazy when no array cell needs it;
     `IFNA` leaves non-`#N/A` errors unchanged.
+16. **Resolved 2026-09-03:** an explicitly omitted selected `IF` result is
+    numeric zero for scalar and array conditions. A genuinely absent optional
+    false result remains Boolean `FALSE`.
 
 ## RFC (only if a frozen contract changed)
 
@@ -720,6 +765,9 @@ The `FREQUENCY` bin-order follow-up changes no public signature or frozen
 contract.
 
 The array error-handler follow-up changes no public signature or frozen
+contract.
+
+The `IF` explicit-omission follow-up changes no public signature or frozen
 contract.
 
 ## Checklist
