@@ -901,7 +901,11 @@ fn percentrank(ctx: &EvalCtx<'_>, args: &[ArgVal], inc: bool) -> RuntimeValue {
         let first = args.first().ok_or(ErrorKind::Value)?;
         let mut v = collect_numbers(ctx, std::slice::from_ref(first))?;
         let x = arg_number(ctx, args, 1)?;
-        let sig = crate::common::arg_number_or(ctx, args, 2, 3.0)?.trunc() as i32;
+        let sig = crate::common::arg_number_or(ctx, args, 2, 3.0)?.trunc();
+        if sig < 1.0 {
+            return Err(ErrorKind::Num);
+        }
+        let sig = sig as i32;
         if v.is_empty() {
             return Err(ErrorKind::Na);
         }
@@ -939,7 +943,7 @@ fn percentrank(ctx: &EvalCtx<'_>, args: &[ArgVal], inc: bool) -> RuntimeValue {
                 (i as f64 + 1.0 + frac) / (n as f64 + 1.0)
             }
         };
-        Ok(crate::common::round_half_away(r, sig.max(1)))
+        Ok(crate::common::round_down(r, sig))
     })();
     match out {
         Ok(n) => rt_num(n),
