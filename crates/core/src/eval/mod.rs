@@ -751,6 +751,14 @@ impl<'a> EvalCtx<'a> {
             .unwrap_or(false)
     }
 
+    /// Whether `row` was hidden by the active AutoFilter on `sheet`.
+    #[must_use]
+    pub fn is_row_filtered(&self, sheet: SheetId, row: u32) -> bool {
+        self.wb
+            .sheet(sheet)
+            .is_some_and(|s| s.filter_hidden_rows.contains(&row))
+    }
+
     /// Formula source at a cell, if the slot stores a formula.
     #[must_use]
     pub fn formula_source(&self, sheet: SheetId, row: u32, col: u16) -> Option<&str> {

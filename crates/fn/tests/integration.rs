@@ -1,7 +1,9 @@
 //! Lazy-branch, hidden-row, random, whole-column, criteria, and fuzz smoke.
 
+use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::coerce::Scalar;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeArray, RuntimeValue};
+use omacell_core::filter::{AutoFilter, FilterColumn, FilterCriteria, NumOp, apply_filter};
 use omacell_core::graph::{CellCoord, Precedent};
 use omacell_core::recalc::{RecalcEngine, format_cell};
 use omacell_core::spill::SpillTable;
@@ -90,6 +92,70 @@ fn hidden_row_subtotal_skips_101_family() {
     assert_eq!(display(&wb, 2, 1), "40");
     assert_eq!(display(&wb, 3, 1), "40");
     assert_eq!(display(&wb, 4, 1), "60");
+}
+
+#[test]
+fn empty_min_max_family_and_aggregate_forms_return_zero() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    for (row, formula) in [
+        "=MIN(A1:A2)",
+        "=MAX(A1:A2)",
+        "=MINA(A1:A2)",
+        "=MAXA(A1:A2)",
+        "=SUBTOTAL(4,A1:A2)",
+        "=SUBTOTAL(5,A1:A2)",
+        "=AGGREGATE(4,4,A1:A2)",
+        "=AGGREGATE(5,4,A1:A2)",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        wb.set_formula_text(s, row as u32, 1, formula).unwrap();
+    }
+
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+    for row in 0..8 {
+        assert_eq!(display(&wb, row, 1), "0");
+    }
+}
+
+#[test]
+fn subtotal_always_skips_filtered_rows_but_only_101_family_skips_manual_rows() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.undo_log_mut().set_enabled(false);
+    wb.set_text(s, 0, 0, "Value").unwrap();
+    wb.set_number(s, 1, 0, 10.0).unwrap();
+    wb.set_number(s, 2, 0, 20.0).unwrap();
+    wb.set_number(s, 3, 0, 30.0).unwrap();
+    apply_filter(
+        &mut wb,
+        s,
+        &AutoFilter {
+            range: RangeRef::from_corners(CellRef::new(0, 0).unwrap(), CellRef::new(3, 0).unwrap()),
+            columns: vec![FilterColumn {
+                col_id: 0,
+                criteria: FilterCriteria::Number {
+                    op: NumOp::Greater,
+                    value: 10.0,
+                    value2: None,
+                },
+            }],
+        },
+    )
+    .unwrap();
+    wb.set_row_hidden(s, 2, true).unwrap();
+    wb.set_formula_text(s, 0, 1, "=SUBTOTAL(9,A2:A4)").unwrap();
+    wb.set_formula_text(s, 1, 1, "=SUBTOTAL(109,A2:A4)")
+        .unwrap();
+
+    let mut eng = engine();
+    eng.recalc_full(&mut wb);
+    assert_eq!(display(&wb, 0, 1), "50");
+    assert_eq!(display(&wb, 1, 1), "30");
 }
 
 #[test]

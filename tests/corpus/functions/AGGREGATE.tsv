@@ -11,3 +11,5 @@
 =AGGREGATE(0,4,{1})	#VALUE!	bad function_num
 =AGGREGATE(3,6,{1,"x",#N/A})	2	COUNTA ignoring errors; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =AGGREGATE(14,4,{1,2},#N/A)	#N/A	k error propagates
+=AGGREGATE(4,4,{""})	0	MAX with no numeric values returns zero
+=AGGREGATE(5,4,{""})	0	MIN with no numeric values returns zero

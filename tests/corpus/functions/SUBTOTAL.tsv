@@ -9,3 +9,5 @@
 =SUBTOTAL(9,1,2,3)	6	multiple refs as scalars
 =SUBTOTAL(0,{1})	#VALUE!	bad function_num
 =SUBTOTAL(109,{1,2,3})	6	109 SUM ignore hidden (none hidden)
+=SUBTOTAL(4,{""})	0	MAX with no numeric values returns zero
+=SUBTOTAL(5,{""})	0	MIN with no numeric values returns zero
