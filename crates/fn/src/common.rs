@@ -291,19 +291,29 @@ fn for_each_one(
 
 /// Collect numbers with Excel SUM/AVERAGE range-vs-literal rules.
 pub fn collect_numbers(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<Vec<f64>, ErrorKind> {
-    let mut out = Vec::new();
-    for_each_value(ctx, args, &mut |s, origin| {
-        push_number(&mut out, s, origin, false)
-    })?;
-    Ok(out)
+    collect_numeric_args(ctx, args, false)
 }
 
 /// AVERAGEA / STDEVA / VARA: text and FALSE → 0, TRUE → 1 in aggregates.
 pub fn collect_numbers_a(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<Vec<f64>, ErrorKind> {
+    collect_numeric_args(ctx, args, true)
+}
+
+fn collect_numeric_args(
+    ctx: &EvalCtx<'_>,
+    args: &[ArgVal],
+    alpha: bool,
+) -> Result<Vec<f64>, ErrorKind> {
     let mut out = Vec::new();
-    for_each_value(ctx, args, &mut |s, origin| {
-        push_number(&mut out, s, origin, true)
-    })?;
+    for arg in args {
+        if arg.omitted {
+            out.push(0.0);
+            continue;
+        }
+        for_each_one(ctx, &arg.value, &mut |s, origin| {
+            push_number(&mut out, s, origin, alpha)
+        })?;
+    }
     Ok(out)
 }
 
@@ -358,19 +368,25 @@ pub fn product_args(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<f64, ErrorKind
 /// COUNT: numbers in ranges; literals coerce bool/numeric-text.
 pub fn count_args(ctx: &EvalCtx<'_>, args: &[ArgVal]) -> Result<f64, ErrorKind> {
     let mut n = 0.0;
-    for_each_value(ctx, args, &mut |s, origin| {
-        if s.error().is_some() {
-            return Ok(());
-        }
-        let keep = match origin {
-            Origin::Literal => coerce::to_number(&s).is_ok(),
-            Origin::Aggregate => matches!(s, Scalar::Number(v) if v.is_finite()),
-        };
-        if keep {
+    for arg in args {
+        if arg.omitted {
             n += 1.0;
+            continue;
         }
-        Ok(())
-    })?;
+        for_each_one(ctx, &arg.value, &mut |s, origin| {
+            if s.error().is_some() {
+                return Ok(());
+            }
+            let keep = match origin {
+                Origin::Literal => coerce::to_number(&s).is_ok(),
+                Origin::Aggregate => matches!(s, Scalar::Number(v) if v.is_finite()),
+            };
+            if keep {
+                n += 1.0;
+            }
+            Ok(())
+        })?;
+    }
     Ok(n)
 }
 

@@ -10,3 +10,4 @@
 =MAX(10,2,8)	10	three
 =MAX("2",3)	3	numeric text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
 =MAX({""})	0	Microsoft MAX: arguments containing no numbers return zero
+=MAX(-2,)	0	explicit omitted argument is zero; Microsoft Excel omission semantics; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

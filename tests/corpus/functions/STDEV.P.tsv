@@ -9,3 +9,4 @@
 =STDEV.P(1,2,3,4,5)	1.414213562	1..5
 =STDEV.P(2,4)	1	two
 =STDEV.P(0,0)	0	zeros
+=STDEV.P(2,)	1	explicit omitted argument is zero; Microsoft Excel omission semantics; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)

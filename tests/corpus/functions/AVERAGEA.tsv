@@ -9,3 +9,4 @@
 =AVERAGEA({1,2,3})	2	array numbers
 =AVERAGEA(0,0)	0	zeros
 =AVERAGEA({1,""})	0.5	empty text is 0
+=AVERAGEA(2,)	1	explicit omitted argument is zero; Microsoft Excel omission semantics; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
