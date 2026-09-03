@@ -14,8 +14,9 @@ use crate::pivot::PivotTable;
 use crate::print::PageSetup;
 use crate::sheet::{Sheet, SheetEditState, SheetVisibility};
 use crate::storage::CellSlot;
-use crate::style::Color;
+use crate::style::{Color, StyleId};
 use crate::tables::Table;
+use crate::value::Value;
 use crate::workbook::{CalcMode, WorkbookProtectionState};
 
 /// Default undo memory budget (64 MiB of estimated delta size).
@@ -489,6 +490,7 @@ pub struct UndoLog {
     undo: VecDeque<Transaction>,
     redo: VecDeque<Transaction>,
     open: Option<Transaction>,
+    discarded_slots: Vec<CellSlot>,
     depth: u32,
     next_id: u64,
     budget: usize,
@@ -510,6 +512,7 @@ impl UndoLog {
             undo: VecDeque::new(),
             redo: VecDeque::new(),
             open: None,
+            discarded_slots: Vec::new(),
             depth: 0,
             next_id: 1,
             budget: DEFAULT_BUDGET,
@@ -667,9 +670,18 @@ impl UndoLog {
         self.undo.iter()
     }
 
+    pub(crate) fn take_discarded_slots(&mut self) -> Vec<CellSlot> {
+        std::mem::take(&mut self.discarded_slots)
+    }
+
+    pub(crate) fn discard_transaction(&mut self, tx: Transaction) {
+        collect_discarded_slots(tx, &mut self.discarded_slots);
+    }
+
     fn clear_redo(&mut self) {
         for tx in self.redo.drain(..) {
             self.used = self.used.saturating_sub(tx.bytes);
+            collect_discarded_slots(tx, &mut self.discarded_slots);
         }
     }
 
@@ -677,6 +689,7 @@ impl UndoLog {
         while self.used > self.budget && self.undo.len() > 1 {
             if let Some(old) = self.undo.pop_front() {
                 self.used = self.used.saturating_sub(old.bytes);
+                collect_discarded_slots(old, &mut self.discarded_slots);
             } else {
                 break;
             }
@@ -684,11 +697,28 @@ impl UndoLog {
         while self.used > self.budget {
             if let Some(old) = self.redo.pop_front() {
                 self.used = self.used.saturating_sub(old.bytes);
+                collect_discarded_slots(old, &mut self.discarded_slots);
             } else {
                 break;
             }
         }
     }
+}
+
+fn collect_discarded_slots(tx: Transaction, slots: &mut Vec<CellSlot>) {
+    for delta in tx.deltas {
+        let Delta::Cell { before, after, .. } = delta else {
+            continue;
+        };
+        slots.extend(before.into_iter().filter(slot_holds_interns));
+        slots.extend(after.into_iter().filter(slot_holds_interns));
+    }
+}
+
+fn slot_holds_interns(slot: &CellSlot) -> bool {
+    matches!(slot.value, Value::Text(_) | Value::Array(_))
+        || slot.formula.is_some()
+        || slot.style != StyleId::DEFAULT
 }
 
 /// Collect affected ranges from a transaction (pub for Workbook).
