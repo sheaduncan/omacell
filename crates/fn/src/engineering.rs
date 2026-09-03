@@ -409,7 +409,7 @@ const UNITS: &[Unit] = &[
     Unit {
         name: "Pica",
         dim: Dim::Dist,
-        to_si: 0.004_233_333_333_333_333,
+        to_si: 0.025_4 / 72.0,
     },
     Unit {
         name: "pica",
@@ -503,6 +503,11 @@ const UNITS: &[Unit] = &[
         name: "dyn",
         dim: Dim::Force,
         to_si: 1e-5,
+    },
+    Unit {
+        name: "lbf",
+        dim: Dim::Force,
+        to_si: 4.448_221_615_260_5,
     },
     Unit {
         name: "pond",
@@ -710,6 +715,16 @@ const UNITS: &[Unit] = &[
         to_si: 4.168_181_825_440_58e12,
     },
     Unit {
+        name: "Nmi3",
+        dim: Dim::Vol,
+        to_si: 6_352_182_208_000.0,
+    },
+    Unit {
+        name: "Pica3",
+        dim: Dim::Vol,
+        to_si: 0.016_387_064 / 373_248.0,
+    },
+    Unit {
         name: "yd3",
         dim: Dim::Vol,
         to_si: 764.554_857_984,
@@ -788,7 +803,7 @@ const UNITS: &[Unit] = &[
     Unit {
         name: "Pica2",
         dim: Dim::Area,
-        to_si: 1.792_111_111_111_111e-5,
+        to_si: 0.000_645_16 / 5_184.0,
     },
     Unit {
         name: "yd2",
@@ -834,6 +849,69 @@ const UNITS: &[Unit] = &[
     },
 ];
 
+const UNIT_ALIASES: &[(&str, &str)] = &[
+    ("shweight", "cwt"),
+    ("lcwt", "uk_cwt"),
+    ("hweight", "uk_cwt"),
+    ("LTON", "uk_ton"),
+    ("brton", "uk_ton"),
+    ("pc", "parsec"),
+    ("Picapt", "Pica"),
+    ("d", "day"),
+    ("min", "mn"),
+    ("s", "sec"),
+    ("at", "atm"),
+    ("dy", "dyn"),
+    ("ev", "eV"),
+    ("hh", "HPh"),
+    ("wh", "Wh"),
+    ("btu", "BTU"),
+    ("h", "HP"),
+    ("w", "W"),
+    ("cel", "C"),
+    ("fah", "F"),
+    ("kel", "K"),
+    ("us_pt", "pt"),
+    ("L", "l"),
+    ("lt", "l"),
+    ("ang^3", "ang3"),
+    ("ft^3", "ft3"),
+    ("in^3", "in3"),
+    ("ly^3", "ly3"),
+    ("m^3", "m3"),
+    ("mi^3", "mi3"),
+    ("yd^3", "yd3"),
+    ("Nmi^3", "Nmi3"),
+    ("Picapt3", "Pica3"),
+    ("Picapt^3", "Pica3"),
+    ("Pica^3", "Pica3"),
+    ("regton", "GRT"),
+    ("ang^2", "ang2"),
+    ("ft^2", "ft2"),
+    ("in^2", "in2"),
+    ("ly^2", "ly2"),
+    ("m^2", "m2"),
+    ("mi^2", "mi2"),
+    ("Nmi^2", "Nmi2"),
+    ("Picapt2", "Pica2"),
+    ("Pica^2", "Pica2"),
+    ("Picapt^2", "Pica2"),
+    ("yd^2", "yd2"),
+    ("m/hr", "m/h"),
+    ("m/sec", "m/s"),
+];
+
+const BINARY_PREFIXES: &[(&str, i32)] = &[
+    ("Yi", 80),
+    ("Zi", 70),
+    ("Ei", 60),
+    ("Pi", 50),
+    ("Ti", 40),
+    ("Gi", 30),
+    ("Mi", 20),
+    ("ki", 10),
+];
+
 const PREFIXES: &[(&str, f64)] = &[
     ("Y", 1e24),
     ("Z", 1e21),
@@ -858,18 +936,41 @@ const PREFIXES: &[(&str, f64)] = &[
     ("y", 1e-24),
 ];
 
+fn canonical_unit(name: &str) -> &str {
+    UNIT_ALIASES
+        .iter()
+        .find_map(|(alias, canonical)| (*alias == name).then_some(*canonical))
+        .unwrap_or(name)
+}
+
+fn direct_unit(name: &str) -> Option<(Dim, f64)> {
+    let canonical = canonical_unit(name);
+    UNITS
+        .iter()
+        .find(|unit| unit.name == canonical)
+        .map(|unit| (unit.dim, unit.to_si))
+}
+
 fn lookup_unit(name: &str) -> Option<(Dim, f64)> {
-    if let Some(u) = UNITS.iter().find(|u| u.name == name) {
-        return Some((u.dim, u.to_si));
+    if let Some(unit) = direct_unit(name) {
+        return Some(unit);
+    }
+    for (prefix, exponent) in BINARY_PREFIXES {
+        if let Some(rest) = name.strip_prefix(prefix)
+            && matches!(canonical_unit(rest), "bit" | "byte")
+            && let Some((dim, to_si)) = direct_unit(rest)
+        {
+            return Some((dim, to_si * 2.0_f64.powi(*exponent)));
+        }
     }
     // prefix + unit (not for temperature)
     for (p, f) in PREFIXES {
         if let Some(rest) = name.strip_prefix(p)
             && !rest.is_empty()
-            && let Some(u) = UNITS.iter().find(|u| u.name == rest)
-            && u.dim != Dim::Temp
+            && let Some((dim, to_si)) = direct_unit(rest)
+            && dim != Dim::Temp
         {
-            return Some((u.dim, u.to_si * f));
+            return Some((dim, to_si * f));
         }
     }
     None
@@ -902,12 +1003,13 @@ fn convert_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         let n = args::number(ctx, args.first().ok_or(ErrorKind::Value)?)?;
         let from = args::as_text(&args::scalar(ctx, args.get(1).ok_or(ErrorKind::Value)?)?)?;
         let to = args::as_text(&args::scalar(ctx, args.get(2).ok_or(ErrorKind::Value)?)?)?;
-        if to_kelvin(n, &from).is_some() {
-            let k = to_kelvin(n, &from).ok_or(ErrorKind::Na)?;
-            return from_kelvin(k, &to).ok_or(ErrorKind::Na);
+        let from = canonical_unit(&from);
+        let to = canonical_unit(&to);
+        if let Some(k) = to_kelvin(n, from) {
+            return from_kelvin(k, to).ok_or(ErrorKind::Na);
         }
-        let (d1, s1) = lookup_unit(&from).ok_or(ErrorKind::Na)?;
-        let (d2, s2) = lookup_unit(&to).ok_or(ErrorKind::Na)?;
+        let (d1, s1) = lookup_unit(from).ok_or(ErrorKind::Na)?;
+        let (d2, s2) = lookup_unit(to).ok_or(ErrorKind::Na)?;
         if d1 != d2 || s2 == 0.0 {
             return Err(ErrorKind::Na);
         }
