@@ -336,6 +336,29 @@ fn direct_reference_to_a_spill_ghost_sees_the_new_value() {
 }
 
 #[test]
+fn overlapping_spills_preserve_the_first_owner_and_block_the_second() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    // B1:B2 and A2:B2 cross at B2 without either origin occupying the
+    // other's rectangle. B1 commits first in deterministic cell order.
+    wb.set_formula_text(sheet, 0, 1, "={1;2}").unwrap();
+    wb.set_formula_text(sheet, 1, 0, "={3,4}").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+
+    let result = engine.recalc_full(&mut wb);
+
+    let b1 = CellCoord::new(sheet, 0, 1);
+    let a2 = CellCoord::new(sheet, 1, 0);
+    let b2 = CellCoord::new(sheet, 1, 1);
+    assert_eq!(display(&wb, 0, 1), "1");
+    assert_eq!(display(&wb, 1, 1), "2");
+    assert_eq!(display(&wb, 1, 0), "#SPILL!");
+    assert_eq!(result.spill_blocked, vec![(a2, b2)]);
+    assert_eq!(engine.spill().get(b1).unwrap().blocked_by, None);
+    assert_eq!(engine.spill().get(a2).unwrap().blocked_by, Some(b2));
+}
+
+#[test]
 fn fixed_cse_range_truncates_pads_and_orders_dependents() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

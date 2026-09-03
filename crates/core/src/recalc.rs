@@ -16,7 +16,7 @@ use crate::eval::{
 use crate::graph::{CellCoord, DepGraph};
 use crate::intern::ArrayPayload;
 use crate::locale::LocaleId;
-use crate::spill::{SpillRegion, SpillTable, blocks_spill};
+use crate::spill::{SpillRegion, SpillTable};
 use crate::storage::{CellFlags, CellSlot};
 use crate::value::{Array2D, Value};
 use crate::workbook::{CalcMode, Workbook};
@@ -1434,13 +1434,14 @@ fn spill_array(
                 blocker = Some(CellCoord::new(origin.sheet, row, col));
                 break;
             }
+            let target = CellCoord::new(origin.sheet, row, col);
             match wb.get(origin.sheet, row, col) {
-                Ok(Some(slot)) if blocks_spill(slot) => {
-                    blocker = Some(CellCoord::new(origin.sheet, row, col));
+                Ok(Some(slot)) if spill.blocks_spill_at(slot, target, origin) => {
+                    blocker = Some(target);
                     break;
                 }
                 Err(_) => {
-                    blocker = Some(CellCoord::new(origin.sheet, row, col));
+                    blocker = Some(target);
                     break;
                 }
                 _ => {}

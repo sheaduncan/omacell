@@ -85,6 +85,21 @@ impl SpillTable {
         }
     }
 
+    pub(crate) fn blocks_spill_at(
+        &self,
+        slot: &CellSlot,
+        cell: CellCoord,
+        origin: CellCoord,
+    ) -> bool {
+        if slot.flags.spill() && slot.formula.is_none() {
+            return self
+                .occupancy
+                .get(&cell)
+                .is_none_or(|owner| *owner != origin);
+        }
+        blocks_spill(slot)
+    }
+
     /// Record a successful or blocked region.
     pub fn insert(&mut self, region: SpillRegion) {
         self.remove(region.origin);
@@ -118,7 +133,13 @@ impl SpillTable {
                 }
                 let row = r.origin.row.saturating_add(dr);
                 let col = r.origin.col.saturating_add(dc as u16);
-                if let Ok(Some(slot)) = wb.get(r.origin.sheet, row, col)
+                let cell = CellCoord {
+                    sheet: r.origin.sheet,
+                    row,
+                    col,
+                };
+                if self.occupancy.get(&cell) == Some(&origin)
+                    && let Ok(Some(slot)) = wb.get(r.origin.sheet, row, col)
                     && slot.flags.spill()
                     && slot.formula.is_none()
                 {
