@@ -142,3 +142,9 @@ table_rename	=Sales[@Amount]	Sales	Rev		=Rev[@Amount]	this-row shorthand table n
 table_rename	=Table1[#All]	Table1	T		=T[#All]	rename with #All specifier
 table_rename	=Table1[]	Table1	T		=T[]	Table[] data-body form
 table_rename	=MyTable[[#This Row],[Col]]	MyTable	Y		=Y[[#This Row],[Col]]	this-row long form
+copy	=[Book.xlsx]Sheet1!A1	0	1		=[Book.xlsx]Sheet1!A2	copying a formula shifts its relative external reference with the formula
+insert_rows	=A1+[Book.xlsx]Sheet1!A1	1	1		=A2+[Book.xlsx]Sheet1!A1	local row insertion shifts only the local reference
+delete_rows	=A1+[Book.xlsx]Sheet1!A1	1	1		=#REF!+[Book.xlsx]Sheet1!A1	local row deletion invalidates only the local reference
+insert_cols	=A1+[Book.xlsx]Sheet1!A1	A	1		=B1+[Book.xlsx]Sheet1!A1	local column insertion shifts only the local reference
+delete_cols	=A1+[Book.xlsx]Sheet1!A1	A	1		=#REF!+[Book.xlsx]Sheet1!A1	local column deletion invalidates only the local reference
+move	=A1+[Book.xlsx]Sheet1!A1	A1	A2		=A2+[Book.xlsx]Sheet1!A1	moving local cells retargets only the local reference

@@ -697,7 +697,7 @@ fn map_sheet_rows(
         None => home.eq_ignore_ascii_case(target),
         Some(spec) => spec.start.eq_ignore_ascii_case(target),
     };
-    expr.clone().map(&mut |e| {
+    expr.clone().map_local(&mut |e| {
         let kind = match e.kind {
             ExprKind::Cell { sheet, cell } if applies(&sheet) => {
                 match adjust_rows(
@@ -751,7 +751,7 @@ fn map_sheet_cols(
         None => home.eq_ignore_ascii_case(target),
         Some(spec) => spec.start.eq_ignore_ascii_case(target),
     };
-    expr.clone().map(&mut |e| {
+    expr.clone().map_local(&mut |e| {
         let kind = match e.kind {
             ExprKind::Cell { sheet, cell } if applies(&sheet) => {
                 match adjust_cols(
@@ -808,7 +808,7 @@ fn map_sheet_band_rows(
         None => home.eq_ignore_ascii_case(target),
         Some(spec) => spec.start.eq_ignore_ascii_case(target),
     };
-    expr.clone().map(&mut |item| {
+    expr.clone().map_local(&mut |item| {
         let kind = match item.kind {
             ExprKind::Cell { sheet, cell }
                 if applies(&sheet) && cell.col >= c0 && cell.col <= c1 =>
@@ -870,7 +870,7 @@ fn map_sheet_band_cols(
         None => home.eq_ignore_ascii_case(target),
         Some(spec) => spec.start.eq_ignore_ascii_case(target),
     };
-    expr.clone().map(&mut |item| {
+    expr.clone().map_local(&mut |item| {
         let kind = match item.kind {
             ExprKind::Cell { sheet, cell }
                 if applies(&sheet) && cell.row >= r0 && cell.row <= r1 =>
@@ -2581,7 +2581,7 @@ fn map_sheet_move_between(
     src: RangeRef,
     dest: CellRef,
 ) -> Expr {
-    expr.clone().map(&mut |item| {
+    expr.clone().map_local(&mut |item| {
         let kind = match item.kind {
             ExprKind::Cell { sheet, cell } => {
                 let resolved = sheet
@@ -2674,7 +2674,7 @@ fn map_sheet_move(expr: &Expr, home: &str, target: &str, src: RangeRef, dest: Ce
         None => home.eq_ignore_ascii_case(target),
         Some(spec) => spec.start.eq_ignore_ascii_case(target),
     };
-    expr.clone().map(&mut |item| {
+    expr.clone().map_local(&mut |item| {
         let kind = match item.kind {
             ExprKind::Cell { sheet, cell } if applies(&sheet) => {
                 match move_range(

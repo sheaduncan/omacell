@@ -7,3 +7,12 @@ band_down	insert	D1	=A2	A2:B2	down	=A3	cell insertion adjusts references inside 
 band_down_unaffected	insert	D1	=C2	A2:B2	down	=C2	cell insertion leaves references outside the shifted column band unchanged
 band_right	insert	A4	=B1	B1:B2	right	=C1	cell insertion adjusts references inside the shifted row band
 move_retarget	move	D1	=A1	A1	B2	=B2	moving cells retargets dependents to the destination
+external_insert_rows	insert	D1	=A3+[Book.xlsx]Sheet1!A3	A2	rows	=A4+[Book.xlsx]Sheet1!A3	local row insertion must not shift an external workbook reference
+external_delete_rows	delete	D1	=A3+[Book.xlsx]Sheet1!A3	A3	rows	=#REF!+[Book.xlsx]Sheet1!A3	local row deletion must not invalidate an external workbook reference
+external_insert_cols	insert	A4	=C1+[Book.xlsx]Sheet1!C1	B1	cols	=D1+[Book.xlsx]Sheet1!C1	local column insertion must not shift an external workbook reference
+external_delete_cols	delete	A4	=C1+[Book.xlsx]Sheet1!C1	C1	cols	=#REF!+[Book.xlsx]Sheet1!C1	local column deletion must not invalidate an external workbook reference
+external_move	move	D1	=A1+[Book.xlsx]Sheet1!A1	A1	B2	=B2+[Book.xlsx]Sheet1!A1	moving local cells must not retarget an external workbook reference
+external_band_down	insert	D1	=A2+[Book.xlsx]Sheet1!A2	A2:B2	down	=A3+[Book.xlsx]Sheet1!A2	local cell insertion must not shift an external workbook reference
+external_band_up	delete	D1	=A2+[Book.xlsx]Sheet1!A2	A2:B2	up	=#REF!+[Book.xlsx]Sheet1!A2	local cell deletion must not invalidate an external workbook reference
+external_band_right	insert	A4	=B1+[Book.xlsx]Sheet1!B1	B1:B2	right	=C1+[Book.xlsx]Sheet1!B1	local cell insertion must not shift an external workbook reference
+external_band_left	delete	A4	=B1+[Book.xlsx]Sheet1!B1	B1:B2	left	=#REF!+[Book.xlsx]Sheet1!B1	local cell deletion must not invalidate an external workbook reference

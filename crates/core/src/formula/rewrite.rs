@@ -148,7 +148,7 @@ fn validate_col_rewrite(at: u16, count: u16) -> Result<(), ParseError> {
 /// Copy/fill: relative row/col shift. Absolute axes stay. Out of grid → `#REF!`.
 #[must_use]
 pub fn copy_delta(expr: &Expr, drow: i32, dcol: i32) -> Expr {
-    map_refs(
+    map_refs_including_external(
         expr,
         &mut |cell| shift_cell(*cell, drow, dcol, true),
         &mut |r| shift_range(*r, drow, dcol, true),
@@ -309,7 +309,23 @@ where
     Fc: FnMut(&CellRef) -> Result<CellRef, ErrorKind>,
     Fr: FnMut(&RangeRef) -> Result<RangeRef, ErrorKind>,
 {
-    expr.clone().map(&mut |e| {
+    map_refs_with(expr, fc, fr, false)
+}
+
+fn map_refs_including_external<Fc, Fr>(expr: &Expr, fc: &mut Fc, fr: &mut Fr) -> Expr
+where
+    Fc: FnMut(&CellRef) -> Result<CellRef, ErrorKind>,
+    Fr: FnMut(&RangeRef) -> Result<RangeRef, ErrorKind>,
+{
+    map_refs_with(expr, fc, fr, true)
+}
+
+fn map_refs_with<Fc, Fr>(expr: &Expr, fc: &mut Fc, fr: &mut Fr, traverse_external: bool) -> Expr
+where
+    Fc: FnMut(&CellRef) -> Result<CellRef, ErrorKind>,
+    Fr: FnMut(&RangeRef) -> Result<RangeRef, ErrorKind>,
+{
+    let mut rewrite = |e: Expr| {
         let kind = match e.kind {
             ExprKind::Cell { sheet, cell } => match fc(&cell) {
                 Ok(cell) => ExprKind::Cell { sheet, cell },
@@ -322,7 +338,12 @@ where
             other => other,
         };
         Expr { kind, span: e.span }
-    })
+    };
+    if traverse_external {
+        expr.clone().map(&mut rewrite)
+    } else {
+        expr.clone().map_local(&mut rewrite)
+    }
 }
 
 fn shift_cell(cell: CellRef, drow: i32, dcol: i32, rel_only: bool) -> Result<CellRef, ErrorKind> {
