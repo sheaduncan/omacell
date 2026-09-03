@@ -47,6 +47,23 @@
   2. Legacy `CEILING`/`FLOOR` sign rules differ across Excel versions; corpus cites 365-style and LibreOffice disagreements go to known-differences.
   3. `MODE.MULT` / `FREQUENCY` spill arrays; 1×1 collapse follows WP-05F `RuntimeValue::array`.
 
+### 2026-09-03 empty/filter aggregate plan (written before coding)
+
+- Add failing integration regressions first for `MIN`, `MAX`, `MINA`, and
+  `MAXA` over an empty range; and for `SUBTOTAL` distinguishing a row excluded
+  by AutoFilter from a separately, manually hidden row. Add corpus coverage for
+  empty MAX/MIN and aggregate function numbers 4/5.
+- Return zero when MIN/MAX-family aggregation has no numeric values, including
+  `SUBTOTAL` and `AGGREGATE` function numbers 4/5, while preserving existing
+  error propagation and coercion rules.
+- Expose the filter-owned hidden-row distinction through `EvalCtx` so every
+  `SUBTOTAL` function number excludes filtered rows, while only 101–111 exclude
+  manually hidden rows. Leave `AGGREGATE`'s option-controlled hidden-row policy
+  unchanged.
+- Keep frozen types and existing method signatures unchanged, add no
+  dependency, run the function/core suites and strict Clippy, then run exact
+  `just check` and reconcile this report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -113,6 +130,13 @@ digits to discard. The rounding direction is then an exact integer decision,
 so binary products just below or above an integer no longer change results for
 `ROUND`, `ROUNDUP`, `ROUNDDOWN`, or `TRUNC`.
 
+The 2026-09-03 empty/filter aggregate follow-up makes `MIN`, `MAX`, `MINA`,
+`MAXA`, and aggregate function numbers 4/5 return zero when their inputs contain
+no numeric values. `SUBTOTAL` now distinguishes rows excluded by AutoFilter from
+rows hidden manually: every function number excludes the former, while only
+101–111 exclude the latter. `AGGREGATE` retains its existing option-controlled
+hidden-row behavior.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -120,6 +144,7 @@ so binary products just below or above an integer no longer change results for
 | `register_math` / `register_stat` / `register_logical` / `register_info` / `register_aggregate` / `register_all` | `omacell_fn` |
 | `all_specs()`, `functions_json()` (includes `ISOMITTED`) | same |
 | `EvalCtx` sheet callbacks listed above | `omacell_core::eval` |
+| `EvalCtx::is_row_filtered` | same; distinguishes AutoFilter-owned hidden rows from manual row hiding for `SUBTOTAL` |
 | `Workbook::set_row_hidden` | `omacell_core::workbook` |
 | Catalog schema | unchanged, `docs/schemas/functions.schema.json` (`schema: 1`) |
 
@@ -152,6 +177,28 @@ Host: rustc 1.98.0, Linux.
   all-target `omacell-fn` Clippy pass. The exact `just check` gate and
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` pass with
   `CARGO_BUILD_JOBS=2` for this machine's linker constraint.
+- 2026-09-03 empty/filter aggregate test-first evidence:
+  - Six new corpus rows initially returned `#NUM!` for empty MIN/MAX forms;
+    they now return zero. An eight-form integration matrix covers `MIN`, `MAX`,
+    `MINA`, `MAXA`, `SUBTOTAL`, and `AGGREGATE` over an empty range.
+  - The AutoFilter regression initially returned **60** from
+    `SUBTOTAL(9,A2:A4)`, including a filtered-out 10. It now returns **50**,
+    while `SUBTOTAL(109,A2:A4)` also excludes a separately manually hidden 20
+    and returns **30**.
+  - The complete function and core suites pass (17 function integration tests,
+    73 core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - Criterion `--quick`: whole-column `SUBTOTAL` is **9.65 ms** versus the
+    recorded **8.84 ms** baseline (**9.2%** slower, within the 10% review
+    threshold). `SUM` is **5.08 ms** and `SUMIFS` is **62.96 ms**, both faster
+    than their recorded baselines.
+  - Semantics follow Microsoft's [`MAX`](https://support.microsoft.com/en-us/office/max-function-e0012414-9ac8-4b34-9a47-73e662c08098),
+    [`MIN`](https://support.microsoft.com/en-us/office/min-function-61635d12-920f-4ce2-a70f-96f202dcc152),
+    and [`SUBTOTAL`](https://support.microsoft.com/en-us/office/subtotal-function-7b027003-f060-4ade-9040-e478765b9939)
+    documentation.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
@@ -176,10 +223,16 @@ Host: rustc 1.98.0, Linux.
 3. **Resolved in the P1 fidelity follow-up:** `SUMIF(S)`, `COUNTIF(S)`,
    `AVERAGEIF(S)`, `MAXIFS`, and `MINIFS` require reference-valued range
    arguments and reject array constants with `#VALUE!`.
+4. **Resolved 2026-09-03:** AutoFilter-excluded rows and manually hidden rows
+   have distinct `SUBTOTAL` semantics. All function numbers exclude filtered
+   rows; only 101–111 additionally exclude manual hiding.
 
 ## RFC (only if a frozen contract changed)
 
 None. WP-01 types unchanged.
+
+The empty/filter aggregate follow-up adds one method to the post-WP-01
+`EvalCtx` function-runtime interface and changes no frozen contract.
 
 ## Checklist
 

@@ -673,24 +673,22 @@ fn median_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     map_nums(ctx, args, median)
 }
 fn min_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
-    map_nums(ctx, args, |v| {
-        v.iter().copied().reduce(f64::min).ok_or(ErrorKind::Num)
-    })
+    map_nums(ctx, args, |v| Ok(min_or_zero(v)))
 }
 fn max_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
-    map_nums(ctx, args, |v| {
-        v.iter().copied().reduce(f64::max).ok_or(ErrorKind::Num)
-    })
+    map_nums(ctx, args, |v| Ok(max_or_zero(v)))
 }
 fn mina_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
-    map_numsa(ctx, args, |v| {
-        v.iter().copied().reduce(f64::min).ok_or(ErrorKind::Num)
-    })
+    map_numsa(ctx, args, |v| Ok(min_or_zero(v)))
 }
 fn maxa_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
-    map_numsa(ctx, args, |v| {
-        v.iter().copied().reduce(f64::max).ok_or(ErrorKind::Num)
-    })
+    map_numsa(ctx, args, |v| Ok(max_or_zero(v)))
+}
+fn min_or_zero(values: &[f64]) -> f64 {
+    values.iter().copied().reduce(f64::min).unwrap_or(0.0)
+}
+fn max_or_zero(values: &[f64]) -> f64 {
+    values.iter().copied().reduce(f64::max).unwrap_or(0.0)
 }
 fn count_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     match count_args(ctx, args) {

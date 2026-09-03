@@ -9,3 +9,4 @@
 =MIN(0,-0)	0	zero
 =MIN(10,2,8)	2	three
 =MIN("2",3)	2	numeric text; known difference: LibreOffice CSV/importer (see docs/compat/known-differences.md)
+=MIN({""})	0	Microsoft MIN: arguments containing no numbers return zero

@@ -409,6 +409,7 @@ fn minmax_ifs(ctx: &EvalCtx<'_>, args: &[ArgVal], max: bool) -> RuntimeValue {
 #[derive(Clone, Copy)]
 struct AggOpts {
     ignore_hidden: bool,
+    ignore_filtered: bool,
     ignore_errors: bool,
     ignore_nested: bool,
 }
@@ -457,7 +458,9 @@ fn consider_cell(
     opts: AggOpts,
     out: &mut Vec<f64>,
 ) -> Result<(), ErrorKind> {
-    if opts.ignore_hidden && ctx.is_row_hidden(sheet, row) {
+    if (opts.ignore_filtered && ctx.is_row_filtered(sheet, row))
+        || (opts.ignore_hidden && ctx.is_row_hidden(sheet, row))
+    {
         return Ok(());
     }
     if opts.ignore_nested
@@ -486,16 +489,8 @@ fn apply_fn_num(num: i32, values: &[f64], k: Option<f64>) -> Result<f64, ErrorKi
     match num {
         1 => mean(values),
         2 | 3 => Ok(values.len() as f64),
-        4 => values
-            .iter()
-            .copied()
-            .reduce(f64::max)
-            .ok_or(ErrorKind::Num),
-        5 => values
-            .iter()
-            .copied()
-            .reduce(f64::min)
-            .ok_or(ErrorKind::Num),
+        4 => Ok(values.iter().copied().reduce(f64::max).unwrap_or(0.0)),
+        5 => Ok(values.iter().copied().reduce(f64::min).unwrap_or(0.0)),
         6 => Ok(if values.is_empty() {
             0.0
         } else {
@@ -588,6 +583,7 @@ fn subtotal_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     };
     let opts = AggOpts {
         ignore_hidden,
+        ignore_filtered: true,
         ignore_errors: false,
         ignore_nested: true,
     };
@@ -611,7 +607,9 @@ fn subtotal_count(ctx: &EvalCtx<'_>, args: &[ArgVal], opts: AggOpts, counta: boo
         match &arg.value {
             RuntimeValue::Ref(r) => {
                 ctx.for_each_stored_cell(r, &mut |sheet, row, col, s| {
-                    if opts.ignore_hidden && ctx.is_row_hidden(sheet, row) {
+                    if (opts.ignore_filtered && ctx.is_row_filtered(sheet, row))
+                        || (opts.ignore_hidden && ctx.is_row_hidden(sheet, row))
+                    {
                         return;
                     }
                     if opts.ignore_nested
@@ -668,6 +666,7 @@ fn aggregate_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     let opts = AggOpts {
         ignore_nested: matches!(options, 0..=3),
         ignore_hidden: matches!(options, 1 | 3 | 5 | 7),
+        ignore_filtered: false,
         ignore_errors: matches!(options, 2 | 3 | 6 | 7),
     };
     let rest = args.get(2..).unwrap_or(&[]);
