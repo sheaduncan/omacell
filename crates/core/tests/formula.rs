@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use omacell_core::formula::{
-    BinOp, ExprKind, ParseOptions, PostfixOp, PrefixOp, RefStyle, RewriteOp, collect_deps, parse,
-    parse_editor, parse_with, print, rewrite_print,
+    BinOp, ExprKind, ParseOptions, PostfixOp, PrefixOp, RefStyle, RewriteOp, TableColumns,
+    collect_deps, parse, parse_editor, parse_with, print, rewrite_print,
 };
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use proptest::prelude::*;
@@ -92,6 +92,27 @@ fn excel_unary_precedence_shapes_the_ast() {
             }
         )
     ));
+}
+
+#[test]
+fn structured_columns_use_excel_prefix_escapes() {
+    for (formula, expected) in [
+        ("=DeptSalesFYSummary['#OfItems]", "#OfItems"),
+        ("=Sales[O''Brien]", "O'Brien"),
+        ("=Sales['[Bracket']]", "[Bracket]"),
+        ("=Sales['@Owner]", "@Owner"),
+    ] {
+        let parsed = parse(formula).unwrap_or_else(|error| panic!("{formula}: {error:?}"));
+        let ExprKind::Structured(reference) = &parsed.ast.kind else {
+            panic!("{formula}: expected a structured reference");
+        };
+        assert_eq!(
+            reference.columns,
+            Some(TableColumns::One(expected.to_string())),
+            "{formula}"
+        );
+        assert_eq!(print(&parsed), formula);
+    }
 }
 
 #[test]

@@ -442,7 +442,8 @@
 =Table1[]	=Table1[]	a1	Table[] means the data body
 =Sales[[#Headers],[Amount]]	=Sales[[#Headers],[Amount]]	a1	Sales headers Amount
 =Table1[[#Data],[Col1]:[Col2]]	=Table1[[#Data],[Col1]:[Col2]]	a1	data body column span
-=Table[['# of items']]	=Table[['# of items']]	a1	column name with # is quoted with '
+=Table['# of items]	=Table['# of items]	a1	column name with # uses Excel's prefix escape
+=DeptSalesFYSummary['#OfItems]	=DeptSalesFYSummary['#OfItems]	a1	Microsoft documented structured-reference escape example
 =SUM(Table1[Col])	=SUM(Table1[Col])	a1	structured ref as function arg
 =Table1[[#Totals]]	=Table1[[#Totals]]	a1	totals row
 =[@]	=[@]	a1	[@] this-row whole record
@@ -741,8 +742,12 @@ SUM(A1)	=SUM(A1)	a1	bare call; print adds =
 =Sales[[#This Row],[Amount]]+Sales[[#This Row],[Tax]]	=Sales[[#This Row],[Amount]]+Sales[[#This Row],[Tax]]	a1	this-row amount plus tax
 =[@[Col Name]]	=[@[Col Name]]	a1	this-row column with space
 =Table1[[Col Name]]	=Table1[[Col Name]]	a1	column name with space needs double brackets
-=Table1[['#Qty']]	=Table1[['#Qty']]	a1	column name starting with #
-=Table1[['[Col]']]	=Table1[['[Col]']]	a1	column name with brackets quoted
+=Table1['#Qty]	=Table1['#Qty]	a1	column name starting with escaped #
+=Table1['[Col']]	=Table1['[Col']]	a1	column name with prefix-escaped brackets
+=Table1[O''Brien]	=Table1[O''Brien]	a1	column name with prefix-escaped apostrophe
+=Table1['@Owner]	=Table1['@Owner]	a1	column name with prefix-escaped @
+=Table1[[#Headers],['#Qty]]	=Table1[[#Headers],['#Qty]]	a1	escaped column combined with an item specifier
+=Table1[['#First]:['@Last]]	=Table1[['#First]:['@Last]]	a1	escaped endpoints in a column span
 =R[1]C[0]	=R[1]C	r1c1	C[0] canonicalizes away
 =R[0]C[1]	=RC[1]	r1c1	R[0] canonicalizes away
 =R[1]C[1]	=R[1]C[1]	r1c1	diagonal relative from A1

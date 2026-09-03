@@ -1114,7 +1114,6 @@ fn structured_range(
     let (c1, c2) = match &sr.columns {
         None => (table.start_col, table.end_col),
         Some(TableColumns::One(n)) => {
-            let n = n.trim_matches(|c| c == '[' || c == ']');
             if let Some(it) = TableItem::parse(n) {
                 item = Some(it);
                 if it == TableItem::ThisRow {
@@ -1127,18 +1126,16 @@ fn structured_range(
             }
         }
         Some(TableColumns::Span { start, end }) => {
-            let start_n = start.trim_matches(|c| c == '[' || c == ']');
-            let end_n = end.trim_matches(|c| c == '[' || c == ']');
-            if let Some(it) = TableItem::parse(start_n) {
+            if let Some(it) = TableItem::parse(start) {
                 item = Some(it);
                 if it == TableItem::ThisRow {
                     this_row = true;
                 }
-                let c = col_index(table, end_n).ok_or(ErrorKind::Value)?;
+                let c = col_index(table, end).ok_or(ErrorKind::Value)?;
                 (c, c)
             } else {
-                let a = col_index(table, start_n).ok_or(ErrorKind::Value)?;
-                let b = col_index(table, end_n).ok_or(ErrorKind::Value)?;
+                let a = col_index(table, start).ok_or(ErrorKind::Value)?;
+                let b = col_index(table, end).ok_or(ErrorKind::Value)?;
                 (a.min(b), a.max(b))
             }
         }

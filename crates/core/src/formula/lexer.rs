@@ -795,23 +795,14 @@ fn scan_brackets(src: &str, start: usize) -> Option<(&str, usize)> {
     }
     let mut depth = 0i32;
     let mut i = start;
-    let mut in_quote = false;
     while i < src.len() {
-        let ch = src[i..].chars().next()?;
-        let n = ch.len_utf8();
-        if in_quote {
-            if ch == '\'' {
-                if src.as_bytes().get(i + 1) == Some(&b'\'') {
-                    i += 2;
-                    continue;
-                }
-                in_quote = false;
-            }
-            i += n;
+        if let Some(len) = column_escape_len(src, i) {
+            i += len;
             continue;
         }
+        let ch = src[i..].chars().next()?;
+        let n = ch.len_utf8();
         match ch {
-            '\'' => in_quote = true,
             '[' => depth += 1,
             ']' => {
                 depth -= 1;
@@ -855,9 +846,9 @@ pub(crate) fn parse_structured(
         let rest = rest.trim();
         if rest.starts_with('[') {
             let name = strip_outer_brackets(rest).unwrap_or(rest);
-            columns = Some(TableColumns::One(unquote_col(name)));
+            columns = Some(TableColumns::One(decode_col(name)));
         } else if !rest.is_empty() {
-            columns = Some(TableColumns::One(unquote_col(rest)));
+            columns = Some(TableColumns::One(decode_col(rest)));
         }
     } else if let Some(it) = TableItem::parse(t) {
         item = Some(it);
@@ -873,7 +864,7 @@ pub(crate) fn parse_structured(
     } else if t.starts_with('[') {
         parse_double_bracket_body(t, offset, &mut item, &mut this_row, &mut columns)?;
     } else {
-        columns = Some(TableColumns::One(unquote_col(t)));
+        columns = Some(TableColumns::One(decode_col(t)));
     }
     Ok(StructuredRef {
         table,
@@ -918,12 +909,12 @@ fn parse_double_bracket_body(
             let name = p.trim_start_matches('@').trim();
             let name = strip_outer_brackets(name).unwrap_or(name);
             if !name.is_empty() {
-                *columns = Some(TableColumns::One(unquote_col(name)));
+                *columns = Some(TableColumns::One(decode_col(name)));
             }
         } else if let Some((a, b)) = split_col_span(p) {
             *columns = Some(TableColumns::Span {
-                start: unquote_col(a),
-                end: unquote_col(b),
+                start: decode_col(a),
+                end: decode_col(b),
             });
         } else if p.starts_with('#') {
             return Err(ParseError::parse(
@@ -933,7 +924,7 @@ fn parse_double_bracket_body(
             ));
         } else {
             let name = strip_outer_brackets(p).unwrap_or(p);
-            *columns = Some(TableColumns::One(unquote_col(name)));
+            *columns = Some(TableColumns::One(decode_col(name)));
         }
         return Ok(());
     }
@@ -943,12 +934,12 @@ fn parse_double_bracket_body(
         let b = strip_outer_brackets(last).unwrap_or(last);
         if rest.len() == 2 || rest.iter().any(|p| p.contains(':')) {
             *columns = Some(TableColumns::Span {
-                start: unquote_col(a),
-                end: unquote_col(b),
+                start: decode_col(a),
+                end: decode_col(b),
             });
             return Ok(());
         }
-        *columns = Some(TableColumns::One(unquote_col(a)));
+        *columns = Some(TableColumns::One(decode_col(a)));
     }
     Ok(())
 }
@@ -957,25 +948,15 @@ fn split_struct_parts(inner: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
     let mut depth = 0i32;
-    let mut in_quote = false;
-    let b = inner.as_bytes();
     let mut i = 0;
-    while i < b.len() {
-        let ch = inner[i..].chars().next().unwrap_or('\0');
-        let n = ch.len_utf8();
-        if in_quote {
-            if ch == '\'' {
-                if b.get(i + 1) == Some(&b'\'') {
-                    i += 2;
-                    continue;
-                }
-                in_quote = false;
-            }
-            i += n;
+    while i < inner.len() {
+        if let Some(len) = column_escape_len(inner, i) {
+            i += len;
             continue;
         }
+        let ch = inner[i..].chars().next().unwrap_or('\0');
+        let n = ch.len_utf8();
         match ch {
-            '\'' => in_quote = true,
             '[' => depth += 1,
             ']' => depth -= 1,
             ',' if depth == 0 => {
@@ -992,7 +973,13 @@ fn split_struct_parts(inner: &str) -> Vec<&str> {
 
 fn split_col_span(p: &str) -> Option<(&str, &str)> {
     let mut depth = 0i32;
-    for (i, ch) in p.char_indices() {
+    let mut i = 0;
+    while i < p.len() {
+        if let Some(len) = column_escape_len(p, i) {
+            i += len;
+            continue;
+        }
+        let ch = p[i..].chars().next()?;
         match ch {
             '[' => depth += 1,
             ']' => depth -= 1,
@@ -1005,6 +992,7 @@ fn split_col_span(p: &str) -> Option<(&str, &str)> {
             }
             _ => {}
         }
+        i += ch.len_utf8();
     }
     None
 }
@@ -1015,7 +1003,13 @@ fn strip_outer_brackets(s: &str) -> Option<&str> {
         return None;
     }
     let mut depth = 0i32;
-    for (i, ch) in s.char_indices() {
+    let mut i = 0;
+    while i < s.len() {
+        if let Some(len) = column_escape_len(s, i) {
+            i += len;
+            continue;
+        }
+        let ch = s[i..].chars().next()?;
         match ch {
             '[' => depth += 1,
             ']' => {
@@ -1030,17 +1024,35 @@ fn strip_outer_brackets(s: &str) -> Option<&str> {
             }
             _ => {}
         }
+        i += ch.len_utf8();
     }
     None
 }
 
-fn unquote_col(s: &str) -> String {
+fn decode_col(s: &str) -> String {
     let s = s.trim();
-    if let Some(inner) = s.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')) {
-        inner.replace("''", "'")
-    } else {
-        s.to_string()
+    let mut decoded = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        if let Some(len) = column_escape_len(s, i) {
+            let escaped = s[i + 1..].chars().next().unwrap_or('\'');
+            decoded.push(escaped);
+            i += len;
+            continue;
+        }
+        let ch = s[i..].chars().next().unwrap_or('\0');
+        decoded.push(ch);
+        i += ch.len_utf8();
     }
+    decoded
+}
+
+fn column_escape_len(src: &str, index: usize) -> Option<usize> {
+    if src.as_bytes().get(index) != Some(&b'\'') {
+        return None;
+    }
+    let escaped = src.get(index + 1..)?.chars().next()?;
+    matches!(escaped, '[' | ']' | '#' | '\'' | '@').then_some(1 + escaped.len_utf8())
 }
 
 #[cfg(test)]
