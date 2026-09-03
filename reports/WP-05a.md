@@ -83,6 +83,21 @@
   function/core suites, strict Clippy, exact `just check`, and reconcile this
   report.
 
+### 2026-09-03 array-valued IF plan (written before coding)
+
+- Add a failing sheet integration regression for the audited
+  `SUM(IF(A1:A3>1,A1:A3,0))` case, plus array-branch broadcasting and
+  all-true/all-false cases proving an entirely unselected error branch remains
+  unevaluated.
+- Keep scalar `IF` on its existing lazy path. For an array logical test,
+  validate and coerce each condition cell, evaluate only branch expressions
+  selected by at least one condition cell, then broadcast the materialized
+  branch values over the result shape with per-cell errors.
+- Reuse the frozen WP-05F runtime-array limits and constructors, preserve
+  existing omitted-branch behavior and public interfaces, add no dependency,
+  run the complete function/core suites and strict Clippy, then run exact
+  `just check` and reconcile this report.
+
 ### 2026-09-02 criteria-type follow-up plan (written before coding)
 
 - Add a sheet-range integration regression first that distinguishes true
@@ -169,6 +184,17 @@ The SUMIF value-range follow-up adds
 `sumif_resized_range_does_not_create_a_false_cycle_from_the_written_tail` to
 `crates/fn/tests/integration.rs`.
 
+The 2026-09-03 array-valued `IF` follow-up keeps the scalar lazy path unchanged
+and adds cell-wise selection when the logical test is an array. Only branches
+selected by at least one condition cell are evaluated; scalar and array branch
+results then use the evaluator's existing singleton-dimension broadcasting
+rules. Condition errors stay local to their output cells, and transient output
+shapes retain the WP-05F validation and allocation cap.
+
+The follow-up adds
+`array_if_selects_and_broadcasts_cells_without_evaluating_unused_branches` to
+`crates/fn/tests/integration.rs`.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -249,6 +275,22 @@ Host: rustc 1.98.0, Linux.
   - Semantics follow Microsoft's [`SUMIF`](https://support.microsoft.com/en-us/office/sumif-function-169b8c99-c05c-4483-a712-1697a653039b)
     and [`AVERAGEIF`](https://support.microsoft.com/en-us/office/averageif-function-faec8e2e-0dec-4308-af69-f5576d8ac642)
     documentation.
+- 2026-09-03 array-valued `IF` test-first evidence:
+  - The audited `SUM(IF(A1:A3>1,A1:A3,0))` regression initially returned
+    `#VALUE!`; it now returns **5**.
+  - The same regression verifies array-branch/scalar-branch broadcasting,
+    horizontal spill values `1, 10, 3`, and a condition error localized as
+    `1, #N/A, 2`.
+  - All-false and all-true condition arrays return **21** while leaving their
+    respective `1/0` branch entirely unevaluated.
+  - The complete function and core suites pass (20 function integration tests,
+    73 core unit tests, every integration suite, and 103 core doctests); strict
+    all-target Clippy for both crates is warning-free.
+  - Exact `just check` passes formatting, workspace all-target strict Clippy,
+    workspace tests and doctests, repository policy checks, and warning-free
+    rustdoc.
+  - Behavior follows Microsoft's documented [`IF`](https://support.microsoft.com/en-us/office/if-function-69aed7c9-4e8a-4755-a9bc-aa8bbff73be2)
+    value-selection contract and Omacell's WP-05F array broadcasting policy.
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
 - `cargo +nightly fuzz run fn_eager -- -runs=10000` — pass, 10,000 executions with no crashes; the target honors every eager function's declared minimum arity.
 - `cargo test -p omacell-core --release --test recalc determinism_200k -- --ignored` — **ok, 2.00 s**
@@ -280,6 +322,9 @@ Host: rustc 1.98.0, Linux.
    Excel's top-left resizing rule. Their effective range, rather than the
    written shape, is used for values, ordering, circular checks, and dirty
    propagation.
+6. **Resolved 2026-09-03:** An array logical test makes `IF` select branch
+   values cell by cell, with scalar/singleton broadcasting and per-cell errors.
+   A branch that no condition cell selects remains unevaluated.
 
 ## RFC (only if a frozen contract changed)
 
@@ -289,6 +334,8 @@ The empty/filter aggregate follow-up adds one method to the post-WP-01
 `EvalCtx` function-runtime interface and changes no frozen contract.
 
 The SUMIF value-range follow-up changes no public signature or frozen contract.
+
+The array-valued `IF` follow-up changes no public signature or frozen contract.
 
 ## Checklist
 
