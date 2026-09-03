@@ -280,15 +280,27 @@ impl Expr {
 
     /// Reconstruct with a mapped kind (children first).
     pub fn map<F: FnMut(Expr) -> Expr>(self, f: &mut F) -> Expr {
+        self.map_inner(f, true)
+    }
+
+    pub(crate) fn map_local<F: FnMut(Expr) -> Expr>(self, f: &mut F) -> Expr {
+        self.map_inner(f, false)
+    }
+
+    fn map_inner<F: FnMut(Expr) -> Expr>(self, f: &mut F, traverse_external: bool) -> Expr {
         let mapped = match self.kind {
             ExprKind::Array(rows) => ExprKind::Array(
                 rows.into_iter()
-                    .map(|row| row.into_iter().map(|c| c.map(f)).collect())
+                    .map(|row| {
+                        row.into_iter()
+                            .map(|c| c.map_inner(f, traverse_external))
+                            .collect()
+                    })
                     .collect(),
             ),
             ExprKind::ThreeD { sheets, inner } => ExprKind::ThreeD {
                 sheets,
-                inner: Box::new(inner.map(f)),
+                inner: Box::new(inner.map_inner(f, traverse_external)),
             },
             ExprKind::External {
                 workbook,
@@ -296,29 +308,38 @@ impl Expr {
                 quoted,
             } => ExprKind::External {
                 workbook,
-                inner: Box::new(inner.map(f)),
+                inner: if traverse_external {
+                    Box::new(inner.map_inner(f, true))
+                } else {
+                    inner
+                },
                 quoted,
             },
             ExprKind::Prefix { op, expr } => ExprKind::Prefix {
                 op,
-                expr: Box::new(expr.map(f)),
+                expr: Box::new(expr.map_inner(f, traverse_external)),
             },
             ExprKind::Postfix { expr, op } => ExprKind::Postfix {
-                expr: Box::new(expr.map(f)),
+                expr: Box::new(expr.map_inner(f, traverse_external)),
                 op,
             },
             ExprKind::Binary { op, left, right } => ExprKind::Binary {
                 op,
-                left: Box::new(left.map(f)),
-                right: Box::new(right.map(f)),
+                left: Box::new(left.map_inner(f, traverse_external)),
+                right: Box::new(right.map_inner(f, traverse_external)),
             },
-            ExprKind::Paren(inner) => ExprKind::Paren(Box::new(inner.map(f))),
+            ExprKind::Paren(inner) => {
+                ExprKind::Paren(Box::new(inner.map_inner(f, traverse_external)))
+            }
             ExprKind::Call { callee, args } => {
                 let callee = match callee {
                     Callee::Name(n) => Callee::Name(n),
-                    Callee::Expr(e) => Callee::Expr(Box::new(e.map(f))),
+                    Callee::Expr(e) => Callee::Expr(Box::new(e.map_inner(f, traverse_external))),
                 };
-                let args = args.into_iter().map(|a| a.map(|e| e.map(f))).collect();
+                let args = args
+                    .into_iter()
+                    .map(|a| a.map(|e| e.map_inner(f, traverse_external)))
+                    .collect();
                 ExprKind::Call { callee, args }
             }
             other => other,

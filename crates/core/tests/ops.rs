@@ -670,7 +670,7 @@ fn move_retargets_formulas_outside_the_moved_range() {
 }
 
 #[test]
-fn cross_sheet_move_retargets_external_and_internal_references() {
+fn cross_sheet_move_retargets_local_references_but_not_external_workbooks() {
     let mut wb = Workbook::new();
     let source = wb.active_sheet();
     let target = wb.add_sheet("Target").unwrap();
@@ -678,8 +678,11 @@ fn cross_sheet_move_retargets_external_and_internal_references() {
     wb.set_number(source, 0, 1, 2.0).unwrap();
     wb.set_cell_contents(source, 1, 0, "=B1").unwrap();
     wb.set_cell_contents(target, 0, 3, "=Sheet1!A1").unwrap();
+    wb.set_cell_contents(target, 0, 4, "=[Book.xlsx]Sheet1!A1")
+        .unwrap();
     move_range_cells_between(&mut wb, source, range(0, 0, 1, 0), target, cell(2, 2)).unwrap();
     assert_eq!(formula_src(&wb, target, 0, 3), "=C3");
+    assert_eq!(formula_src(&wb, target, 0, 4), "=[Book.xlsx]Sheet1!A1");
     assert_eq!(formula_src(&wb, target, 3, 2), "=Sheet1!B1");
 }
 
