@@ -99,7 +99,8 @@ fn legacy_array_formula_range_recalculates_and_round_trips() {
     let mut engine = RecalcEngine::new(FnRegistry::new());
     engine.recalc_full(&mut doc.workbook);
     assert_eq!(format_cell(&doc.workbook, sheet_id, 0, 1), "2");
-    assert_eq!(format_cell(&doc.workbook, sheet_id, 1, 0), "#N/A");
+    assert_eq!(format_cell(&doc.workbook, sheet_id, 1, 0), "1");
+    assert_eq!(format_cell(&doc.workbook, sheet_id, 1, 1), "2");
 
     let saved = save_workbook_bytes(&doc.workbook).unwrap();
     let mut archive = zip::ZipArchive::new(Cursor::new(&saved)).unwrap();

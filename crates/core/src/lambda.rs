@@ -80,10 +80,6 @@ pub fn eval_let(ctx: &mut EvalCtx<'_>, args: &[Option<Expr>]) -> RuntimeValue {
             }
         };
         let val = crate::eval::eval_expr(ctx, val_e);
-        if let Some(e) = val.error_kind() {
-            ctx.pop_frame();
-            return RuntimeValue::error(e);
-        }
         ctx.bind(p.name, val);
     }
     let out = crate::eval::eval_expr(ctx, calc);

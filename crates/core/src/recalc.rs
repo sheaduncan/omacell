@@ -1378,13 +1378,7 @@ fn commit_fixed_cse(
             let dc = u32::from(col - range.start.col);
             let scalar = array
                 .as_ref()
-                .filter(|array| dr < array.rows && dc < array.cols)
-                .and_then(|array| {
-                    let index = (dr as usize)
-                        .saturating_mul(array.cols as usize)
-                        .saturating_add(dc as usize);
-                    array.values.get(index).cloned()
-                })
+                .and_then(|array| fixed_cse_value(array, dr, dc))
                 .unwrap_or(Scalar::Error(ErrorKind::Na));
             let value = intern_scalar(wb, scalar);
             let mut slot = wb
@@ -1536,6 +1530,18 @@ fn commit_runtime(
             commit_cse_or_scalar(wb, cell, Scalar::Error(ErrorKind::Value), cse, stale);
         }
     }
+}
+
+fn fixed_cse_value(array: &crate::eval::RuntimeArray, row: u32, col: u32) -> Option<Scalar> {
+    let source_row = if array.rows == 1 { 0 } else { row };
+    let source_col = if array.cols == 1 { 0 } else { col };
+    if source_row >= array.rows || source_col >= array.cols {
+        return None;
+    }
+    let index = (source_row as usize)
+        .saturating_mul(array.cols as usize)
+        .saturating_add(source_col as usize);
+    array.values.get(index).cloned()
 }
 
 fn commit_scalar(wb: &mut Workbook, cell: CellCoord, s: Scalar, flags: CellFlags) {
