@@ -1397,29 +1397,65 @@ fn sumsq_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Err(e) => RuntimeValue::error(e),
     }
 }
+
+struct SumproductValues {
+    rows: u32,
+    cols: u32,
+    values: Vec<Scalar>,
+}
+
+fn sumproduct_values(
+    ctx: &EvalCtx<'_>,
+    value: &RuntimeValue,
+) -> Result<SumproductValues, ErrorKind> {
+    match ctx.materialize(value.clone()) {
+        RuntimeValue::Scalar(value) => Ok(SumproductValues {
+            rows: 1,
+            cols: 1,
+            values: vec![value],
+        }),
+        RuntimeValue::Array(array) => {
+            array.validate()?;
+            Ok(SumproductValues {
+                rows: array.rows,
+                cols: array.cols,
+                values: array.values.to_vec(),
+            })
+        }
+        RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => Err(ErrorKind::Value),
+    }
+}
+
 fn sumproduct_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
-    let arrays: Result<Vec<Vec<Scalar>>, _> = args
+    let arrays: Result<Vec<SumproductValues>, _> = args
         .iter()
         .filter(|a| !a.omitted)
-        .map(|a| common::flatten(ctx, &a.value))
+        .map(|a| sumproduct_values(ctx, &a.value))
         .collect();
     match arrays {
         Err(e) => RuntimeValue::error(e),
         Ok(list) if list.is_empty() => RuntimeValue::error(ErrorKind::Value),
         Ok(list) => {
-            let len = list[0].len();
-            if list.iter().any(|v| v.len() != len) {
+            let rows = list[0].rows;
+            let cols = list[0].cols;
+            if list
+                .iter()
+                .any(|values| values.rows != rows || values.cols != cols)
+            {
                 return RuntimeValue::error(ErrorKind::Value);
             }
+            let len = list[0].values.len();
             let mut acc = 0.0;
             for i in 0..len {
                 let mut prod = 1.0;
                 for arr in &list {
-                    match &arr[i] {
+                    let Some(value) = arr.values.get(i) else {
+                        return RuntimeValue::error(ErrorKind::Value);
+                    };
+                    match value {
                         Scalar::Error(e) => return RuntimeValue::error(*e),
                         Scalar::Number(n) if n.is_finite() => prod *= n,
                         Scalar::Number(_) => return RuntimeValue::error(ErrorKind::Num),
-                        Scalar::Bool(b) => prod *= if *b { 1.0 } else { 0.0 },
                         _ => prod = 0.0,
                     }
                 }
