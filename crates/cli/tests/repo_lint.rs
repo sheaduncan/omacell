@@ -471,6 +471,36 @@ fn wp28_manual_and_release_automation_are_present() {
 }
 
 #[test]
+fn wp28_omarchy_packaging_and_performance_lanes_do_not_drift() {
+    let root = workspace_root();
+    let omarchy = fs::read_to_string(root.join(".github/workflows/omarchy.yml"))
+        .expect("read Omarchy workflow");
+    for input in ["PKGBUILD_SOURCE_URL", "PKGBUILD_SOURCE_SHA256"] {
+        assert!(
+            omarchy.contains(input),
+            "Omarchy workflow must pass the source recipe's {input} input"
+        );
+    }
+    assert!(
+        !omarchy.contains("OMACELL_SOURCE_"),
+        "build inputs must not use the OMACELL_* runtime namespace"
+    );
+
+    let reload =
+        fs::read_to_string(root.join("crates/gui/tests/reload.rs")).expect("read GUI reload tests");
+    assert!(
+        !reload.contains("theme reload took"),
+        "shared/debug tests must not enforce the theme-reload wall clock"
+    );
+    let performance = fs::read_to_string(root.join(".github/workflows/performance.yml"))
+        .expect("read performance workflow");
+    assert!(
+        performance.contains("cargo bench -p omacell-conf --bench theme_reload"),
+        "fixed-host performance workflow must retain the theme-reload benchmark"
+    );
+}
+
+#[test]
 fn wp28_release_handoffs_are_implemented_and_reconciled() {
     let root = workspace_root();
     let setup = fs::read_to_string(root.join("crates/conf/src/setup.rs")).expect("read setup");

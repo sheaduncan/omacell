@@ -38,8 +38,8 @@ jobs:
           source_sha=$(sha256sum "$RUNNER_TEMP/omacell-0.0.0.tar.gz" | cut -d ' ' -f 1)
           (
             cd "$package_root"
-            OMACELL_SOURCE_URL="file://$RUNNER_TEMP/omacell-0.0.0.tar.gz" \
-              OMACELL_SOURCE_SHA256="$source_sha" \
+            PKGBUILD_SOURCE_URL="file://$RUNNER_TEMP/omacell-0.0.0.tar.gz" \
+              PKGBUILD_SOURCE_SHA256="$source_sha" \
               makepkg --noconfirm --syncdeps --cleanbuild --nocheck
           )
           sudo pacman -U --noconfirm "$package_root"/omacell-0.0.0-1-*.pkg.tar.zst
