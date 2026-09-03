@@ -24,9 +24,6 @@ pub(super) fn binary(
     left_origin: OperandOrigin,
     right_origin: OperandOrigin,
 ) -> RuntimeValue {
-    if let Some(e) = left.error_kind().or_else(|| right.error_kind()) {
-        return RuntimeValue::error(e);
-    }
     match op {
         BinOp::Range | BinOp::Isect | BinOp::Union => {
             // Range operators are handled in the walker (need refs).
@@ -161,6 +158,9 @@ fn arithmetic_number(
 fn pow_excel(x: f64, y: f64) -> Scalar {
     if x == 0.0 && y == 0.0 {
         return Scalar::Error(ErrorKind::Num);
+    }
+    if x == 0.0 && y < 0.0 {
+        return Scalar::Error(ErrorKind::Div0);
     }
     if x < 0.0 {
         // Integer exponents are allowed; fractional → #NUM!.

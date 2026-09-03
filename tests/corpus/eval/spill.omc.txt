@@ -23,6 +23,13 @@ expect A10 1
 expect B10 2
 expect C10 3
 
+# The spill operator names the formula origin, not a spill ghost or scalar.
+set D10 =B1#
+set D14 7
+set E14 =D14#
+expect D10 #REF!
+expect E14 #REF!
+
 # Legacy CSE: evaluate the array but do not spill.
 set A12 ={1,2,3}
 flag A12 array
