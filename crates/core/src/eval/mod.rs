@@ -1577,14 +1577,21 @@ fn implicit_intersect(ctx: &EvalCtx<'_>, v: RuntimeValue) -> RuntimeValue {
                 return RuntimeValue::Scalar(ctx.read_cell(sheet, r1, c1));
             }
             if r1 == r2 {
-                // One row: take the formula's column if it lands in the range,
-                // else the left cell (Excel implicit intersection of a row).
-                let col = if fc >= c1 && fc <= c2 { fc } else { c1 };
-                return RuntimeValue::Scalar(ctx.read_cell(sheet, r1, col));
+                return if fc >= c1 && fc <= c2 {
+                    RuntimeValue::Scalar(ctx.read_cell(sheet, r1, fc))
+                } else {
+                    RuntimeValue::error(ErrorKind::Value)
+                };
             }
             if c1 == c2 {
-                let row = if fr >= r1 && fr <= r2 { fr } else { r1 };
-                return RuntimeValue::Scalar(ctx.read_cell(sheet, row, c1));
+                return if fr >= r1 && fr <= r2 {
+                    RuntimeValue::Scalar(ctx.read_cell(sheet, fr, c1))
+                } else {
+                    RuntimeValue::error(ErrorKind::Value)
+                };
+            }
+            if fr >= r1 && fr <= r2 && fc >= c1 && fc <= c2 {
+                return RuntimeValue::Scalar(ctx.read_cell(sheet, fr, fc));
             }
             RuntimeValue::error(ErrorKind::Value)
         }
