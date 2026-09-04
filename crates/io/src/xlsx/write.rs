@@ -334,6 +334,7 @@ pub(crate) fn encode(
     let mut wb_rels: Vec<(String, String, String, bool)> = Vec::new();
     let mut sheet_rids = Vec::new();
     let mut drawing_names = drawing::PartNameAllocator::new(package);
+    let mut vml_shape_ids = VmlShapeIdAllocator::new(package);
     for (i, sheet) in sheets.iter().enumerate() {
         let r = workbook_relationship_ids.next()?;
         let target = format!("worksheets/sheet{}.xml", i + 1);
@@ -353,6 +354,7 @@ pub(crate) fn encode(
             &dxfs,
             &pivots,
             &mut drawing_names,
+            &mut vml_shape_ids,
         )?;
         parts.insert(format!("xl/{target}"), sheet_xml);
         overrides.push((format!("/xl/{target}"), CT_WS.into()));
@@ -646,6 +648,56 @@ struct PreservedXmlCapture {
 struct RelationshipIdAllocator {
     used: HashSet<String>,
     next: u32,
+}
+
+struct VmlShapeIdAllocator {
+    used: HashSet<String>,
+    next: u64,
+}
+
+impl VmlShapeIdAllocator {
+    fn new(package: Option<&OpcPackage>) -> Self {
+        let mut used = HashSet::new();
+        if let Some(package) = package {
+            for part in package.parts.values().filter(|part| {
+                part.name.to_ascii_lowercase().ends_with(".vml")
+                    || part.content_type.as_deref() == Some(CT_VML)
+            }) {
+                const PREFIX: &[u8] = b"_x0000_s";
+                for (offset, window) in part.bytes.windows(PREFIX.len()).enumerate() {
+                    if window.eq_ignore_ascii_case(PREFIX) {
+                        let digits = &part.bytes[offset + PREFIX.len()..];
+                        let length = digits
+                            .iter()
+                            .take_while(|byte| byte.is_ascii_digit())
+                            .count();
+                        if length > 0 {
+                            used.insert(
+                                String::from_utf8_lossy(
+                                    &part.bytes[offset..offset + PREFIX.len() + length],
+                                )
+                                .to_ascii_lowercase(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Self { used, next: 1025 }
+    }
+
+    fn next(&mut self) -> Result<String, CoreError> {
+        loop {
+            let id = format!("_x0000_s{}", self.next);
+            self.next = self
+                .next
+                .checked_add(1)
+                .ok_or_else(|| error::xlsx_write("VML shape id space is exhausted"))?;
+            if self.used.insert(id.to_ascii_lowercase()) {
+                return Ok(id);
+            }
+        }
+    }
 }
 
 fn is_regenerated_workbook_relationship(relationship: &super::opc::Relationship) -> bool {
@@ -1560,6 +1612,7 @@ fn worksheet_xml(
     dxfs: &[CfDxf],
     pivots: &[PivotTable],
     drawing_names: &mut drawing::PartNameAllocator,
+    vml_shape_ids: &mut VmlShapeIdAllocator,
 ) -> Result<
     (
         Vec<u8>,
@@ -1877,6 +1930,26 @@ fn worksheet_xml(
             push_fragment(&mut s, xml.as_bytes(), "print settings", &print_roots)?;
         }
     }
+    if sheet
+        .notes
+        .keys()
+        .any(|coordinate| sheet.comments.contains_key(coordinate))
+    {
+        return Err(error::xlsx_write(
+            "a cell cannot contain both a note and a threaded comment",
+        ));
+    }
+    let threaded_comments = if sheet.comments.is_empty() {
+        None
+    } else {
+        Some(threaded_comments_xml(sheet, sheet_ord, persons)?)
+    };
+    let annotation_cells: BTreeSet<(u32, u16)> = sheet
+        .notes
+        .keys()
+        .chain(sheet.comments.keys())
+        .copied()
+        .collect();
     let mut drawing_xml = String::new();
     let mut vml_xml = String::new();
     let worksheet_name = format!("xl/worksheets/sheet{}.xml", sheet_ord + 1);
@@ -1931,7 +2004,19 @@ fn worksheet_xml(
         ));
         extra_parts.extend(parts.parts);
     }
-    if !sheet.notes.is_empty() && vml_xml.is_empty() {
+    if let Some(source_vml) = original_rels
+        .iter()
+        .rev()
+        .find(|relationship| relationship.rel_type == REL_VML && !relationship.external)
+        && let Some(source_part) = package.and_then(|package| package.part(&source_vml.target))
+    {
+        let reconciled =
+            reconcile_comments_vml(&source_part.bytes, &annotation_cells, vml_shape_ids)?;
+        if reconciled != source_part.bytes {
+            extra_parts.push((source_vml.target.clone(), reconciled, CT_VML.into()));
+        }
+    }
+    if !annotation_cells.is_empty() && vml_xml.is_empty() {
         let id = relationship_ids.next()?;
         let number = sheet_ord + 1;
         let name = drawing_names.take(format!("xl/drawings/vmlDrawing{number}.vml"))?;
@@ -1941,7 +2026,11 @@ fn worksheet_xml(
             relative_target(&worksheet_name, &name),
             false,
         ));
-        extra_parts.push((name, comments_vml_xml(sheet), CT_VML.into()));
+        extra_parts.push((
+            name,
+            comments_vml_xml(&annotation_cells, vml_shape_ids)?,
+            CT_VML.into(),
+        ));
         vml_xml = format!(r#"<legacyDrawing r:id="{id}"/>"#);
     }
     s.push_str(&drawing_xml);
@@ -1997,7 +2086,7 @@ fn worksheet_xml(
             "sparkline",
         )?;
     }
-    if !sheet.notes.is_empty() {
+    if !annotation_cells.is_empty() {
         let id = relationship_ids.next()?;
         let cname = format!("xl/comments{}.xml", sheet_ord + 1);
         rels.push((
@@ -2006,9 +2095,13 @@ fn worksheet_xml(
             format!("../comments{}.xml", sheet_ord + 1),
             false,
         ));
-        extra_parts.push((cname, comments_xml(sheet), CT_CMT.into()));
+        let placeholders = threaded_comments
+            .as_ref()
+            .map(|comments| comments.placeholders.as_slice())
+            .unwrap_or(&[]);
+        extra_parts.push((cname, comments_xml(sheet, placeholders)?, CT_CMT.into()));
     }
-    if !sheet.comments.is_empty() {
+    if let Some(threaded_comments) = threaded_comments {
         let id = relationship_ids.next()?;
         let number = sheet_ord + 1;
         let name = format!("xl/threadedComments/threadedComment{number}.xml");
@@ -2018,11 +2111,7 @@ fn worksheet_xml(
             format!("../threadedComments/threadedComment{number}.xml"),
             false,
         ));
-        extra_parts.push((
-            name,
-            threaded_comments_xml(sheet, sheet_ord, persons)?,
-            CT_THREADED_CMT.into(),
-        ));
+        extra_parts.push((name, threaded_comments.bytes, CT_THREADED_CMT.into()));
     }
     push_worksheet_extensions(&mut s, &extensions);
     s.push_str("</worksheet>");
@@ -2568,17 +2657,28 @@ fn persons_xml(persons: &BTreeMap<String, String>) -> Vec<u8> {
     xml_out.into_bytes()
 }
 
+struct LegacyThreadPlaceholder {
+    cell_ref: String,
+    id: String,
+}
+
+struct ThreadedCommentsPart {
+    bytes: Vec<u8>,
+    placeholders: Vec<LegacyThreadPlaceholder>,
+}
+
 fn threaded_comments_xml(
     sheet: &Sheet,
     sheet_ord: usize,
     persons: &BTreeMap<String, String>,
-) -> Result<Vec<u8>, CoreError> {
+) -> Result<ThreadedCommentsPart, CoreError> {
     let mut comments: Vec<_> = sheet.comments.iter().collect();
     comments.sort_by_key(|((row, col), _)| (*row, *col));
     let mut xml_out = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">"#,
     );
     let mut ordinal = 1u64;
+    let mut placeholders = Vec::with_capacity(comments.len());
     for ((row, col), comment) in comments {
         let cell_ref = format!(
             "{}{}",
@@ -2593,11 +2693,15 @@ fn threaded_comments_xml(
             sheet_ord,
             persons,
             &mut ordinal,
+            &mut placeholders,
             0,
         )?;
     }
     xml_out.push_str("</ThreadedComments>");
-    Ok(xml_out.into_bytes())
+    Ok(ThreadedCommentsPart {
+        bytes: xml_out.into_bytes(),
+        placeholders,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2609,6 +2713,7 @@ fn append_thread_comment_xml(
     sheet_ord: usize,
     persons: &BTreeMap<String, String>,
     ordinal: &mut u64,
+    placeholders: &mut Vec<LegacyThreadPlaceholder>,
     depth: usize,
 ) -> Result<(), CoreError> {
     if depth >= 64 {
@@ -2621,6 +2726,12 @@ fn append_thread_comment_xml(
         .ok_or_else(|| error::xlsx_write("threaded comment author has no person record"))?;
     let id = deterministic_guid(u32::try_from(sheet_ord + 2).unwrap_or(u32::MAX), *ordinal);
     *ordinal = ordinal.saturating_add(1);
+    if parent_id.is_none() {
+        placeholders.push(LegacyThreadPlaceholder {
+            cell_ref: cell_ref.to_string(),
+            id: id.clone(),
+        });
+    }
     let parent = parent_id
         .map(|value| format!(r#" parentId="{}""#, xml::escape(value)))
         .unwrap_or_default();
@@ -2641,13 +2752,17 @@ fn append_thread_comment_xml(
             sheet_ord,
             persons,
             ordinal,
+            placeholders,
             depth + 1,
         )?;
     }
     Ok(())
 }
 
-fn comments_xml(sheet: &Sheet) -> Vec<u8> {
+fn comments_xml(
+    sheet: &Sheet,
+    placeholders: &[LegacyThreadPlaceholder],
+) -> Result<Vec<u8>, CoreError> {
     let mut authors: Vec<String> = Vec::new();
     let mut notes: Vec<_> = sheet.notes.iter().collect();
     notes.sort_by_key(|((r, c), _)| (*r, *c));
@@ -2656,6 +2771,9 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
         if !authors.iter().any(|x| x == &a) {
             authors.push(a);
         }
+    }
+    for placeholder in placeholders {
+        authors.push(format!("tc={}", placeholder.id));
     }
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><comments xmlns="{NS}"><authors>"#
@@ -2667,7 +2785,7 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
     for ((row, col), n) in notes {
         let addr = format!(
             "{}{}",
-            col_to_letters(*col).unwrap_or_else(|_| "A".into()),
+            col_to_letters(*col).map_err(|error| error::xlsx_write(error.to_string()))?,
             row + 1
         );
         let author = n.author.as_deref().unwrap_or("");
@@ -2680,27 +2798,187 @@ fn comments_xml(sheet: &Sheet) -> Vec<u8> {
             t_elem(&n.text)
         ));
     }
+    for placeholder in placeholders {
+        let author = format!("tc={}", placeholder.id);
+        let author_id = authors
+            .iter()
+            .position(|candidate| candidate == &author)
+            .ok_or_else(|| error::xlsx_write("threaded comment placeholder has no author"))?;
+        s.push_str(&format!(
+            r#"<comment ref="{}" authorId="{author_id}"><text>{}</text></comment>"#,
+            xml::escape(&placeholder.cell_ref),
+            t_elem("")
+        ));
+    }
     s.push_str("</commentList></comments>");
-    s.into_bytes()
+    Ok(s.into_bytes())
 }
 
-fn comments_vml_xml(sheet: &Sheet) -> Vec<u8> {
-    let mut notes: Vec<_> = sheet.notes.keys().copied().collect();
-    notes.sort_unstable();
+fn comments_vml_xml(
+    cells: &BTreeSet<(u32, u16)>,
+    shape_ids: &mut VmlShapeIdAllocator,
+) -> Result<Vec<u8>, CoreError> {
     let mut s = String::from(
         r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>"#,
     );
-    for (index, (row, col)) in notes.into_iter().enumerate() {
+    s.push_str(&comments_vml_shapes(cells, shape_ids)?);
+    s.push_str("</xml>");
+    Ok(s.into_bytes())
+}
+
+fn comments_vml_shapes(
+    cells: &BTreeSet<(u32, u16)>,
+    shape_ids: &mut VmlShapeIdAllocator,
+) -> Result<String, CoreError> {
+    let mut s = String::new();
+    for (index, &(row, col)) in cells.iter().enumerate() {
         let end_col = u32::from(col).saturating_add(2).min(16_383);
         let end_row = row.saturating_add(4).min(1_048_575);
+        let shape_id = shape_ids.next()?;
         s.push_str(&format!(
-            r##"<v:shape id="_x0000_s{}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:5pt;width:108pt;height:59.25pt;z-index:{};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"/></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{col}, 15, {row}, 2, {end_col}, 15, {end_row}, 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{row}</x:Row><x:Column>{col}</x:Column></x:ClientData></v:shape>"##,
-            index + 1025,
+            r##"<v:shape id="{shape_id}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:5pt;width:108pt;height:59.25pt;z-index:{};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><v:shadow on="t" color="black" obscured="t"/><v:path o:connecttype="none"/><v:textbox style="mso-direction-alt:auto"><div style="text-align:left"/></v:textbox><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:Anchor>{col}, 15, {row}, 2, {end_col}, 15, {end_row}, 4</x:Anchor><x:AutoFill>False</x:AutoFill><x:Row>{row}</x:Row><x:Column>{col}</x:Column></x:ClientData></v:shape>"##,
             index + 1
         ));
     }
-    s.push_str("</xml>");
-    s.into_bytes()
+    Ok(s)
+}
+
+struct ParsedCommentsVml {
+    note_cells: BTreeSet<(u32, u16)>,
+    note_shapes: Vec<std::ops::Range<usize>>,
+    root_end: usize,
+    complete: bool,
+}
+
+struct VmlShapeScan {
+    start: usize,
+    depth: u32,
+    is_note: bool,
+    field: Option<VmlCellField>,
+    row: String,
+    col: String,
+}
+
+#[derive(Clone, Copy)]
+enum VmlCellField {
+    Row,
+    Col,
+}
+
+fn reconcile_comments_vml(
+    original: &[u8],
+    cells: &BTreeSet<(u32, u16)>,
+    shape_ids: &mut VmlShapeIdAllocator,
+) -> Result<Vec<u8>, CoreError> {
+    let parsed = parse_comments_vml(original)?;
+    if parsed.complete && parsed.note_cells == *cells {
+        return Ok(original.to_vec());
+    }
+    let generated = comments_vml_shapes(cells, shape_ids)?;
+    let mut out = Vec::with_capacity(original.len().saturating_add(generated.len()));
+    let mut cursor = 0usize;
+    for shape in &parsed.note_shapes {
+        if shape.start < cursor || shape.end > parsed.root_end {
+            return Err(error::xlsx_write(
+                "source VML note shape boundaries are invalid",
+            ));
+        }
+        out.extend_from_slice(&original[cursor..shape.start]);
+        cursor = shape.end;
+    }
+    out.extend_from_slice(&original[cursor..parsed.root_end]);
+    out.extend_from_slice(generated.as_bytes());
+    out.extend_from_slice(&original[parsed.root_end..]);
+    Ok(out)
+}
+
+fn parse_comments_vml(bytes: &[u8]) -> Result<ParsedCommentsVml, CoreError> {
+    let mut reader = xml::XmlReader::new(bytes);
+    let mut depth = 0u32;
+    let mut shape: Option<VmlShapeScan> = None;
+    let mut note_cells = BTreeSet::new();
+    let mut note_shapes = Vec::new();
+    let mut root_end = None;
+    let mut complete = true;
+    while let Some(event) = reader.next()? {
+        let span = reader.last_span();
+        match event {
+            xml::XmlEvent::Start { name, attrs } => {
+                if shape.is_none() && name == "shape" {
+                    shape = Some(VmlShapeScan {
+                        start: span.start,
+                        depth,
+                        is_note: false,
+                        field: None,
+                        row: String::new(),
+                        col: String::new(),
+                    });
+                }
+                if let Some(shape) = &mut shape {
+                    if name == "ClientData" && xml::attr(&attrs, "ObjectType") == Some("Note") {
+                        shape.is_note = true;
+                    } else if name == "Row" {
+                        shape.field = Some(VmlCellField::Row);
+                    } else if name == "Column" {
+                        shape.field = Some(VmlCellField::Col);
+                    }
+                }
+                depth = depth.saturating_add(1);
+            }
+            xml::XmlEvent::Empty { name, attrs } => {
+                if let Some(shape) = &mut shape
+                    && name == "ClientData"
+                    && xml::attr(&attrs, "ObjectType") == Some("Note")
+                {
+                    shape.is_note = true;
+                }
+            }
+            xml::XmlEvent::Text(text) => {
+                if let Some(shape) = &mut shape {
+                    match shape.field {
+                        Some(VmlCellField::Row) => shape.row.push_str(&text),
+                        Some(VmlCellField::Col) => shape.col.push_str(&text),
+                        None => {}
+                    }
+                }
+            }
+            xml::XmlEvent::End { name } => {
+                if let Some(shape) = &mut shape
+                    && (name == "Row" || name == "Column")
+                {
+                    shape.field = None;
+                }
+                if name == "shape"
+                    && shape
+                        .as_ref()
+                        .is_some_and(|shape| depth == shape.depth.saturating_add(1))
+                    && let Some(shape) = shape.take()
+                    && shape.is_note
+                {
+                    note_shapes.push(shape.start..span.end);
+                    match (shape.row.trim().parse(), shape.col.trim().parse()) {
+                        (Ok(row), Ok(col)) if row < MAX_ROWS && col < MAX_COLS => {
+                            if !note_cells.insert((row, col)) {
+                                complete = false;
+                            }
+                        }
+                        _ => complete = false,
+                    }
+                }
+                if name == "xml" && depth == 1 {
+                    root_end = Some(span.start);
+                }
+                depth = depth.saturating_sub(1);
+            }
+        }
+    }
+    let root_end = root_end.ok_or_else(|| error::xlsx_write("source VML has no root end tag"))?;
+    Ok(ParsedCommentsVml {
+        note_cells,
+        note_shapes,
+        root_end,
+        complete,
+    })
 }
 
 fn rels_xml(rels: &[(String, String, String, bool)]) -> Vec<u8> {

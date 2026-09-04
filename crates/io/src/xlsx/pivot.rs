@@ -565,11 +565,13 @@ fn parse_cache(package: &OpcPackage, rel: &Relationship) -> Result<LoadedCache, 
                 headers.push(current_field.clone());
                 shared.push(Vec::new());
                 current_field_index = Some(headers.len() - 1);
-                let calculated = attr(&attrs, "databaseField").is_some_and(|value| value == "0");
+                let formula = attr(&attrs, "formula").filter(|formula| !formula.trim().is_empty());
+                let calculated = attr(&attrs, "databaseField").is_some_and(|value| value == "0")
+                    && formula.is_some();
                 if calculated {
                     calc_fields.push(PivotCalcField {
                         name: current_field.clone(),
-                        formula: super::formula::from_xlsx(attr(&attrs, "formula").unwrap_or("")),
+                        formula: super::formula::from_xlsx(formula.unwrap_or_default()),
                     });
                 }
             }

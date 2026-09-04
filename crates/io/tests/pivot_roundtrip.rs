@@ -409,6 +409,54 @@ fn calculated_field_fixture_round_trips_without_downgrade() {
 }
 
 #[test]
+fn grouped_cache_field_without_formula_is_not_a_calculated_field() {
+    let bytes = excel_authored_pivot(false, false, false);
+    let cache = zip_text(&bytes, "xl/pivotCache/pivotCacheDefinition1.xml")
+        .replace(
+            r#"<cacheFields count="2">"#,
+            r#"<cacheFields count="3">"#,
+        )
+        .replace(
+            "</cacheFields>",
+            r#"<cacheField name="Region Group" databaseField="0"><sharedItems count="2" containsString="1"><s v="East"/><s v="West"/></sharedItems><fieldGroup base="0"><discretePr count="2"><x v="0"/><x v="1"/></discretePr></fieldGroup></cacheField></cacheFields>"#,
+        );
+    let bytes = {
+        let mut input = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut output);
+            let options = SimpleFileOptions::default();
+            for index in 0..input.len() {
+                let mut entry = input.by_index(index).unwrap();
+                let name = entry.name().to_string();
+                let mut body = Vec::new();
+                entry.read_to_end(&mut body).unwrap();
+                if name == "xl/pivotCache/pivotCacheDefinition1.xml" {
+                    body = cache.as_bytes().to_vec();
+                } else if name == "xl/pivotTables/pivotTable1.xml" {
+                    body = String::from_utf8(body)
+                        .unwrap()
+                        .replace(r#"<pivotFields count="2">"#, r#"<pivotFields count="3">"#)
+                        .replace(
+                            "</pivotFields>",
+                            r#"<pivotField axis="axisRow" showAll="0"/></pivotFields>"#,
+                        )
+                        .into_bytes();
+                }
+                writer.start_file(name, options).unwrap();
+                writer.write_all(&body).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        output.into_inner()
+    };
+
+    let doc = open_bytes(&bytes).unwrap();
+    let pivot = doc.workbook.pivots().iter().next().unwrap();
+    assert!(pivot.calc_fields.is_empty(), "{:?}", pivot.calc_fields);
+}
+
+#[test]
 fn distinct_count_fixture_round_trips_x14_metadata() {
     let bytes = excel_authored_pivot(false, true, false);
     let doc = open_bytes(&bytes).unwrap();
