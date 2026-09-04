@@ -69,3 +69,15 @@ fn help_snapshots() {
     assert_snapshot!("agent_diagnose", help(&["agent", "diagnose", "--help"]));
     assert_snapshot!("mcp", help(&["mcp", "--help"]));
 }
+
+#[test]
+fn help_describes_the_real_paths_theme_and_formats() {
+    let root = help(&["--help"]);
+    assert!(root.contains("XDG_CONFIG_HOME"), "{root}");
+    assert!(root.contains("role overlay"), "{root}");
+    assert!(root.contains(".xlsm"), "{root}");
+    assert!(root.contains("Parquet"), "{root}");
+
+    let setup = help(&["setup", "omarchy", "--help"]);
+    assert!(setup.contains("--uninstall"), "{setup}");
+}

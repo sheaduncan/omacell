@@ -68,3 +68,33 @@ fn rotate_if_needed(path: &Path) -> io::Result<()> {
     fs::rename(path, rotated)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::open_log_file;
+
+    #[test]
+    fn log_directory_and_existing_file_are_private() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = omacell_conf::Paths::from_home(temp.path());
+        let dir = paths.state_dir.join("logs");
+        let path = dir.join("omacell.log");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&path, b"existing\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        drop(open_log_file(&paths).unwrap());
+
+        assert_eq!(
+            std::fs::metadata(dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+}

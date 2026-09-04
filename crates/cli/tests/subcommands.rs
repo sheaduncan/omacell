@@ -350,6 +350,53 @@ fn theme_show_and_keys_check_and_setup() {
 }
 
 #[test]
+fn setup_preflights_hyprland_before_writing_and_uninstalls_owned_assets() {
+    let dir = TempDir::new().unwrap();
+    let hypr = dir.path().join(".config/hypr/bindings.lua");
+    std::fs::create_dir_all(hypr.parent().unwrap()).unwrap();
+    std::fs::write(&hypr, [0xff, 0xfe]).unwrap();
+
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args(["setup", "omarchy"])
+        .assert()
+        .code(1);
+    assert!(!dir.path().join(".config/omarchy").exists());
+    assert!(!dir.path().join(".agents/skills/omacell").exists());
+
+    std::fs::remove_file(hypr).unwrap();
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args(["setup", "omarchy", "--menu"])
+        .assert()
+        .success();
+    assert!(
+        dir.path()
+            .join(".config/omarchy/themed/omacell.toml.tpl")
+            .is_file()
+    );
+
+    let mut cmd = bin();
+    cmd.env("HOME", dir.path())
+        .args(["--json", "setup", "omarchy", "--uninstall", "--menu"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed"));
+    assert!(!
+        dir.path()
+            .join(".config/omarchy/themed/omacell.toml.tpl")
+            .exists()
+    );
+    let menu = std::fs::read_to_string(
+        dir.path()
+            .join(".config/omarchy/extensions/omarchy-menu.jsonc"),
+    )
+    .unwrap();
+    assert!(!menu.contains("\"command\": \"omacell\""));
+    assert!(!menu.contains("omacell --clipboard"));
+}
+
+#[test]
 fn diff_two_identical_copies() {
     let dir = TempDir::new().unwrap();
     let a = dir.path().join("a.xlsx");

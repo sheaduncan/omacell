@@ -71,6 +71,33 @@ fn setup_dry_run_writes_nothing() {
 }
 
 #[test]
+fn uninstall_dry_run_retains_installed_assets() {
+    let dir = TempDir::new().unwrap();
+    let template = dir
+        .path()
+        .join(".config/omarchy/themed/omacell.toml.tpl");
+    Command::cargo_bin("omacell")
+        .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env("HOME", dir.path())
+        .args(["setup", "omarchy"])
+        .assert()
+        .success();
+    assert!(template.is_file());
+
+    Command::cargo_bin("omacell")
+        .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env("HOME", dir.path())
+        .args(["--dry-run", "setup", "omarchy", "--uninstall"])
+        .assert()
+        .success();
+    assert!(template.is_file());
+}
+
+#[test]
 fn configured_backup_is_the_original_not_a_second_preflight_save() {
     let dir = TempDir::new().unwrap();
     let book = dir.path().join("book.xlsx");

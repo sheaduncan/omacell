@@ -382,6 +382,8 @@ pub fn proposal_notifier(config: Config) -> omacell_bus::mcp::ProposeHook {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use tokio::io::AsyncReadExt;
 
     use super::BoundedLines;
@@ -401,5 +403,17 @@ mod tests {
         let error = input.read_to_end(&mut output).await.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert_eq!(output, b"12345678");
+    }
+
+    #[test]
+    fn explicit_socket_parent_must_be_private() {
+        let temp = tempfile::tempdir().unwrap();
+        let public = temp.path().join("public");
+        std::fs::create_dir(&public).unwrap();
+        std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = super::prepare_socket_parent(&public.join("omacell.sock")).unwrap_err();
+        assert_eq!(error.code, "mcp.socket");
+        assert!(error.message.contains("700"), "{}", error.message);
     }
 }
