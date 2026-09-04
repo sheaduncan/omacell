@@ -41,7 +41,7 @@ pub struct SetupReport {
 pub struct UninstallReport {
     /// Unchanged Omacell-owned files and links that were removed.
     pub removed: Vec<PathBuf>,
-    /// Missing or user-modified assets that were retained.
+    /// User-modified or non-owned assets that were retained.
     pub skipped: Vec<String>,
 }
 
@@ -476,7 +476,7 @@ fn strip_jsonc_comments(text: &str) -> String {
         }
         index += 1;
     }
-    String::from_utf8(output).unwrap_or_default()
+    String::from_utf8_lossy(&output).into_owned()
 }
 
 fn matching_object_end(text: &str, start: usize) -> Option<usize> {

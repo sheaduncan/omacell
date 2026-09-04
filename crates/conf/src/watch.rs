@@ -42,7 +42,7 @@ pub enum ReloadEvent {
         /// Revalidated path in the user configuration tree.
         path: PathBuf,
     },
-    /// Parse/schema error; previous config kept.
+    /// Invalid input or unavailable live watcher; previous config kept.
     Invalid {
         /// Path that changed.
         path: PathBuf,

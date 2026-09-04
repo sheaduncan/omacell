@@ -7,7 +7,11 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("omacell").unwrap()
+    let mut command = Command::cargo_bin("omacell").unwrap();
+    command
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME");
+    command
 }
 
 fn home() -> (TempDir, Command) {

@@ -23,6 +23,8 @@ fn convert_dry_run_does_not_write() {
     let output = dir.path().join("out.csv");
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", dir.path())
         .args([
             "--dry-run",
@@ -43,6 +45,8 @@ fn set_dry_run_does_not_change_workbook() {
     let before = std::fs::read(&book).unwrap();
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", dir.path())
         .args(["--dry-run", "set", book.to_str().unwrap(), "A1", "999"])
         .assert()
@@ -56,6 +60,8 @@ fn setup_dry_run_writes_nothing() {
     let dir = TempDir::new().unwrap();
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", dir.path())
         .args(["--dry-run", "setup", "omarchy"])
         .assert()
@@ -73,6 +79,8 @@ fn configured_backup_is_the_original_not_a_second_preflight_save() {
 
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", dir.path())
         .args([
             "--set",

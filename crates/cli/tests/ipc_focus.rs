@@ -33,6 +33,8 @@ fn ipc_defaults_to_the_focused_instance() {
 
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", xdg.path())
         .env("XDG_RUNTIME_DIR", xdg.path())
         .args(["--json", "ipc", "ping"])

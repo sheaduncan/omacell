@@ -10,6 +10,8 @@ use tempfile::TempDir;
 fn run_json(xdg: &TempDir, home: &TempDir, args: &[&str]) -> serde_json::Value {
     let output = Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", xdg.path())
         .arg("--json")

@@ -92,6 +92,8 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
     let socket = home.path().join("mcp.sock");
     let book = corpus_xlsx();
     let mut child = std::process::Command::new(cargo_bin("omacell"))
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", &runtime)
         .args([
@@ -307,6 +309,8 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
         }
         let discard_id = cs["id"].as_str().unwrap();
         let discarded = std::process::Command::new(cargo_bin("omacell"))
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_STATE_HOME")
             .env("HOME", home.path())
             .env("XDG_RUNTIME_DIR", &runtime)
             .args(["--json", "changeset", "discard", discard_id])
@@ -344,6 +348,8 @@ fn socket_refuses_to_replace_a_regular_file() {
     let socket = home.path().join("not-a-socket");
     std::fs::write(&socket, b"keep me").unwrap();
     let output = std::process::Command::new(cargo_bin("omacell"))
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", &runtime)
         .args(["mcp", "--socket", socket.to_str().unwrap()])
@@ -362,6 +368,8 @@ async fn headless_proposal_appears_in_changeset_cli() {
     let socket = home.path().join("mcp.sock");
     let book = corpus_xlsx();
     let mut child = std::process::Command::new(cargo_bin("omacell"))
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", &runtime)
         .args([
@@ -386,6 +394,8 @@ async fn headless_proposal_appears_in_changeset_cli() {
     wait_ipc(&runtime.join("omacell"));
 
     let listed = std::process::Command::new(cargo_bin("omacell"))
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", &runtime)
         .args(["--json", "changeset", "list"])
@@ -400,6 +410,8 @@ async fn headless_proposal_appears_in_changeset_cli() {
     assert!(json.as_array().unwrap().iter().any(|cs| cs["id"] == id));
 
     let applied = std::process::Command::new(cargo_bin("omacell"))
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", &runtime)
         .args(["--json", "changeset", "apply", &id])
@@ -414,6 +426,8 @@ async fn headless_proposal_appears_in_changeset_cli() {
     assert_eq!(applied_json["status"], "applied");
 
     let reverted = std::process::Command::new(cargo_bin("omacell"))
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", &runtime)
         .args(["--json", "changeset", "revert", &id])

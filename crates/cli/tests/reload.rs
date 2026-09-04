@@ -18,6 +18,8 @@ fn local_theme_reload() {
     let dir = TempDir::new().unwrap();
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", dir.path())
         .args(["--json", "theme", "reload"])
         .assert()
@@ -87,6 +89,8 @@ fn ipc_theme_reload_all() {
 
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", xdg.path())
         .args(["--json", "ipc", "theme.reload", "--all", "--quiet"])
@@ -108,6 +112,8 @@ fn ipc_dry_run_reaches_the_server_without_mutating_it() {
 
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", xdg.path())
         .args([
@@ -139,6 +145,8 @@ fn ipc_all_returns_failure_when_a_remote_command_fails() {
 
     Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", xdg.path())
         .args(["--json", "ipc", "missing.command", "--all", "--quiet"])

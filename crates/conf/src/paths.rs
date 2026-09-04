@@ -9,13 +9,13 @@ pub struct Paths {
     pub home: PathBuf,
     /// Package defaults (`/usr/share/omacell/default` in production).
     pub default_dir: PathBuf,
-    /// `~/.config/omacell`.
+    /// `$XDG_CONFIG_HOME/omacell`, falling back to `~/.config/omacell`.
     pub user_config: PathBuf,
-    /// `~/.local/state/omacell`.
+    /// `$XDG_STATE_HOME/omacell`, falling back to `~/.local/state/omacell`.
     pub state_dir: PathBuf,
-    /// `~/.local/state/omarchy` then `~/.config/omarchy` for current theme.
+    /// Omarchy's state root, then its config root, for current-theme lookup.
     pub omarchy_state: PathBuf,
-    /// `~/.config/omarchy`.
+    /// `$XDG_CONFIG_HOME/omarchy`, falling back to `~/.config/omarchy`.
     pub omarchy_config: PathBuf,
 }
 
