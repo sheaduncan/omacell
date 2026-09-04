@@ -81,3 +81,43 @@ fn shipped_default_dir() -> PathBuf {
     }
     PathBuf::from("/usr/share/omacell/default")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Paths;
+    use std::path::PathBuf;
+
+    #[test]
+    fn absolute_xdg_roots_are_honored() {
+        let paths = Paths::from_env_parts(
+            Some(PathBuf::from("/home/tester")),
+            Some(PathBuf::from("/var/config")),
+            Some(PathBuf::from("/var/state")),
+            Some(PathBuf::from("/opt/omacell/default")),
+        )
+        .unwrap();
+        assert_eq!(paths.user_config, PathBuf::from("/var/config/omacell"));
+        assert_eq!(paths.state_dir, PathBuf::from("/var/state/omacell"));
+        assert_eq!(paths.omarchy_config, PathBuf::from("/var/config/omarchy"));
+        assert_eq!(paths.omarchy_state, PathBuf::from("/var/state/omarchy"));
+    }
+
+    #[test]
+    fn relative_xdg_roots_fall_back_under_home() {
+        let paths = Paths::from_env_parts(
+            Some(PathBuf::from("/home/tester")),
+            Some(PathBuf::from("relative-config")),
+            Some(PathBuf::from("relative-state")),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            paths.user_config,
+            PathBuf::from("/home/tester/.config/omacell")
+        );
+        assert_eq!(
+            paths.state_dir,
+            PathBuf::from("/home/tester/.local/state/omacell")
+        );
+    }
+}

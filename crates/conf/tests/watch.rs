@@ -118,6 +118,22 @@ fn live_reload_false_does_not_start_a_watcher() {
 }
 
 #[test]
+fn watcher_setup_failure_keeps_the_loaded_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    std::fs::write(&paths.user_config, "not a directory").unwrap();
+
+    let store = ConfigStore::load_and_watch(paths.clone()).unwrap();
+    assert!(!store.is_watching());
+    assert!(store.drain_events().iter().any(|event| matches!(
+        event,
+        ReloadEvent::Invalid { path, message }
+            if path == &paths.user_config && message.contains("watch")
+    )));
+    store.reload().unwrap();
+}
+
+#[test]
 fn active_theme_changes_reload_and_emit_theme_event() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
