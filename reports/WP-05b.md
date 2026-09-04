@@ -2,6 +2,20 @@
 
 ## Plan (written before coding)
 
+### 2026-09-04 remaining text-function follow-up (written before coding)
+
+- Add the reviewed negative `REGEXREPLACE` occurrence, array-preserving
+  `VALUETOTEXT`, `UNICHAR` surrogate, and unmappable `CODE` cases to their
+  owning corpora before implementation.
+- Preserve the existing bounded, linear-time regex engine while selecting a
+  negative occurrence from the end; retain an array result for
+  `VALUETOTEXT` and apply its format mode cell by cell.
+- Reconcile `CHAR`/`CODE` documentation with the already-implemented
+  Windows-1252 mapping and document the intentional regex-flavor gap where
+  Rust regex cannot implement Excel's PCRE2 lookaround/backreferences.
+- Update the authoritative review ledger, run the complete function suite and
+  strict Clippy, then run exact `just check` before opening the PR.
+
 ### 2026-09-04 text/date parsing follow-up (written before coding)
 
 - Add the reviewed scientific-number, locale-date, omitted-date-part,
@@ -55,7 +69,7 @@
   - Unit tests: pass-stable clock, regex size/time rejection, fuzz smoke, locale/date-system matrix.
 - Items the package says to "decide and document" and the decision taken:
   - **`LEN`/`MID`/`LEFT`/`RIGHT` and astral characters.** Excel for Windows (including Microsoft 365) counts UTF-16 code units, so a single scalar value in `U+10000..=U+10FFFF` (e.g. `😀` U+1F600) has `LEN` = 2 and `MID` can split a surrogate pair. Spec §6.4 requires Unicode-correct text. Omacell counts Unicode scalar values (`str::chars`): `LEN("😀")` = 1, and `MID`/`LEFT`/`RIGHT` never emit unpaired surrogates. No workbook compatibility flag (frozen `WorkbookSettings`). Recorded in corpus notes and `docs/compat/known-differences.md`. Combining marks are separate scalars (`LEN("é")` of `e` + U+0301 = 2), matching Excel’s code-unit count for BMP combining sequences.
-  - **`CHAR`/`CODE` vs `UNICHAR`/`UNICODE`.** `UNICHAR`/`UNICODE` are Unicode scalar values. `CHAR`/`CODE` use Latin-1 code points `1..=255` (not Windows-1252), documented as a known difference for `128..=159`.
+  - **`CHAR`/`CODE` vs `UNICHAR`/`UNICODE`.** `UNICHAR`/`UNICODE` are Unicode scalar values. `CHAR`/`CODE` use Windows-1252 bytes `1..=255`; `CODE` substitutes the ANSI default question-mark byte for an unmappable character.
   - **`NOW`/`TODAY`.** Read `EvalCtx::clock()` / `today()` only. Never sample the wall clock inside a function. `TODAY` is `clock.trunc()` as defined by WP-05F.
   - **Date system.** Read `ctx.workbook().settings().date_system` (already on frozen settings). Do not add a flag.
   - **Locale.** `TEXT`/`VALUE`/`NUMBERVALUE`/`DATEVALUE`/`TIMEVALUE` use `EvalCtx::locale()` and WP-06 `numfmt` / `LocaleInfo` tables. `NUMBERVALUE` omitted separators fall back to that locale.
@@ -66,7 +80,7 @@
 - Open questions at planning time:
   1. Excel `DATEDIF` `"MD"` / `"YD"` leap-year bugs — match Excel where a cited corpus row exists; otherwise record LO/Excel disagreement as a known difference.
   2. Excel `YEARFRAC` basis 1 (actual/actual) across year boundaries has multiple published algorithms. Implement the commonly cited Excel algorithm, corpus-cite it, triage LO mismatches.
-  3. Live Excel confirmation of `CHAR(128)` (Windows-1252 euro vs Latin-1 C1). Plan: Latin-1, documented.
+  3. `CHAR(128)` compatibility was later confirmed as Windows-1252 euro; the original Latin-1 plan was corrected.
   4. `TEXTSPLIT` of empty text and `CONCAT` of a whole-column reference — confirm LO/Excel if the runner cannot host a full column; corpus uses small arrays.
 
 ## What was built
@@ -112,6 +126,14 @@ longer fall back to day-first order, and `WORKDAY.INTL` rejects an all-weekend
 calendar before its bounded search. `NETWORKDAYS.INTL` deliberately retains
 Excel's distinct result of zero for that same calendar.
 
+The remaining text-function follow-up makes negative `REGEXREPLACE`
+occurrences count from the end without weakening the source, result, or regex
+compile limits. `VALUETOTEXT` now converts arrays cell by cell and retains
+their shape. `UNICHAR` distinguishes partial-surrogate `#N/A` from out-of-range
+`#VALUE!`, and Windows-1252 `CODE` uses the ANSI question-mark byte when its
+first character is not representable. The function catalog now describes the
+implemented Windows-1252 behavior rather than the obsolete Latin-1 plan.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -133,6 +155,10 @@ No commands, schemas, or CLI. Frozen WP-01 types and `WorkbookSettings` unchange
 
 - **Astral `LEN`/`MID`/`LEFT`/`RIGHT`:** Unicode scalar values, not Excel UTF-16 code units. Documented; no settings flag.
 - **Resolved 2026-08-31:** `CHAR`/`CODE` use Windows-1252 for bytes 1–255, including C1 controls for the five undefined slots.
+- **Regex flavor:** Excel's PCRE2 lookaround and backreferences remain an
+  intentional compatibility gap. Omacell retains Rust `regex` so matching is
+  deterministically linear-time; unsupported constructs fail closed with
+  `#VALUE!` and are recorded in `known-differences.md`.
 - **`WORKDAY`/`WORKDAY.INTL` array lift:** `ArrayBehavior::None` so the holidays argument is a set; start/days are lifted locally (Excel lifts the first two args only).
 - **Corpus runner formats spills as `{…}`.** `format_cell` of a spill origin is the top-left scalar (WP-04); the runner reconstructs the spill so TEXTSPLIT/lift rows can assert shape.
 - **LibreOffice:** the original run recorded 269 documented mismatches (date
@@ -180,6 +206,18 @@ Host: rustc 1.98 / Linux.
   where `1111111` is invalid, and
   [`NETWORKDAYS.INTL`](https://support.microsoft.com/en-us/excel/functions/networkdays-intl-function),
   where it returns zero.
+- 2026-09-04 remaining-text test-first evidence: eight corrected corpus cases
+  failed before implementation and all pass afterward; the complete
+  `omacell-fn` suite and strict all-target Clippy pass. Microsoft documents
+  negative occurrence as a from-the-end selection in
+  [`REGEXREPLACE`](https://support.microsoft.com/en-us/office/regexreplace-function-9c030bb2-5e47-4efc-bad5-4582d7100897),
+  partial surrogates as `#N/A` in
+  [`UNICHAR`](https://support.microsoft.com/en-us/Excel/functions/unichar-function),
+  and Windows `CODE` as using the ANSI character set in the
+  [`CODE` reference](https://support.microsoft.com/en-us/Excel/functions/code-function).
+  For unmappable input, the Windows
+  [`WideCharToMultiByte` contract](https://learn.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-widechartomultibyte)
+  substitutes the code page's default character, normally `?` (byte 63).
 - WP-04 recalc benches use an empty `FnRegistry` and were not re-run; this package does not change the `=1+1` formula path.
 
 ## Open questions / decisions needed
@@ -196,6 +234,8 @@ Host: rustc 1.98 / Linux.
    `DAYS360`'s February adjustment.
 6. **Resolved 2026-09-04:** text dates with an omitted year use the
    pass-stable workbook clock, not a wall-clock read inside the function.
+7. **Resolved 2026-09-04:** retain Rust `regex`'s linear-time guarantee and
+   document its PCRE2 flavor gap instead of enabling lookaround/backreferences.
 
 ## RFC (only if a frozen contract changed)
 

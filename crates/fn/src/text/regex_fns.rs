@@ -114,7 +114,6 @@ pub(crate) fn regexreplace_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> Runti
     };
     let occurrence = match optional(args, 3) {
         Some(a) => match to_number(ctx, a).and_then(trunc_i64) {
-            Ok(n) if n < 0 => return err(ErrorKind::Value),
             Ok(n) => n,
             Err(e) => return err(e),
         },
@@ -143,6 +142,20 @@ fn replace_capped(
     replacement: &str,
     occurrence: i64,
 ) -> Result<String, ErrorKind> {
+    let occurrence = if occurrence < 0 {
+        let from_end = occurrence.unsigned_abs();
+        let match_count =
+            u64::try_from(re.find_iter(source).count()).map_err(|_| ErrorKind::Value)?;
+        if from_end > match_count {
+            let mut out = String::new();
+            let mut char_count = 0usize;
+            push_capped(&mut out, source, &mut char_count)?;
+            return Ok(out);
+        }
+        i64::try_from(match_count - from_end + 1).map_err(|_| ErrorKind::Value)?
+    } else {
+        occurrence
+    };
     let mut out = String::new();
     let mut char_count = 0usize;
     let mut last_end = 0usize;

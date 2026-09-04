@@ -12,3 +12,6 @@
 =REGEXREPLACE("éé", "é", "x")	xx	Unicode; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =REGEXREPLACE({"ab","cd"}, "b", "X")	{aX,cd}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =REGEXREPLACE("abc", "b", "")	ac	replace with empty; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXREPLACE("abcb", "b", "X", -1)	abcX	negative occurrence selects the first match from the end
+=REGEXREPLACE("abcb", "b", "X", -2)	aXcb	negative occurrence counts backward across all matches
+=REGEXREPLACE("abcb", "b", "X", -3)	abcb	an out-of-range negative occurrence leaves the text unchanged

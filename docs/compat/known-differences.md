@@ -18,6 +18,7 @@ encode.
 | `LEN`/`MID`/`LEFT`/`RIGHT` of astral scalars (e.g. `😀` U+1F600) | Excel for Windows (365 included) counts UTF-16 code units, so `LEN` = 2 and `MID` can emit a lone surrogate | Unicode scalar values (`LEN` = 1); slices never split a code point | WP-05b |
 | `UPPER("ß")` | Stays `ß` | Same (one-to-one mapping; not Unicode `SS`) | WP-05b |
 | `REGEXTEST`/`REGEXEXTRACT`/`REGEXREPLACE` | Excel 365; LibreOffice has no equivalent names | Implemented with the `regex` crate (linear-time, 256-char pattern / 1 MiB compile cap) | WP-05b |
+| Excel PCRE2 regex flavor | Supports lookaround and backreferences | Uses Rust `regex` for a deterministic linear-time bound; unsupported constructs return `#VALUE!` | WP-05b |
 | LibreOffice CSV of date serials | LO often emits a locale date string (`01/01/2024`) or `Err:502` | Omacell corpus expects the numeric serial / Excel error token | WP-05b |
 | LibreOffice array-lifting | Implicit intersection: first element only | Dynamic-array lift (`{2,3}`) | WP-05b |
 | LibreOffice CSV double unary boolean | Keeps `--TRUE` as logical `TRUE` | Coerces to numeric `1` per spec F-3.5 | WP-04 |

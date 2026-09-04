@@ -387,7 +387,7 @@ text_fn!(
     1,
     ArrayBehavior::LiftAll,
     "CHAR(number)",
-    "Latin-1 character for codes 1–255 (not Windows-1252).",
+    "Windows-1252 character for codes 1–255.",
     char_impl
 );
 text_fn!(
@@ -398,7 +398,7 @@ text_fn!(
     1,
     ArrayBehavior::LiftAll,
     "CODE(text)",
-    "Latin-1 code of the first scalar if it is in 1–255.",
+    "Windows-1252 code of the first scalar; unmappable text uses question mark.",
     code_impl
 );
 text_fn!(
@@ -409,7 +409,7 @@ text_fn!(
     1,
     ArrayBehavior::LiftAll,
     "UNICHAR(number)",
-    "Unicode scalar value. Surrogates and 0 are `#VALUE!`.",
+    "Unicode scalar value. Partial surrogates are `#N/A`; 0 is `#VALUE!`.",
     unichar_impl
 );
 text_fn!(
@@ -462,9 +462,9 @@ text_fn!(
     &[ArgKind::Any, ArgKind::Number],
     1,
     2,
-    ArrayBehavior::None,
+    ArrayBehavior::LiftAll,
     "VALUETOTEXT(value, [format])",
-    "Serialize a value: 0 concise, 1 strict.",
+    "Convert each value to text: 0 concise, 1 strict; arrays retain their shape.",
     valuetotext_impl
 );
 text_fn!(
@@ -508,7 +508,7 @@ text_fn!(
     5,
     ArrayBehavior::LiftAll,
     "REGEXREPLACE(text, pattern, replacement, [occurrence], [case_sensitivity])",
-    "Replace regex matches. occurrence 0 (default) replaces all.",
+    "Replace regex matches. occurrence 0 replaces all; negative values count from the end.",
     regexreplace_impl
 );
 
@@ -864,9 +864,9 @@ fn code_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Ok(s) => s,
         Err(e) => return util::err(e),
     };
-    match s.chars().next().and_then(windows_1252_byte) {
-        Some(byte) if byte != 0 => number(f64::from(byte)),
-        Some(_) | None => util::err(ErrorKind::Value),
+    match s.chars().next() {
+        Some(character) => number(f64::from(windows_1252_byte(character).unwrap_or(b'?'))),
+        None => util::err(ErrorKind::Value),
     }
 }
 
@@ -906,7 +906,7 @@ fn unichar_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     }
     let u = n as u32;
     if (0xD800..=0xDFFF).contains(&u) {
-        return util::err(ErrorKind::Value);
+        return util::err(ErrorKind::Na);
     }
     match char::from_u32(u) {
         Some(c) => text(c.to_string()),

@@ -8,9 +8,10 @@
 =CODE(#N/A)	#N/A	error
 =CODE("ÿ")	255	U+00FF; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =CODE("é")	233	U+00E9; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
-=CODE("😀")	#VALUE!	astral is not Latin-1; use UNICODE; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=CODE("😀")	63	unmappable Windows ANSI input uses the default question-mark byte
 =CODE({"A","B"})	{65,66}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =CODE(TRUE)	84	T of TRUE; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =CODE(CHAR(65))	65	round-trip
 =CODE("€")	128	Windows-1252 euro byte
 =CODE("Œ")	140	Windows-1252 ligature byte
+=CODE("Ω")	63	another character outside Windows-1252 uses the default question-mark byte
