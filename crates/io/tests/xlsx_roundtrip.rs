@@ -89,6 +89,70 @@ fn modern_protection_fixture() -> Vec<u8> {
     output.into_inner()
 }
 
+const EXTERNAL_LINK_BYTES: &[u8] = br#"<?xml version="1.0"?><externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><externalBook r:id="rId1"/></externalLink>"#;
+const EXTERNAL_LINK_RELS: &[u8] = br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath" Target="file:///source.xlsx" TargetMode="External"/></Relationships>"#;
+
+fn package_identity_fixture() -> Vec<u8> {
+    let base = save_workbook_bytes(&Workbook::new()).unwrap();
+    let mut input = zip::ZipArchive::new(Cursor::new(base)).unwrap();
+    let mut output = Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut output);
+        let options = zip::write::SimpleFileOptions::default();
+        for index in 0..input.len() {
+            let mut entry = input.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if name == "[Content_Types].xml" {
+                bytes = String::from_utf8(bytes)
+                    .unwrap()
+                    .replace(
+                        "</Types>",
+                        r#"<Override PartName="/xl/externalLinks/externalLink1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/></Types>"#,
+                    )
+                    .into_bytes();
+            } else if name == "xl/workbook.xml" {
+                bytes = String::from_utf8(bytes)
+                    .unwrap()
+                    .replace(
+                        "</sheets>",
+                        r#"</sheets><externalReferences><externalReference r:id="rIdExternal"/></externalReferences>"#,
+                    )
+                    .into_bytes();
+            } else if name == "xl/_rels/workbook.xml.rels" {
+                bytes = String::from_utf8(bytes)
+                    .unwrap()
+                    .replace(
+                        "</Relationships>",
+                        r#"<Relationship Id="rIdExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>"#,
+                    )
+                    .into_bytes();
+            } else if name == "xl/worksheets/sheet1.xml" {
+                bytes = String::from_utf8(bytes)
+                    .unwrap()
+                    .replace(
+                        "</sheetData>",
+                        "</sheetData><headerFooter differentOddEven=\"1\"><oddHeader>&amp;LSource</oddHeader></headerFooter>",
+                    )
+                    .into_bytes();
+            }
+            writer.start_file(name, options).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        writer
+            .start_file("xl/externalLinks/externalLink1.xml", options)
+            .unwrap();
+        writer.write_all(EXTERNAL_LINK_BYTES).unwrap();
+        writer
+            .start_file("xl/externalLinks/_rels/externalLink1.xml.rels", options)
+            .unwrap();
+        writer.write_all(EXTERNAL_LINK_RELS).unwrap();
+        writer.finish().unwrap();
+    }
+    output.into_inner()
+}
+
 #[test]
 fn roundtrip_diff_empty_for_corpus() {
     for path in xlsx_files() {
@@ -102,6 +166,48 @@ fn roundtrip_diff_empty_for_corpus() {
             path.file_name().unwrap().to_string_lossy()
         );
     }
+}
+
+#[test]
+fn sheet_rename_keeps_extras_and_external_reference_relationships_connected() {
+    let mut doc = open_bytes(&package_identity_fixture()).unwrap();
+    let sheet = doc.workbook.active_sheet();
+    doc.workbook.rename_sheet(sheet, "Renamed").unwrap();
+
+    let saved = save_bytes(&doc).unwrap();
+    let worksheet = zip_text_part(&saved, "xl/worksheets/sheet1.xml");
+    assert!(
+        worksheet.contains(
+            "<headerFooter differentOddEven=\"1\"><oddHeader>&amp;LSource</oddHeader></headerFooter>"
+        ),
+        "{worksheet}"
+    );
+    let workbook = zip_text_part(&saved, "xl/workbook.xml");
+    assert!(workbook.contains(
+        r#"<externalReferences><externalReference r:id="rIdExternal"/></externalReferences>"#
+    ));
+    let relationships = zip_text_part(&saved, "xl/_rels/workbook.xml.rels");
+    assert!(relationships.contains(
+        r#"<Relationship Id="rIdExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="externalLinks/externalLink1.xml"/>"#
+    ));
+
+    let reopened = open_bytes(&saved).unwrap();
+    assert_eq!(
+        reopened
+            .package
+            .part("xl/externalLinks/externalLink1.xml")
+            .unwrap()
+            .bytes,
+        EXTERNAL_LINK_BYTES
+    );
+    assert_eq!(
+        reopened
+            .package
+            .part("xl/externalLinks/_rels/externalLink1.xml.rels")
+            .unwrap()
+            .bytes,
+        EXTERNAL_LINK_RELS
+    );
 }
 
 #[test]
