@@ -30,6 +30,11 @@ Writers quote a field when it is empty, begins with `#`, contains TAB/LF/CR/`"`,
 or has leading/trailing space. Unknown escapes, quotes in raw fields, and bytes
 after a closing quote are parse errors.
 
+A `comment` with no author quotes a body beginning with `author=` so it cannot
+be mistaken for the optional author metadata field. Readers use that explicit
+quoting to preserve the body; the legacy unquoted two-field `author=…` form
+continues to mean an author with an empty body.
+
 ## Record types
 
 | Kind | Shape | Notes |

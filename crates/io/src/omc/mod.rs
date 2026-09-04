@@ -19,7 +19,7 @@ use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
 
 use crate::error;
-use crate::xlsx::{OpcPackage, WorksheetExtras, XlsxDocument};
+use crate::xlsx::{OpcPackage, SaveOptions, WorksheetExtras, XlsxDocument, atomic_write_bytes};
 
 /// Maximum `.omc` document size.
 pub const MAX_OMC_BYTES: usize = 32 * 1024 * 1024;
@@ -96,7 +96,7 @@ pub fn to_string(doc: &OmcDocument) -> Result<String, CoreError> {
 /// Write `doc` to `path`.
 pub fn write_to_path(doc: &OmcDocument, path: &Path) -> Result<(), CoreError> {
     let text = to_string(doc)?;
-    std::fs::write(path, text).map_err(|e| error::omc_parse(e.to_string()))
+    atomic_write_bytes(path, text.as_bytes(), SaveOptions::default())
 }
 
 /// Convert an opened `.xlsx` into `.omc`, listing unrepresentable parts.

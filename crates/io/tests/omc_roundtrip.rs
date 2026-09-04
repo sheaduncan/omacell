@@ -22,7 +22,7 @@ use omacell_core::value::{Array2D, Value};
 use omacell_core::workbook::Workbook;
 use omacell_io::omc::{
     ConversionReport, OmcDocument, changeset_from_omc, changeset_to_omc, empty_package, from_xlsx,
-    open_str, to_string,
+    open_str, to_string, write_to_path,
 };
 use omacell_io::xlsx::{FileWarnings, XlsxDocument, diff, open, save_bytes};
 
@@ -73,6 +73,83 @@ fn omc_only_contains_live_workbook_cells() {
     assert!(text.contains("current-cell-token"));
     assert!(!text.contains("undo-only-token"));
     assert!(!text.contains("evicted-history-token"));
+}
+
+#[test]
+fn opened_omc_records_and_undoes_subsequent_edits() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook.set_text(sheet, 0, 0, "before").unwrap();
+    let text = to_string(&OmcDocument::from_workbook(workbook)).unwrap();
+
+    let mut opened = open_str(&text).unwrap().workbook;
+    assert!(opened.undo_log().is_enabled());
+    let sheet = opened.active_sheet();
+    opened.set_text(sheet, 0, 0, "after").unwrap();
+    opened.undo().unwrap();
+
+    let slot = opened.get(sheet, 0, 0).unwrap().unwrap();
+    let Value::Text(id) = slot.value else {
+        panic!("undo did not restore the original text cell");
+    };
+    assert_eq!(opened.intern().strings.get(id), Some("before"));
+}
+
+#[test]
+fn no_author_note_text_starting_with_author_round_trips() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .set_note(
+            sheet,
+            0,
+            0,
+            Some(Note {
+                author: None,
+                text: "author=reviewer".into(),
+            }),
+        )
+        .unwrap();
+
+    let text = to_string(&OmcDocument::from_workbook(workbook)).unwrap();
+    assert!(text.contains("\t\"author=reviewer\"\n"), "{text}");
+    let reopened = open_str(&text).unwrap();
+    let note = reopened
+        .workbook
+        .sheet(reopened.workbook.active_sheet())
+        .unwrap()
+        .notes
+        .get(&(0, 0))
+        .unwrap();
+    assert_eq!(note.author, None);
+    assert_eq!(note.text, "author=reviewer");
+}
+
+#[cfg(unix)]
+#[test]
+fn write_to_path_atomically_replaces_the_destination_inode() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "omacell-omc-atomic-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let destination = dir.join("book.omc");
+    let old_inode = dir.join("old-inode.omc");
+    std::fs::write(&destination, "old destination bytes").unwrap();
+    std::fs::hard_link(&destination, &old_inode).unwrap();
+
+    write_to_path(&OmcDocument::from_workbook(Workbook::new()), &destination).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&old_inode).unwrap(),
+        "old destination bytes"
+    );
+    omacell_io::omc::open(&destination).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
