@@ -2,7 +2,7 @@
 
 Generated from `omacell_bus::mcp::TOOLS`. Do not edit by hand.
 
-Write tools default to proposing a changeset. `apply=true` is denied for external agents; apply from `omacell changeset apply`.
+Write tools default to proposing a changeset. `apply=true` is denied for external agents; apply or discard from `omacell changeset apply|discard`.
 
 JSON-RPC input frames are capped at 2 MiB; the optional Unix socket allows 32 concurrent clients and is mode 0600.
 
@@ -40,7 +40,7 @@ The command-bus catalog (`omacell commands --json`).
 
 ## `export`
 
-Export the open workbook (`file.export`).
+Export is a user action; MCP is denied. Use the CLI/GUI.
 
 ## `formula_set`
 
@@ -56,7 +56,7 @@ Write formula-bar values into an A1 range. Defaults to proposing a changeset.
 
 ## `recalc`
 
-Recalculate the workbook. `wait` is reserved for async AI cells (WP-22).
+Recalculate the live workbook. Denied while a changeset is still proposed. `wait` is reserved for async AI cells (WP-22).
 
 ## `render`
 
@@ -80,11 +80,11 @@ List workbooks open in this MCP session.
 
 ## `workbook_open`
 
-Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed.
+Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed; discard from `omacell changeset discard`.
 
 ## `workbook_save`
 
-Save the open workbook.
+Save is a user action; MCP is denied. Use the CLI/GUI.
 
 ## Resources
 

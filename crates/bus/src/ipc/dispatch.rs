@@ -133,6 +133,17 @@ impl Target<'_> {
             Self::Runner(runner) => runner.revert(origin, id),
         }
     }
+
+    fn discard_proposal(
+        &mut self,
+        origin: Origin,
+        id: &ChangesetId,
+    ) -> Result<Changeset, CoreError> {
+        match self {
+            Self::Bus(bus) => bus.discard_proposal(origin, id),
+            Self::Runner(runner) => runner.discard_proposal(origin, id),
+        }
+    }
 }
 
 fn dispatch_request(mut target: Target<'_>, origin: Origin, request: Request) -> Dispatch {
@@ -241,7 +252,10 @@ fn dispatch_control(
             Ok(changesets) => serialized_reply(id, changesets, "changesets"),
             Err(error) => Reply::err(id, error),
         },
-        ControlOp::ChangesetGet | ControlOp::ChangesetApply | ControlOp::ChangesetRevert => {
+        ControlOp::ChangesetGet
+        | ControlOp::ChangesetApply
+        | ControlOp::ChangesetRevert
+        | ControlOp::ChangesetDiscard => {
             let Some(changeset) = changeset else {
                 return Reply::err(id, error::ipc_protocol("changeset id is required"));
             };
@@ -253,6 +267,7 @@ fn dispatch_control(
                 ControlOp::ChangesetGet => target.get_changeset(&changeset),
                 ControlOp::ChangesetApply => target.apply(origin, &changeset),
                 ControlOp::ChangesetRevert => target.revert(origin, &changeset),
+                ControlOp::ChangesetDiscard => target.discard_proposal(origin, &changeset),
                 _ => return Reply::err(id, error::ipc_protocol("invalid changeset operation")),
             };
             match result {

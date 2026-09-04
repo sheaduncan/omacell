@@ -68,7 +68,10 @@ impl Bus {
     }
 
     /// Mutable workbook (AI cache persist, composition-root settle).
+    ///
+    /// Out-of-band mutation invalidates outstanding proposal bases.
     pub fn workbook_mut(&mut self) -> &mut Workbook {
+        self.bump_live_generation();
         &mut self.workbook
     }
 
@@ -79,11 +82,15 @@ impl Bus {
     }
 
     /// Mutable engine (startup registry, thread count, locale injectors).
+    ///
+    /// Out-of-band mutation invalidates outstanding proposal bases.
     pub fn engine_mut(&mut self) -> &mut RecalcEngine {
+        self.bump_live_generation();
         &mut self.engine
     }
 
     pub(crate) fn recalc_after_registry_change(&mut self) {
+        self.bump_live_generation();
         let result = self.engine.recalc_rebuild(&mut self.workbook);
         self.events.emit(Event::RecalcDone {
             cells: result.cells_evaluated,
@@ -98,7 +105,10 @@ impl Bus {
     }
 
     /// Mutable registry so later packages can register commands.
+    ///
+    /// Out-of-band mutation invalidates outstanding proposal bases.
     pub fn registry_mut(&mut self) -> &mut CommandRegistry {
+        self.bump_live_generation();
         &mut self.registry
     }
 
@@ -157,6 +167,24 @@ impl Bus {
         self.execute_with_task(origin, id, args, crate::handler::TaskCtl::default())
     }
 
+    /// Execute an allowlisted MCP session command as `Origin::ExternalAgent`.
+    ///
+    /// Does not grant Ipc/User authority. Save and export stay denied.
+    pub(crate) fn execute_mcp_session(&mut self, id: &str, args: serde_json::Value) -> Outcome {
+        if !MutationPolicy::allow_mcp_session_mutate(id) {
+            return Outcome::failure(bus_error::denied(format!(
+                "MCP cannot execute {id} as a session command"
+            )));
+        }
+        self.dispatch_execute(
+            Origin::ExternalAgent,
+            id,
+            args,
+            crate::handler::TaskCtl::default(),
+            Run::mcp_session(),
+        )
+    }
+
     /// Execute with cooperative cancel/progress (task runner).
     pub fn execute_with_task(
         &mut self,
@@ -164,6 +192,17 @@ impl Bus {
         id: &str,
         args: serde_json::Value,
         task: crate::handler::TaskCtl,
+    ) -> Outcome {
+        self.dispatch_execute(origin, id, args, task, Run::direct())
+    }
+
+    fn dispatch_execute(
+        &mut self,
+        origin: Origin,
+        id: &str,
+        args: serde_json::Value,
+        task: crate::handler::TaskCtl,
+        how: Run,
     ) -> Outcome {
         if id == "edit.repeat" {
             let repeat_args = if args.is_null() {
@@ -186,7 +225,7 @@ impl Bus {
                 return Outcome::failure(bus_error::args("there is no prior mutation to repeat"));
             };
             let calls = vec![call; repeat.count as usize];
-            return match self.run_with_task(origin, &calls, Run::direct(), task) {
+            return match self.run_with_task(origin, &calls, how, task) {
                 Ok(effect) => {
                     self.notify_command_observers(origin, &calls);
                     Outcome::success(effect.result)
@@ -203,7 +242,7 @@ impl Bus {
                 && command.exposure == Exposure::Public
                 && !matches!(call.id.as_str(), "edit.undo" | "edit.redo" | "edit.repeat")
         });
-        match self.run_with_task(origin, std::slice::from_ref(&call), Run::direct(), task) {
+        match self.run_with_task(origin, std::slice::from_ref(&call), how, task) {
             Ok(effect) => {
                 let opened_workbook = effect
                     .events
@@ -442,6 +481,12 @@ impl Bus {
         self.changesets.list()
     }
 
+    /// Whether any retained changeset is still proposed.
+    #[must_use]
+    pub(crate) fn has_proposed_changeset(&self) -> bool {
+        self.changesets.has_proposed()
+    }
+
     /// Fetch one changeset.
     pub fn get_changeset(&self, id: &ChangesetId) -> Result<&Changeset, CoreError> {
         self.changesets.get(id)
@@ -525,7 +570,7 @@ impl Bus {
             }
         };
         if self.calls_are_mutating(calls) {
-            self.live_generation = self.live_generation.saturating_add(1);
+            self.bump_live_generation();
         }
         if how.emit {
             emit_events(&mut self.events, &live_effect, extra);
@@ -570,6 +615,13 @@ impl Bus {
                 .is_some_and(|command| command.descriptor.mutating)
         })
     }
+
+    fn bump_live_generation(&mut self) {
+        // Every consecutive mutation must produce a different token. Saturating
+        // at `u64::MAX` would pin the token and make later proposals immune to
+        // invalidation; wrapping preserves next-mutation invalidation.
+        self.live_generation = self.live_generation.wrapping_add(1);
+    }
 }
 
 struct Run {
@@ -588,6 +640,18 @@ impl Run {
             allow_internal: false,
             require_eligible: false,
             require_direct: true,
+            scratch_only: false,
+            emit: true,
+            recalc: true,
+            applied_changeset: None,
+        }
+    }
+
+    fn mcp_session() -> Self {
+        Self {
+            allow_internal: false,
+            require_eligible: false,
+            require_direct: false,
             scratch_only: false,
             emit: true,
             recalc: true,
@@ -825,5 +889,42 @@ mod tests {
                 .unwrap()
                 .needs_snapshot_inverse()
         );
+    }
+
+    #[test]
+    fn registry_refresh_invalidates_outstanding_proposal_bases() {
+        let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).unwrap();
+        let proposed = bus
+            .propose(
+                Origin::ExternalAgent,
+                vec![CommandCall {
+                    id: omacell_core::command::CommandId::new("cell.set").unwrap(),
+                    args: serde_json::json!({"ref": "A1", "input": "1"}),
+                }],
+            )
+            .unwrap();
+        bus.recalc_after_registry_change();
+        let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+        assert_eq!(err.code, crate::error::codes::CHANGESET_BASE);
+    }
+
+    #[test]
+    fn proposal_base_invalidation_survives_generation_rollover() {
+        let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).unwrap();
+        bus.live_generation = u64::MAX;
+        let proposed = bus
+            .propose(
+                Origin::ExternalAgent,
+                vec![CommandCall {
+                    id: omacell_core::command::CommandId::new("cell.set").unwrap(),
+                    args: serde_json::json!({"ref": "A1", "input": "1"}),
+                }],
+            )
+            .unwrap();
+
+        let _ = bus.workbook_mut();
+        assert_eq!(bus.live_generation, 0);
+        let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+        assert_eq!(err.code, crate::error::codes::CHANGESET_BASE);
     }
 }

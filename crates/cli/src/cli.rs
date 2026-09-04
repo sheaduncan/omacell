@@ -393,6 +393,11 @@ pub enum ChangesetCmd {
         /// Changeset id.
         id: String,
     },
+    /// Discard a proposed changeset without applying it.
+    Discard {
+        /// Changeset id.
+        id: String,
+    },
     /// Revert an applied changeset.
     Revert {
         /// Changeset id.

@@ -18,13 +18,13 @@ The `omacell` binary is a thin adapter over the command bus, file I/O, and confi
 
 `--config` replaces `~/.config/omacell/config.toml`. `--theme` wins over `OMACELL_THEME`. Repeated `--set` values are retained on reload with the rest of `LoadOptions`.
 
-`--dry-run` is also forwarded to registry commands sent through `omacell ipc`; changeset apply/revert controls become local no-ops. It never creates the rotating file log. Usage failures under `--json` use the same `{code, message, hint}` error object as operational failures.
+`--dry-run` is also forwarded to registry commands sent through `omacell ipc`; changeset apply/discard/revert controls become local no-ops. It never creates the rotating file log. Usage failures under `--json` use the same `{code, message, hint}` error object as operational failures.
 
 ## Commands
 
 See `omacell --help` and the per-command help snapshots. `omacell --tui [file]` launches the terminal UI (WP-15). Without a TTY it exits 1 with `tui.tty` rather than hanging. Bare `omacell [file]` launches the GUI (WP-16). Without `WAYLAND_DISPLAY`/`DISPLAY` it exits 1 with `gui.display`.
 
-`omacell mcp [--socket PATH] [--book FILE]` serves the MCP tool catalog over stdio or a Unix socket and also binds the WP-07b IPC socket so `omacell changeset list` can see proposals. `omacell agent "<prompt>"` hands off to `omarchy agent prompt` when a default agent is set; otherwise it prints the equivalent command and JSON `{hidden: true}`. `omacell agent diagnose [--pid] [--book]` builds the WP-19 diagnostic bundle. `omacell recalc --wait` is accepted for the skill done-checklist (async AI settle is WP-22).
+`omacell mcp [--socket PATH] [--book FILE]` serves the MCP tool catalog over stdio or a Unix socket and also binds the WP-07b IPC socket so `omacell changeset list|apply|discard|revert` can see and resolve proposals. `omacell agent "<prompt>"` hands off to `omarchy agent prompt` when a default agent is set; otherwise it prints the equivalent command and JSON `{hidden: true}`. `omacell agent diagnose [--pid] [--book]` builds the WP-19 diagnostic bundle. `omacell recalc --wait` is accepted for the skill done-checklist (async AI settle is WP-22).
 
 `omacell run script.lua book.xlsx` runs Lua (WP-20). It explicitly loads trusted `init.lua`, then sorted `plugins/*/init.lua`, then the requested script. `--embedded` runs `xl/omacell/scripts/main.lua` only when the exact workbook bytes are trusted in `~/.local/state/omacell/trust.toml` (`omacell trust add|remove|list`); embedded Lua can invoke only a fixed, reviewed allowlist of workbook commands, so newly registered commands remain unavailable by default. `omacell run --python script.py [book.xlsx]` is an experimental stdio bridge using the versioned IPC JSON-lines request/reply envelopes and the configured `[ipc].max_frame_bytes` limit (16 MiB by default, configurable from 1–16 MiB). `--dry-run` is accepted only with `--embedded`; user Lua and Python have OS access and therefore cannot provide a no-write dry-run guarantee.
 

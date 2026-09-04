@@ -1093,7 +1093,11 @@ fn cmd_ipc(
     if dry_run
         && matches!(
             control_op(command),
-            Some(ControlOp::ChangesetApply | ControlOp::ChangesetRevert)
+            Some(
+                ControlOp::ChangesetApply
+                    | ControlOp::ChangesetDiscard
+                    | ControlOp::ChangesetRevert
+            )
         )
     {
         output.success(
@@ -1213,6 +1217,7 @@ fn control_op(command: &str) -> Option<ControlOp> {
         "changeset.get" => Some(ControlOp::ChangesetGet),
         "changeset.apply" => Some(ControlOp::ChangesetApply),
         "changeset.revert" => Some(ControlOp::ChangesetRevert),
+        "changeset.discard" => Some(ControlOp::ChangesetDiscard),
         _ => None,
     }
 }
@@ -1221,7 +1226,10 @@ fn cmd_changeset(cli: &Cli, cmd: &ChangesetCmd, output: Output) -> Result<(), Cl
     if cli.dry_run
         && matches!(
             cmd,
-            ChangesetCmd::Apply { .. } | ChangesetCmd::Revert { .. } | ChangesetCmd::Export { .. }
+            ChangesetCmd::Apply { .. }
+                | ChangesetCmd::Discard { .. }
+                | ChangesetCmd::Revert { .. }
+                | ChangesetCmd::Export { .. }
         )
     {
         output.success(serde_json::json!({"dry_run": true}), "dry-run")?;
@@ -1241,6 +1249,15 @@ fn cmd_changeset(cli: &Cli, cmd: &ChangesetCmd, output: Output) -> Result<(), Cl
         ChangesetCmd::Apply { id } => cmd_ipc(
             cli,
             "changeset.apply",
+            Some(&serde_json::json!({"id": id}).to_string()),
+            false,
+            true,
+            None,
+            output,
+        ),
+        ChangesetCmd::Discard { id } => cmd_ipc(
+            cli,
+            "changeset.discard",
             Some(&serde_json::json!({"id": id}).to_string()),
             false,
             true,

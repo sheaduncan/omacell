@@ -40,6 +40,7 @@ omacell convert <INPUT> <OUTPUT>
 omacell changeset list
 omacell changeset show <ID>
 omacell changeset apply <ID>
+omacell changeset discard <ID>
 omacell changeset revert <ID>
 omacell changeset export <ID> --omc <FILE>
 omacell mcp
@@ -61,17 +62,17 @@ the user's harness). Tools:
 
 | Tool | Role |
 |---|---|
-| `workbook_open` / `workbook_list` / `workbook_save` | Session files |
+| `workbook_open` / `workbook_list` | Session files (`workbook_save` is denied; user saves) |
 | `sheet_list` / `sheet_add` / `sheet_rename` | Structure |
 | `range_read` | Values, formulas, formats; paginate with `offset` / `limit` |
 | `range_write` / `formula_set` / `command_run` | Edits (default: **propose**) |
 | `commands_list` | Same catalog as `omacell commands --json` |
-| `recalc` | Pass `wait: true` before declaring done |
+| `recalc` | Live workbook only; denied while a proposal is pending |
 | `audit` | Same report as `omacell audit --json` |
 | `card` | Summary-level workbook card until WP-22 |
 | `changeset_propose` / `changeset_list` | Review queue |
-| `changeset_apply` / `changeset_revert` | Denied for agents; user applies from the CLI |
-| `export` | `file.export` |
+| `changeset_apply` / `changeset_revert` | Denied for agents; user applies or discards from the CLI |
+| `export` | Denied; user exports from the CLI/GUI |
 | `render` | GUI only; headless returns `GUI not running` |
 
 Resources: `omacell://<file>/card`, `omacell://<file>/<sheet>`.
@@ -85,8 +86,9 @@ Apply is a deliberate user step.
 2. Propose with `range_write` / `formula_set` / `changeset_propose` (or
    `omacell ipc` against a running instance, which already proposes).
 3. Tell the user to review: `omacell changeset list` then
-   `omacell changeset apply <ID>` (or the GUI review overlay).
-4. To undo: `omacell changeset revert <ID>`.
+   `omacell changeset apply <ID>` or `omacell changeset discard <ID>`
+   (or the GUI review overlay).
+4. To undo an applied changeset: `omacell changeset revert <ID>`.
 
 A headless `omacell mcp` process is a live instance: `omacell changeset list`
 talks to it over IPC.
