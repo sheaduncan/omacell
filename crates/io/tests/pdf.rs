@@ -57,6 +57,20 @@ fn helvetica_path_has_no_fontfile2() {
 }
 
 #[test]
+fn helvetica_declares_and_uses_win_ansi_for_supported_unicode() {
+    let mut wb = Workbook::new();
+    wb.set_text(wb.active_sheet(), 0, 0, "café € —").unwrap();
+    let bytes = write_pdf(&wb, &PdfOptions::default()).unwrap();
+    let source = String::from_utf8_lossy(&bytes);
+
+    assert!(source.contains("/Encoding /WinAnsiEncoding"));
+    assert!(source.contains("<636166E920802097>"), "{source}");
+    if let Some(text) = pdftotext_output(&bytes, "helvetica-winansi") {
+        assert!(text.contains("café € —"), "{text:?}");
+    }
+}
+
+#[test]
 fn ttf_embed_writes_fontfile2_when_a_face_is_present() {
     let Some(font) = system_ttf() else {
         return;
@@ -74,6 +88,40 @@ fn ttf_embed_writes_fontfile2_when_a_face_is_present() {
         pdf_has_fontfile2(&bytes),
         "embedded TTF must set /FontFile2"
     );
+}
+
+#[test]
+fn embedded_font_tounicode_covers_supported_non_ascii_glyphs() {
+    let Some(font) = system_ttf() else {
+        return;
+    };
+    let font_bytes = std::fs::read(&font).unwrap();
+    let face = ttf_parser::Face::parse(&font_bytes, 0).unwrap();
+    let mut wb = Workbook::new();
+    wb.set_text(wb.active_sheet(), 0, 0, "café Ω").unwrap();
+    let bytes = write_pdf(
+        &wb,
+        &PdfOptions {
+            font_path: Some(font),
+            ..PdfOptions::default()
+        },
+    )
+    .unwrap();
+    let source = String::from_utf8_lossy(&bytes);
+
+    for ch in ['é', 'Ω'] {
+        let Some(glyph) = face.glyph_index(ch) else {
+            continue;
+        };
+        let mapping = format!("<{:04X}> <{:04X}>", glyph.0, u32::from(ch));
+        assert!(
+            source.contains(&mapping),
+            "missing {ch:?} mapping {mapping}"
+        );
+    }
+    if let Some(text) = pdftotext_output(&bytes, "embedded-tounicode") {
+        assert!(text.contains("café Ω"), "{text:?}");
+    }
 }
 
 #[test]
@@ -268,10 +316,33 @@ fn which(bin: &str) -> bool {
         .any(|dir| std::path::Path::new(dir).join(bin).exists())
 }
 
+fn pdftotext_output(bytes: &[u8], label: &str) -> Option<String> {
+    if !which("pdftotext") {
+        return None;
+    }
+    let dir = test_scratch(label);
+    let path = dir.join("out.pdf");
+    std::fs::write(&path, bytes).unwrap();
+    let output = std::process::Command::new("pdftotext")
+        .args(["-layout", path.to_str().unwrap(), "-"])
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        output.status.success(),
+        "pdftotext: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty() || String::from_utf8_lossy(&output.stderr).trim().is_empty());
+    Some(String::from_utf8(output.stdout).unwrap())
+}
+
 fn system_ttf() -> Option<std::path::PathBuf> {
     const CANDIDATES: &[&str] = &[
+        "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
     ];

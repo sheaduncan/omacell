@@ -137,7 +137,7 @@ pub fn write_pdf(wb: &Workbook, options: &PdfOptions) -> Result<Vec<u8>, CoreErr
         .kids(page_ids.iter().copied())
         .count(page_ids.len() as i32);
 
-    write_font(
+    let cmap_bytes = write_font(
         &mut pdf,
         font_id,
         &extra_font_ids,
@@ -145,7 +145,9 @@ pub fn write_pdf(wb: &Workbook, options: &PdfOptions) -> Result<Vec<u8>, CoreErr
         font_data.as_deref(),
     )?;
 
-    let mut stream_bytes = font_data.as_ref().map_or(0, Vec::len);
+    let mut stream_bytes = 0usize;
+    add_stream_bytes(&mut stream_bytes, font_data.as_ref().map_or(0, Vec::len))?;
+    add_stream_bytes(&mut stream_bytes, cmap_bytes)?;
     for (i, planned) in pages.iter().enumerate() {
         let (media_w, media_h) = planned.setup.media_pt();
         let links = collect_links(wb, planned);
@@ -180,17 +182,7 @@ pub fn write_pdf(wb: &Workbook, options: &PdfOptions) -> Result<Vec<u8>, CoreErr
             &options.file_name,
             &options.theme,
         )?;
-        stream_bytes = stream_bytes.saturating_add(content.len());
-        if stream_bytes > MAX_PDF_STREAM_BYTES {
-            return Err(CoreError::new(
-                "pdf.limit",
-                format!(
-                    "PDF streams exceed {} MiB",
-                    MAX_PDF_STREAM_BYTES / (1024 * 1024)
-                ),
-            )
-            .with_hint("set a smaller print area or reduce cell text"));
-        }
+        add_stream_bytes(&mut stream_bytes, content.len())?;
         pdf.stream(content_ids[i], &content);
         annot_ids.push(this_annots);
     }
@@ -264,14 +256,18 @@ fn write_font(
     extra: &ExtraFontIds,
     face: Option<&ttf_parser::Face<'_>>,
     font_data: Option<&[u8]>,
-) -> Result<(), CoreError> {
+) -> Result<usize, CoreError> {
     let Some(face) = face else {
-        pdf.type1_font(font_id).base_font(Name(b"Helvetica"));
-        return Ok(());
+        pdf.type1_font(font_id)
+            .base_font(Name(b"Helvetica"))
+            .encoding_predefined(Name(b"WinAnsiEncoding"));
+        return Ok(0);
     };
     let Some(cid_id) = extra.cid else {
-        pdf.type1_font(font_id).base_font(Name(b"Helvetica"));
-        return Ok(());
+        pdf.type1_font(font_id)
+            .base_font(Name(b"Helvetica"))
+            .encoding_predefined(Name(b"WinAnsiEncoding"));
+        return Ok(0);
     };
     let desc_id = extra
         .desc
@@ -338,15 +334,54 @@ fn write_font(
             i32::try_from(data.len()).unwrap_or(i32::MAX),
         );
     }
-    let mut cmap = UnicodeCmap::new(Name(b"Omacell"), SYSTEM_INFO);
-    for cp in 0x20u32..=0x7E {
-        if let Some(ch) = char::from_u32(cp)
-            && let Some(gid) = face.glyph_index(ch)
-        {
-            cmap.pair(gid.0, ch);
+    let mut unicode_by_glyph = vec![None; usize::from(face.number_of_glyphs())];
+    if let Some(table) = face.tables().cmap {
+        for subtable in table.subtables {
+            if !subtable.is_unicode() {
+                continue;
+            }
+            subtable.codepoints(|codepoint| {
+                let Some(ch) = char::from_u32(codepoint) else {
+                    return;
+                };
+                let Some(glyph) = subtable.glyph_index(codepoint) else {
+                    return;
+                };
+                if face.glyph_index(ch) != Some(glyph) {
+                    return;
+                }
+                if let Some(slot) = unicode_by_glyph.get_mut(usize::from(glyph.0)) {
+                    slot.get_or_insert(ch);
+                }
+            });
         }
     }
-    pdf.cmap(cmap_id, &cmap.finish());
+    let mut cmap = UnicodeCmap::new(Name(b"Omacell"), SYSTEM_INFO);
+    for (glyph, ch) in unicode_by_glyph.into_iter().enumerate() {
+        if let Some(ch) = ch {
+            cmap.pair(glyph as u16, ch);
+        }
+    }
+    let cmap = cmap.finish();
+    let cmap_bytes = cmap.len();
+    pdf.cmap(cmap_id, &cmap);
+    Ok(cmap_bytes)
+}
+
+fn add_stream_bytes(total: &mut usize, additional: usize) -> Result<(), CoreError> {
+    *total = total
+        .checked_add(additional)
+        .ok_or_else(|| CoreError::new("pdf.limit", "PDF stream size overflow"))?;
+    if *total > MAX_PDF_STREAM_BYTES {
+        return Err(CoreError::new(
+            "pdf.limit",
+            format!(
+                "PDF streams exceed {} MiB",
+                MAX_PDF_STREAM_BYTES / (1024 * 1024)
+            ),
+        )
+        .with_hint("set a smaller print area or reduce cell text"));
+    }
     Ok(())
 }
 
@@ -802,13 +837,44 @@ fn show_text(
             content.show(Str(&encoded));
         }
     } else {
-        let bytes: Vec<u8> = text
-            .chars()
-            .map(|c| if c as u32 <= 255 { c as u8 } else { b'?' })
-            .collect();
+        let bytes: Vec<u8> = text.chars().map(win_ansi_byte).collect();
         content.show(Str(&bytes));
     }
     content.end_text();
+}
+
+fn win_ansi_byte(ch: char) -> u8 {
+    match ch {
+        ' '..='~' | '\u{A0}'..='ÿ' => ch as u8,
+        '€' => 0x80,
+        '‚' => 0x82,
+        'ƒ' => 0x83,
+        '„' => 0x84,
+        '…' => 0x85,
+        '†' => 0x86,
+        '‡' => 0x87,
+        'ˆ' => 0x88,
+        '‰' => 0x89,
+        'Š' => 0x8A,
+        '‹' => 0x8B,
+        'Œ' => 0x8C,
+        'Ž' => 0x8E,
+        '‘' => 0x91,
+        '’' => 0x92,
+        '“' => 0x93,
+        '”' => 0x94,
+        '•' => 0x95,
+        '–' => 0x96,
+        '—' => 0x97,
+        '˜' => 0x98,
+        '™' => 0x99,
+        'š' => 0x9A,
+        '›' => 0x9B,
+        'œ' => 0x9C,
+        'ž' => 0x9E,
+        'Ÿ' => 0x9F,
+        _ => b'?',
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
