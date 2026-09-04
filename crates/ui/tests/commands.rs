@@ -55,8 +55,8 @@ fn freeze_and_split_are_mutually_exclusive_in_both_dispatch_paths() {
     assert!(bus.execute(Origin::User, "view.split", json!({})).ok);
     assert_eq!(session.viewport().freeze, FreezePanes::default());
     assert!(session.viewport().split.is_some());
-    assert_eq!(session.viewport().first_row, 2);
-    assert_eq!(session.viewport().first_col, 3);
+    assert_eq!(session.viewport().first_row, 0);
+    assert_eq!(session.viewport().first_col, 0);
     assert!(bus.execute(Origin::User, "view.freeze", json!({})).ok);
     assert_eq!(session.viewport().freeze, FreezePanes { rows: 2, cols: 3 });
     assert!(session.viewport().split.is_none());
@@ -65,14 +65,48 @@ fn freeze_and_split_are_mutually_exclusive_in_both_dispatch_paths() {
         .unwrap()
         .unwrap();
     assert_eq!(session.viewport().freeze, FreezePanes::default());
-    assert!(session.viewport().split.is_some());
-    assert_eq!(session.viewport().first_row, 2);
-    assert_eq!(session.viewport().first_col, 3);
+    let split = session.viewport().split.expect("split");
+    assert_eq!(split.y_px, session.viewport().rows.index_to_pixel(2) as u32);
+    assert_eq!(split.x_px, session.viewport().cols.index_to_pixel(3) as u32);
     apply_local_command(&session, bus.workbook(), "view.freeze", &json!({}))
         .unwrap()
         .unwrap();
     assert_eq!(session.viewport().freeze, FreezePanes { rows: 2, cols: 3 });
     assert!(session.viewport().split.is_none());
+}
+
+#[test]
+fn modal_insert_tab_stays_in_the_edit_buffer() {
+    let (_dir, session, _bus) = harness_with_keymap("keys/modal.toml");
+    session.begin_edit(EditSurface::InCell, "hello");
+    let outcome = session.handle_key(KeyEvent {
+        code: KeyCode::Tab,
+        ctrl: false,
+        alt: false,
+        shift: false,
+    });
+    assert!(matches!(outcome, KeyOutcome::Pending));
+    assert_eq!(session.mode(), Mode::Insert);
+    assert_eq!(session.edit().buffer, "hello\t");
+}
+
+#[test]
+fn point_mode_enter_inserts_the_ref_and_returns_to_the_origin() {
+    let (_dir, session, _bus) = harness_with_keymap("keys/classic.toml");
+    session.begin_edit(EditSurface::InCell, "=");
+    let mut selection = session.selection();
+    selection.move_by(1, 0);
+    session.set_selection(selection);
+    let outcome = session.handle_key(KeyEvent {
+        code: KeyCode::Enter,
+        ctrl: false,
+        alt: false,
+        shift: false,
+    });
+    assert!(matches!(outcome, KeyOutcome::Pending));
+    assert_eq!(session.edit().buffer, "=A2");
+    assert_eq!(session.selection().cursor.row, 0);
+    assert_eq!(session.selection().cursor.col, 0);
 }
 
 #[test]

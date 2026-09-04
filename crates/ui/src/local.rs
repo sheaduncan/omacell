@@ -285,8 +285,6 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
                 y_px: scaled_coordinate(y, inner.viewport.zoom),
             });
             inner.viewport.freeze = FreezePanes::default();
-            inner.viewport.first_row = cursor.row;
-            inner.viewport.first_col = cursor.col;
         }
         "view.formulabar" => inner.formula_bar_expanded = !inner.formula_bar_expanded,
         "view.formulas" => inner.show_formulas = !inner.show_formulas,

@@ -87,6 +87,64 @@ model = "classic"
 }
 
 #[test]
+fn named_keys_are_not_pending_prefixes() {
+    let (_dir, _session, _registry, mut modal) = load_session("keys/modal.toml");
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent {
+                code: KeyCode::Char('S'),
+                ctrl: false,
+                alt: false,
+                shift: true,
+            },
+        ),
+        KeyOutcome::Unbound
+    ));
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            },
+        ),
+        KeyOutcome::Pending
+    ));
+}
+
+#[test]
+fn visual_mode_has_motion_and_escape() {
+    let (_dir, _session, _registry, mut modal) = load_session("keys/modal.toml");
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Visual,
+            KeyEvent {
+                code: KeyCode::Esc,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            },
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "mode.normal"
+    ));
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Visual,
+            KeyEvent {
+                code: KeyCode::Char('h'),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            },
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "nav.left"
+    ));
+}
+
+#[test]
 fn invalid_command_id_is_rejected() {
     let err = Keymap::parse(
         r#"

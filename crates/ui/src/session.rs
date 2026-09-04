@@ -575,8 +575,6 @@ impl UiSession {
                         _ => (0, 0),
                     };
                     g.selection.move_by(dr, dc);
-                    let cell = g.selection.cursor;
-                    let _ = g.edit.insert_ref(cell);
                     return crate::keymap::KeyOutcome::Pending;
                 }
                 (crate::event::KeyCode::Char(c), false, false) => {
@@ -585,6 +583,26 @@ impl UiSession {
                 }
                 (crate::event::KeyCode::Space, false, false) => {
                     g.edit.insert_char(' ');
+                    return crate::keymap::KeyOutcome::Pending;
+                }
+                (crate::event::KeyCode::Tab, false, false)
+                    if g.model == crate::mode::KeyModel::Modal =>
+                {
+                    g.edit.insert_char('\t');
+                    return crate::keymap::KeyOutcome::Pending;
+                }
+                (crate::event::KeyCode::Enter, false, false)
+                    if g.edit.point
+                        && g.edit
+                            .origin
+                            .is_some_and(|origin| origin != g.selection.cursor) =>
+                {
+                    let cell = g.selection.cursor;
+                    let _ = g.edit.insert_ref(cell);
+                    if let Some(origin) = g.edit.origin {
+                        g.selection.cursor = origin;
+                        g.selection.replace(crate::selection::Area::cell(origin));
+                    }
                     return crate::keymap::KeyOutcome::Pending;
                 }
                 _ => {}

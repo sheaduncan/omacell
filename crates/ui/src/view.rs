@@ -505,8 +505,6 @@ fn handle(
                 y_px: scaled_coordinate(y, g.viewport.zoom),
             });
             g.viewport.freeze = FreezePanes::default();
-            g.viewport.first_row = cursor.row;
-            g.viewport.first_col = cursor.col;
         }
         HandlerKind::Center => {
             let row = g.selection.cursor.row;
@@ -878,43 +876,57 @@ fn current_region(
         return Ok(Area::cell(cursor));
     }
 
-    let mut row_spans = vec![None::<(u16, u16)>; MAX_ROWS as usize];
-    let mut col_spans = vec![None::<(u32, u32)>; usize::from(MAX_COLS)];
+    let mut row_spans = std::collections::BTreeMap::<u32, (u16, u16)>::new();
+    let mut col_spans = std::collections::BTreeMap::<u16, (u32, u32)>::new();
     for (row, col, _slot) in sheet
         .store
         .iter()
         .filter(|(_, _, slot)| cell_has_contents(*slot))
     {
-        let row_span = &mut row_spans[row as usize];
-        *row_span = Some(row_span.map_or((col, col), |(min, max)| (min.min(col), max.max(col))));
-        let col_span = &mut col_spans[usize::from(col)];
-        *col_span = Some(col_span.map_or((row, row), |(min, max)| (min.min(row), max.max(row))));
+        row_spans
+            .entry(row)
+            .and_modify(|(min, max)| {
+                *min = (*min).min(col);
+                *max = (*max).max(col);
+            })
+            .or_insert((col, col));
+        col_spans
+            .entry(col)
+            .and_modify(|(min, max)| {
+                *min = (*min).min(row);
+                *max = (*max).max(row);
+            })
+            .or_insert((row, row));
     }
     let (mut min_row, mut max_row) = (cursor.row, cursor.row);
     let (mut min_col, mut max_col) = (cursor.col, cursor.col);
     loop {
         let before = (min_row, min_col, max_row, max_col);
         while min_row > 0
-            && row_spans[(min_row - 1) as usize]
-                .is_some_and(|span| overlaps_u16(span, (min_col, max_col)))
+            && row_spans
+                .get(&(min_row - 1))
+                .is_some_and(|span| overlaps_u16(*span, (min_col, max_col)))
         {
             min_row -= 1;
         }
         while max_row + 1 < MAX_ROWS
-            && row_spans[(max_row + 1) as usize]
-                .is_some_and(|span| overlaps_u16(span, (min_col, max_col)))
+            && row_spans
+                .get(&(max_row + 1))
+                .is_some_and(|span| overlaps_u16(*span, (min_col, max_col)))
         {
             max_row += 1;
         }
         while min_col > 0
-            && col_spans[usize::from(min_col - 1)]
-                .is_some_and(|span| overlaps_u32(span, (min_row, max_row)))
+            && col_spans
+                .get(&(min_col - 1))
+                .is_some_and(|span| overlaps_u32(*span, (min_row, max_row)))
         {
             min_col -= 1;
         }
         while max_col + 1 < MAX_COLS
-            && col_spans[usize::from(max_col + 1)]
-                .is_some_and(|span| overlaps_u32(span, (min_row, max_row)))
+            && col_spans
+                .get(&(max_col + 1))
+                .is_some_and(|span| overlaps_u32(*span, (min_row, max_row)))
         {
             max_col += 1;
         }

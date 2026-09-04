@@ -347,9 +347,7 @@ impl Keymap {
             self.reset_pending();
             return KeyOutcome::Command { cmd, args, count };
         }
-        let prefix = table
-            .keys()
-            .any(|k| k.starts_with(&candidate) && k.len() > candidate.len());
+        let prefix = table.keys().any(|k| is_chord_prefix(k, &candidate));
         if prefix {
             self.pending = candidate;
             return KeyOutcome::Pending;
@@ -553,6 +551,28 @@ fn normalize_chord(raw: &str) -> String {
     }
     out.push_str(&key);
     out
+}
+
+fn is_chord_prefix(binding: &str, candidate: &str) -> bool {
+    if !binding.starts_with(candidate) || binding.len() <= candidate.len() {
+        return false;
+    }
+    // Named keys (`Space`, `Enter`, `Ctrl+f`, `F4`) must not treat a leading
+    // letter as a pending multi-key chord.
+    if is_named_key(binding)
+        && !is_named_key(candidate)
+        && !binding
+            .as_bytes()
+            .get(candidate.len())
+            .is_some_and(|b| *b == b'+')
+    {
+        return false;
+    }
+    true
+}
+
+fn is_named_key(key: &str) -> bool {
+    key.contains('+') || (key.len() > 1 && key.starts_with(|c: char| c.is_ascii_uppercase()))
 }
 
 fn normalize_key(token: &str) -> String {
