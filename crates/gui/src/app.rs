@@ -2324,10 +2324,16 @@ fn toolkit_owns_key(edit: &omacell_ui::EditState, event: &KeyEvent) -> bool {
     }
     match edit.surface {
         EditSurface::Idle => false,
-        EditSurface::FormulaBar => !matches!(
-            event.code,
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::F(4)
-        ),
+        EditSurface::FormulaBar => {
+            !matches!(
+                event.code,
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::F(4)
+            ) && !(edit.point
+                && matches!(
+                    event.code,
+                    KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
+                ))
+        }
         EditSurface::InCell => {
             !event.ctrl && !event.alt && matches!(event.code, KeyCode::Char(_) | KeyCode::Space)
         }
@@ -2492,4 +2498,22 @@ pub fn run(launch: Launch) -> Result<(), CoreError> {
         }),
     )
     .map_err(|err| CoreError::new("gui.eframe", err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formula_bar_yields_arrows_only_while_pointing() {
+        let mut edit = omacell_ui::EditState::default();
+        edit.surface = EditSurface::FormulaBar;
+        edit.point = true;
+        let down = KeyEvent::new(KeyCode::Down);
+        assert!(!toolkit_owns_key(&edit, &down));
+
+        edit.point = false;
+        assert!(toolkit_owns_key(&edit, &down));
+        assert!(!toolkit_owns_key(&edit, &KeyEvent::new(KeyCode::Enter)));
+    }
 }

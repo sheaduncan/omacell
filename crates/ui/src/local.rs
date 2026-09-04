@@ -163,85 +163,106 @@ pub fn apply_local_command(
 fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<(), CoreError> {
     let n = count(args);
     let mut inner = session.inner.lock().unwrap_or_else(|p| p.into_inner());
+    let mode = inner.mode;
     match cmd {
-        "nav.left" => inner.selection.move_by(0, -n),
-        "nav.right" => inner.selection.move_by(0, n),
-        "nav.up" => inner.selection.move_by(-n, 0),
-        "nav.down" => inner.selection.move_by(n, 0),
+        "nav.left" => inner.selection.move_in_mode(mode, 0, -n),
+        "nav.right" => inner.selection.move_in_mode(mode, 0, n),
+        "nav.up" => inner.selection.move_in_mode(mode, -n, 0),
+        "nav.down" => inner.selection.move_in_mode(mode, n, 0),
         "nav.pagedown" => {
             let rows = i64::from(inner.viewport.page_rows().max(1));
-            inner.selection.move_by(rows * n, 0);
+            inner.selection.move_in_mode(mode, rows * n, 0);
         }
         "nav.pageup" => {
             let rows = i64::from(inner.viewport.page_rows().max(1));
-            inner.selection.move_by(-rows * n, 0);
+            inner.selection.move_in_mode(mode, -rows * n, 0);
         }
         "nav.halfpagedown" => {
             let rows = i64::from((inner.viewport.page_rows() / 2).max(1));
-            inner.selection.move_by(rows * n, 0);
+            inner.selection.move_in_mode(mode, rows * n, 0);
         }
         "nav.halfpageup" => {
             let rows = i64::from((inner.viewport.page_rows() / 2).max(1));
-            inner.selection.move_by(-rows * n, 0);
+            inner.selection.move_in_mode(mode, -rows * n, 0);
         }
         "nav.pageleft" => {
             let cols = i64::from(inner.viewport.page_cols().max(1));
-            inner.selection.move_by(0, -cols * n);
+            inner.selection.move_in_mode(mode, 0, -cols * n);
         }
         "nav.pageright" => {
             let cols = i64::from(inner.viewport.page_cols().max(1));
-            inner.selection.move_by(0, cols * n);
+            inner.selection.move_in_mode(mode, 0, cols * n);
         }
         "nav.screentop" => {
             let (top, _, _) = inner.viewport.screen_rows();
             let row = inner.selection.cursor.row;
-            inner.selection.move_by(i64::from(top) - i64::from(row), 0);
+            inner
+                .selection
+                .move_in_mode(mode, i64::from(top) - i64::from(row), 0);
         }
         "nav.screenmiddle" => {
             let (_, mid, _) = inner.viewport.screen_rows();
             let row = inner.selection.cursor.row;
-            inner.selection.move_by(i64::from(mid) - i64::from(row), 0);
+            inner
+                .selection
+                .move_in_mode(mode, i64::from(mid) - i64::from(row), 0);
         }
         "nav.screenbottom" => {
             let (_, _, bottom) = inner.viewport.screen_rows();
             let row = inner.selection.cursor.row;
             inner
                 .selection
-                .move_by(i64::from(bottom) - i64::from(row), 0);
+                .move_in_mode(mode, i64::from(bottom) - i64::from(row), 0);
         }
         "nav.a1" => {
             let mut cursor = inner.selection.cursor;
             cursor.row = 0;
             cursor.col = 0;
-            inner.selection.replace(Area::cell(cursor));
+            inner.selection.jump_in_mode(mode, cursor);
         }
         "nav.firstcol" => {
             let mut cursor = inner.selection.cursor;
             cursor.col = 0;
-            inner.selection.replace(Area::cell(cursor));
+            inner.selection.jump_in_mode(mode, cursor);
         }
         "nav.top" => {
             let mut cursor = inner.selection.cursor;
             cursor.row = 0;
-            inner.selection.replace(Area::cell(cursor));
+            inner.selection.jump_in_mode(mode, cursor);
         }
-        "nav.bottom" => move_to_used_edge(wb, &mut inner.selection, true),
-        "nav.lastcol" => move_to_used_edge(wb, &mut inner.selection, false),
+        "nav.bottom" => move_to_used_edge(wb, &mut inner.selection, mode, true),
+        "nav.lastcol" => move_to_used_edge(wb, &mut inner.selection, mode, false),
         "sel.extendleft" => {
-            inner.selection.extend = ExtendMode::Extend;
-            inner.selection.move_by(0, -n);
+            if matches!(mode, Mode::Visual | Mode::VisualRow | Mode::VisualCol) {
+                inner.selection.move_in_mode(mode, 0, -n);
+            } else {
+                inner.selection.extend = ExtendMode::Extend;
+                inner.selection.move_by(0, -n);
+            }
         }
         "sel.extendright" => {
-            inner.selection.extend = ExtendMode::Extend;
-            inner.selection.move_by(0, n);
+            if matches!(mode, Mode::Visual | Mode::VisualRow | Mode::VisualCol) {
+                inner.selection.move_in_mode(mode, 0, n);
+            } else {
+                inner.selection.extend = ExtendMode::Extend;
+                inner.selection.move_by(0, n);
+            }
         }
         "sel.extendup" => {
-            inner.selection.extend = ExtendMode::Extend;
-            inner.selection.move_by(-n, 0);
+            if matches!(mode, Mode::Visual | Mode::VisualRow | Mode::VisualCol) {
+                inner.selection.move_in_mode(mode, -n, 0);
+            } else {
+                inner.selection.extend = ExtendMode::Extend;
+                inner.selection.move_by(-n, 0);
+            }
         }
         "sel.extenddown" => {
-            inner.selection.extend = ExtendMode::Extend;
-            inner.selection.move_by(n, 0);
+            if matches!(mode, Mode::Visual | Mode::VisualRow | Mode::VisualCol) {
+                inner.selection.move_in_mode(mode, n, 0);
+            } else {
+                inner.selection.extend = ExtendMode::Extend;
+                inner.selection.move_by(n, 0);
+            }
         }
         "sel.extendmode" => {
             inner.selection.extend = match inner.selection.extend {
@@ -259,10 +280,12 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
         "sel.visualrow" => {
             inner.mode = Mode::VisualRow;
             inner.selection.select_row();
+            inner.selection.extend = ExtendMode::Extend;
         }
         "sel.visualcol" => {
             inner.mode = Mode::VisualCol;
             inner.selection.select_col();
+            inner.selection.extend = ExtendMode::Extend;
         }
         "view.center" => {
             let cursor = inner.selection.cursor;
@@ -328,6 +351,7 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
         }
         "mode.normal" => {
             inner.mode = Mode::Normal;
+            inner.selection.extend = ExtendMode::Replace;
             inner.edit.cancel();
             inner.panel.dismiss();
         }
@@ -356,14 +380,18 @@ fn apply(session: &UiSession, wb: &Workbook, cmd: &str, args: &Value) -> Result<
                 && let Some(next) = snapshot_edge(wb, inner.selection.cursor, dr, dc)
             {
                 if cmd.starts_with("sel.") {
-                    let current = inner.selection.cursor;
-                    inner.selection.extend = ExtendMode::Extend;
-                    inner.selection.move_by(
-                        i64::from(next.row) - i64::from(current.row),
-                        i64::from(next.col) - i64::from(current.col),
-                    );
+                    if matches!(mode, Mode::Visual | Mode::VisualRow | Mode::VisualCol) {
+                        inner.selection.jump_in_mode(mode, next);
+                    } else {
+                        let current = inner.selection.cursor;
+                        inner.selection.extend = ExtendMode::Extend;
+                        inner.selection.move_by(
+                            i64::from(next.row) - i64::from(current.row),
+                            i64::from(next.col) - i64::from(current.col),
+                        );
+                    }
                 } else {
-                    inner.selection.replace(Area::cell(next));
+                    inner.selection.jump_in_mode(mode, next);
                 }
             }
         }
@@ -412,7 +440,12 @@ fn apply_select(
     Ok(())
 }
 
-fn move_to_used_edge(wb: &Workbook, selection: &mut crate::selection::Selection, row: bool) {
+fn move_to_used_edge(
+    wb: &Workbook,
+    selection: &mut crate::selection::Selection,
+    mode: Mode,
+    row: bool,
+) {
     let used = wb
         .sheet(selection.sheet)
         .and_then(|sheet| sheet.used_range());
@@ -422,7 +455,7 @@ fn move_to_used_edge(wb: &Workbook, selection: &mut crate::selection::Selection,
     } else {
         cursor.col = used.map_or(0, |range| range.max_col);
     }
-    selection.replace(Area::cell(cursor));
+    selection.jump_in_mode(mode, cursor);
 }
 
 fn scaled_coordinate(value: u64, zoom: f64) -> u32 {

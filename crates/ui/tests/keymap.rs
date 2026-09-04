@@ -113,6 +113,64 @@ fn named_keys_are_not_pending_prefixes() {
         ),
         KeyOutcome::Pending
     ));
+    modal.reset_pending();
+    assert_eq!(
+        modal.dispatch(omacell_ui::Mode::Normal, KeyEvent::new(KeyCode::Space),),
+        KeyOutcome::Pending
+    );
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent::new(KeyCode::Char('a')),
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "ai.plan"
+    ));
+
+    let mut uppercase = Keymap::parse(
+        r#"
+[meta]
+name = "uppercase chord"
+model = "modal"
+[bindings.normal]
+ZZ = "edit.undo"
+F4x = "edit.redo"
+"g+" = "edit.repeat"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        uppercase.dispatch(omacell_ui::Mode::Normal, KeyEvent::new(KeyCode::Char('Z')),),
+        KeyOutcome::Pending
+    );
+    assert!(matches!(
+        uppercase.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent::new(KeyCode::Char('Z')),
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "edit.undo"
+    ));
+    assert_eq!(
+        uppercase.dispatch(omacell_ui::Mode::Normal, KeyEvent::new(KeyCode::F(4))),
+        KeyOutcome::Pending
+    );
+    assert!(matches!(
+        uppercase.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent::new(KeyCode::Char('x')),
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "edit.redo"
+    ));
+    assert_eq!(
+        uppercase.dispatch(omacell_ui::Mode::Normal, KeyEvent::new(KeyCode::Char('g')),),
+        KeyOutcome::Pending
+    );
+    assert!(matches!(
+        uppercase.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent::new(KeyCode::Char('+')),
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "edit.repeat"
+    ));
 }
 
 #[test]

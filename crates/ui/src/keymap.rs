@@ -99,6 +99,8 @@ pub struct Binding {
     pub cmd: String,
     /// Optional JSON args.
     pub args: Value,
+    /// Complete key-event tokens used for unambiguous prefix matching.
+    tokens: Vec<String>,
 }
 
 /// Loaded keymap.
@@ -112,8 +114,8 @@ pub struct Keymap {
     pub leader: Option<String>,
     /// Mode → chord → binding. Classic uses the `classic` table.
     tables: BTreeMap<String, IndexMap<String, Binding>>,
-    /// In-progress multi-key chord.
-    pending: String,
+    /// In-progress multi-key chord, retained as complete key-event tokens.
+    pending: Vec<String>,
     /// Modal count prefix.
     count: u32,
 }
@@ -188,7 +190,7 @@ impl Keymap {
             model,
             leader,
             tables,
-            pending: String::new(),
+            pending: Vec::new(),
             count: 0,
         })
     }
@@ -266,7 +268,8 @@ impl Keymap {
             )));
         }
         CommandId::new(cmd).map_err(|error| error::keymap(error.to_string()))?;
-        let chord = normalize_chord(&expand_leader(keys, self.leader.as_deref()));
+        let expanded = expand_leader(keys, self.leader.as_deref());
+        let (chord, tokens) = normalize_chord_tokens(&expanded);
         if chord.is_empty() {
             return Err(error::keymap("script key binding chord cannot be empty"));
         }
@@ -275,6 +278,7 @@ impl Keymap {
             Binding {
                 cmd: cmd.to_string(),
                 args: Value::Null,
+                tokens,
             },
         );
         self.reset_pending();
@@ -322,16 +326,17 @@ impl Keymap {
             return KeyOutcome::Pending;
         }
         let token = event.chord();
-        let candidate = if self.pending.is_empty() {
-            token.clone()
-        } else {
-            format!("{}{token}", self.pending)
-        };
+        let mut candidate_tokens = self.pending.clone();
+        candidate_tokens.push(token);
+        let candidate = candidate_tokens.concat();
         let Some(table) = self.tables.get(mode.table()) else {
             self.reset_pending();
             return KeyOutcome::Unbound;
         };
-        if let Some(binding) = table.get(&candidate) {
+        if let Some(binding) = table
+            .get(&candidate)
+            .filter(|binding| binding.tokens == candidate_tokens)
+        {
             let count = if self.count == 0 { 1 } else { self.count };
             let cmd = binding.cmd.clone();
             let mut args = binding.args.clone();
@@ -347,9 +352,12 @@ impl Keymap {
             self.reset_pending();
             return KeyOutcome::Command { cmd, args, count };
         }
-        let prefix = table.keys().any(|k| is_chord_prefix(k, &candidate));
+        let prefix = table.values().any(|binding| {
+            binding.tokens.len() > candidate_tokens.len()
+                && binding.tokens.starts_with(&candidate_tokens)
+        });
         if prefix {
-            self.pending = candidate;
+            self.pending = candidate_tokens;
             return KeyOutcome::Pending;
         }
         self.reset_pending();
@@ -450,8 +458,8 @@ fn parse_table(
     };
     let mut out = IndexMap::new();
     for (chord, spec) in table {
-        let chord = expand_leader(chord, leader);
-        let normalized = normalize_chord(&chord);
+        let expanded = expand_leader(chord, leader);
+        let (normalized, tokens) = normalize_chord_tokens(&expanded);
         if out.contains_key(&normalized) {
             return Err(error::keymap(format!("duplicate chord {normalized}")));
         }
@@ -459,6 +467,7 @@ fn parse_table(
             toml::Value::String(cmd) => Binding {
                 cmd: cmd.clone(),
                 args: Value::Null,
+                tokens: tokens.clone(),
             },
             toml::Value::Table(t) => {
                 let cmd = t
@@ -473,11 +482,12 @@ fn parse_table(
                 Binding {
                     cmd: cmd.to_string(),
                     args,
+                    tokens: tokens.clone(),
                 }
             }
             _ => {
                 return Err(error::keymap(format!(
-                    "{chord}: expected command string or table"
+                    "{expanded}: expected command string or table"
                 )));
             }
         };
@@ -553,26 +563,58 @@ fn normalize_chord(raw: &str) -> String {
     out
 }
 
-fn is_chord_prefix(binding: &str, candidate: &str) -> bool {
-    if !binding.starts_with(candidate) || binding.len() <= candidate.len() {
-        return false;
+fn normalize_chord_tokens(raw: &str) -> (String, Vec<String>) {
+    let normalized = normalize_chord(raw);
+    let mut remaining = normalized.as_str();
+    let mut tokens = Vec::new();
+    while let Some(token) = first_chord_token(remaining) {
+        tokens.push(token.to_string());
+        remaining = &remaining[token.len()..];
     }
-    // Named keys (`Space`, `Enter`, `Ctrl+f`, `F4`) must not treat a leading
-    // letter as a pending multi-key chord.
-    if is_named_key(binding)
-        && !is_named_key(candidate)
-        && !binding
-            .as_bytes()
-            .get(candidate.len())
-            .is_some_and(|b| *b == b'+')
-    {
-        return false;
-    }
-    true
+    (normalized, tokens)
 }
 
-fn is_named_key(key: &str) -> bool {
-    key.contains('+') || (key.len() > 1 && key.starts_with(|c: char| c.is_ascii_uppercase()))
+fn first_chord_token(chord: &str) -> Option<&str> {
+    let mut key_start = 0;
+    loop {
+        let tail = &chord[key_start..];
+        let modifier = ["Ctrl+", "Alt+", "Shift+"]
+            .into_iter()
+            .find(|modifier| tail.starts_with(modifier));
+        let Some(modifier) = modifier else {
+            break;
+        };
+        key_start += modifier.len();
+    }
+
+    let key = chord.get(key_start..)?;
+    let named = [
+        "Backspace",
+        "Delete",
+        "Enter",
+        "Space",
+        "Right",
+        "Left",
+        "Home",
+        "PgUp",
+        "PgDn",
+        "Down",
+        "Esc",
+        "Tab",
+        "End",
+        "Up",
+    ]
+    .into_iter()
+    .find(|named| key.starts_with(named));
+    let key_len = if let Some(named) = named {
+        named.len()
+    } else if let Some(digits) = key.strip_prefix('F') {
+        let digit_len = digits.bytes().take_while(u8::is_ascii_digit).count();
+        if digit_len == 0 { 1 } else { 1 + digit_len }
+    } else {
+        key.chars().next()?.len_utf8()
+    };
+    chord.get(..key_start + key_len)
 }
 
 fn normalize_key(token: &str) -> String {

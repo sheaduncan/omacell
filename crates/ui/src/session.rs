@@ -188,7 +188,11 @@ impl UiSession {
 
     /// Replace selection state after toolkit-neutral mouse or accessibility input.
     pub fn set_selection(&self, selection: Selection) {
-        self.lock().selection = selection;
+        let mut g = self.lock();
+        if g.edit.point {
+            let _ = g.edit.insert_ref(selection.cursor);
+        }
+        g.selection = selection;
     }
 
     /// Current edit state.
@@ -575,6 +579,8 @@ impl UiSession {
                         _ => (0, 0),
                     };
                     g.selection.move_by(dr, dc);
+                    let cell = g.selection.cursor;
+                    let _ = g.edit.insert_ref(cell);
                     return crate::keymap::KeyOutcome::Pending;
                 }
                 (crate::event::KeyCode::Char(c), false, false) => {
@@ -591,19 +597,21 @@ impl UiSession {
                     g.edit.insert_char('\t');
                     return crate::keymap::KeyOutcome::Pending;
                 }
-                (crate::event::KeyCode::Enter, false, false)
-                    if g.edit.point
-                        && g.edit
-                            .origin
-                            .is_some_and(|origin| origin != g.selection.cursor) =>
-                {
-                    let cell = g.selection.cursor;
-                    let _ = g.edit.insert_ref(cell);
+                (crate::event::KeyCode::Enter, false, false) if g.edit.has_point_ref() => {
                     if let Some(origin) = g.edit.origin {
                         g.selection.cursor = origin;
                         g.selection.replace(crate::selection::Area::cell(origin));
                     }
-                    return crate::keymap::KeyOutcome::Pending;
+                    let cmd = if g.model == KeyModel::Modal {
+                        "edit.commit"
+                    } else {
+                        "nav.enter"
+                    };
+                    return crate::keymap::KeyOutcome::Command {
+                        cmd: cmd.into(),
+                        args: serde_json::Value::Null,
+                        count: 1,
+                    };
                 }
                 _ => {}
             }

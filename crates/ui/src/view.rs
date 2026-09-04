@@ -450,14 +450,19 @@ fn handle(
     let n = count(&args);
     let mut effect = Effect::query(serde_json::json!({"ok": true}));
     match kind {
-        HandlerKind::Move(dr, dc) => g.selection.move_by(dr * n, dc * n),
+        HandlerKind::Move(dr, dc) => {
+            let mode = g.mode;
+            g.selection.move_in_mode(mode, dr * n, dc * n);
+        }
         HandlerKind::PageRows(direction, divisor) => {
             let rows = i64::from((g.viewport.page_rows() / divisor).max(1));
-            g.selection.move_by(direction * rows * n, 0);
+            let mode = g.mode;
+            g.selection.move_in_mode(mode, direction * rows * n, 0);
         }
         HandlerKind::PageCols(direction) => {
             let cols = i64::from(g.viewport.page_cols().max(1));
-            g.selection.move_by(0, direction * cols * n);
+            let mode = g.mode;
+            g.selection.move_in_mode(mode, 0, direction * cols * n);
         }
         HandlerKind::ScreenRow(position) => {
             let (top, middle, bottom) = g.viewport.screen_rows();
@@ -467,26 +472,38 @@ fn handle(
                 ScreenRow::Bottom => bottom,
             };
             let current = g.selection.cursor;
+            let mode = g.mode;
             g.selection
-                .move_by(i64::from(target) - i64::from(current.row), 0);
+                .move_in_mode(mode, i64::from(target) - i64::from(current.row), 0);
         }
         HandlerKind::Edge(dr, dc) => {
             if let Some(cursor) = data_edge(ctx, g.selection.cursor, dr, dc)? {
-                g.selection.replace(Area::cell(cursor));
+                let mode = g.mode;
+                g.selection.jump_in_mode(mode, cursor);
             }
         }
         HandlerKind::Extend(dr, dc) => {
-            g.selection.extend = ExtendMode::Extend;
-            g.selection.move_by(dr * n, dc * n);
+            let mode = g.mode;
+            if matches!(mode, Mode::Visual | Mode::VisualRow | Mode::VisualCol) {
+                g.selection.move_in_mode(mode, dr * n, dc * n);
+            } else {
+                g.selection.extend = ExtendMode::Extend;
+                g.selection.move_by(dr * n, dc * n);
+            }
         }
         HandlerKind::ExtendEdge(dr, dc) => {
             if let Some(target) = data_edge(ctx, g.selection.cursor, dr, dc)? {
-                let current = g.selection.cursor;
-                g.selection.extend = ExtendMode::Extend;
-                g.selection.move_by(
-                    i64::from(target.row) - i64::from(current.row),
-                    i64::from(target.col) - i64::from(current.col),
-                );
+                let mode = g.mode;
+                if matches!(mode, Mode::Visual | Mode::VisualRow | Mode::VisualCol) {
+                    g.selection.jump_in_mode(mode, target);
+                } else {
+                    let current = g.selection.cursor;
+                    g.selection.extend = ExtendMode::Extend;
+                    g.selection.move_by(
+                        i64::from(target.row) - i64::from(current.row),
+                        i64::from(target.col) - i64::from(current.col),
+                    );
+                }
             }
         }
         HandlerKind::Freeze => {
@@ -512,32 +529,36 @@ fn handle(
             g.viewport.center_on(row, col);
         }
         HandlerKind::Top => {
-            g.selection.cursor.row = 0;
-            let cursor = g.selection.cursor;
-            g.selection.replace(Area::cell(cursor));
+            let mut target = g.selection.cursor;
+            target.row = 0;
+            let mode = g.mode;
+            g.selection.jump_in_mode(mode, target);
         }
         HandlerKind::Bottom => {
-            g.selection.cursor.row = ctx
+            let mut target = g.selection.cursor;
+            target.row = ctx
                 .workbook_ref()
                 .sheet(g.selection.sheet)
                 .and_then(|sheet| sheet.used_range())
                 .map_or(0, |used| used.max_row);
-            let cursor = g.selection.cursor;
-            g.selection.replace(Area::cell(cursor));
+            let mode = g.mode;
+            g.selection.jump_in_mode(mode, target);
         }
         HandlerKind::FirstCol => {
-            g.selection.cursor.col = 0;
-            let cursor = g.selection.cursor;
-            g.selection.replace(Area::cell(cursor));
+            let mut target = g.selection.cursor;
+            target.col = 0;
+            let mode = g.mode;
+            g.selection.jump_in_mode(mode, target);
         }
         HandlerKind::LastCol => {
-            g.selection.cursor.col = ctx
+            let mut target = g.selection.cursor;
+            target.col = ctx
                 .workbook_ref()
                 .sheet(g.selection.sheet)
                 .and_then(|sheet| sheet.used_range())
                 .map_or(0, |used| used.max_col);
-            let cursor = g.selection.cursor;
-            g.selection.replace(Area::cell(cursor));
+            let mode = g.mode;
+            g.selection.jump_in_mode(mode, target);
         }
         HandlerKind::Enter => {
             effect = apply_edit(ctx, &g)?;
@@ -559,7 +580,13 @@ fn handle(
             let _ = g.edit.commit();
             g.selection.move_by(0, direction);
         }
-        HandlerKind::A1 => g.selection = crate::selection::Selection::a1(g.selection.sheet),
+        HandlerKind::A1 => {
+            let mut target = g.selection.cursor;
+            target.row = 0;
+            target.col = 0;
+            let mode = g.mode;
+            g.selection.jump_in_mode(mode, target);
+        }
         HandlerKind::Goto => g.panel.open("goto"),
         HandlerKind::Visual => {
             g.mode = Mode::Visual;
@@ -568,10 +595,12 @@ fn handle(
         HandlerKind::VisualRow => {
             g.mode = Mode::VisualRow;
             g.selection.select_row();
+            g.selection.extend = ExtendMode::Extend;
         }
         HandlerKind::VisualCol => {
             g.mode = Mode::VisualCol;
             g.selection.select_col();
+            g.selection.extend = ExtendMode::Extend;
         }
         HandlerKind::SelRow => g.selection.select_row(),
         HandlerKind::SelCol => g.selection.select_col(),
@@ -605,6 +634,7 @@ fn handle(
         HandlerKind::ShiftF8 => g.selection.extend = ExtendMode::Add,
         HandlerKind::Normal => {
             g.mode = Mode::Normal;
+            g.selection.extend = ExtendMode::Replace;
             g.edit.cancel();
             g.panel.dismiss();
         }
