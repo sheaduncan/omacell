@@ -12,3 +12,4 @@
 =REGEXTEST("abc", "(")	#VALUE!	invalid pattern; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =REGEXTEST("é", "É", 1)	TRUE	Unicode case-insensitive; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =REGEXTEST({"a","1"}, "^[0-9]$")	{FALSE,TRUE}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=REGEXTEST("ab", "a(?=b)")	#VALUE!	intentional gap: bounded Rust regex does not support Excel PCRE2 lookaround

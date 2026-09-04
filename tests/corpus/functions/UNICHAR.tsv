@@ -1,10 +1,10 @@
 # formula	expected	note
-# Unicode scalar; surrogates and 0 are #VALUE!.
+# Unicode scalar; partial surrogates are #N/A while 0 is #VALUE!.
 =UNICHAR(65)	A	ASCII
 =UNICHAR(233)	é	U+00E9
 =UNICHAR(128512)	😀	U+1F600
 =UNICHAR(0)	#VALUE!	0 rejected; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
-=UNICHAR(55296)	#VALUE!	U+D800 surrogate rejected; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=UNICHAR(55296)	#N/A	U+D800 is a partial surrogate and returns #N/A
 =UNICHAR(1114112)	#VALUE!	above U+10FFFF; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =UNICHAR(-1)	#VALUE!	negative; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =UNICHAR(#N/A)	#N/A	error

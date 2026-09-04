@@ -11,4 +11,5 @@
 =VALUETOTEXT("", 1)	""	empty strict quotes; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =VALUETOTEXT(1.5)	1.5	fraction; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =VALUETOTEXT("é", 1)	"é"	Unicode strict; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
-=VALUETOTEXT({"a","b"})	a, b	array uses ARRAYTOTEXT concise path; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=VALUETOTEXT({"a","b"})	{a,b}	arrays are converted cell by cell and retain their shape
+=COLUMNS(VALUETOTEXT({"a","b"}, 1))	2	strict formatting retains the source array shape
