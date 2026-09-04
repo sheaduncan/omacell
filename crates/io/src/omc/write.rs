@@ -257,7 +257,11 @@ fn encode_workbook(out: &mut String, doc: &OmcDocument) -> Result<(), CoreError>
                 push_kv(out, "author", a);
             }
             out.push('\t');
-            push_field(out, &n.text);
+            if n.author.is_none() && n.text.starts_with("author=") {
+                push_quoted_field(out, &n.text);
+            } else {
+                push_field(out, &n.text);
+            }
             out.push('\n');
         }
         let mut comments: Vec<_> = sheet.comments.iter().collect();

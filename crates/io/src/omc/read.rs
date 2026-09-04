@@ -238,6 +238,7 @@ pub(super) fn parse(text: &str) -> Result<OmcDocument, CoreError> {
             cs.validate()?;
             Some(cs)
         };
+    wb.undo_log_mut().set_enabled(true);
     Ok(OmcDocument {
         workbook: wb,
         extras,
@@ -883,7 +884,7 @@ fn load_comment(wb: &mut Workbook, fields: &[Field]) -> Result<(), CoreError> {
             &fields[1..fields.len() - 1],
             fields.last().map(|f| f.value.clone()).unwrap_or_default(),
         )
-    } else if fields.len() == 2 && !fields[1].value.starts_with("author=") {
+    } else if fields.len() == 2 && (fields[1].quoted || !fields[1].value.starts_with("author=")) {
         (&fields[1..1], fields[1].value.clone())
     } else {
         (&fields[1..], String::new())
