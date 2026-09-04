@@ -1,7 +1,7 @@
 //! Sync MCP tool/resource dispatch over [`crate::Bus`].
 
 use omacell_core::addr::{RefKind, col_to_letters, parse_a1, quote_sheet_name};
-use omacell_core::changeset::{Changeset, ChangesetId, ChangesetStatus, CommandCall};
+use omacell_core::changeset::{Changeset, ChangesetId, CommandCall};
 use omacell_core::command::{CommandId, Origin};
 use omacell_core::error::CoreError;
 use omacell_core::value::Value;
@@ -217,9 +217,7 @@ fn session_execute(bus: &mut Bus, id: &str, args: Json) -> Result<Json, CoreErro
 }
 
 fn has_pending_proposal(bus: &Bus) -> bool {
-    bus.list_changesets()
-        .iter()
-        .any(|changeset| changeset.status == ChangesetStatus::Proposed)
+    bus.has_proposed_changeset()
 }
 
 fn ensure_no_pending_proposals(bus: &Bus) -> Result<(), CoreError> {

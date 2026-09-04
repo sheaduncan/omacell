@@ -78,6 +78,14 @@ impl ChangesetStore {
         self.retained_bytes
     }
 
+    /// Whether any retained changeset is still awaiting review.
+    #[must_use]
+    pub(crate) fn has_proposed(&self) -> bool {
+        self.entries
+            .values()
+            .any(|entry| entry.public.status == ChangesetStatus::Proposed)
+    }
+
     pub(crate) fn ensure_can_propose(&self, forward: &[CommandCall]) -> Result<(), CoreError> {
         if self.entries.len() >= MAX_CHANGESETS {
             return Err(error::changeset_limit(format!(
@@ -525,5 +533,25 @@ mod tests {
             store.get(&proposed.id).unwrap().status,
             omacell_core::changeset::ChangesetStatus::Proposed
         );
+    }
+
+    #[test]
+    fn has_proposed_tracks_insert_and_discard() {
+        let mut store = ChangesetStore::new();
+        assert!(!store.has_proposed());
+
+        let changeset = store
+            .insert_proposed(
+                Origin::ExternalAgent,
+                Vec::new(),
+                Vec::new(),
+                ChangeSummary::default(),
+                0,
+            )
+            .unwrap();
+        assert!(store.has_proposed());
+
+        store.remove_proposed(&changeset.id).unwrap();
+        assert!(!store.has_proposed());
     }
 }
