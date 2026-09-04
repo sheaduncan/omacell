@@ -317,20 +317,33 @@ pub(crate) fn encode(
     );
     overrides.push(("/xl/styles.xml".into(), CT_STY.into()));
 
+    let original_wb_rels = if let Some((package, workbook)) = package.and_then(|package| {
+        package
+            .workbook_part()
+            .ok()
+            .map(|workbook| (package, workbook))
+    }) {
+        package.rels_for(&workbook.name)?
+    } else {
+        Vec::new()
+    };
+    let mut workbook_relationship_ids =
+        RelationshipIdAllocator::new(&original_wb_rels, "source workbook", |relationship| {
+            !is_regenerated_workbook_relationship(relationship)
+        })?;
     let mut wb_rels: Vec<(String, String, String, bool)> = Vec::new();
-    let mut rid = 1u32;
     let mut sheet_rids = Vec::new();
     let mut drawing_names = drawing::PartNameAllocator::new(package);
     for (i, sheet) in sheets.iter().enumerate() {
-        let r = format!("rId{rid}");
-        rid += 1;
+        let r = workbook_relationship_ids.next()?;
         let target = format!("worksheets/sheet{}.xml", i + 1);
         wb_rels.push((r.clone(), REL_WS.into(), target.clone(), false));
         sheet_rids.push(r);
+        let sheet_extras = extras_for_sheet(extras, package, &sheet.name, i)?;
         let (sheet_xml, sheet_rels, extra_parts) = worksheet_xml(
             wb,
             sheet,
-            extras.get(&sheet.name),
+            sheet_extras,
             &sst,
             &xf_index,
             intern,
@@ -356,15 +369,12 @@ pub(crate) fn encode(
             parts.insert(name, bytes);
         }
     }
-    let sst_rid = format!("rId{rid}");
-    rid += 1;
+    let sst_rid = workbook_relationship_ids.next()?;
     wb_rels.push((sst_rid, REL_SST.into(), "sharedStrings.xml".into(), false));
-    let sty_rid = format!("rId{rid}");
-    rid += 1;
+    let sty_rid = workbook_relationship_ids.next()?;
     wb_rels.push((sty_rid, REL_STYLES.into(), "styles.xml".into(), false));
     if !persons.is_empty() {
-        let person_rid = format!("rId{rid}");
-        rid += 1;
+        let person_rid = workbook_relationship_ids.next()?;
         wb_rels.push((
             person_rid,
             REL_PERSON.into(),
@@ -401,8 +411,7 @@ pub(crate) fn encode(
             Some(parts) => parts,
             None => super::pivot::cache_parts(wb, pivot)?,
         };
-        let r = format!("rId{rid}");
-        rid += 1;
+        let r = workbook_relationship_ids.next()?;
         wb_rels.push((
             r.clone(),
             REL_PIVOT_CACHE_DEF.into(),
@@ -418,37 +427,26 @@ pub(crate) fn encode(
         }
     }
 
-    if let Some(pkg) = package
-        && let Ok(orig) = pkg.rels_for("xl/workbook.xml")
-    {
-        for rel in orig {
-            if rel.rel_type == REL_WS
-                || rel.rel_type == REL_SST
-                || rel.rel_type == REL_STYLES
-                || rel.rel_type == REL_PERSON
-                || rel.rel_type == REL_PIVOT_CACHE_DEF
-            {
+    for rel in &original_wb_rels {
+        if is_regenerated_workbook_relationship(rel) {
+            continue;
+        }
+        if is_rewritten(&rel.target) {
+            let custom_is_present = rel.target.to_ascii_lowercase().starts_with("xl/omacell/")
+                && wb
+                    .custom_parts
+                    .keys()
+                    .any(|name| name.eq_ignore_ascii_case(&rel.target));
+            if !custom_is_present {
                 continue;
             }
-            if is_rewritten(&rel.target) {
-                let custom_is_present = rel.target.to_ascii_lowercase().starts_with("xl/omacell/")
-                    && wb
-                        .custom_parts
-                        .keys()
-                        .any(|name| name.eq_ignore_ascii_case(&rel.target));
-                if !custom_is_present {
-                    continue;
-                }
-            }
-            let r = format!("rId{rid}");
-            rid += 1;
-            let target = if rel.external {
-                rel.target.clone()
-            } else {
-                workbook_rel_target(&rel.target)
-            };
-            wb_rels.push((r, rel.rel_type, target, rel.external));
         }
+        let target = if rel.external {
+            rel.target.clone()
+        } else {
+            relative_target("xl/workbook.xml", &rel.target)
+        };
+        wb_rels.push((rel.id.clone(), rel.rel_type.clone(), target, rel.external));
     }
 
     parts.insert(
@@ -551,14 +549,6 @@ fn is_rewritten(name: &str) -> bool {
         || n.starts_with("xl/omacell/")
 }
 
-fn workbook_rel_target(resolved: &str) -> String {
-    resolved
-        .strip_prefix("xl/")
-        .or_else(|| resolved.strip_prefix("/xl/"))
-        .unwrap_or(resolved)
-        .to_string()
-}
-
 fn zip_parts(parts: &IndexMap<String, Vec<u8>>) -> Result<Vec<u8>, CoreError> {
     if parts.len() > MAX_ZIP_ENTRIES {
         return Err(error::xlsx_write(format!(
@@ -658,14 +648,32 @@ struct RelationshipIdAllocator {
     next: u32,
 }
 
+fn is_regenerated_workbook_relationship(relationship: &super::opc::Relationship) -> bool {
+    matches!(
+        relationship.rel_type.as_str(),
+        REL_WS | REL_SST | REL_STYLES | REL_PERSON | REL_PIVOT_CACHE_DEF
+    )
+}
+
 impl RelationshipIdAllocator {
-    fn new(relationships: &[super::opc::Relationship]) -> Result<Self, CoreError> {
+    fn new<F>(
+        relationships: &[super::opc::Relationship],
+        source: &str,
+        reserve: F,
+    ) -> Result<Self, CoreError>
+    where
+        F: Fn(&super::opc::Relationship) -> bool,
+    {
+        let mut seen = HashSet::new();
         let mut used = HashSet::new();
         for relationship in relationships {
-            if relationship.id.is_empty() || !used.insert(relationship.id.clone()) {
-                return Err(error::xlsx_write(
-                    "source worksheet relationship ids must be non-empty and unique",
-                ));
+            if relationship.id.is_empty() || !seen.insert(relationship.id.clone()) {
+                return Err(error::xlsx_write(format!(
+                    "{source} relationship ids must be non-empty and unique"
+                )));
+            }
+            if reserve(relationship) {
+                used.insert(relationship.id.clone());
             }
         }
         Ok(Self { used, next: 1 })
@@ -677,7 +685,7 @@ impl RelationshipIdAllocator {
             self.next = self
                 .next
                 .checked_add(1)
-                .ok_or_else(|| error::xlsx_write("worksheet relationship id space is exhausted"))?;
+                .ok_or_else(|| error::xlsx_write("relationship id space is exhausted"))?;
             if self.used.insert(id.clone()) {
                 return Ok(id);
             }
@@ -850,6 +858,12 @@ fn workbook_xml(
         ));
     }
     s.push_str("</sheets>");
+    if let Some(external_references) = original_workbook_element(package, "externalReferences")? {
+        s.push_str(
+            std::str::from_utf8(&external_references.raw)
+                .map_err(|_| error::xlsx_write("preserved external references are not UTF-8"))?,
+        );
+    }
     let names: Vec<_> = wb.names().iter().collect();
     let rewrite_print_names: Vec<bool> = sheets
         .iter()
@@ -1576,7 +1590,8 @@ fn worksheet_xml(
         Some(package) => original_sheet_rels(package, &sheet.name, sheet_ord)?,
         None => Vec::new(),
     };
-    let mut relationship_ids = RelationshipIdAllocator::new(&original_rels)?;
+    let mut relationship_ids =
+        RelationshipIdAllocator::new(&original_rels, "source worksheet", |_| true)?;
     let mut rels: Vec<(String, String, String, bool)> = Vec::new();
     let mut extra_parts = Vec::new();
     let uses_x14 = !sheet.sparklines.is_empty()
@@ -2157,6 +2172,46 @@ fn original_sheet_rels(
         return Ok(Vec::new());
     };
     pkg.rels_for(&part_name)
+}
+
+fn extras_for_sheet<'a>(
+    extras: &'a HashMap<String, WorksheetExtras>,
+    package: Option<&OpcPackage>,
+    current_name: &str,
+    sheet_ord: usize,
+) -> Result<Option<&'a WorksheetExtras>, CoreError> {
+    if let Some(package) = package
+        && let Some(source_name) = original_sheet_name(package, sheet_ord)?
+        && let Some(source_extras) = extras.get(&source_name)
+    {
+        return Ok(Some(source_extras));
+    }
+    Ok(extras.get(current_name))
+}
+
+fn original_sheet_name(pkg: &OpcPackage, sheet_ord: usize) -> Result<Option<String>, CoreError> {
+    let Ok(workbook) = pkg.workbook_part() else {
+        return Ok(None);
+    };
+    let mut reader = xml::XmlReader::new(&workbook.bytes);
+    let mut in_sheets = false;
+    let mut index = 0usize;
+    while let Some(event) = reader.next()? {
+        match event {
+            xml::XmlEvent::Start { name, .. } if name == "sheets" => in_sheets = true,
+            xml::XmlEvent::End { name } if name == "sheets" => in_sheets = false,
+            xml::XmlEvent::Start { name, attrs } | xml::XmlEvent::Empty { name, attrs }
+                if in_sheets && name == "sheet" =>
+            {
+                if index == sheet_ord {
+                    return Ok(xml::attr(&attrs, "name").map(ToOwned::to_owned));
+                }
+                index = index.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
 }
 
 fn original_sheet_part_name(
