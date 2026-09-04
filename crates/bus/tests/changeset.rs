@@ -35,6 +35,44 @@ fn propose_does_not_mutate_live() {
 }
 
 #[test]
+fn dry_run_undo_keeps_history_available_and_live_state_untouched() {
+    let mut bus = common::bus();
+    common::exec_ok(&mut bus, "cell.set", json!({"ref": "A1", "input": "1"}));
+
+    let dry = bus.dry_run(Origin::User, "edit.undo", json!({})).unwrap();
+
+    assert!(dry.outcome.ok, "{:?}", dry.outcome.error);
+    assert_eq!(common::cell_value(&bus, 0, 0), Some(Value::Number(1.0)));
+    assert!(bus.workbook().undo_log().can_undo());
+}
+
+#[test]
+fn removed_sheet_inverse_stops_at_the_construction_budget() {
+    let mut bus = common::bus();
+    common::exec_ok(&mut bus, "sheet.add", json!({"name": "Victim"}));
+    let sheet = bus.workbook().sheet_by_name("Victim").unwrap().id;
+    let value = "x".repeat(16 * 1024);
+    for row in 0..80 {
+        bus.workbook_mut().set_text(sheet, row, 0, &value).unwrap();
+    }
+
+    let error = bus
+        .propose(
+            Origin::ExternalAgent,
+            vec![CommandCall {
+                id: CommandId::new("sheet.remove").unwrap(),
+                args: json!({"sheet": "Victim"}),
+            }],
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code, omacell_bus::codes::CHANGESET_LIMIT);
+    assert!(error.message.contains("construction budget"), "{error:?}");
+    assert!(bus.list_changesets().is_empty());
+    assert!(bus.workbook().sheet_by_name("Victim").is_some());
+}
+
+#[test]
 fn review_can_revise_a_proposal_before_one_unit_apply() {
     let mut bus = common::bus();
     let proposed = bus

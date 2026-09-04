@@ -99,7 +99,7 @@ No commands are registered here. WP-07a creates the first versioned command cata
 
 ## Command catalog — `docs/schemas/commands.schema.json` (WP-07a)
 
-Envelope `{schema: 1, commands[]}` from `omacell_bus::commands_json`. Command ids and public argument schemas freeze when WP-07a merges. Internal restore handlers (`cell.restore`, `style.restore`, `sheet.remove`) are excluded from the catalog. Frozen WP-01 `CommandDescriptor` is unchanged.
+Envelope `{schema: 1, commands[]}` from `omacell_bus::commands_json`. Command ids and public argument schemas freeze when WP-07a merges. Internal restore handlers, including `cell.restore`, `style.restore`, `edit.restore`, and `name.restore`, are excluded from the catalog. Frozen WP-01 `CommandDescriptor` is unchanged.
 
 The WP-19 UI integration adds public `edit.searchnext`, `edit.searchprev`, and
 `edit.explainerror` commands. Each uses the shared optional `{count: u32}` UI
@@ -216,6 +216,13 @@ startup, and shutdown, and symlinks or malformed markers are ignored/refused.
 | `Changeset` | same |
 
 Proposed changesets carry no inverse commands. WP-07a computes inverses from trusted workbook state before moving a changeset to `Applied`; applied and reverted non-empty changesets must carry those inverses. Agent-supplied inverses are not trusted.
+
+`Workbook::clone_for_scratch()` is an additive WP-07a validation API. It
+copies the complete logical workbook state using the same copy-on-write
+storage as ordinary `Clone`, but starts with an empty undo/redo log. Ordinary
+`Workbook::clone()` continues to preserve retained history. Callers that need
+to inspect or execute undo/redo must use the ordinary clone; command preflight,
+changeset preview, and exact-inverse snapshots use the scratch clone.
 
 WP-23 adds review-only bus models (`ChangePreview`, `ChangePreviewItem`, and
 `CellPreview`) plus `preview_changeset`, `revise_proposal`, and

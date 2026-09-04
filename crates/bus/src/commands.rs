@@ -22,7 +22,7 @@ use crate::error as bus_error;
 use crate::handler::{CommandContext, Effect};
 use crate::logical::{
     apply_stored_style, apply_style_patch, call, decode_cell_flags, inverse_contents,
-    inverse_style, release_root_ref, restore_cell_value, slot_input, style_of,
+    inverse_style, release_root_ref, restore_cell_value, slot_input, store_logical_value, style_of,
 };
 use crate::registry::{CommandKind, CommandRegistry, CommandSpec, Exposure};
 use crate::resolve::{
@@ -129,6 +129,17 @@ pub fn register_core(registry: &mut CommandRegistry) -> Result<(), CoreError> {
             default_keys: &[],
         },
         name_remove,
+    )?;
+    registry.register(
+        CommandSpec {
+            id: "name.restore",
+            doc: "Internal: restore an exact logical defined name",
+            kind: CommandKind::Mutating,
+            changeset_eligible: false,
+            exposure: Exposure::Internal,
+            default_keys: &[],
+        },
+        name_restore,
     )?;
     registry.register_with_local_inverse(
         CommandSpec {
@@ -625,19 +636,13 @@ fn name_remove(ctx: &mut CommandContext<'_>, args: NameRemoveArgs) -> Result<Eff
                 args.name
             ))
         })?;
-    let mut define = serde_json::json!({
-        "name": existing.name,
-        "referent": referent_arg(&existing.referent, ctx),
-    });
-    if let Some(sheet) = args.sheet.clone() {
-        define["sheet"] = serde_json::Value::String(sheet);
-    }
-    if let Some(comment) = existing.comment {
-        define["comment"] = serde_json::Value::String(comment);
-    }
+    let definition = store_defined_name(ctx.workbook_ref(), &existing)?;
     ctx.workbook().remove_name(scope, &args.name)?;
     Ok(Effect {
-        inverse: vec![call("name.define", define)?],
+        inverse: vec![call(
+            "name.restore",
+            serde_json::json!({"definition": definition}),
+        )?],
         events: Vec::new(),
         summary: ChangeSummary {
             text: format!("remove {}", args.name),
@@ -647,6 +652,84 @@ fn name_remove(ctx: &mut CommandContext<'_>, args: NameRemoveArgs) -> Result<Eff
         result: serde_json::json!({"removed": args.name}),
         auto_recalc: true,
         rebuild: true,
+    })
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum StoredNameReferent {
+    Range { range: omacell_core::addr::RangeRef },
+    Constant { value: serde_json::Value },
+    Formula { formula: String },
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredDefinedName {
+    name: String,
+    scope: NameScope,
+    referent: StoredNameReferent,
+    comment: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct NameRestoreArgs {
+    definition: serde_json::Value,
+}
+
+fn store_defined_name(
+    workbook: &omacell_core::workbook::Workbook,
+    definition: &DefinedName,
+) -> Result<serde_json::Value, CoreError> {
+    let referent = match &definition.referent {
+        NameReferent::Range(range) => StoredNameReferent::Range { range: *range },
+        NameReferent::Constant(value) => StoredNameReferent::Constant {
+            value: store_logical_value(workbook, *value)?,
+        },
+        NameReferent::Formula(formula) => StoredNameReferent::Formula {
+            formula: formula.clone(),
+        },
+    };
+    serde_json::to_value(StoredDefinedName {
+        name: definition.name.clone(),
+        scope: definition.scope,
+        referent,
+        comment: definition.comment.clone(),
+    })
+    .map_err(|error| bus_error::args(format!("cannot encode defined-name inverse: {error}")))
+}
+
+fn name_restore(ctx: &mut CommandContext<'_>, args: NameRestoreArgs) -> Result<Effect, CoreError> {
+    let stored: StoredDefinedName = serde_json::from_value(args.definition)
+        .map_err(|error| bus_error::args(format!("invalid defined-name inverse: {error}")))?;
+    let (referent, owned) = match stored.referent {
+        StoredNameReferent::Range { range } => (NameReferent::Range(range), None),
+        StoredNameReferent::Constant { value } => {
+            let (value, owned) = restore_cell_value(ctx.workbook(), value)?;
+            (NameReferent::Constant(value), owned)
+        }
+        StoredNameReferent::Formula { formula } => (NameReferent::Formula(formula), None),
+    };
+    let result = ctx.workbook().define_name(DefinedName {
+        name: stored.name,
+        scope: stored.scope,
+        referent,
+        comment: stored.comment,
+    });
+    if result.is_err() {
+        release_root_ref(ctx.workbook(), owned);
+    }
+    result?;
+    Ok(Effect {
+        summary: ChangeSummary {
+            text: "restore defined name".into(),
+            ..ChangeSummary::default()
+        },
+        auto_recalc: true,
+        rebuild: true,
+        result: serde_json::json!({"restored": true}),
+        ..Effect::default()
     })
 }
 
@@ -878,56 +961,6 @@ fn absolute_range(
     Ok(NameReferent::Range(
         omacell_core::addr::RangeRef::from_corners(start, end),
     ))
-}
-
-fn referent_arg(referent: &NameReferent, ctx: &CommandContext<'_>) -> serde_json::Value {
-    match referent {
-        NameReferent::Range(range) => {
-            let cell = ResolvedCell {
-                sheet: range
-                    .start
-                    .sheet
-                    .unwrap_or_else(|| ctx.workbook_ref().active_sheet()),
-                row: range.start.row.min(range.end.row),
-                col: range.start.col.min(range.end.col),
-            };
-            let other = ResolvedCell {
-                sheet: cell.sheet,
-                row: range.start.row.max(range.end.row),
-                col: range.start.col.max(range.end.col),
-            };
-            let text = if cell.row == other.row && cell.col == other.col {
-                format_cell(ctx.workbook_ref(), cell)
-            } else {
-                format_range(
-                    ctx.workbook_ref(),
-                    crate::resolve::ResolvedRange {
-                        sheet: cell.sheet,
-                        min_row: cell.row,
-                        min_col: cell.col,
-                        max_row: other.row,
-                        max_col: other.col,
-                    },
-                )
-            };
-            serde_json::json!({"type": "range", "range": text})
-        }
-        NameReferent::Constant(Value::Number(n)) => {
-            serde_json::json!({"type": "constant", "value": n})
-        }
-        NameReferent::Constant(Value::Bool(b)) => {
-            serde_json::json!({"type": "constant", "value": b})
-        }
-        NameReferent::Constant(Value::Text(id)) => {
-            let text = ctx.workbook_ref().intern().strings.get(*id).unwrap_or("");
-            serde_json::json!({"type": "constant", "value": text})
-        }
-        NameReferent::Constant(Value::Empty) => {
-            serde_json::json!({"type": "constant", "value": null})
-        }
-        NameReferent::Constant(_) => serde_json::json!({"type": "constant", "value": null}),
-        NameReferent::Formula(f) => serde_json::json!({"type": "formula", "formula": f}),
-    }
 }
 
 fn format_number(

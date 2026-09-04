@@ -314,6 +314,34 @@ impl Workbook {
         }
     }
 
+    /// Clone logical workbook state for validation without copying undo/redo history.
+    ///
+    /// Command-bus preflight and review need an isolated copy-on-write model,
+    /// but never consume the live session's retained history. Ordinary
+    /// [`Clone`] continues to preserve that history for callers that require
+    /// exact session state.
+    #[must_use]
+    pub fn clone_for_scratch(&self) -> Self {
+        Self {
+            sheets: self.sheets.clone(),
+            names_by_lower: self.names_by_lower.clone(),
+            intern: Arc::clone(&self.intern),
+            names: self.names.clone(),
+            tables: self.tables.clone(),
+            pivots: self.pivots.clone(),
+            settings: self.settings.clone(),
+            protection: self.protection.clone(),
+            meta: self.meta.clone(),
+            custom_parts: self.custom_parts.clone(),
+            undo: UndoLog::new(),
+            next_sheet: self.next_sheet,
+            active: self.active,
+            num_fmts: self.num_fmts.clone(),
+            next_num_fmt: self.next_num_fmt,
+            ref_errors: self.ref_errors,
+        }
+    }
+
     fn intern_mut(&mut self) -> &mut Interners {
         Arc::make_mut(&mut self.intern)
     }

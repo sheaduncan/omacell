@@ -72,6 +72,38 @@ fn pivot_create_refresh_remove_and_changeset() {
 }
 
 #[test]
+fn structural_changeset_revert_restores_shifted_pivot_definition() {
+    let mut bus = analysis_bus();
+    seed(&mut bus);
+    common::exec_ok(
+        &mut bus,
+        "pivot.create",
+        json!({
+            "source": "A1:B3",
+            "dest": "E1",
+            "name": "Sales",
+            "rows": ["Region"],
+            "data": [{"source": "Amount", "agg": "sum"}]
+        }),
+    );
+    let before = bus.workbook().pivots().iter().next().unwrap().clone();
+    let changeset = bus
+        .propose(
+            Origin::ExternalAgent,
+            vec![CommandCall {
+                id: CommandId::new("edit.insert").unwrap(),
+                args: json!({"range": "1:1", "shift": "rows"}),
+            }],
+        )
+        .unwrap();
+
+    bus.apply(Origin::User, &changeset.id).unwrap();
+    assert_ne!(bus.workbook().pivots().iter().next(), Some(&before));
+    bus.revert(Origin::User, &changeset.id).unwrap();
+    assert_eq!(bus.workbook().pivots().iter().next(), Some(&before));
+}
+
+#[test]
 fn pivot_output_edit_is_refused() {
     let mut bus = analysis_bus();
     seed(&mut bus);

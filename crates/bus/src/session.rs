@@ -313,11 +313,11 @@ impl Bus {
 
         let changeset = self.changesets.get(id)?.clone();
         let forward = self.changesets.forward_for_apply(id)?.to_vec();
-        let mut workbook = self.workbook.clone();
+        let mut workbook = self.workbook.clone_for_scratch();
         let mut engine = clone_engine(&self.engine);
         let mut items = Vec::with_capacity(forward.len());
         for command in forward {
-            let before = workbook.clone();
+            let before = workbook.clone_for_scratch();
             let effect = dispatch(
                 &self.registry,
                 &mut workbook,
@@ -450,7 +450,14 @@ impl Bus {
         task: crate::handler::TaskCtl,
     ) -> Result<Effect, CoreError> {
         self.check_calls(origin, calls, &how)?;
-        let mut scratch_wb = self.workbook.clone();
+        let mut scratch_wb = if calls
+            .iter()
+            .any(|call| matches!(call.id.as_str(), "edit.undo" | "edit.redo"))
+        {
+            self.workbook.clone()
+        } else {
+            self.workbook.clone_for_scratch()
+        };
         let mut scratch_engine = clone_engine(&self.engine);
         let preflight = dispatch(
             &self.registry,
@@ -654,7 +661,7 @@ fn dispatch(
             .ok_or_else(|| bus_error::unknown(call.id.as_str()))?;
         let before =
             (cmd.descriptor.mutating && cmd.changeset_eligible && cmd.needs_snapshot_inverse())
-                .then(|| workbook.clone());
+                .then(|| workbook.clone_for_scratch());
         let mut ctx =
             CommandContext::with_task(workbook, engine, origin, preflight, dry_run, task.clone());
         let mut effect = cmd.invoke(&mut ctx, call.args.clone())?;
