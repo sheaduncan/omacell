@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::launch_theme;
+use common::{graphics_adapter_available, launch_theme};
 use egui_kittest::{Harness, SnapshotOptions};
 use omacell_gui::Gui;
 
@@ -11,6 +11,9 @@ const SCALES: [f32; 3] = [1.0, 1.5, 2.0];
 
 #[test]
 fn grid_snapshots_across_scales_and_themes() {
+    if !graphics_adapter_available() {
+        return;
+    }
     for theme in THEMES {
         for scale in SCALES {
             let parts = launch_theme(Some(theme));

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{fixed_gpu_setup, launch_theme};
+use common::{fixed_gpu_setup, graphics_adapter_available, launch_theme};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -206,6 +206,9 @@ fn chart_release_edits_are_reachable_through_the_gui_command_surface() {
 #[test]
 #[ignore = "nightly wall-clock smoke bound; shared CI software runners are nondeterministic"]
 fn first_frame_renders_within_software_ci_smoke_budget() {
+    if !graphics_adapter_available() {
+        return;
+    }
     // The product's 300 ms target is gated on the fixed integrated-GPU
     // reference host (WP-28). GitHub's cold lavapipe initialization takes
     // seconds, so this is only a render-completion smoke bound.
