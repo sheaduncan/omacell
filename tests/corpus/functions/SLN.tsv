@@ -2,7 +2,7 @@
 =SLN(1000,100,9)	100	(cost-salvage)/life
 =SLN(100,100,5)	0	already at salvage
 =SLN(100,0,4)	25	no salvage
-=SLN(100,0,0)	#NUM!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. life 0 is #NUM!
+=SLN(100,0,0)	#DIV/0!	zero life divides by zero
 =SLN(#N/A,0,4)	#N/A	cost error propagates
 =SLN(100,#N/A,4)	#N/A	salvage error propagates
 =SLN(100,0,#N/A)	#N/A	life error propagates

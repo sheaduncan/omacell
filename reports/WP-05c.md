@@ -2,6 +2,22 @@
 
 ## Plan (written before coding)
 
+### 2026-09-04 financial-semantics review follow-up (written before coding)
+
+- Add regression corpus rows first for beginning-of-period `IPMT`/`PPMT`,
+  cumulative beginning-of-period windows, the false-zero `RATE` identity, and
+  scale-independent solver convergence.
+- Correct the closed-form payment timing without introducing user-sized loops;
+  make Newton convergence depend on successive rate estimates and a normalized
+  residual instead of an absolute currency residual.
+- Reconcile the remaining financial claims from the repository review in the
+  same pass: reject zero rates for `EFFECT`/`NOMINAL`, apply documented positive
+  rate/present-value checks to cumulative loan functions, and return the Excel
+  division error for zero-life `SLN`.
+- Preserve public function signatures and dependencies, update the WP report
+  and authoritative review ledger, run the function/core suites and strict
+  Clippy, then run exact `just check` before opening the PR.
+
 ### 2026-09-03 bit-shift boundary follow-up (written before coding)
 
 - Update the `BITLSHIFT` and `BITRSHIFT` corpora first with cases at 49,
@@ -33,7 +49,7 @@
   - `crates/fn/src/lookup.rs` — `XLOOKUP`, `XMATCH`, `INDEX`, `MATCH`, `VLOOKUP`, `HLOOKUP`, `LOOKUP`, `CHOOSE`, `OFFSET`, `INDIRECT`, `ROW`, `ROWS`, `COLUMN`, `COLUMNS`, `ADDRESS`, `AREAS`. `OFFSET`/`INDIRECT` are volatile and call `EvalCtx::record_dynamic_ref`. `ROWS`/`COLUMNS`/`INDEX`/`OFFSET` operate on `Reference` dimensions without materializing whole-column payloads. `register_lookup`.
   - `crates/fn/src/array.rs` — `TRANSPOSE`, `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `SEQUENCE` (replaces the WP-05F probe; full `rows, [columns], [start], [step]`), `RANDARRAY` (volatile; `EvalCtx::random_unit("RANDARRAY", index)`), `TAKE`, `DROP`, `CHOOSEROWS`, `CHOOSECOLS`, `VSTACK`, `HSTACK`, `TOCOL`, `TOROW`, `WRAPROWS`, `WRAPCOLS`, `EXPAND`. Every user-controlled output shape is rejected (`#NUM!`) via `RuntimeArray::checked_len` / `try_new` before `Vec` allocation. `register_array`.
   - `crates/fn/src/lambda.rs` — `MAP`, `REDUCE`, `SCAN`, `BYROW`, `BYCOL`, `MAKEARRAY` (eager; last arg is a `RuntimeValue::Lambda`, applied through `omacell_core::lambda::apply`, which already enforces `MAX_CALL_DEPTH`). Catalog-only `FunctionSpec`s for evaluator-owned `LET`, `LAMBDA`, `ISOMITTED` (lazy stubs, **not** registered on `FnRegistry`). `register_lambda` skips `is_language_fn` names.
-  - `crates/fn/src/financial.rs` — `PMT`, `IPMT`, `PPMT`, `NPV`, `XNPV`, `IRR`, `XIRR`, `MIRR`, `FV`, `PV`, `RATE`, `NPER`, `SLN`, `DB`, `DDB`, `SYD`, `EFFECT`, `NOMINAL`, `CUMIPMT`, `CUMPRINC`. Newton solvers: `RATE`/`IRR` max 20 iterations, `XIRR` max 100; residual `|f| < 1e-8` or `#NUM!`. `register_financial`.
+  - `crates/fn/src/financial.rs` — `PMT`, `IPMT`, `PPMT`, `NPV`, `XNPV`, `IRR`, `XIRR`, `MIRR`, `FV`, `PV`, `RATE`, `NPER`, `SLN`, `DB`, `DDB`, `SYD`, `EFFECT`, `NOMINAL`, `CUMIPMT`, `CUMPRINC`. Newton solvers: `RATE`/`IRR` max 20 iterations, `XIRR` max 100; normalized residual `<= 1e-8` or successive-rate delta `<= 1e-7`, otherwise `#NUM!`. `register_financial`.
   - `crates/fn/src/engineering.rs` — `CONVERT` (full Excel unit table + SI prefixes; temperature via Kelvin), `DEC2BIN`/`DEC2OCT`/`DEC2HEX` and inverses `BIN2DEC`/`OCT2DEC`/`HEX2DEC`, `BITAND`/`BITOR`/`BITXOR`/`BITLSHIFT`/`BITRSHIFT`, `DELTA`, `GESTEP`. `register_engineering`.
   - `crates/fn/src/lib.rs` — **append only**: `mod args/lookup/array/lambda/financial/engineering` and `register_*` calls inside `register_all`. Do **not** delete `ABS`/`SUM`/`IF`/`NOW`/`RAND` probes.
   - `crates/fn/src/probes.rs` — remove **only** `SEQUENCE` (moved to `array.rs`). Keep `ABS`/`SUM`/`IF`/`NOW`/`RAND`.
@@ -48,7 +64,7 @@
   - `omacell_fn::{register_all, all_specs, functions_json}` now includes WP-05c specs.
   - `omacell_fn::{LOOKUP_SPECS, ARRAY_SPECS, LAMBDA_SPECS, FINANCIAL_SPECS, ENGINEERING_SPECS}` (crate-visible slices).
   - No new WP-01 types, commands, or CLI. No RFC.
-  - Solver constants (`RATE`/`IRR`: 20 iters, `XIRR`: 100, tol `1e-8`) documented in this report and known-differences.
+  - Solver constants (`RATE`/`IRR`: 20 iters, `XIRR`: 100, normalized residual `1e-8`, rate delta `1e-7`) documented in this report and known-differences.
 - Tests and corpora to write first:
   - `tests/corpus/functions/{XLOOKUP,XMATCH,INDEX,MATCH,VLOOKUP,HLOOKUP,LOOKUP,CHOOSE,OFFSET,INDIRECT,ROW,ROWS,COLUMN,COLUMNS,ADDRESS,AREAS}.tsv`
   - `tests/corpus/functions/{TRANSPOSE,FILTER,SORT,SORTBY,UNIQUE,SEQUENCE,RANDARRAY,TAKE,DROP,CHOOSEROWS,CHOOSECOLS,VSTACK,HSTACK,TOCOL,TOROW,WRAPROWS,WRAPCOLS,EXPAND}.tsv`
@@ -65,7 +81,7 @@
   - **`SEQUENCE` arity:** replace the 2-arg probe with Excel's `SEQUENCE(rows, [columns], [start], [step])`. Dimension args truncate toward zero (Excel), not round (probe).
   - **Approximate `VLOOKUP`/`HLOOKUP`/`MATCH`/`LOOKUP`:** binary search assuming sorted input; unsorted data is **not** “fixed” — Excel-compatible wrong answers are corpus-covered.
   - **`FILTER` with no keepers:** `#CALC!` when `if_empty` omitted (Excel).
-  - **Solver policy:** Newton–Raphson; `RATE`/`IRR` 20 iterations default guess `0.1`; `XIRR` 100 iterations; success when `|f| < 1e-8`; else `#NUM!`.
+  - **Solver policy:** Newton–Raphson; `RATE`/`IRR` 20 iterations default guess `0.1`; `XIRR` 100 iterations; success at normalized residual `<= 1e-8` or successive-rate delta `<= 1e-7`; else `#NUM!`.
   - **Engineering count:** WP text says 12; the named list is 14 (`CONVERT` + 6 bases + 5 bit ops + `DELTA` + `GESTEP`). Implement the named list. Cross conversions (`BIN2HEX`, …) stay unimplemented.
 - Open questions at planning time:
   1. LibreOffice coverage of `XLOOKUP`/`FILTER`/`MAP`/`MAKEARRAY`/`RANDARRAY` via `_xlfn.` may still be incomplete; unexplained mismatches will be appended to known-differences rather than weakening corpora.
@@ -105,6 +121,13 @@ documented unit table, distinguishes case-sensitive 1/72-inch `Pica`/`Picapt`
 from 1/6-inch `pica`, adds pound-force and the missing cubic units, and supports
 the eight binary prefixes on bit/byte units only.
 
+The 2026-09-04 financial follow-up aligns beginning-of-period interest and
+principal with the post-payment balance, including partial cumulative windows.
+It removes `RATE`'s false zero shortcut and normalizes solver residuals by the
+cash-flow scale, so multiplying every cash flow by a currency scale does not
+change convergence. `EFFECT`, `NOMINAL`, cumulative loan functions, and
+zero-life `SLN` now apply their documented Excel error boundaries.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -113,7 +136,7 @@ the eight binary prefixes on bit/byte units only.
 | `all_specs()` | catalog = probes + WP-05c (includes `LET`/`LAMBDA`/`ISOMITTED`) |
 | `LOOKUP_SPECS`, `ARRAY_SPECS`, `LAMBDA_SPECS`, `FINANCIAL_SPECS`, `ENGINEERING_SPECS` | `omacell_fn` |
 | `functions_json()` | includes every spec, sorted by name |
-| Solver constants | `RATE_IRR_MAX_ITERS=20`, `XIRR_MAX_ITERS=100`, `SOLVER_TOL=1e-8`, `DEFAULT_GUESS=0.1` in `financial.rs` |
+| Solver constants | `RATE_IRR_MAX_ITERS=20`, `XIRR_MAX_ITERS=100`, `SOLVER_TOL=1e-8`, `SOLVER_RATE_TOL=1e-7`, `DEFAULT_GUESS=0.1` in `financial.rs` |
 | Corpora | `tests/corpus/functions/<NAME>.tsv` |
 
 No commands, CLI, or WP-01 type changes. `LET`/`LAMBDA`/`ISOMITTED` are **not** `FnRegistry` entries.
@@ -145,6 +168,17 @@ Host: rustc 1.98.0, Linux.
 - Eager smoke: `eager_functions_do_not_panic_on_garbage_args` — pass
 - Criterion `crates/fn/benches/lookup_array.rs`: 1M-row `XLOOKUP`/`XMATCH`/`FILTER`/`SORT`/`UNIQUE`, 10k `MAP`, `IRR`/`RATE`. Not part of `just check`. Run `cargo bench -p omacell-fn --bench lookup_array`. Review: regressions over 10% vs this harness fail review.
 - Review measurement: optimized `unique_1m --quick` **469.34 ms** midpoint on the review host.
+- 2026-09-04 financial test-first evidence:
+  - Fourteen review assertions reproduced across `IPMT`, `PPMT`, `RATE`, `SLN`,
+    `EFFECT`, `NOMINAL`, `CUMIPMT`, and `CUMPRINC` (the first batch reported 12
+    mismatches, followed by the two partial-window cases); all updated WP-05c
+    corpora and the complete `omacell-fn` suite now pass.
+  - `RATE(3,-500,1000,-500)` returns `0.3836729` rather than the incorrect
+    zero shortcut; scaling the 12-period cash flows by one billion preserves
+    the `0.02922854` result.
+  - Billion-period cumulative calculations remain constant-time with a small
+    positive rate and return finite results.
+  - Strict all-target Clippy for `omacell-fn` is warning-free.
 - 2026-09-03 bit-shift test-first evidence:
   - Six cases at 49 and ±53 bits initially returned `#NUM!`; they now return
     zero when the input/result remains within the 48-bit value ceiling.
@@ -193,6 +227,9 @@ Host: rustc 1.98.0, Linux.
    bits, while `BITLSHIFT`/`BITRSHIFT` shift magnitudes are allowed through 53.
 5. **Resolved 2026-09-03:** `CONVERT` recognizes Microsoft's complete current
    alias table and binary prefixes, including case-sensitive Pica semantics.
+6. **Resolved 2026-09-04:** beginning-of-period loan schedules, financial
+   argument errors, and rate-solver convergence now match the documented Excel
+   behavior. The live-Excel oracle remains the separately owned WP-28 gate.
 
 ## RFC (only if a frozen contract changed)
 
@@ -203,6 +240,9 @@ contract.
 
 The `CONVERT` unit-table follow-up changes no public signature or frozen
 contract.
+
+The financial-semantics follow-up adds one documented solver constant and
+changes no function signature, command schema, or frozen WP-01 type.
 
 ## Checklist
 

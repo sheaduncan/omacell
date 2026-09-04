@@ -1,6 +1,6 @@
 # formula	expected	note
 =CUMIPMT(0.1,1,100,1,1,0)	-10	Excel takes pv as a positive loan amount; result is negative
-=CUMIPMT(0,2,100,1,2,0)	0	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. zero rate → 0 interest
+=CUMIPMT(0,2,100,1,2,0)	#NUM!	Microsoft documents rate <= 0 as #NUM!
 =CUMIPMT(0.1,1,100,1,1,1)	0	type 1 first period interest is 0
 =CUMIPMT(0.1,1,100,0,1,0)	#NUM!	start_period < 1 is #NUM!
 =CUMIPMT(0.1,1,100,1,2,0)	#NUM!	end_period > nper is #NUM!
@@ -9,4 +9,7 @@
 =CUMIPMT(0.1,0,100,1,1,0)	#NUM!	nper 0 is #NUM!
 =CUMIPMT(0.1,2,200,1,1,0)	-20	first-period interest = -rate*pv
 =CUMIPMT(0.1,1,100,1,1,#N/A)	#N/A	type error propagates
-=CUMIPMT(-1,1,100,1,1,0)	#NUM!	rate ≤ -1 is #NUM!
+=CUMIPMT(-1,1,100,1,1,0)	#NUM!	rate <= 0 is #NUM!
+=ROUND(CUMIPMT(0.1,2,1000,1,2,1),6)	-47.619048	type 1 includes zero first-period interest and post-opening-payment interest in period 2
+=ROUND(CUMIPMT(0.1,2,1000,2,2,1),6)	-47.619048	type 1 partial window is aligned to the requested payment period
+=CUMIPMT(0.1,2,0,1,2,0)	#NUM!	Microsoft documents pv <= 0 as #NUM!

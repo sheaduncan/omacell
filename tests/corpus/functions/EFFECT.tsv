@@ -1,6 +1,6 @@
 # formula	expected	note
 =EFFECT(0.1,2)	0.1025	(1+0.1/2)^2-1
-=EFFECT(0,12)	0	zero nominal
+=EFFECT(0,12)	#NUM!	Microsoft documents nominal_rate <= 0 as #NUM!
 =EFFECT(0.12,1)	0.12	npery=1 equals the nominal rate
 =EFFECT(-0.1,12)	#NUM!	nominal ≤ 0 is #NUM!
 =EFFECT(0.12,0)	#NUM!	npery < 1 is #NUM!

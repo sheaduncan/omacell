@@ -10,3 +10,4 @@
 =PPMT(0.1,#N/A,1,-100)	#N/A	per error propagates
 =PPMT(0,2,2,-100)	50	second of two zero-rate periods
 =PPMT(0,1,1,-100,0,1)	100	type 1 with nper=1 still repays pv
+=ROUND(PPMT(0.1,2,2,1000,0,1),2)	-476.19	type 1 period 2 principal is payment less post-opening-payment interest

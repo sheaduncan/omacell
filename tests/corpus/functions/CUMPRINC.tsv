@@ -1,12 +1,15 @@
 # formula	expected	note
 =CUMPRINC(0.1,1,100,1,1,0)	-100	one period: whole principal; Excel signs are negative for a loan
-=CUMPRINC(0,2,100,1,2,0)	-100	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. zero rate: all principal over the window
-=CUMPRINC(0,2,100,1,1,0)	-50	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. first of two zero-rate periods
+=CUMPRINC(0,2,100,1,2,0)	#NUM!	Microsoft documents rate <= 0 as #NUM!
+=CUMPRINC(0,2,100,1,1,0)	#NUM!	zero rate is invalid even for a partial window
 =CUMPRINC(0.1,1,100,0,1,0)	#NUM!	start_period < 1 is #NUM!
 =CUMPRINC(0.1,1,100,1,2,0)	#NUM!	end_period > nper is #NUM!
 =CUMPRINC(0.1,1,100,2,1,0)	#NUM!	start > end is #NUM!
 =CUMPRINC(#N/A,1,100,1,1,0)	#N/A	rate error propagates
 =CUMPRINC(0.1,0,100,1,1,0)	#NUM!	nper 0 is #NUM!
-=CUMPRINC(0,4,80,2,3,0)	-40	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. middle two of four zero-rate periods
+=ROUND(CUMPRINC(0.1,4,80,1,4,0),8)	-80	full end-of-period window repays the full principal
 =CUMPRINC(0.1,1,100,1,1,#N/A)	#N/A	type error propagates
-=CUMPRINC(-1,1,100,1,1,0)	#NUM!	rate ≤ -1 is #NUM!
+=CUMPRINC(-1,1,100,1,1,0)	#NUM!	rate <= 0 is #NUM!
+=ROUND(CUMPRINC(0.1,2,1000,1,2,1),6)	-1000	type 1 full window repays the full principal
+=ROUND(CUMPRINC(0.1,2,1000,2,2,1),6)	-476.190476	type 1 partial window is aligned to the requested payment period
+=CUMPRINC(0.1,2,0,1,2,0)	#NUM!	Microsoft documents pv <= 0 as #NUM!

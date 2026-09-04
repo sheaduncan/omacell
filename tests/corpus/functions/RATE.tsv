@@ -10,3 +10,5 @@
 =RATE(1,-110,100,0,0,#N/A)	#N/A	guess error propagates
 =RATE(1,0,0,1)	#NUM!	pmt=pv=0 fv=1 has no rate that satisfies the identity → #NUM!
 =RATE(1,0,100,-110)	0.1	pv 100 fv -110 is the inverse of the first row
+=ROUND(RATE(3,-500,1000,-500),7)	0.3836729	zero-rate identity includes pmt*nper, so this annuity has a nonzero solution
+=ROUND(RATE(12,-100000000000,1000000000000),8)	0.02922854	convergence is scale-independent for currency-sized inputs
