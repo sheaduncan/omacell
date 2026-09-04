@@ -1,18 +1,13 @@
 ---
 source: crates/cli/tests/help.rs
-expression: "help(&[\"changeset\", \"--help\"])"
+expression: "help(&[\"changeset\", \"discard\", \"--help\"])"
 ---
-Changesets on a running instance
+Discard a proposed changeset without applying it
 
-Usage: omacell changeset [OPTIONS] <COMMAND>
+Usage: omacell changeset discard [OPTIONS] <ID>
 
-Commands:
-  list     List stored changesets
-  show     Show one changeset
-  apply    Apply a proposed changeset
-  discard  Discard a proposed changeset without applying it
-  revert   Revert an applied changeset
-  export   Export a changeset as `.omc`
+Arguments:
+  <ID>  Changeset id
 
 Options:
       --json                  Machine-readable stdout (and stderr errors)

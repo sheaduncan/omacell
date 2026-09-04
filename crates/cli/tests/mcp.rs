@@ -231,29 +231,43 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
         .unwrap_err();
     assert!(revert_err.contains("command.denied"));
 
+    let pending = call_tool(&client, "changeset_list", json!({}))
+        .await
+        .unwrap();
+    assert!(
+        pending
+            .as_array()
+            .is_some_and(|list| list.iter().any(|cs| cs["status"] == "proposed")),
+        "expected a pending proposal before recalc, got {pending}"
+    );
+    let recalc_err = call_tool(&client, "recalc", json!({})).await.unwrap_err();
+    assert!(recalc_err.contains("command.denied"));
+
     let export_path = home.path().join("export.csv");
-    call_tool(
+    let export_err = call_tool(
         &client,
         "export",
         json!({"path": export_path.display().to_string()}),
     )
     .await
-    .unwrap();
-    assert!(export_path.is_file());
+    .unwrap_err();
+    assert!(export_err.contains("command.denied"));
+    assert!(!export_path.exists());
 
     let saved_path = home.path().join("saved.xlsx");
-    call_tool(
+    let save_err = call_tool(
         &client,
         "workbook_save",
         json!({"path": saved_path.display().to_string()}),
     )
     .await
-    .unwrap();
-    assert!(saved_path.is_file());
+    .unwrap_err();
+    assert!(save_err.contains("command.denied"));
+    assert!(!saved_path.exists());
     let books = call_tool(&client, "workbook_list", json!({}))
         .await
         .unwrap();
-    assert_eq!(books["files"][0], saved_path.display().to_string());
+    assert_eq!(books["files"][0], book.display().to_string());
 
     let resources = client.list_resources(Default::default()).await.unwrap();
     assert!(!resources.resources.is_empty());
@@ -285,6 +299,32 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
         !changesets.as_array().unwrap().is_empty(),
         "opening another workbook must not discard a pending proposal"
     );
+
+    wait_ipc(&runtime.join("omacell"));
+    for cs in changesets.as_array().unwrap() {
+        if cs["status"] != "proposed" {
+            continue;
+        }
+        let discard_id = cs["id"].as_str().unwrap();
+        let discarded = std::process::Command::new(cargo_bin("omacell"))
+            .env("HOME", home.path())
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .args(["--json", "changeset", "discard", discard_id])
+            .output()
+            .unwrap();
+        assert!(
+            discarded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&discarded.stderr)
+        );
+    }
+    call_tool(
+        &client,
+        "workbook_open",
+        json!({"path": book.display().to_string()}),
+    )
+    .await
+    .unwrap();
 
     let render_err = call_tool(&client, "render", json!({"range": "A1"}))
         .await

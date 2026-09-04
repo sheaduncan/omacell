@@ -107,6 +107,9 @@ pub enum ControlOp {
     /// Fetch one changeset by id.
     #[serde(rename = "changeset.get")]
     ChangesetGet,
+    /// Discard a proposed changeset without applying it.
+    #[serde(rename = "changeset.discard")]
+    ChangesetDiscard,
     /// Liveness check.
     Ping,
 }
@@ -133,7 +136,7 @@ pub enum Request {
         op: ControlOp,
         /// Subscribe filter (only `subscribe`).
         events: Vec<String>,
-        /// Changeset id (`changeset.apply` / `revert` / `get`).
+        /// Changeset id (`changeset.apply` / `revert` / `get` / `discard`).
         changeset: Option<String>,
     },
 }
@@ -486,7 +489,10 @@ fn decode_request_object(obj: &Map<String, Value>) -> Result<Request, CoreError>
                 return Err(error::ipc_protocol("unexpected field for this op"));
             }
         }
-        ControlOp::ChangesetApply | ControlOp::ChangesetRevert | ControlOp::ChangesetGet => {
+        ControlOp::ChangesetApply
+        | ControlOp::ChangesetRevert
+        | ControlOp::ChangesetGet
+        | ControlOp::ChangesetDiscard => {
             if obj.contains_key("events") {
                 return Err(error::ipc_protocol("unexpected field for this op"));
             }
@@ -520,6 +526,7 @@ fn parse_op(s: &str) -> Result<ControlOp, CoreError> {
         "changeset.revert" => Ok(ControlOp::ChangesetRevert),
         "changeset.list" => Ok(ControlOp::ChangesetList),
         "changeset.get" => Ok(ControlOp::ChangesetGet),
+        "changeset.discard" => Ok(ControlOp::ChangesetDiscard),
         "ping" => Ok(ControlOp::Ping),
         other => Err(error::ipc_protocol(format!("unknown op {other:?}"))),
     }
@@ -710,6 +717,7 @@ pub fn encode_control_with_limits(
         ControlOp::ChangesetRevert => "changeset.revert",
         ControlOp::ChangesetList => "changeset.list",
         ControlOp::ChangesetGet => "changeset.get",
+        ControlOp::ChangesetDiscard => "changeset.discard",
         ControlOp::Ping => "ping",
     };
     map.insert("op".into(), Value::from(op_s));

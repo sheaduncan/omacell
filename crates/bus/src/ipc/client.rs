@@ -169,6 +169,11 @@ impl IpcClient {
         self.control(ControlOp::ChangesetRevert, &[], Some(changeset))
     }
 
+    /// Discard a proposed changeset without applying it.
+    pub fn discard(&mut self, changeset: &str) -> Result<Reply, CoreError> {
+        self.control(ControlOp::ChangesetDiscard, &[], Some(changeset))
+    }
+
     /// Next buffered or incoming unsolicited record.
     pub fn poll_record(&mut self) -> Result<Option<ServerRecord>, CoreError> {
         if let Some(record) = self.pending_records.pop_front() {

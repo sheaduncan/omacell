@@ -166,7 +166,7 @@
       "name": "commands_list"
     },
     {
-      "description": "Export the open workbook (`file.export`).",
+      "description": "Export is a user action; MCP is denied. Use the CLI/GUI.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -315,7 +315,7 @@
       "name": "range_write"
     },
     {
-      "description": "Recalculate the workbook. `wait` is reserved for async AI cells (WP-22).",
+      "description": "Recalculate the live workbook. Denied while a changeset is still proposed. `wait` is reserved for async AI cells (WP-22).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -430,7 +430,7 @@
       "name": "workbook_list"
     },
     {
-      "description": "Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed.",
+      "description": "Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed; discard from `omacell changeset discard`.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -450,7 +450,7 @@
       "name": "workbook_open"
     },
     {
-      "description": "Save the open workbook.",
+      "description": "Save is a user action; MCP is denied. Use the CLI/GUI.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,

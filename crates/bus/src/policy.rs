@@ -22,6 +22,15 @@ impl MutationPolicy {
         !Self::is_model_origin(origin)
     }
 
+    /// MCP session-private mutations that may run as `Origin::ExternalAgent`.
+    ///
+    /// This is not Ipc/User authority. Path-writing `file.save` / `file.export`
+    /// stay denied; agents on IPC remain changeset-only for grid edits.
+    #[must_use]
+    pub fn allow_mcp_session_mutate(command: &str) -> bool {
+        matches!(command, "file.open" | "calc.recalc")
+    }
+
     /// Submitting a changeset proposal.
     #[must_use]
     pub fn allow_propose(origin: Origin) -> bool {

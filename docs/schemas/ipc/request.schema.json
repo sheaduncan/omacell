@@ -69,7 +69,7 @@
         "id": { "type": "integer", "minimum": 0 },
         "op": {
           "type": "string",
-          "enum": ["changeset.apply", "changeset.revert", "changeset.get"]
+          "enum": ["changeset.apply", "changeset.revert", "changeset.get", "changeset.discard"]
         },
         "changeset": { "type": "string", "minLength": 1 }
       }

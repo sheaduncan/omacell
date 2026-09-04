@@ -157,6 +157,24 @@ impl Bus {
         self.execute_with_task(origin, id, args, crate::handler::TaskCtl::default())
     }
 
+    /// Execute an allowlisted MCP session command as `Origin::ExternalAgent`.
+    ///
+    /// Does not grant Ipc/User authority. Save and export stay denied.
+    pub(crate) fn execute_mcp_session(&mut self, id: &str, args: serde_json::Value) -> Outcome {
+        if !MutationPolicy::allow_mcp_session_mutate(id) {
+            return Outcome::failure(bus_error::denied(format!(
+                "MCP cannot execute {id} as a session command"
+            )));
+        }
+        self.dispatch_execute(
+            Origin::ExternalAgent,
+            id,
+            args,
+            crate::handler::TaskCtl::default(),
+            Run::mcp_session(),
+        )
+    }
+
     /// Execute with cooperative cancel/progress (task runner).
     pub fn execute_with_task(
         &mut self,
@@ -164,6 +182,17 @@ impl Bus {
         id: &str,
         args: serde_json::Value,
         task: crate::handler::TaskCtl,
+    ) -> Outcome {
+        self.dispatch_execute(origin, id, args, task, Run::direct())
+    }
+
+    fn dispatch_execute(
+        &mut self,
+        origin: Origin,
+        id: &str,
+        args: serde_json::Value,
+        task: crate::handler::TaskCtl,
+        how: Run,
     ) -> Outcome {
         if id == "edit.repeat" {
             let repeat_args = if args.is_null() {
@@ -186,7 +215,7 @@ impl Bus {
                 return Outcome::failure(bus_error::args("there is no prior mutation to repeat"));
             };
             let calls = vec![call; repeat.count as usize];
-            return match self.run_with_task(origin, &calls, Run::direct(), task) {
+            return match self.run_with_task(origin, &calls, how, task) {
                 Ok(effect) => {
                     self.notify_command_observers(origin, &calls);
                     Outcome::success(effect.result)
@@ -203,7 +232,7 @@ impl Bus {
                 && command.exposure == Exposure::Public
                 && !matches!(call.id.as_str(), "edit.undo" | "edit.redo" | "edit.repeat")
         });
-        match self.run_with_task(origin, std::slice::from_ref(&call), Run::direct(), task) {
+        match self.run_with_task(origin, std::slice::from_ref(&call), how, task) {
             Ok(effect) => {
                 let opened_workbook = effect
                     .events
@@ -588,6 +617,18 @@ impl Run {
             allow_internal: false,
             require_eligible: false,
             require_direct: true,
+            scratch_only: false,
+            emit: true,
+            recalc: true,
+            applied_changeset: None,
+        }
+    }
+
+    fn mcp_session() -> Self {
+        Self {
+            allow_internal: false,
+            require_eligible: false,
+            require_direct: false,
             scratch_only: false,
             emit: true,
             recalc: true,
