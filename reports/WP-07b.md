@@ -30,7 +30,7 @@
     - mutating + changeset-eligible → propose;
     - mutating + not eligible (`calc.recalc`, `edit.undo`, `edit.redo`) → execute (Ipc is trusted in-process; these cannot be proposed).
     - `mode: execute` on a changeset-eligible mutating command is **rejected** (`ipc.mode`) so the socket cannot bypass review.
-  - **Control `op`:** `subscribe`, `unsubscribe`, `changeset.apply`, `changeset.revert`, `changeset.list`, `changeset.get`, `ping`.
+  - **Control `op`:** `subscribe`, `unsubscribe`, `changeset.apply`, `changeset.revert`, `changeset.list`, `changeset.get`, `changeset.discard`, `ping`.
   - **Event filter names:** frozen Event `type` strings (`cell_changed`, `recalc_done`, …). Empty `events` on subscribe means all types.
   - **Overflow:** per-client queue 64 events / 256 KiB. On overflow the server writes an overflow record and disconnects. Command dispatch never waits on a client write beyond a short socket timeout.
   - **Limits:** see table below. Checked before allocating the parsed value (frame size and nesting) or before accept (connection count).
