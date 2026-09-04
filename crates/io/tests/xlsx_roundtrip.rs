@@ -1,6 +1,6 @@
 //! Open → save → open; L1/L2 diff empty. External loaders skip if absent.
 
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -13,7 +13,7 @@ use omacell_core::sheet::{
 };
 use omacell_core::style::{Color, Fill, Font, GradientFill, GradientKind, GradientStop, Style};
 use omacell_core::tables::{Table, TableId};
-use omacell_core::workbook::{Workbook, WorkbookProtectionState};
+use omacell_core::workbook::{DateSystem, Workbook, WorkbookProtectionState};
 use omacell_io::xlsx::{
     SaveOptions, diff, open, open_bytes, save, save_bytes, save_workbook_bytes,
 };
@@ -34,6 +34,59 @@ fn xlsx_files() -> Vec<PathBuf> {
         .collect();
     files.sort();
     files
+}
+
+fn zip_text_part(bytes: &[u8], name: &str) -> String {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut text = String::new();
+    archive
+        .by_name(name)
+        .unwrap()
+        .read_to_string(&mut text)
+        .unwrap();
+    text
+}
+
+fn modern_protection_fixture() -> Vec<u8> {
+    let base = save_workbook_bytes(&Workbook::new()).unwrap();
+    let mut input = zip::ZipArchive::new(Cursor::new(base)).unwrap();
+    let mut output = Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut output);
+        for index in 0..input.len() {
+            let mut entry = input.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if name == "xl/workbook.xml" {
+                let xml = String::from_utf8(bytes).unwrap();
+                bytes = xml
+                    .replace(
+                        "<bookViews>",
+                        r#"<workbookPr codeName="ThisWorkbook" defaultThemeVersion="166925"/><workbookProtection lockStructure="1" workbookAlgorithmName="SHA-512" workbookHashValue="d29ya2Jvb2staGFzaA==" workbookSaltValue="d29ya2Jvb2stc2FsdA==" workbookSpinCount="100000"/><bookViews>"#,
+                    )
+                    .into_bytes();
+            } else if name == "xl/worksheets/sheet1.xml" {
+                let xml = String::from_utf8(bytes).unwrap();
+                bytes = xml
+                    .replace(
+                        "<sheetViews>",
+                        r#"<sheetPr codeName="SheetCode"><outlinePr summaryBelow="0"/><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews>"#,
+                    )
+                    .replace(
+                        "</sheetData>",
+                        r#"</sheetData><sheetProtection sheet="1" algorithmName="SHA-512" hashValue="c2hlZXQtaGFzaA==" saltValue="c2hlZXQtc2FsdA==" spinCount="100000"/>"#,
+                    )
+                    .into_bytes();
+            }
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+    output.into_inner()
 }
 
 #[test]
@@ -173,6 +226,104 @@ fn new_workbook_save_bytes_reopens() {
         slot.unwrap().value,
         omacell_core::value::Value::Number(n) if n == 42.0
     ));
+}
+
+#[test]
+fn modern_protection_and_source_properties_survive_roundtrip() {
+    let doc = open_bytes(&modern_protection_fixture()).unwrap();
+    assert_eq!(
+        doc.workbook.protection().password.as_deref(),
+        Some(b"d29ya2Jvb2staGFzaA==".as_slice())
+    );
+    assert_eq!(
+        doc.workbook
+            .sheet(doc.workbook.active_sheet())
+            .unwrap()
+            .protection
+            .password
+            .as_deref(),
+        Some(b"c2hlZXQtaGFzaA==".as_slice())
+    );
+
+    let saved = save_bytes(&doc).unwrap();
+    let workbook = zip_text_part(&saved, "xl/workbook.xml");
+    assert!(
+        workbook.contains(r#"<workbookPr codeName="ThisWorkbook" defaultThemeVersion="166925"/>"#),
+        "{workbook}"
+    );
+    assert!(
+        workbook.contains(r#"workbookAlgorithmName="SHA-512""#),
+        "{workbook}"
+    );
+    assert!(
+        workbook.contains(r#"workbookHashValue="d29ya2Jvb2staGFzaA==""#),
+        "{workbook}"
+    );
+    assert!(!workbook.contains("workbookPassword="), "{workbook}");
+
+    let sheet = zip_text_part(&saved, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<sheetPr codeName="SheetCode"><outlinePr summaryBelow="0"/><pageSetUpPr fitToPage="1"/></sheetPr>"#), "{sheet}");
+    assert!(sheet.contains(r#"algorithmName="SHA-512""#), "{sheet}");
+    assert!(sheet.contains(r#"hashValue="c2hlZXQtaGFzaA==""#), "{sheet}");
+    assert!(!sheet.contains(r#" password=""#), "{sheet}");
+}
+
+#[test]
+fn modeled_property_edits_keep_source_only_properties() {
+    let mut doc = open_bytes(&modern_protection_fixture()).unwrap();
+    doc.workbook.settings_mut().date_system = DateSystem::Excel1904;
+    let sheet_id = doc.workbook.active_sheet();
+    doc.workbook
+        .set_tab_color(sheet_id, Some(Color::Rgb { argb: 0xFF11_2233 }))
+        .unwrap();
+
+    let saved = save_bytes(&doc).unwrap();
+    let workbook = zip_text_part(&saved, "xl/workbook.xml");
+    assert!(
+        workbook.contains(r#"codeName="ThisWorkbook""#),
+        "{workbook}"
+    );
+    assert!(workbook.contains(r#"date1904="1""#), "{workbook}");
+
+    let sheet = zip_text_part(&saved, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"codeName="SheetCode""#), "{sheet}");
+    assert!(
+        sheet.contains(r#"<outlinePr summaryBelow="0"/>"#),
+        "{sheet}"
+    );
+    assert!(sheet.contains(r#"<pageSetUpPr fitToPage="1"/>"#), "{sheet}");
+    assert!(sheet.contains(r#"<tabColor rgb="FF112233"/>"#), "{sheet}");
+}
+
+#[test]
+fn explicit_protection_edits_replace_preserved_modern_hashes() {
+    let mut doc = open_bytes(&modern_protection_fixture()).unwrap();
+    doc.workbook
+        .set_workbook_protection(WorkbookProtectionState {
+            enabled: true,
+            lock_structure: true,
+            lock_windows: false,
+            password: Some(b"ABCD".to_vec()),
+        })
+        .unwrap();
+    let sheet_id = doc.workbook.active_sheet();
+    let mut sheet_protection = doc.workbook.sheet(sheet_id).unwrap().protection.clone();
+    sheet_protection.password = Some(b"DCBA".to_vec());
+    doc.workbook
+        .set_sheet_protection(sheet_id, sheet_protection)
+        .unwrap();
+
+    let saved = save_bytes(&doc).unwrap();
+    let workbook = zip_text_part(&saved, "xl/workbook.xml");
+    assert!(
+        workbook.contains(r#"workbookPassword="ABCD""#),
+        "{workbook}"
+    );
+    assert!(!workbook.contains("workbookAlgorithmName="), "{workbook}");
+
+    let sheet = zip_text_part(&saved, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"password="DCBA""#), "{sheet}");
+    assert!(!sheet.contains("algorithmName="), "{sheet}");
 }
 
 #[test]

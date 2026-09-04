@@ -11,14 +11,14 @@ use omacell_core::geometry::DEFAULT_COL_PX;
 use omacell_core::intern::{Interners, RichTextRun};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::pivot::PivotTable;
-use omacell_core::sheet::{ArrayFormula, Sheet, SheetVisibility};
+use omacell_core::sheet::{ArrayFormula, ProtectionAllow, ProtectionState, Sheet, SheetVisibility};
 use omacell_core::storage::CellSlot;
 use omacell_core::style::{
     BorderStyle, Color, Fill, Font, GradientKind, PatternType, Style, StyleId, Underline,
 };
 use omacell_core::tables::Table;
 use omacell_core::value::{StrId, Value};
-use omacell_core::workbook::{CalcMode, DateSystem, Workbook};
+use omacell_core::workbook::{CalcMode, DateSystem, Workbook, WorkbookProtectionState};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
@@ -451,7 +451,7 @@ pub(crate) fn encode(
 
     parts.insert(
         "xl/workbook.xml".into(),
-        workbook_xml(wb, intern, &sheets, &sheet_rids, &pivot_caches)?,
+        workbook_xml(wb, intern, &sheets, &sheet_rids, &pivot_caches, package)?,
     );
     let workbook_content_type = package
         .and_then(|pkg| pkg.workbook_part().ok())
@@ -640,42 +640,158 @@ fn part_order(name: &str) -> u8 {
     }
 }
 
+struct PreservedXmlElement {
+    raw: Vec<u8>,
+    attrs: Vec<(String, String)>,
+}
+
+struct PreservedXmlCapture {
+    start: usize,
+    attrs: Vec<(String, String)>,
+    depth: u32,
+}
+
+fn first_xml_element(bytes: &[u8], wanted: &str) -> Result<Option<PreservedXmlElement>, CoreError> {
+    let mut reader = xml::XmlReader::new(bytes);
+    let mut target: Option<PreservedXmlCapture> = None;
+    while let Some(event) = reader.next()? {
+        let span = reader.last_span();
+        match event {
+            xml::XmlEvent::Start { name, attrs } => {
+                if let Some(target) = target.as_mut() {
+                    target.depth += 1;
+                } else if name == wanted {
+                    target = Some(PreservedXmlCapture {
+                        start: span.start,
+                        attrs,
+                        depth: 1,
+                    });
+                }
+            }
+            xml::XmlEvent::Empty { name, attrs } if target.is_none() && name == wanted => {
+                let raw = bytes
+                    .get(span)
+                    .ok_or_else(|| error::xlsx_write("preserved XML span is outside its part"))?
+                    .to_vec();
+                return Ok(Some(PreservedXmlElement { raw, attrs }));
+            }
+            xml::XmlEvent::End { .. } => {
+                if let Some(target) = target.as_mut() {
+                    target.depth = target.depth.saturating_sub(1);
+                    if target.depth == 0 {
+                        let raw = bytes
+                            .get(target.start..span.end)
+                            .ok_or_else(|| {
+                                error::xlsx_write("preserved XML span is outside its part")
+                            })?
+                            .to_vec();
+                        return Ok(Some(PreservedXmlElement {
+                            raw,
+                            attrs: std::mem::take(&mut target.attrs),
+                        }));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
+fn original_workbook_element(
+    package: Option<&OpcPackage>,
+    wanted: &str,
+) -> Result<Option<PreservedXmlElement>, CoreError> {
+    let Some(package) = package else {
+        return Ok(None);
+    };
+    let Ok(workbook) = package.workbook_part() else {
+        return Ok(None);
+    };
+    first_xml_element(&workbook.bytes, wanted)
+}
+
+fn push_preserved_attrs(out: &mut String, attrs: &[(String, String)], excluded: &[&str]) {
+    for (name, value) in attrs {
+        if !excluded.contains(&name.as_str()) {
+            out.push_str(&format!(r#" {name}="{}""#, xml::escape(value)));
+        }
+    }
+}
+
+fn xml_truthy(value: &str) -> bool {
+    value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+fn workbook_protection_matches(
+    attrs: &[(String, String)],
+    protection: &WorkbookProtectionState,
+) -> bool {
+    let password = xml::attr(attrs, "workbookHashValue")
+        .or_else(|| xml::attr(attrs, "workbookPassword"))
+        .map(str::as_bytes);
+    protection.enabled
+        && protection.lock_structure == xml::attr(attrs, "lockStructure").is_some_and(xml_truthy)
+        && protection.lock_windows == xml::attr(attrs, "lockWindows").is_some_and(xml_truthy)
+        && protection.password.as_deref() == password
+}
+
 fn workbook_xml(
     wb: &Workbook,
     intern: &omacell_core::intern::Interners,
     sheets: &[&Sheet],
     rids: &[String],
     pivot_caches: &[(u32, String)],
+    package: Option<&OpcPackage>,
 ) -> Result<Vec<u8>, CoreError> {
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="{NS}" xmlns:r="{NS_R}">"#
     );
-    if wb.settings().date_system == DateSystem::Excel1904 {
-        s.push_str(r#"<workbookPr date1904="1"/>"#);
+    let original_workbook_pr = original_workbook_element(package, "workbookPr")?;
+    if original_workbook_pr.is_some() || wb.settings().date_system == DateSystem::Excel1904 {
+        s.push_str("<workbookPr");
+        if let Some(original) = &original_workbook_pr {
+            push_preserved_attrs(&mut s, &original.attrs, &["date1904"]);
+        }
+        if wb.settings().date_system == DateSystem::Excel1904 {
+            s.push_str(r#" date1904="1""#);
+        }
+        s.push_str("/>");
     }
     if wb.protection().enabled {
-        let password = wb
-            .protection()
-            .password
-            .as_deref()
-            .map(std::str::from_utf8)
-            .transpose()
-            .map_err(|_| error::xlsx_write("workbook protection verifier is not UTF-8"))?
-            .map(|value| format!(r#" workbookPassword="{}""#, xml::escape(value)))
-            .unwrap_or_default();
-        let structure = if wb.protection().lock_structure {
-            r#" lockStructure="1""#
+        let original = original_workbook_element(package, "workbookProtection")?;
+        if let Some(raw) = original
+            .as_ref()
+            .filter(|element| workbook_protection_matches(&element.attrs, wb.protection()))
+        {
+            s.push_str(
+                std::str::from_utf8(&raw.raw)
+                    .map_err(|_| error::xlsx_write("preserved workbook protection is not UTF-8"))?,
+            );
         } else {
-            ""
-        };
-        let windows = if wb.protection().lock_windows {
-            r#" lockWindows="1""#
-        } else {
-            ""
-        };
-        s.push_str(&format!(
-            r#"<workbookProtection{password}{structure}{windows}/>"#
-        ));
+            let password = wb
+                .protection()
+                .password
+                .as_deref()
+                .map(std::str::from_utf8)
+                .transpose()
+                .map_err(|_| error::xlsx_write("workbook protection verifier is not UTF-8"))?
+                .map(|value| format!(r#" workbookPassword="{}""#, xml::escape(value)))
+                .unwrap_or_default();
+            let structure = if wb.protection().lock_structure {
+                r#" lockStructure="1""#
+            } else {
+                ""
+            };
+            let windows = if wb.protection().lock_windows {
+                r#" lockWindows="1""#
+            } else {
+                ""
+            };
+            s.push_str(&format!(
+                r#"<workbookProtection{password}{structure}{windows}/>"#
+            ));
+        }
     }
     let active = sheets
         .iter()
@@ -793,6 +909,59 @@ fn workbook_xml(
     }
     s.push_str("</workbook>");
     Ok(s.into_bytes())
+}
+
+fn sheet_pr_xml(
+    sheet: &Sheet,
+    filter_mode: bool,
+    original: Option<&PreservedXmlElement>,
+) -> Result<String, CoreError> {
+    if original.is_none() && sheet.tab_color.is_none() && !filter_mode {
+        return Ok(String::new());
+    }
+    let mut out = String::from("<sheetPr");
+    if let Some(original) = original {
+        push_preserved_attrs(&mut out, &original.attrs, &["filterMode"]);
+    }
+    if filter_mode {
+        out.push_str(r#" filterMode="1""#);
+    }
+    out.push('>');
+    if let Some(color) = sheet.tab_color {
+        out.push_str(&color_tag("tabColor", &color));
+    }
+    if let Some(original) = original {
+        for child in ["outlinePr", "pageSetUpPr"] {
+            if let Some(element) = first_xml_element(&original.raw, child)? {
+                out.push_str(std::str::from_utf8(&element.raw).map_err(|_| {
+                    error::xlsx_write(format!("preserved {child} property is not UTF-8"))
+                })?);
+            }
+        }
+    }
+    out.push_str("</sheetPr>");
+    Ok(out)
+}
+
+fn sheet_protection_matches(attrs: &[(String, String)], protection: &ProtectionState) -> bool {
+    let password = xml::attr(attrs, "hashValue")
+        .or_else(|| xml::attr(attrs, "password"))
+        .map(str::as_bytes);
+    let mut allow = ProtectionAllow::default();
+    for (name, target) in [
+        ("selectLockedCells", &mut allow.select_locked),
+        ("selectUnlockedCells", &mut allow.select_unlocked),
+        ("formatCells", &mut allow.format_cells),
+        ("insertRows", &mut allow.insert_rows),
+        ("insertColumns", &mut allow.insert_cols),
+        ("sort", &mut allow.sort),
+        ("autoFilter", &mut allow.auto_filter),
+    ] {
+        if let Some(value) = xml::attr(attrs, name) {
+            *target = !xml_truthy(value);
+        }
+    }
+    protection.enabled && protection.password.as_deref() == password && protection.allow == allow
 }
 
 fn defined_name_range_text(wb: &Workbook, range: RangeRef) -> Result<String, CoreError> {
@@ -1384,6 +1553,9 @@ fn worksheet_xml(
     } else {
         String::new()
     };
+    let original_sheet_pr = original_sheet_element(package, &sheet.name, sheet_ord, "sheetPr")?;
+    let original_sheet_protection =
+        original_sheet_element(package, &sheet.name, sheet_ord, "sheetProtection")?;
     let mut s = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="{NS}" xmlns:r="{NS_R}"{extension_namespaces}{revision_namespace}>"#
     );
@@ -1392,17 +1564,11 @@ fn worksheet_xml(
         .autofilter
         .as_ref()
         .is_some_and(|filter| !filter.columns.is_empty());
-    if sheet.tab_color.is_some() || filter_mode {
-        s.push_str("<sheetPr");
-        if filter_mode {
-            s.push_str(r#" filterMode="1""#);
-        }
-        s.push('>');
-        if let Some(color) = sheet.tab_color {
-            s.push_str(&color_tag("tabColor", &color));
-        }
-        s.push_str("</sheetPr>");
-    }
+    s.push_str(&sheet_pr_xml(
+        sheet,
+        filter_mode,
+        original_sheet_pr.as_ref(),
+    )?);
     s.push_str(&sheet_views_xml(sheet));
     s.push_str(&cols_xml(sheet));
     s.push_str("<sheetData>");
@@ -1463,26 +1629,36 @@ fn worksheet_xml(
     }
     s.push_str("</sheetData>");
     if sheet.protection.enabled {
-        let password = sheet
-            .protection
-            .password
-            .as_deref()
-            .map(std::str::from_utf8)
-            .transpose()
-            .map_err(|_| error::xlsx_write("sheet protection verifier is not UTF-8"))?
-            .map(|value| format!(r#" password="{}""#, xml::escape(value)))
-            .unwrap_or_default();
-        let allow = &sheet.protection.allow;
-        s.push_str(&format!(
-            r#"<sheetProtection sheet="1"{password} selectLockedCells="{}" selectUnlockedCells="{}" formatCells="{}" insertRows="{}" insertColumns="{}" sort="{}" autoFilter="{}"/>"#,
-            u8::from(!allow.select_locked),
-            u8::from(!allow.select_unlocked),
-            u8::from(!allow.format_cells),
-            u8::from(!allow.insert_rows),
-            u8::from(!allow.insert_cols),
-            u8::from(!allow.sort),
-            u8::from(!allow.auto_filter),
-        ));
+        if let Some(raw) = original_sheet_protection
+            .as_ref()
+            .filter(|element| sheet_protection_matches(&element.attrs, &sheet.protection))
+        {
+            s.push_str(
+                std::str::from_utf8(&raw.raw)
+                    .map_err(|_| error::xlsx_write("preserved sheet protection is not UTF-8"))?,
+            );
+        } else {
+            let password = sheet
+                .protection
+                .password
+                .as_deref()
+                .map(std::str::from_utf8)
+                .transpose()
+                .map_err(|_| error::xlsx_write("sheet protection verifier is not UTF-8"))?
+                .map(|value| format!(r#" password="{}""#, xml::escape(value)))
+                .unwrap_or_default();
+            let allow = &sheet.protection.allow;
+            s.push_str(&format!(
+                r#"<sheetProtection sheet="1"{password} selectLockedCells="{}" selectUnlockedCells="{}" formatCells="{}" insertRows="{}" insertColumns="{}" sort="{}" autoFilter="{}"/>"#,
+                u8::from(!allow.select_locked),
+                u8::from(!allow.select_unlocked),
+                u8::from(!allow.format_cells),
+                u8::from(!allow.insert_rows),
+                u8::from(!allow.insert_cols),
+                u8::from(!allow.sort),
+                u8::from(!allow.auto_filter),
+            ));
+        }
     }
     if !sheet.protection.protected_ranges.is_empty() {
         s.push_str("<protectedRanges>");
@@ -1925,8 +2101,23 @@ fn original_sheet_rels(
     sheet_name: &str,
     sheet_ord: usize,
 ) -> Result<Vec<super::opc::Relationship>, CoreError> {
-    let workbook = pkg.workbook_part()?;
-    let rels = pkg.rels_for(&workbook.name)?;
+    let Some(part_name) = original_sheet_part_name(pkg, sheet_name, sheet_ord)? else {
+        return Ok(Vec::new());
+    };
+    pkg.rels_for(&part_name)
+}
+
+fn original_sheet_part_name(
+    pkg: &OpcPackage,
+    sheet_name: &str,
+    sheet_ord: usize,
+) -> Result<Option<String>, CoreError> {
+    let Ok(workbook) = pkg.workbook_part() else {
+        return Ok(None);
+    };
+    let Ok(rels) = pkg.rels_for(&workbook.name) else {
+        return Ok(None);
+    };
     let mut reader = xml::XmlReader::new(&workbook.bytes);
     let mut in_sheets = false;
     let mut sheet_rids = Vec::new();
@@ -1952,9 +2143,27 @@ fn original_sheet_rels(
         rels.iter()
             .find(|rel| rel.id == rid && rel.rel_type == REL_WS)
     }) else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
-    pkg.rels_for(&rel.target)
+    Ok(Some(rel.target.clone()))
+}
+
+fn original_sheet_element(
+    package: Option<&OpcPackage>,
+    sheet_name: &str,
+    sheet_ord: usize,
+    wanted: &str,
+) -> Result<Option<PreservedXmlElement>, CoreError> {
+    let Some(package) = package else {
+        return Ok(None);
+    };
+    let Some(part_name) = original_sheet_part_name(package, sheet_name, sheet_ord)? else {
+        return Ok(None);
+    };
+    let Some(part) = package.part(&part_name) else {
+        return Ok(None);
+    };
+    first_xml_element(&part.bytes, wanted)
 }
 
 fn sheet_rel_target(resolved: &str) -> String {

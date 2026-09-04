@@ -143,7 +143,7 @@ pub struct WorkbookProtectionState {
     /// Prevent workbook-window changes.
     #[serde(default)]
     pub lock_windows: bool,
-    /// OOXML legacy password verifier as uppercase ASCII hex bytes.
+    /// Opaque OOXML password verifier (legacy hex or modern Base64 hash).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<Vec<u8>>,
 }

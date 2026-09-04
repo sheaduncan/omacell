@@ -136,7 +136,7 @@ impl Default for ViewState {
 pub struct ProtectionState {
     /// Protection is on.
     pub enabled: bool,
-    /// Opaque hash / verifier bytes (Excel XOR hash, two bytes, not a secret).
+    /// Opaque OOXML password verifier (legacy hex or modern Base64 hash).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<Vec<u8>>,
     /// Actions still allowed while the sheet is protected.
