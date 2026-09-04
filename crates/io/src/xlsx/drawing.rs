@@ -1,7 +1,7 @@
 //! DrawingML chart parts and sparkline XML from the core model.
 
 use omacell_core::addr::col_to_letters;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use omacell_core::chart::{
     Axis, Chart, ChartAnchor, ChartId, ChartKind, LegendPos, Series, Sparkline, SparklineKind,
@@ -12,24 +12,109 @@ use omacell_core::sheet::Sheet;
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 
+use super::opc::{OpcPackage, relative_target, rels_path};
 use super::xml::{XmlEvent, XmlReader, attr};
+use crate::error;
 
 const NS_XDR: &str = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
 const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
 const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const REL_CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
-pub(crate) const REL_DRAWING: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 pub(crate) const CT_DRAWING: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 pub(crate) const CT_CHART: &str =
     "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
 
-/// Extra OPC parts + the worksheet `<drawing>` rel id.
+/// Generated drawing/chart parts and their package drawing name.
 pub(crate) struct ChartParts {
-    pub drawing_rid: String,
+    pub drawing_name: String,
     pub parts: Vec<(String, Vec<u8>, String)>,
-    pub rels: Vec<(String, String, String, bool)>,
+}
+
+pub(crate) struct PartNameAllocator {
+    used: HashSet<String>,
+    suffix: u32,
+}
+
+impl PartNameAllocator {
+    pub(crate) fn new(package: Option<&OpcPackage>) -> Self {
+        Self {
+            used: package
+                .into_iter()
+                .flat_map(|package| package.parts.keys())
+                .map(|name| name.replace('\\', "/").to_ascii_lowercase())
+                .collect(),
+            suffix: 1,
+        }
+    }
+
+    pub(crate) fn take(&mut self, preferred: String) -> Result<String, CoreError> {
+        if self.used.insert(preferred.to_ascii_lowercase()) {
+            return Ok(preferred);
+        }
+        let (stem, extension) = preferred
+            .rsplit_once('.')
+            .map_or((preferred.as_str(), ""), |(stem, extension)| {
+                (stem, extension)
+            });
+        loop {
+            let suffix = self.suffix;
+            self.suffix = self
+                .suffix
+                .checked_add(1)
+                .ok_or_else(|| error::xlsx_write("drawing part id space is exhausted"))?;
+            let candidate = if extension.is_empty() {
+                format!("{stem}_omacell{suffix}")
+            } else {
+                format!("{stem}_omacell{suffix}.{extension}")
+            };
+            if self.used.insert(candidate.to_ascii_lowercase()) {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    fn take_drawing(&mut self, preferred: String) -> Result<String, CoreError> {
+        let (stem, extension) = preferred
+            .rsplit_once('.')
+            .map_or((preferred.as_str(), ""), |(stem, extension)| {
+                (stem, extension)
+            });
+        let mut candidate = preferred.clone();
+        loop {
+            let relationship_name = rels_path(&candidate);
+            if !self.used.contains(&candidate.to_ascii_lowercase())
+                && !self.used.contains(&relationship_name.to_ascii_lowercase())
+            {
+                self.used.insert(candidate.to_ascii_lowercase());
+                self.used.insert(relationship_name.to_ascii_lowercase());
+                return Ok(candidate);
+            }
+            let suffix = self.suffix;
+            self.suffix = self
+                .suffix
+                .checked_add(1)
+                .ok_or_else(|| error::xlsx_write("drawing part id space is exhausted"))?;
+            candidate = if extension.is_empty() {
+                format!("{stem}_omacell{suffix}")
+            } else {
+                format!("{stem}_omacell{suffix}.{extension}")
+            };
+        }
+    }
+}
+
+struct PreservedDrawingXml {
+    start: String,
+    anchors: Vec<String>,
+    trailing: Vec<String>,
+    end: String,
+}
+
+struct DrawingChild {
+    start: usize,
+    name: String,
+    contains_chart: bool,
 }
 
 /// Emit drawing + chart parts for modeled charts on `sheet`.
@@ -37,6 +122,9 @@ pub(crate) fn chart_parts(
     wb: &Workbook,
     sheet: &Sheet,
     sheet_ord: usize,
+    package: Option<&OpcPackage>,
+    source_drawing: Option<&str>,
+    names: &mut PartNameAllocator,
 ) -> Result<Option<ChartParts>, CoreError> {
     if sheet.charts.is_empty() {
         return Ok(None);
@@ -50,26 +138,93 @@ pub(crate) fn chart_parts(
         // its DrawingML remains authoritative and must stay byte-identical.
         return Ok(None);
     }
-    let drawing_name = format!("xl/drawings/drawing{}.xml", sheet_ord + 1);
-    let mut drawing = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="{NS_XDR}" xmlns:a="{NS_A}">"#
+    let drawing_name = match source_drawing {
+        Some(source) => source.to_string(),
+        None => names.take_drawing(format!("xl/drawings/drawing{}.xml", sheet_ord + 1))?,
+    };
+    let chart_names = (0..sheet.charts.len())
+        .map(|index| {
+            names.take(format!(
+                "xl/charts/chart{}_{}.xml",
+                sheet_ord + 1,
+                index + 1
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let preserved_xml = match (package, source_drawing) {
+        (Some(package), Some(source)) => package
+            .part(source)
+            .map(|part| preserved_drawing_xml(&part.bytes))
+            .transpose()?,
+        _ => None,
+    };
+    let mut drawing = preserved_xml.as_ref().map_or_else(
+        || {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="{NS_XDR}" xmlns:a="{NS_A}">"#
+            )
+        },
+        |preserved| preserved.start.clone(),
     );
+    if let Some(preserved) = &preserved_xml {
+        for anchor in &preserved.anchors {
+            drawing.push_str(anchor);
+        }
+    }
+    let original_rels = match (package, source_drawing) {
+        (Some(package), Some(source)) => package.rels_for(source)?,
+        _ => Vec::new(),
+    };
+    let mut used_rids = HashSet::new();
+    for relationship in &original_rels {
+        if relationship.id.is_empty() || !used_rids.insert(relationship.id.clone()) {
+            return Err(error::xlsx_write(
+                "preserved drawing relationships contain an empty or duplicate id",
+            ));
+        }
+    }
+    let mut next_rid = 1u32;
     let mut drawing_rels = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
     );
+    for relationship in original_rels
+        .iter()
+        .filter(|relationship| relationship.rel_type != REL_CHART)
+    {
+        let target = if relationship.external {
+            relationship.target.clone()
+        } else {
+            relative_target(&drawing_name, &relationship.target)
+        };
+        push_relationship(
+            &mut drawing_rels,
+            &relationship.id,
+            &relationship.rel_type,
+            &target,
+            relationship.external,
+        );
+    }
     let mut parts = Vec::new();
-    for (i, chart) in sheet.charts.iter().enumerate() {
-        let crid = format!("rId{}", i + 1);
-        let cname = format!("xl/charts/chart{}_{}.xml", sheet_ord + 1, i + 1);
+    for ((i, chart), cname) in sheet.charts.iter().enumerate().zip(chart_names) {
+        let crid = next_relationship_id(&mut used_rids, &mut next_rid)?;
         drawing.push_str(&anchor_xml(chart, &crid, i));
-        drawing_rels.push_str(&format!(
-            r#"<Relationship Id="{crid}" Type="{REL_CHART}" Target="../charts/chart{}_{}.xml"/>"#,
-            sheet_ord + 1,
-            i + 1
-        ));
+        push_relationship(
+            &mut drawing_rels,
+            &crid,
+            REL_CHART,
+            &relative_target(&drawing_name, &cname),
+            false,
+        );
         parts.push((cname, chart_xml(wb, sheet, chart)?, CT_CHART.into()));
     }
-    drawing.push_str("</xdr:wsDr>");
+    if let Some(preserved) = &preserved_xml {
+        for trailing in &preserved.trailing {
+            drawing.push_str(trailing);
+        }
+        drawing.push_str(&preserved.end);
+    } else {
+        drawing.push_str("</xdr:wsDr>");
+    }
     drawing_rels.push_str("</Relationships>");
     parts.push((
         drawing_name.clone(),
@@ -77,22 +232,184 @@ pub(crate) fn chart_parts(
         CT_DRAWING.into(),
     ));
     parts.push((
-        format!("xl/drawings/_rels/drawing{}.xml.rels", sheet_ord + 1),
+        rels_path(&drawing_name),
         drawing_rels.into_bytes(),
         String::new(),
     ));
-    let drawing_rid = "rIdChart".to_string();
-    let rels = vec![(
-        drawing_rid.clone(),
-        REL_DRAWING.into(),
-        format!("../drawings/drawing{}.xml", sheet_ord + 1),
-        false,
-    )];
     Ok(Some(ChartParts {
-        drawing_rid,
+        drawing_name,
         parts,
-        rels,
     }))
+}
+
+fn next_relationship_id(used: &mut HashSet<String>, next: &mut u32) -> Result<String, CoreError> {
+    loop {
+        let id = format!("rId{next}");
+        *next = next
+            .checked_add(1)
+            .ok_or_else(|| error::xlsx_write("drawing relationship id space is exhausted"))?;
+        if used.insert(id.clone()) {
+            return Ok(id);
+        }
+    }
+}
+
+fn push_relationship(
+    output: &mut String,
+    id: &str,
+    relationship_type: &str,
+    target: &str,
+    external: bool,
+) {
+    let mode = if external {
+        r#" TargetMode="External""#
+    } else {
+        ""
+    };
+    output.push_str(&format!(
+        r#"<Relationship Id="{}" Type="{}" Target="{}"{mode}/>"#,
+        super::xml::escape(id),
+        super::xml::escape(relationship_type),
+        super::xml::escape(target),
+    ));
+}
+
+fn preserved_drawing_xml(bytes: &[u8]) -> Result<PreservedDrawingXml, CoreError> {
+    let mut reader = XmlReader::new(bytes);
+    let mut depth = 0u32;
+    let mut start = None;
+    let mut end = None;
+    let mut child: Option<DrawingChild> = None;
+    let mut anchors = Vec::new();
+    let mut trailing = Vec::new();
+    while let Some(event) = reader.next()? {
+        let span = reader.last_span();
+        match event {
+            XmlEvent::Start { name, .. } => {
+                if depth == 0 {
+                    if name != "wsDr" {
+                        return Err(error::xlsx_write(
+                            "preserved drawing has an unexpected root element",
+                        ));
+                    }
+                    start = Some(drawing_root_start(xml_span(bytes, span)?));
+                } else {
+                    if depth == 1 {
+                        child = Some(DrawingChild {
+                            start: span.start,
+                            name: name.clone(),
+                            contains_chart: false,
+                        });
+                    }
+                    if name == "chart"
+                        && let Some(child) = child.as_mut()
+                    {
+                        child.contains_chart = true;
+                    }
+                }
+                depth += 1;
+            }
+            XmlEvent::Empty { name, .. } => {
+                if depth == 0 {
+                    if name != "wsDr" {
+                        return Err(error::xlsx_write(
+                            "preserved drawing has an unexpected root element",
+                        ));
+                    }
+                    let raw = xml_span(bytes, span)?;
+                    return Ok(PreservedDrawingXml {
+                        start: drawing_root_start(raw),
+                        anchors,
+                        trailing,
+                        end: drawing_root_end(raw),
+                    });
+                }
+                if name == "chart"
+                    && let Some(child) = child.as_mut()
+                {
+                    child.contains_chart = true;
+                } else if depth == 1 {
+                    let raw = xml_span(bytes, span)?.to_string();
+                    if name == "extLst" {
+                        trailing.push(raw);
+                    } else {
+                        anchors.push(raw);
+                    }
+                }
+            }
+            XmlEvent::End { .. } => {
+                if depth == 2 {
+                    if let Some(child) = child.take()
+                        && !child.contains_chart
+                    {
+                        let raw = xml_span(bytes, child.start..span.end)?.to_string();
+                        if child.name == "extLst" {
+                            trailing.push(raw);
+                        } else {
+                            anchors.push(raw);
+                        }
+                    }
+                } else if depth == 1 {
+                    end = Some(xml_span(bytes, span)?.to_string());
+                }
+                depth = depth.saturating_sub(1);
+            }
+            XmlEvent::Text(_) => {}
+        }
+    }
+    Ok(PreservedDrawingXml {
+        start: start.ok_or_else(|| error::xlsx_write("preserved drawing has no root element"))?,
+        anchors,
+        trailing,
+        end: end.ok_or_else(|| error::xlsx_write("preserved drawing root is not closed"))?,
+    })
+}
+
+fn xml_span(bytes: &[u8], span: std::ops::Range<usize>) -> Result<&str, CoreError> {
+    std::str::from_utf8(
+        bytes
+            .get(span)
+            .ok_or_else(|| error::xlsx_write("preserved drawing span is outside its part"))?,
+    )
+    .map_err(|_| error::xlsx_write("preserved drawing is not UTF-8"))
+}
+
+fn has_namespace_declaration(start: &str, prefix: &str) -> bool {
+    let declaration = format!("xmlns:{prefix}");
+    start.match_indices(&declaration).any(|(offset, _)| {
+        start[offset + declaration.len()..]
+            .trim_start()
+            .starts_with('=')
+    })
+}
+
+fn drawing_root_start(raw: &str) -> String {
+    let raw = raw.trim_end();
+    let mut start = raw
+        .strip_suffix("/>")
+        .or_else(|| raw.strip_suffix('>'))
+        .unwrap_or(raw)
+        .to_string();
+    if !has_namespace_declaration(&start, "xdr") {
+        start.push_str(&format!(r#" xmlns:xdr="{NS_XDR}""#));
+    }
+    if !has_namespace_declaration(&start, "a") {
+        start.push_str(&format!(r#" xmlns:a="{NS_A}""#));
+    }
+    start.push('>');
+    start
+}
+
+fn drawing_root_end(raw: &str) -> String {
+    let name = raw
+        .trim_start()
+        .strip_prefix('<')
+        .unwrap_or("xdr:wsDr")
+        .split(|character: char| character.is_whitespace() || character == '/' || character == '>')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("xdr:wsDr");
+    format!("</{name}>")
 }
 
 fn anchor_xml(chart: &Chart, rid: &str, index: usize) -> String {

@@ -1,6 +1,6 @@
 //! Regenerate modeled OPC parts and re-emit preserved L3 bytes.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Cursor, Write};
 
 use indexmap::IndexMap;
@@ -26,7 +26,7 @@ use super::WorksheetExtras;
 use super::drawing;
 use super::opc::{
     MAX_ENTRY_BYTES, MAX_PACKAGE_BYTES, MAX_UNCOMPRESSED_TOTAL, MAX_ZIP_ENTRIES, OpcPackage,
-    sanitize_path,
+    relative_target, sanitize_path,
 };
 use super::print as xlsx_print;
 use super::{XlsxDocument, split_pixels_to_twips, xml};
@@ -320,6 +320,7 @@ pub(crate) fn encode(
     let mut wb_rels: Vec<(String, String, String, bool)> = Vec::new();
     let mut rid = 1u32;
     let mut sheet_rids = Vec::new();
+    let mut drawing_names = drawing::PartNameAllocator::new(package);
     for (i, sheet) in sheets.iter().enumerate() {
         let r = format!("rId{rid}");
         rid += 1;
@@ -338,6 +339,7 @@ pub(crate) fn encode(
             &persons,
             &dxfs,
             &pivots,
+            &mut drawing_names,
         )?;
         parts.insert(format!("xl/{target}"), sheet_xml);
         overrides.push((format!("/xl/{target}"), CT_WS.into()));
@@ -649,6 +651,38 @@ struct PreservedXmlCapture {
     start: usize,
     attrs: Vec<(String, String)>,
     depth: u32,
+}
+
+struct RelationshipIdAllocator {
+    used: HashSet<String>,
+    next: u32,
+}
+
+impl RelationshipIdAllocator {
+    fn new(relationships: &[super::opc::Relationship]) -> Result<Self, CoreError> {
+        let mut used = HashSet::new();
+        for relationship in relationships {
+            if relationship.id.is_empty() || !used.insert(relationship.id.clone()) {
+                return Err(error::xlsx_write(
+                    "source worksheet relationship ids must be non-empty and unique",
+                ));
+            }
+        }
+        Ok(Self { used, next: 1 })
+    }
+
+    fn next(&mut self) -> Result<String, CoreError> {
+        loop {
+            let id = format!("rId{}", self.next);
+            self.next = self
+                .next
+                .checked_add(1)
+                .ok_or_else(|| error::xlsx_write("worksheet relationship id space is exhausted"))?;
+            if self.used.insert(id.clone()) {
+                return Ok(id);
+            }
+        }
+    }
 }
 
 fn first_xml_element(bytes: &[u8], wanted: &str) -> Result<Option<PreservedXmlElement>, CoreError> {
@@ -1511,6 +1545,7 @@ fn worksheet_xml(
     persons: &BTreeMap<String, String>,
     dxfs: &[CfDxf],
     pivots: &[PivotTable],
+    drawing_names: &mut drawing::PartNameAllocator,
 ) -> Result<
     (
         Vec<u8>,
@@ -1537,9 +1572,13 @@ fn worksheet_xml(
     if let Some(color) = sheet.tab_color {
         validate_color(color)?;
     }
+    let original_rels = match package {
+        Some(package) => original_sheet_rels(package, &sheet.name, sheet_ord)?,
+        None => Vec::new(),
+    };
+    let mut relationship_ids = RelationshipIdAllocator::new(&original_rels)?;
     let mut rels: Vec<(String, String, String, bool)> = Vec::new();
     let mut extra_parts = Vec::new();
-    let mut rid = 1u32;
     let uses_x14 = !sheet.sparklines.is_empty()
         || extras.is_some_and(|extra| worksheet_extras_contain(extra, b"x14:"));
     let uses_xr = extras.is_some_and(|extra| worksheet_extras_contain(extra, b"xr:"));
@@ -1796,8 +1835,7 @@ fn worksheet_xml(
                     xml::escape(&link.target)
                 ));
             } else {
-                let id = format!("rId{rid}");
-                rid += 1;
+                let id = relationship_ids.next()?;
                 rels.push((id.clone(), REL_HYPER.into(), link.target.clone(), true));
                 s.push_str(&format!(
                     r#"<hyperlink ref="{addr}" r:id="{id}"{tooltip}{display}/>"#
@@ -1826,49 +1864,66 @@ fn worksheet_xml(
     }
     let mut drawing_xml = String::new();
     let mut vml_xml = String::new();
-    let modeled = drawing::chart_parts(wb, sheet, sheet_ord)?;
-    if let Some(pkg) = package
-        && modeled.is_none()
-        && let Ok(orig) = original_sheet_rels(pkg, &sheet.name, sheet_ord)
-    {
-        for rel in orig {
-            if rel.rel_type == REL_HYPER
-                || rel.rel_type == REL_TABLE
-                || rel.rel_type == REL_PIVOT_TABLE
-                || rel.rel_type == REL_COMMENTS
-                || rel.rel_type == REL_THREADED_COMMENTS
-            {
-                continue;
-            }
-            let id = format!("rId{rid}");
-            rid += 1;
-            let target = if rel.external {
-                rel.target.clone()
-            } else {
-                sheet_rel_target(&rel.target)
-            };
-            if rel.rel_type == REL_DRAWING {
-                drawing_xml = format!(r#"<drawing r:id="{id}"/>"#);
-            } else if rel.rel_type == REL_VML {
-                vml_xml = format!(r#"<legacyDrawing r:id="{id}"/>"#);
-            }
-            rels.push((id, rel.rel_type, target, rel.external));
+    let worksheet_name = format!("xl/worksheets/sheet{}.xml", sheet_ord + 1);
+    let source_drawing = original_rels
+        .iter()
+        .find(|relationship| relationship.rel_type == REL_DRAWING && !relationship.external);
+    let modeled = drawing::chart_parts(
+        wb,
+        sheet,
+        sheet_ord,
+        package,
+        source_drawing.map(|relationship| relationship.target.as_str()),
+        drawing_names,
+    )?;
+    for relationship in &original_rels {
+        if relationship.rel_type == REL_HYPER
+            || relationship.rel_type == REL_TABLE
+            || relationship.rel_type == REL_PIVOT_TABLE
+            || relationship.rel_type == REL_COMMENTS
+            || relationship.rel_type == REL_THREADED_COMMENTS
+            || (relationship.rel_type == REL_DRAWING && modeled.is_some())
+        {
+            continue;
         }
+        let target = if relationship.external {
+            relationship.target.clone()
+        } else {
+            relative_target(&worksheet_name, &relationship.target)
+        };
+        if relationship.rel_type == REL_DRAWING {
+            drawing_xml = format!(r#"<drawing r:id="{}"/>"#, relationship.id);
+        } else if relationship.rel_type == REL_VML {
+            vml_xml = format!(r#"<legacyDrawing r:id="{}"/>"#, relationship.id);
+        }
+        rels.push((
+            relationship.id.clone(),
+            relationship.rel_type.clone(),
+            target,
+            relationship.external,
+        ));
     }
     if let Some(parts) = modeled {
-        drawing_xml = format!(r#"<drawing r:id="{}"/>"#, parts.drawing_rid);
-        rels.extend(parts.rels);
+        let id = source_drawing
+            .map(|relationship| relationship.id.clone())
+            .map_or_else(|| relationship_ids.next(), Ok)?;
+        drawing_xml = format!(r#"<drawing r:id="{id}"/>"#);
+        rels.push((
+            id,
+            REL_DRAWING.into(),
+            relative_target(&worksheet_name, &parts.drawing_name),
+            false,
+        ));
         extra_parts.extend(parts.parts);
     }
     if !sheet.notes.is_empty() && vml_xml.is_empty() {
-        let id = format!("rId{rid}");
-        rid += 1;
+        let id = relationship_ids.next()?;
         let number = sheet_ord + 1;
-        let name = format!("xl/drawings/vmlDrawing{number}.vml");
+        let name = drawing_names.take(format!("xl/drawings/vmlDrawing{number}.vml"))?;
         rels.push((
             id.clone(),
             REL_VML.into(),
-            format!("../drawings/vmlDrawing{number}.vml"),
+            relative_target(&worksheet_name, &name),
             false,
         ));
         extra_parts.push((name, comments_vml_xml(sheet), CT_VML.into()));
@@ -1881,8 +1936,7 @@ fn worksheet_xml(
         s.push_str(&format!(r#"<tableParts count="{}">"#, tables.len()));
         for table in tables {
             validate_table(table)?;
-            let id = format!("rId{rid}");
-            rid += 1;
+            let id = relationship_ids.next()?;
             let table_number = table.id.index().saturating_add(1);
             let tname = format!("xl/tables/table{table_number}.xml");
             rels.push((
@@ -1906,8 +1960,7 @@ fn worksheet_xml(
             Some(parts) => parts,
             None => super::pivot::table_parts(wb, pivot)?,
         };
-        let id = format!("rId{rid}");
-        rid += 1;
+        let id = relationship_ids.next()?;
         rels.push((id, REL_PIVOT_TABLE.into(), extra.rel_target, false));
         extra_parts.extend(extra.parts);
     }
@@ -1930,7 +1983,7 @@ fn worksheet_xml(
         )?;
     }
     if !sheet.notes.is_empty() {
-        let id = format!("rId{rid}");
+        let id = relationship_ids.next()?;
         let cname = format!("xl/comments{}.xml", sheet_ord + 1);
         rels.push((
             id,
@@ -1941,7 +1994,7 @@ fn worksheet_xml(
         extra_parts.push((cname, comments_xml(sheet), CT_CMT.into()));
     }
     if !sheet.comments.is_empty() {
-        let id = format!("rId{rid}");
+        let id = relationship_ids.next()?;
         let number = sheet_ord + 1;
         let name = format!("xl/threadedComments/threadedComment{number}.xml");
         rels.push((
@@ -1957,7 +2010,6 @@ fn worksheet_xml(
         ));
     }
     push_worksheet_extensions(&mut s, &extensions);
-    let _ = rid;
     s.push_str("</worksheet>");
     Ok((s.into_bytes(), rels, extra_parts))
 }
@@ -2164,15 +2216,6 @@ fn original_sheet_element(
         return Ok(None);
     };
     first_xml_element(&part.bytes, wanted)
-}
-
-fn sheet_rel_target(resolved: &str) -> String {
-    let t = resolved.trim_start_matches('/');
-    if let Some(rest) = t.strip_prefix("xl/") {
-        format!("../{rest}")
-    } else {
-        t.to_string()
-    }
 }
 
 fn sheet_views_xml(sheet: &Sheet) -> String {

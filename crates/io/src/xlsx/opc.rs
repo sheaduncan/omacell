@@ -273,6 +273,32 @@ pub fn resolve_target(base_dir: &str, target: &str) -> String {
     stack.join("/")
 }
 
+/// Build a relative relationship target from one package part to another.
+#[must_use]
+pub(crate) fn relative_target(source_part: &str, target_part: &str) -> String {
+    let source_dir = source_part
+        .trim_start_matches('/')
+        .rsplit_once('/')
+        .map_or("", |(dir, _)| dir);
+    let source: Vec<_> = source_dir
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let target: Vec<_> = target_part
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let shared = source
+        .iter()
+        .zip(&target)
+        .take_while(|(left, right)| left.eq_ignore_ascii_case(right))
+        .count();
+    let mut relative = vec![".."; source.len().saturating_sub(shared)];
+    relative.extend_from_slice(&target[shared..]);
+    relative.join("/")
+}
+
 fn parse_rels(bytes: &[u8], base_dir: &str) -> Result<Vec<Relationship>, CoreError> {
     let mut r = XmlReader::new(bytes);
     let mut out = Vec::new();
