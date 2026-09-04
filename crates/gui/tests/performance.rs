@@ -4,7 +4,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{fixed_gpu_setup, launch_theme};
+use common::{fixed_gpu_setup, graphics_adapter_available, launch_theme};
 use egui_kittest::Harness;
 use omacell_core::limits::MAX_ROWS;
 use omacell_gui::Gui;
@@ -12,6 +12,9 @@ use omacell_gui::Gui;
 #[test]
 #[ignore = "nightly wall-clock performance gate"]
 fn scrolling_the_million_row_space_stays_within_the_regression_budget() {
+    if !graphics_adapter_available() {
+        return;
+    }
     let parts = launch_theme(None);
     let mut builder = Harness::builder().with_size(egui::vec2(800.0, 600.0));
     if let Some(setup) = fixed_gpu_setup() {

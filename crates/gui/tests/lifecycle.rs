@@ -5,7 +5,7 @@ mod common;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use common::{launch_opts, launch_script, launch_theme};
+use common::{graphics_adapter_available, launch_opts, launch_script, launch_theme};
 use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -74,6 +74,9 @@ fn startup_file_is_opened_through_the_task_runner() {
 
 #[test]
 fn grid_paints_worker_resolved_conditional_format_fill() {
+    if !graphics_adapter_available() {
+        return;
+    }
     let mut workbook = Workbook::new();
     let sheet = workbook.active_sheet();
     workbook.set_number(sheet, 1, 1, 3.0).unwrap();

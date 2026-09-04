@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use omacell_bus::{Bus, CommandKind, CommandSpec, Effect, Exposure, LongOps};
 use omacell_conf::{ConfigStore, LoadOptions, Paths};
@@ -52,6 +52,33 @@ pub fn fixed_gpu_setup() -> Option<eframe::egui_wgpu::WgpuSetup> {
         ..eframe::egui_wgpu::WgpuSetupCreateNew::default()
     };
     Some(eframe::egui_wgpu::WgpuSetup::CreateNew(setup))
+}
+
+pub fn graphics_adapter_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    let available = *AVAILABLE.get_or_init(|| {
+        let setup = fixed_gpu_setup().unwrap_or_else(egui_kittest::wgpu::default_wgpu_setup);
+        match setup {
+            eframe::egui_wgpu::WgpuSetup::CreateNew(setup) => {
+                let instance = eframe::wgpu::Instance::new(&setup.instance_descriptor);
+                let adapters = instance.enumerate_adapters(setup.instance_descriptor.backends);
+                setup.native_adapter_selector.as_ref().map_or_else(
+                    || !adapters.is_empty(),
+                    |select| select(&adapters, None).is_ok(),
+                )
+            }
+            eframe::egui_wgpu::WgpuSetup::Existing(_) => true,
+        }
+    });
+    if !available {
+        assert_ne!(
+            std::env::var_os("OMACELL_FIXED_GPU").as_deref(),
+            Some(std::ffi::OsStr::new("1")),
+            "fixed-host gate requires an integrated-GPU wgpu adapter"
+        );
+        eprintln!("skipping GPU-rendered GUI test: no compatible wgpu adapter");
+    }
+    available
 }
 
 fn install_omarchy_theme(paths: &Paths, name: &str) {
