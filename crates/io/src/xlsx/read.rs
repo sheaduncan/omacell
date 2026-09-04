@@ -46,6 +46,7 @@ const REL_HYPER: &str =
 const REL_DRAWING: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 const REL_CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+const MAX_MODELED_HYPERLINK_CELLS: u64 = 100_000;
 
 /// Unmodeled worksheet fragments for WP-10.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -490,7 +491,10 @@ fn apply_font_tag(font: &mut Font, name: &str, attrs: &[(String, String)], theme
         "i" => font.italic = attr(attrs, "val").is_none_or(truthy),
         "strike" => font.strike = attr(attrs, "val").is_none_or(truthy),
         "sz" => {
-            if let Some(v) = attr(attrs, "val").and_then(|s| s.parse().ok()) {
+            if let Some(v) = attr(attrs, "val")
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|size| size.is_finite() && *size > 0.0)
+            {
                 font.size_pt = v;
             }
         }
@@ -543,7 +547,7 @@ fn load_styles(
         });
     };
     let mut r = XmlReader::new(&part.bytes);
-    let mut numfmts: HashMap<u32, String> = HashMap::new();
+    let mut numfmts: HashMap<u32, NumFmtId> = HashMap::new();
     let mut fonts: Vec<Font> = Vec::new();
     let mut fills: Vec<Fill> = Vec::new();
     let mut borders: Vec<Border> = Vec::new();
@@ -577,7 +581,22 @@ fn load_styles(
                     attr(&attrs, "numFmtId").and_then(|s| s.parse().ok()),
                     attr(&attrs, "formatCode"),
                 ) {
-                    numfmts.insert(id, code.to_string());
+                    match wb.intern_num_fmt(code) {
+                        Ok(core_id) => {
+                            numfmts.insert(id, core_id);
+                        }
+                        Err(err) => {
+                            numfmts.insert(id, NumFmtId::GENERAL);
+                            warnings.push(
+                                "xlsx.style",
+                                format!(
+                                    "invalid custom number format {id} was replaced with General: {}",
+                                    err.message
+                                ),
+                                Some(part.name.clone()),
+                            );
+                        }
+                    }
                 }
             }
             XmlEvent::Start { name, .. } if name == "fonts" => in_fonts = true,
@@ -725,7 +744,7 @@ fn load_styles(
             XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
                 if in_xfs && name == "xf" =>
             {
-                cell_xfs.push(xf_to_style(&attrs, &fonts, &fills, &borders, &numfmts, wb)?);
+                cell_xfs.push(xf_to_style(&attrs, &fonts, &fills, &borders, &numfmts));
             }
             XmlEvent::Start { name, attrs } if in_xfs && name == "alignment" => {
                 if let Some(last) = cell_xfs.last_mut() {
@@ -763,7 +782,7 @@ fn load_styles(
                 cur_dxf.font = Some(parse_color(&attrs, Some(theme)));
             }
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
-                if in_dxf && (name == "fgColor" || name == "fgcolor") =>
+                if in_dxf && (name == "fgColor" || name == "bgColor") =>
             {
                 cur_dxf.fill = Some(parse_color(&attrs, Some(theme)));
             }
@@ -781,9 +800,8 @@ fn xf_to_style(
     fonts: &[Font],
     fills: &[Fill],
     borders: &[Border],
-    numfmts: &HashMap<u32, String>,
-    wb: &mut Workbook,
-) -> Result<Style, CoreError> {
+    numfmts: &HashMap<u32, NumFmtId>,
+) -> Style {
     let font_id = attr(attrs, "fontId")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
@@ -806,11 +824,11 @@ fn xf_to_style(
     if let Some(b) = borders.get(border_id) {
         style.border = *b;
     }
-    style.num_fmt = match numfmts.get(&num_id) {
-        Some(code) => wb.intern_num_fmt(code)?,
-        None => NumFmtId::new(num_id),
-    };
-    Ok(style)
+    style.num_fmt = numfmts
+        .get(&num_id)
+        .copied()
+        .unwrap_or_else(|| NumFmtId::new(num_id));
+    style
 }
 
 fn parse_alignment(attrs: &[(String, String)]) -> Alignment {
@@ -1137,6 +1155,61 @@ fn capture_fragment(
     Ok(())
 }
 
+fn load_row_properties(
+    wb: &mut Workbook,
+    id: omacell_core::addr::SheetId,
+    attrs: &[(String, String)],
+) -> Result<Option<u32>, CoreError> {
+    let Some(ridx) = attr(attrs, "r").and_then(|value| value.parse::<u32>().ok()) else {
+        return Ok(None);
+    };
+    if ridx == 0 || ridx > MAX_ROWS {
+        return Err(error::xlsx_limit(format!(
+            "worksheet row {ridx} is outside 1..={MAX_ROWS}"
+        )));
+    }
+    let row = ridx - 1;
+    if attr(attrs, "hidden").is_some_and(truthy) {
+        wb.set_row_hidden(id, row, true)?;
+    }
+    if let Some(level) = attr(attrs, "outlineLevel").and_then(|value| value.parse::<u8>().ok())
+        && level > 0
+    {
+        let _ = wb.set_row_outline_level(id, row, level);
+    }
+    if attr(attrs, "collapsed").is_some_and(truthy) {
+        let _ = wb.set_row_collapsed(id, row, true);
+    }
+    if let Some(height) = attr(attrs, "ht")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|height| height.is_finite() && *height > 0.0)
+    {
+        let pixels = (height * 96.0 / 72.0).round().max(1.0) as u32;
+        wb.set_row_height(id, row, pixels)?;
+    }
+    Ok(Some(row))
+}
+
+fn sequenced_cell_ref(raw: Option<&str>, row: Option<u32>, next_col: &mut u32) -> String {
+    if let Some(raw) = raw.filter(|value| !value.is_empty()) {
+        if let Ok(cell) = parse_a1_cell(raw) {
+            *next_col = u32::from(cell.col) + 1;
+        }
+        return raw.to_string();
+    }
+    let Some(row) = row else {
+        return String::new();
+    };
+    let Ok(col) = u16::try_from(*next_col) else {
+        return String::new();
+    };
+    if col >= MAX_COLS {
+        return String::new();
+    }
+    *next_col += 1;
+    CellRef::new(row, col).map_or_else(|_| String::new(), |cell| cell.to_a1())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn load_sheet(
     wb: &mut Workbook,
@@ -1177,6 +1250,9 @@ fn load_sheet(
     let mut shared: HashMap<u32, (u32, u16, String)> = HashMap::new();
     let mut merges: Vec<RangeRef> = Vec::new();
     let mut in_hyperlinks = false;
+    let mut current_row = None;
+    let mut next_cell_col = 0;
+    let mut modeled_hyperlink_cells = 0_u64;
     let mut open_fragments = Vec::new();
     let mut af_parser = super::data::AutoFilterParser::default();
 
@@ -1197,40 +1273,19 @@ fn load_sheet(
             }
             XmlEvent::Start { name, .. } if name == "sheetData" => in_sheet_data = true,
             XmlEvent::End { name } if name == "sheetData" => in_sheet_data = false,
-            XmlEvent::Start { name, attrs } | XmlEvent::Empty { name, attrs }
-                if in_sheet_data && name == "row" =>
-            {
-                if let Some(ridx) = attr(&attrs, "r").and_then(|s| s.parse::<u32>().ok()) {
-                    if ridx == 0 || ridx > MAX_ROWS {
-                        return Err(error::xlsx_limit(format!(
-                            "worksheet row {ridx} is outside 1..={MAX_ROWS}"
-                        )));
-                    }
-                    let row = ridx - 1;
-                    if attr(&attrs, "hidden").is_some_and(truthy) {
-                        wb.set_row_hidden(id, row, true)?;
-                    }
-                    if let Some(level) =
-                        attr(&attrs, "outlineLevel").and_then(|s| s.parse::<u8>().ok())
-                        && level > 0
-                    {
-                        let _ = wb.set_row_outline_level(id, row, level);
-                    }
-                    if attr(&attrs, "collapsed").is_some_and(truthy) {
-                        let _ = wb.set_row_collapsed(id, row, true);
-                    }
-                    if let Some(ht) = attr(&attrs, "ht")
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .filter(|height| height.is_finite() && *height > 0.0)
-                    {
-                        let px = (ht * 96.0 / 72.0).round().max(1.0) as u32;
-                        wb.set_row_height(id, row, px)?;
-                    }
-                }
+            XmlEvent::Start { name, attrs } if in_sheet_data && name == "row" => {
+                current_row = load_row_properties(wb, id, &attrs)?;
+                next_cell_col = 0;
             }
+            XmlEvent::Empty { name, attrs } if in_sheet_data && name == "row" => {
+                load_row_properties(wb, id, &attrs)?;
+                current_row = None;
+                next_cell_col = 0;
+            }
+            XmlEvent::End { name } if name == "row" => current_row = None,
             XmlEvent::Start { name, attrs } if in_sheet_data && name == "c" => {
                 in_c = true;
-                cell_ref = attr(&attrs, "r").unwrap_or("").to_string();
+                cell_ref = sequenced_cell_ref(attr(&attrs, "r"), current_row, &mut next_cell_col);
                 cell_type = attr(&attrs, "t").unwrap_or("n").to_string();
                 cell_style = attr(&attrs, "s").and_then(|s| s.parse().ok());
                 v_text.clear();
@@ -1264,13 +1319,14 @@ fn load_sheet(
                 }
             }
             XmlEvent::Empty { name, attrs } if in_sheet_data && name == "c" => {
-                let empty_ref = attr(&attrs, "r").unwrap_or("");
+                let empty_ref =
+                    sequenced_cell_ref(attr(&attrs, "r"), current_row, &mut next_cell_col);
                 let empty_type = attr(&attrs, "t").unwrap_or("n");
                 let empty_style = attr(&attrs, "s").and_then(|s| s.parse().ok());
                 if let Err(e) = commit_cell(
                     wb,
                     id,
-                    empty_ref,
+                    &empty_ref,
                     empty_type,
                     empty_style,
                     "",
@@ -1399,7 +1455,7 @@ fn load_sheet(
                         .ok_or_else(|| error::xlsx_format("worksheet id disappeared"))?
                         .view
                         .clone();
-                    view.zoom = z / 100.0;
+                    view.zoom = z.clamp(10.0, 400.0) / 100.0;
                     wb.set_sheet_view(id, view)?;
                 }
                 if attr(&attrs, "showGridLines").is_some_and(|s| !truthy(s)) {
@@ -1515,7 +1571,8 @@ fn load_sheet(
                 if in_hyperlinks && name == "hyperlink" =>
             {
                 if let Some(rf) = attr(&attrs, "ref")
-                    && let Ok(cell) = parse_a1_cell(rf.split(':').next().unwrap_or(rf))
+                    && let Ok(parsed) = parse_a1(rf)
+                    && parsed.sheet.is_none()
                 {
                     let rid = attr(&attrs, "id");
                     let loc = attr(&attrs, "location");
@@ -1528,18 +1585,45 @@ fn load_sheet(
                             .map(|rel| rel.target.clone())
                             .unwrap_or_default()
                     } else {
-                        loc.unwrap_or("").to_string()
+                        loc.unwrap_or("").trim_start_matches('#').to_string()
                     };
-                    let _ = wb.set_hyperlink(
-                        id,
-                        cell.row,
-                        cell.col,
-                        Some(Hyperlink {
-                            target,
-                            tooltip,
-                            display,
-                        }),
-                    );
+                    let range = match parsed.kind {
+                        RefKind::Cell(cell) => RangeRef::from_corners(cell, cell),
+                        RefKind::Range(range) => RangeRef::from_corners(
+                            CellRef::new(
+                                range.start.row.min(range.end.row),
+                                range.start.col.min(range.end.col),
+                            )?,
+                            CellRef::new(
+                                range.start.row.max(range.end.row),
+                                range.start.col.max(range.end.col),
+                            )?,
+                        ),
+                    };
+                    let rows = u64::from(range.end.row - range.start.row) + 1;
+                    let cols = u64::from(range.end.col - range.start.col) + 1;
+                    let cells = rows.saturating_mul(cols);
+                    if modeled_hyperlink_cells.saturating_add(cells) > MAX_MODELED_HYPERLINK_CELLS {
+                        warnings.push(
+                            "xlsx.limit",
+                            format!(
+                                "hyperlink range {rf} exceeds the per-sheet limit of {MAX_MODELED_HYPERLINK_CELLS} modeled cells"
+                            ),
+                            Some(part_name.into()),
+                        );
+                        continue;
+                    }
+                    modeled_hyperlink_cells += cells;
+                    let link = Hyperlink {
+                        target,
+                        tooltip,
+                        display,
+                    };
+                    for row in range.start.row..=range.end.row {
+                        for col in range.start.col..=range.end.col {
+                            wb.set_hyperlink(id, row, col, Some(link.clone()))?;
+                        }
+                    }
                 }
             }
             _ => {}
@@ -2379,5 +2463,77 @@ mod tests {
             }
         );
         assert_eq!(style.border.left.color, Color::Rgb { argb: 0xFFE0_E0E0 });
+    }
+
+    #[test]
+    fn differential_fill_accepts_excel_bg_color() {
+        let xml = br#"<?xml version="1.0"?>
+            <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <dxfs count="1"><dxf><fill><patternFill patternType="solid">
+                <bgColor rgb="FF336699"/>
+              </patternFill></fill></dxf></dxfs>
+            </styleSheet>"#;
+        let name = "xl/styles.xml";
+        let package = package_with_part(name, xml);
+        let relationship = Relationship {
+            id: "rIdStyles".into(),
+            rel_type: REL_STYLES.into(),
+            target: name.into(),
+            external: false,
+        };
+        let mut workbook = Workbook::new();
+        let styles = load_styles(
+            &package,
+            &[relationship],
+            &Theme::default(),
+            &mut workbook,
+            &mut FileWarnings::new(),
+        )
+        .expect("Excel differential fill parses");
+        assert_eq!(styles.dxfs[0].fill, Some(Color::Rgb { argb: 0xFF33_6699 }));
+    }
+
+    #[test]
+    fn invalid_font_sizes_keep_the_default() {
+        for value in ["NaN", "inf", "0", "-1"] {
+            let mut font = Font::default();
+            apply_font_tag(&mut font, "sz", &[("val".into(), value.into())], None);
+            assert_eq!(font.size_pt, Font::default().size_pt, "size {value}");
+        }
+    }
+
+    #[test]
+    fn malformed_custom_format_does_not_abort_stylesheet() {
+        let xml = br#"<?xml version="1.0"?>
+            <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <numFmts count="1"><numFmt numFmtId="164" formatCode="["/></numFmts>
+              <cellXfs count="1"><xf numFmtId="164"/></cellXfs>
+            </styleSheet>"#;
+        let name = "xl/styles.xml";
+        let package = package_with_part(name, xml);
+        let relationship = Relationship {
+            id: "rIdStyles".into(),
+            rel_type: REL_STYLES.into(),
+            target: name.into(),
+            external: false,
+        };
+        let mut workbook = Workbook::new();
+        let mut warnings = FileWarnings::new();
+        let styles = load_styles(
+            &package,
+            &[relationship],
+            &Theme::default(),
+            &mut workbook,
+            &mut warnings,
+        )
+        .expect("invalid optional number format is recoverable");
+        assert_eq!(styles.cell_xfs[0].num_fmt, NumFmtId::GENERAL);
+        assert!(
+            warnings
+                .items
+                .iter()
+                .any(|warning| warning.code == "xlsx.style"),
+            "{warnings:?}"
+        );
     }
 }
