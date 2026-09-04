@@ -16,6 +16,10 @@ fn corpus_xlsx() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/xlsx/l1_values.xlsx")
 }
 
+fn make_private(path: &std::path::Path) {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
 fn wait_socket(path: &std::path::Path) {
     let start = Instant::now();
     while !path.exists() {
@@ -87,6 +91,7 @@ async fn call_tool(
 #[tokio::test]
 async fn rmcp_client_exercises_every_tool_and_resource() {
     let home = TempDir::new().unwrap();
+    make_private(home.path());
     let runtime = home.path().join("run");
     std::fs::create_dir_all(&runtime).unwrap();
     let socket = home.path().join("mcp.sock");
@@ -343,6 +348,7 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
 #[test]
 fn socket_refuses_to_replace_a_regular_file() {
     let home = TempDir::new().unwrap();
+    make_private(home.path());
     let runtime = home.path().join("run");
     std::fs::create_dir_all(&runtime).unwrap();
     let socket = home.path().join("not-a-socket");
@@ -363,6 +369,7 @@ fn socket_refuses_to_replace_a_regular_file() {
 #[tokio::test]
 async fn headless_proposal_appears_in_changeset_cli() {
     let home = TempDir::new().unwrap();
+    make_private(home.path());
     let runtime = home.path().join("run");
     std::fs::create_dir_all(&runtime).unwrap();
     let socket = home.path().join("mcp.sock");

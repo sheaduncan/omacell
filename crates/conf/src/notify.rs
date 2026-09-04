@@ -49,6 +49,8 @@ fn send_inner(title: &str, body: &str) -> Result<(), CoreError> {
             .arg(title)
             .arg(body)
             .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .map_err(|err| CoreError::new("notify.send", err.to_string()))?;
         if status.success() {

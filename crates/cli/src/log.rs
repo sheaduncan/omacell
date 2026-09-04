@@ -2,6 +2,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -47,13 +48,20 @@ pub fn init(paths: &Paths, verbose: u8, quiet: bool, write_file: bool) {
 fn open_log_file(paths: &Paths) -> Option<fs::File> {
     let dir = paths.state_dir.join("logs");
     fs::create_dir_all(&dir).ok()?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).ok()?;
     let path = dir.join("omacell.log");
+    if path.exists() {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).ok()?;
+    }
     rotate_if_needed(&path).ok()?;
-    OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(&path)
-        .ok()
+        .ok()?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).ok()?;
+    Some(file)
 }
 
 fn rotate_if_needed(path: &Path) -> io::Result<()> {
@@ -67,4 +75,34 @@ fn rotate_if_needed(path: &Path) -> io::Result<()> {
     let _ = fs::remove_file(&rotated);
     fs::rename(path, rotated)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::open_log_file;
+
+    #[test]
+    fn log_directory_and_existing_file_are_private() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = omacell_conf::Paths::from_home(temp.path());
+        let dir = paths.state_dir.join("logs");
+        let path = dir.join("omacell.log");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&path, b"existing\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        drop(open_log_file(&paths).unwrap());
+
+        assert_eq!(
+            std::fs::metadata(dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

@@ -15,7 +15,7 @@ use omacell_conf::schema::package_defaults;
 use omacell_conf::{
     HYPRLAND_SNIPPET, Layer, LoadOptions, LoadedConfig, Paths, SetupOptions, keys,
     load_with_options, reset_user_file, reset_user_rel, setup_omarchy, show_all_json,
-    validate_user_rel,
+    uninstall_omarchy, validate_user_rel,
 };
 use omacell_core::addr::{RefKind, parse_a1};
 use omacell_core::command::Origin;
@@ -413,8 +413,13 @@ fn cmd_config(cli: &Cli, cmd: &ConfigCmd, output: Output) -> Result<(), CliError
             if !status.success() {
                 return Err(CliError::new("config.edit", format!("{editor} failed")));
             }
+            let loaded = App::bootstrap(cli)?.loaded();
             output.success(
-                serde_json::json!({"path": path.display().to_string()}),
+                serde_json::json!({
+                    "path": path.display().to_string(),
+                    "valid": true,
+                    "schema": loaded.config.schema,
+                }),
                 &path.display().to_string(),
             )?;
             Ok(())
@@ -576,7 +581,7 @@ fn cmd_keys(cli: &Cli, cmd: &KeysCmd, output: Output) -> Result<(), CliError> {
         KeysCmd::Check { hyprland } => {
             let path = hyprland
                 .clone()
-                .unwrap_or_else(|| paths.home.join(".config/hypr/bindings.lua"));
+                .unwrap_or_else(|| hyprland_bindings(&paths));
             let conflicts = keys::check_hyprland(&path, keys::CLASSIC_CHORDS)?;
             let json = serde_json::json!({
                 "path": path.display().to_string(),
@@ -605,6 +610,7 @@ fn cmd_setup(cli: &Cli, cmd: &SetupCmd, output: Output) -> Result<(), CliError> 
         SetupCmd::Omarchy {
             show_hyprland,
             menu,
+            uninstall,
         } => {
             if *show_hyprland {
                 output.success(
@@ -615,9 +621,22 @@ fn cmd_setup(cli: &Cli, cmd: &SetupCmd, output: Output) -> Result<(), CliError> 
             }
             let paths = init_paths(cli)?;
             if cli.dry_run {
-                output.success(serde_json::json!({"dry_run": true}), "dry-run")?;
+                output.success(
+                    serde_json::json!({"dry_run": true, "uninstall": uninstall}),
+                    "dry-run",
+                )?;
                 return Ok(());
             }
+            if *uninstall {
+                let report = uninstall_omarchy(&paths, true)?;
+                let json = serde_json::json!({
+                    "removed": report.removed.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                    "skipped": report.skipped,
+                });
+                output.success(json, "ok")?;
+                return Ok(());
+            }
+            let conflicts = keys::check_hyprland(&hyprland_bindings(&paths), keys::CLASSIC_CHORDS)?;
             let confirm_menu = *menu || prompt_menu();
             let report = setup_omarchy(
                 &paths,
@@ -626,18 +645,26 @@ fn cmd_setup(cli: &Cli, cmd: &SetupCmd, output: Output) -> Result<(), CliError> 
                     link_skill: true,
                 },
             )?;
-            let _ = keys::check_hyprland(
-                &paths.home.join(".config/hypr/bindings.lua"),
-                keys::CLASSIC_CHORDS,
-            )?;
             let json = serde_json::json!({
                 "written": report.written.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
                 "skipped": report.skipped,
+                "hyprland_conflicts": conflicts.iter().map(|conflict| serde_json::json!({
+                    "chord": conflict.chord,
+                    "omacell": conflict.omacell,
+                })).collect::<Vec<_>>(),
             });
             output.success(json, "ok")?;
             Ok(())
         }
     }
+}
+
+fn hyprland_bindings(paths: &Paths) -> PathBuf {
+    paths
+        .user_config
+        .parent()
+        .unwrap_or(&paths.home)
+        .join("hypr/bindings.lua")
 }
 
 fn prompt_menu() -> bool {
@@ -1143,14 +1170,16 @@ fn cmd_ipc(
                 format!("{failed} of {} instances failed; {first}", instances.len()),
             ));
         }
-        if !quiet && !output.json {
-            for inst in &instances {
-                println!("{}: ok=true", inst.pid);
-            }
-        }
         let json = serde_json::json!({"instances": results});
-        let human = serde_json::to_string_pretty(&json)
-            .map_err(|err| CliError::new("cli.json", err.to_string()))?;
+        let human = if quiet {
+            String::new()
+        } else {
+            instances
+                .iter()
+                .map(|instance| format!("{}: ok=true", instance.pid))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         output.success(json, &human)?;
         return Ok(());
     }

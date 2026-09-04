@@ -17,8 +17,8 @@ Options:
       --quiet                 Suppress per-instance human output
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --socket <SOCKET>       Socket path (default: focused instance, then newest live instance)
-      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
-      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+      --config <FILE>         Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
+      --theme <FILE>          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
   -v, --verbose...            Increase log verbosity
       --from-workbook <FILE>  Workbook whose frozen settings overlay configuration
   -h, --help                  Print help

@@ -206,11 +206,8 @@ pub async fn serve(handler: OmacellMcp, socket: Option<PathBuf>) -> Result<(), C
 }
 
 async fn serve_socket(handler: OmacellMcp, path: &Path) -> Result<(), CliError> {
+    prepare_socket_parent(path)?;
     prepare_socket_path(path)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|err| CliError::new("mcp.socket", err.to_string()))?;
-    }
     let listener = tokio::net::UnixListener::bind(path)
         .map_err(|err| CliError::new("mcp.socket", err.to_string()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
@@ -241,6 +238,27 @@ async fn serve_socket(handler: OmacellMcp, path: &Path) -> Result<(), CliError> 
             }
         });
     }
+}
+
+fn prepare_socket_parent(path: &Path) -> Result<(), CliError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            CliError::new(
+                "mcp.socket",
+                "socket path must have an owned parent directory with mode 0700",
+            )
+        })?;
+    omacell_bus::ipc::prepare_runtime_dir(parent).map_err(|error| {
+        CliError::new(
+            "mcp.socket",
+            format!(
+                "socket parent must be owned by this user with mode 0700: {}",
+                error.message
+            ),
+        )
+    })
 }
 
 fn prepare_socket_path(path: &Path) -> Result<(), CliError> {
@@ -382,6 +400,8 @@ pub fn proposal_notifier(config: Config) -> omacell_bus::mcp::ProposeHook {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use tokio::io::AsyncReadExt;
 
     use super::BoundedLines;
@@ -401,5 +421,17 @@ mod tests {
         let error = input.read_to_end(&mut output).await.unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert_eq!(output, b"12345678");
+    }
+
+    #[test]
+    fn explicit_socket_parent_must_be_private() {
+        let temp = tempfile::tempdir().unwrap();
+        let public = temp.path().join("public");
+        std::fs::create_dir(&public).unwrap();
+        std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = super::prepare_socket_parent(&public.join("omacell.sock")).unwrap_err();
+        assert_eq!(error.code, "mcp.socket");
+        assert!(error.message.contains("700"), "{}", error.message);
     }
 }

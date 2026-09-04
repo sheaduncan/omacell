@@ -1,6 +1,7 @@
 //! `--config`, `--theme`, env, `--set`, and workbook overlay reach one `LoadOptions`.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use assert_cmd::Command;
@@ -147,6 +148,48 @@ fn config_edit_dry_run_prints_path() {
         .success()
         .stdout(predicate::str::contains("profile.toml"));
     assert!(!explicit.exists());
+}
+
+#[test]
+fn config_edit_validates_the_editors_result() {
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join("profile.toml");
+    let editor = dir.path().join("invalid-editor");
+    fs::write(&editor, "#!/bin/sh\nprintf '%s\\n' '[[[invalid' > \"$1\"\n").unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o700)).unwrap();
+
+    bin()
+        .env("HOME", dir.path())
+        .env("EDITOR", &editor)
+        .args([
+            "--json",
+            "--config",
+            config.to_str().unwrap(),
+            "config",
+            "edit",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("invalid"));
+    assert_eq!(fs::read_to_string(config).unwrap(), "[[[invalid\n");
+}
+
+#[test]
+fn config_edit_uses_xdg_config_home() {
+    let dir = TempDir::new().unwrap();
+    let config_home = dir.path().join("xdg-config");
+    bin()
+        .env("HOME", dir.path().join("home"))
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args(["--dry-run", "config", "edit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            config_home
+                .join("omacell/config.toml")
+                .display()
+                .to_string(),
+        ));
 }
 
 #[test]

@@ -10,10 +10,11 @@ Options:
       --json                  Machine-readable stdout (and stderr errors)
       --show-hyprland         Print the Hyprland snippet and exit
       --dry-run               Validate writes without changing files
-      --menu                  Write Omarchy menu rows (otherwise skipped unless confirmed on a TTY)
+      --menu                  Install menu rows without prompting (uninstall always removes owned rows)
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
-      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
-      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+      --uninstall             Remove unchanged Omacell-owned Omarchy assets and menu rows
+      --config <FILE>         Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
+      --theme <FILE>          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
   -q, --quiet                 Suppress non-error human output
   -v, --verbose...            Increase log verbosity
       --from-workbook <FILE>  Workbook whose frozen settings overlay configuration

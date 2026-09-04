@@ -24,10 +24,10 @@ pub struct Cli {
     /// Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable.
     #[arg(long = "set", global = true, value_name = "KEY=VALUE", action = ArgAction::Append)]
     pub sets: Vec<String>,
-    /// Explicit config file; replaces `~/.config/omacell/config.toml`.
+    /// Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`.
     #[arg(long, global = true, value_name = "FILE")]
     pub config: Option<PathBuf>,
-    /// Explicit theme `colors.toml`; wins over `OMACELL_THEME`.
+    /// Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`.
     #[arg(long, global = true, value_name = "FILE")]
     pub theme: Option<PathBuf>,
     /// Suppress non-error human output.
@@ -52,7 +52,7 @@ pub struct Cli {
 /// Top-level subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Convert a workbook between `.xlsx`, CSV, `.omc`, ODS, JSON, and PDF.
+    /// Convert `.xlsx`/`.xlsm`/`.xls`, CSV/TSV, OMC, ODS, JSON, Parquet, HTML/Markdown, or PDF.
     Convert {
         /// Input path.
         input: PathBuf,
@@ -253,7 +253,7 @@ pub enum AiCmd {
         /// Natural-language request.
         prompt: String,
     },
-    /// Read `~/.local/state/omacell/ai/log.jsonl`.
+    /// Read the XDG-state AI audit log.
     Log,
     /// Token usage totals from the audit log.
     Usage,
@@ -309,7 +309,7 @@ pub enum ConfigCmd {
     Edit,
     /// Restore package defaults (backup first).
     Reset {
-        /// Relative file under `~/.config/omacell` (default `config.toml`).
+        /// Relative file under the XDG Omacell config dir (default `config.toml`).
         file: Option<String>,
     },
     /// Show one key or the full effective config.
@@ -341,7 +341,7 @@ pub enum ThemeCmd {
 pub enum KeysCmd {
     /// Compare classic chords to Hyprland `bindings.lua`.
     Check {
-        /// Path to `bindings.lua` (default `~/.config/hypr/bindings.lua`).
+        /// Path to `bindings.lua` (default `$XDG_CONFIG_HOME/hypr/bindings.lua`).
         #[arg(long)]
         hyprland: Option<PathBuf>,
     },
@@ -370,11 +370,14 @@ pub enum SetupCmd {
     /// Install the Omarchy theme template, hook, and skill links.
     Omarchy {
         /// Print the Hyprland snippet and exit.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["menu", "uninstall"])]
         show_hyprland: bool,
-        /// Write Omarchy menu rows (otherwise skipped unless confirmed on a TTY).
+        /// Install menu rows without prompting (uninstall always removes owned rows).
         #[arg(long)]
         menu: bool,
+        /// Remove unchanged Omacell-owned Omarchy assets and menu rows.
+        #[arg(long)]
+        uninstall: bool,
     },
 }
 
