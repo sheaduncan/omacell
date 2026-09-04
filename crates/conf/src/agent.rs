@@ -108,7 +108,12 @@ pub fn hand_off(req: HandOffRequest) -> Result<HandOff, CoreError> {
         });
     }
     let mut child = Command::new(&argv[0]);
-    child.args(&argv[1..]).current_dir(&cwd);
+    child
+        .args(&argv[1..])
+        .current_dir(&cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     let status = child
         .status()
         .map_err(|err| CoreError::new("agent.spawn", err.to_string()))?;

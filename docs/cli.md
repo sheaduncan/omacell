@@ -16,7 +16,10 @@ The `omacell` binary is a thin adapter over the command bus, file I/O, and confi
 
 `--json` · `--dry-run` · `--set KEY=VALUE` (repeatable) · `--config FILE` · `--theme FILE` · `--from-workbook FILE` · `--quiet` · `--verbose`
 
-`--config` replaces `~/.config/omacell/config.toml`. `--theme` wins over `OMACELL_THEME`. Repeated `--set` values are retained on reload with the rest of `LoadOptions`.
+`--config` replaces `$XDG_CONFIG_HOME/omacell/config.toml` (falling back to
+`~/.config/omacell/config.toml`). `--theme` is an Omacell role-overlay TOML and
+wins over `OMACELL_THEME`; it is not a terminal `colors.toml`. Repeated `--set`
+values are retained on reload with the rest of `LoadOptions`.
 
 `--dry-run` is also forwarded to registry commands sent through `omacell ipc`; changeset apply/discard/revert controls become local no-ops. It never creates the rotating file log. Usage failures under `--json` use the same `{code, message, hint}` error object as operational failures.
 
@@ -24,9 +27,9 @@ The `omacell` binary is a thin adapter over the command bus, file I/O, and confi
 
 See `omacell --help` and the per-command help snapshots. `omacell --tui [file]` launches the terminal UI (WP-15). Without a TTY it exits 1 with `tui.tty` rather than hanging. Bare `omacell [file]` launches the GUI (WP-16). Without `WAYLAND_DISPLAY`/`DISPLAY` it exits 1 with `gui.display`.
 
-`omacell mcp [--socket PATH] [--book FILE]` serves the MCP tool catalog over stdio or a Unix socket and also binds the WP-07b IPC socket so `omacell changeset list|apply|discard|revert` can see and resolve proposals. `omacell agent "<prompt>"` hands off to `omarchy agent prompt` when a default agent is set; otherwise it prints the equivalent command and JSON `{hidden: true}`. `omacell agent diagnose [--pid] [--book]` builds the WP-19 diagnostic bundle. `omacell recalc --wait` is accepted for the skill done-checklist (async AI settle is WP-22).
+`omacell mcp [--socket PATH] [--book FILE]` serves the MCP tool catalog over stdio or a Unix socket and also binds the WP-07b IPC socket so `omacell changeset list|apply|discard|revert` can see and resolve proposals. An explicit socket's parent is created private or must already be owned by the current user with mode `0700`. `omacell agent "<prompt>"` hands off to `omarchy agent prompt` when a default agent is set; otherwise it prints the equivalent command and JSON `{hidden: true}`. `omacell agent diagnose [--pid] [--book]` builds the WP-19 diagnostic bundle. `omacell recalc --wait` is accepted for the skill done-checklist (async AI settle is WP-22).
 
-`omacell run script.lua book.xlsx` runs Lua (WP-20). It explicitly loads trusted `init.lua`, then sorted `plugins/*/init.lua`, then the requested script. `--embedded` runs `xl/omacell/scripts/main.lua` only when the exact workbook bytes are trusted in `~/.local/state/omacell/trust.toml` (`omacell trust add|remove|list`); embedded Lua can invoke only a fixed, reviewed allowlist of workbook commands, so newly registered commands remain unavailable by default. `omacell run --python script.py [book.xlsx]` is an experimental stdio bridge using the versioned IPC JSON-lines request/reply envelopes and the configured `[ipc].max_frame_bytes` limit (16 MiB by default, configurable from 1–16 MiB). `--dry-run` is accepted only with `--embedded`; user Lua and Python have OS access and therefore cannot provide a no-write dry-run guarantee.
+`omacell run script.lua book.xlsx` runs Lua (WP-20). It explicitly loads trusted `init.lua`, then sorted `plugins/*/init.lua`, then the requested script. `--embedded` runs `xl/omacell/scripts/main.lua` only when the exact workbook bytes are trusted in `$XDG_STATE_HOME/omacell/trust.toml` (falling back to `~/.local/state/omacell/trust.toml`; manage it with `omacell trust add|remove|list`); embedded Lua can invoke only a fixed, reviewed allowlist of workbook commands, so newly registered commands remain unavailable by default. `omacell run --python script.py [book.xlsx]` is an experimental stdio bridge using the versioned IPC JSON-lines request/reply envelopes and the configured `[ipc].max_frame_bytes` limit (16 MiB by default, configurable from 1–16 MiB). `--dry-run` is accepted only with `--embedded`; user Lua and Python have OS access and therefore cannot provide a no-write dry-run guarantee.
 
 `omacell ipc theme.reload --all --quiet` is the Omarchy theme-set hook. It enumerates live owned instances and executes the registered `theme.reload` command. It does not add an IPC `ControlOp`.
 
@@ -51,6 +54,11 @@ live owned instance. GUI focus comes from eframe/winit; the TUI enables and
 consumes Crossterm focus-change events.
 
 `omacell convert input.csv output.xlsx --plan plan.json` consumes the shared WP-08 `ImportPlan` JSON (bounded to 1 MiB). For JSON input, `--jq .items` selects an array with a dotted object path; it is a selector, not the full jq language. `omacell config diff` emits sorted effective user/package differences and honors `--config`.
+
+`omacell setup omarchy` preflights Hyprland binding conflicts before it writes
+managed assets. `omacell setup omarchy --uninstall` removes only Omacell-owned
+assets and menu rows; unrelated menu content is preserved. Both operations
+support `--dry-run`.
 
 Legacy Excel 97–2003 `.xls` input is read natively, without LibreOffice or an external converter. It is read-only: use `omacell convert old.xls new.xlsx` before editing in place, or save an opened workbook to a writable format.
 

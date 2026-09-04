@@ -2,7 +2,7 @@
 source: crates/cli/tests/help.rs
 expression: "help(&[\"ai\", \"log\", \"--help\"])"
 ---
-Read `~/.local/state/omacell/ai/log.jsonl`
+Read the XDG-state AI audit log
 
 Usage: omacell ai log [OPTIONS]
 
@@ -10,8 +10,8 @@ Options:
       --json                  Machine-readable stdout (and stderr errors)
       --dry-run               Validate writes without changing files
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
-      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
-      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+      --config <FILE>         Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
+      --theme <FILE>          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
   -q, --quiet                 Suppress non-error human output
   -v, --verbose...            Increase log verbosity
       --from-workbook <FILE>  Workbook whose frozen settings overlay configuration

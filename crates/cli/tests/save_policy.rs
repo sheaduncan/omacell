@@ -45,11 +45,7 @@ fn csv_tsv_and_omc_saves_rotate_backups_and_honor_peer_locks() {
         );
 
         let saved = std::fs::read(&path).unwrap();
-        std::fs::write(
-            lock_path(&path),
-            "foreign,lock,file:///x,file:///y,now;",
-        )
-        .unwrap();
+        std::fs::write(lock_path(&path), "foreign,lock,file:///x,file:///y,now;").unwrap();
         bin(dir.path())
             .args(["set", path.to_str().unwrap(), "A1", "blocked"])
             .assert()

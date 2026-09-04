@@ -2,7 +2,7 @@
 source: crates/cli/tests/help.rs
 expression: "help(&[\"convert\", \"--help\"])"
 ---
-Convert a workbook between `.xlsx`, CSV, `.omc`, ODS, JSON, and PDF
+Convert `.xlsx`/`.xlsm`/`.xls`, CSV/TSV, OMC, ODS, JSON, Parquet, HTML/Markdown, or PDF
 
 Usage: omacell convert [OPTIONS] <INPUT> <OUTPUT>
 
@@ -17,9 +17,9 @@ Options:
       --range <RANGE>         A1 range to export
       --plan <FILE>           Shared WP-08 CSV import plan JSON
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
-      --config <FILE>         Explicit config file; replaces `~/.config/omacell/config.toml`
+      --config <FILE>         Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
       --jq <PATH>             Dotted selector into a JSON array (`.items`)
-      --theme <FILE>          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+      --theme <FILE>          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
   -q, --quiet                 Suppress non-error human output
   -v, --verbose...            Increase log verbosity
       --from-workbook <FILE>  Workbook whose frozen settings overlay configuration

@@ -382,8 +382,8 @@ fn setup_preflights_hyprland_before_writing_and_uninstalls_owned_assets() {
         .assert()
         .success()
         .stdout(predicate::str::contains("removed"));
-    assert!(!
-        dir.path()
+    assert!(
+        !dir.path()
             .join(".config/omarchy/themed/omacell.toml.tpl")
             .exists()
     );

@@ -155,11 +155,7 @@ fn config_edit_validates_the_editors_result() {
     let dir = TempDir::new().unwrap();
     let config = dir.path().join("profile.toml");
     let editor = dir.path().join("invalid-editor");
-    fs::write(
-        &editor,
-        "#!/bin/sh\nprintf '%s\\n' '[[[invalid' > \"$1\"\n",
-    )
-    .unwrap();
+    fs::write(&editor, "#!/bin/sh\nprintf '%s\\n' '[[[invalid' > \"$1\"\n").unwrap();
     fs::set_permissions(&editor, fs::Permissions::from_mode(0o700)).unwrap();
 
     bin()

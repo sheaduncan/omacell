@@ -10,7 +10,7 @@ A spreadsheet for Omarchy Linux
 Usage: omacell [OPTIONS] [FILE]... [COMMAND]
 
 Commands:
-  convert    Convert a workbook between `.xlsx`, CSV, `.omc`, ODS, JSON, and PDF
+  convert    Convert `.xlsx`/`.xlsm`/`.xls`, CSV/TSV, OMC, ODS, JSON, Parquet, HTML/Markdown, or PDF
   query      Print a range as json, csv, or markdown
   set        Set a cell or range from formula-bar text
   eval       Evaluate a formula in a workbook
@@ -46,10 +46,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -73,7 +73,7 @@ Options:
 ### `omacell convert`
 
 ```text
-Convert a workbook between `.xlsx`, CSV, `.omc`, ODS, JSON, and PDF
+Convert `.xlsx`/`.xlsm`/`.xls`, CSV/TSV, OMC, ODS, JSON, Parquet, HTML/Markdown, or PDF
 
 Usage: convert [OPTIONS] <INPUT> <OUTPUT>
 
@@ -104,13 +104,13 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --jq <PATH>
           Dotted selector into a JSON array (`.items`)
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -163,10 +163,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -209,10 +209,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -252,10 +252,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -298,10 +298,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -347,10 +347,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -388,10 +388,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -428,10 +428,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -468,10 +468,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -504,10 +504,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -544,10 +544,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -580,10 +580,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -620,10 +620,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -663,10 +663,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -699,10 +699,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -735,10 +735,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -762,7 +762,7 @@ Usage: reset [OPTIONS] [FILE]
 
 Arguments:
   [FILE]
-          Relative file under `~/.config/omacell` (default `config.toml`)
+          Relative file under the XDG Omacell config dir (default `config.toml`)
 
 Options:
       --json
@@ -775,10 +775,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -821,10 +821,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -857,10 +857,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -897,10 +897,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -933,10 +933,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -969,10 +969,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1008,10 +1008,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1035,7 +1035,7 @@ Usage: check [OPTIONS]
 
 Options:
       --hyprland <HYPRLAND>
-          Path to `bindings.lua` (default `~/.config/hypr/bindings.lua`)
+          Path to `bindings.lua` (default `$XDG_CONFIG_HOME/hypr/bindings.lua`)
 
       --json
           Machine-readable stdout (and stderr errors)
@@ -1047,10 +1047,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1086,10 +1086,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1122,16 +1122,19 @@ Options:
           Validate writes without changing files
 
       --menu
-          Write Omarchy menu rows (otherwise skipped unless confirmed on a TTY)
+          Install menu rows without prompting (uninstall always removes owned rows)
 
       --set <KEY=VALUE>
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
+      --uninstall
+          Remove unchanged Omacell-owned Omarchy assets and menu rows
+
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1164,10 +1167,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1216,10 +1219,10 @@ Options:
           Socket path (default: focused instance, then newest live instance)
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -v, --verbose...
           Increase log verbosity
@@ -1257,10 +1260,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1293,10 +1296,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1333,10 +1336,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1373,10 +1376,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1413,10 +1416,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1453,10 +1456,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1496,10 +1499,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1539,10 +1542,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1579,10 +1582,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1608,7 +1611,7 @@ Commands:
   setup  Detect local servers and write a sparse user config
   card   Print a workbook card
   plan   Propose registry commands from a natural-language request
-  log    Read `~/.local/state/omacell/ai/log.jsonl`
+  log    Read the XDG-state AI audit log
   usage  Token usage totals from the audit log
 
 Options:
@@ -1622,10 +1625,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1658,10 +1661,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1709,7 +1712,7 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --offset <OFFSET>
           Zero-based row offset within `--range`
@@ -1722,7 +1725,7 @@ Options:
           [default: 128]
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1762,10 +1765,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1783,7 +1786,7 @@ Options:
 #### `omacell ai log`
 
 ```text
-Read `~/.local/state/omacell/ai/log.jsonl`
+Read the XDG-state AI audit log
 
 Usage: log [OPTIONS]
 
@@ -1798,10 +1801,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1834,10 +1837,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1883,10 +1886,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1928,10 +1931,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
@@ -1970,10 +1973,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output

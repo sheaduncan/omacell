@@ -73,9 +73,7 @@ fn setup_dry_run_writes_nothing() {
 #[test]
 fn uninstall_dry_run_retains_installed_assets() {
     let dir = TempDir::new().unwrap();
-    let template = dir
-        .path()
-        .join(".config/omarchy/themed/omacell.toml.tpl");
+    let template = dir.path().join(".config/omarchy/themed/omacell.toml.tpl");
     Command::cargo_bin("omacell")
         .unwrap()
         .env_remove("XDG_CONFIG_HOME")

@@ -206,11 +206,8 @@ pub async fn serve(handler: OmacellMcp, socket: Option<PathBuf>) -> Result<(), C
 }
 
 async fn serve_socket(handler: OmacellMcp, path: &Path) -> Result<(), CliError> {
+    prepare_socket_parent(path)?;
     prepare_socket_path(path)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|err| CliError::new("mcp.socket", err.to_string()))?;
-    }
     let listener = tokio::net::UnixListener::bind(path)
         .map_err(|err| CliError::new("mcp.socket", err.to_string()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
@@ -241,6 +238,27 @@ async fn serve_socket(handler: OmacellMcp, path: &Path) -> Result<(), CliError> 
             }
         });
     }
+}
+
+fn prepare_socket_parent(path: &Path) -> Result<(), CliError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            CliError::new(
+                "mcp.socket",
+                "socket path must have an owned parent directory with mode 0700",
+            )
+        })?;
+    omacell_bus::ipc::prepare_runtime_dir(parent).map_err(|error| {
+        CliError::new(
+            "mcp.socket",
+            format!(
+                "socket parent must be owned by this user with mode 0700: {}",
+                error.message
+            ),
+        )
+    })
 }
 
 fn prepare_socket_path(path: &Path) -> Result<(), CliError> {

@@ -675,7 +675,12 @@ fn file_export(
                     return Err(cancelled());
                 }
                 ctx.report_progress(0, Some(1), "export");
-                atomic_write_bytes(&path, &bytes, ctx.cancel_flag().map(Arc::as_ref))?;
+                atomic_write_format_bytes(
+                    &path,
+                    &bytes,
+                    keep_backups,
+                    ctx.cancel_flag().map(Arc::as_ref),
+                )?;
                 ctx.report_progress(1, Some(1), "export");
             }
         }
@@ -1175,7 +1180,7 @@ fn write_kind(
                 changeset: None,
             };
             let text = omc::to_string(&doc)?;
-            atomic_write_bytes(path, text.as_bytes(), cancel)?;
+            atomic_write_format_bytes(path, text.as_bytes(), keep_backups, cancel)?;
         }
         FileKind::Csv => {
             let mut plan = ExportPlan::default();
@@ -1183,7 +1188,7 @@ fn write_kind(
                 plan.delimiter = '\t';
             }
             let bytes = csv::export(wb, &plan)?;
-            atomic_write_bytes(path, &bytes, cancel)?;
+            atomic_write_format_bytes(path, &bytes, keep_backups, cancel)?;
         }
         FileKind::Pdf => {
             return Err(CoreError::new(
@@ -1520,6 +1525,9 @@ fn send_to_printer(printer: &str, path: &Path) -> Result<(), CoreError> {
         .arg(printer)
         .arg("--")
         .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map_err(|err| CoreError::new("file.print", format!("lp: {err}")))?;
     if status.success() {

@@ -37,10 +37,10 @@ Options:
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
 
       --config <FILE>
-          Explicit config file; replaces `~/.config/omacell/config.toml`
+          Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
 
       --theme <FILE>
-          Explicit theme `colors.toml`; wins over `OMACELL_THEME`
+          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`
 
   -q, --quiet
           Suppress non-error human output
