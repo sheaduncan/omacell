@@ -967,7 +967,7 @@ fn lookup_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     } else {
         array_form(&second)
     };
-    match args::last_le(&keys, &lookup) {
+    match args::last_le_skipping_errors(&keys, &lookup) {
         Ok(Some(i)) => match results.get(i) {
             Some(s) => RuntimeValue::Scalar(s.clone()),
             None => err(ErrorKind::Na),

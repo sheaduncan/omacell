@@ -2,6 +2,17 @@
 
 ## Plan (written before coding)
 
+### 2026-09-04 approximate-lookup error follow-up (written before coding)
+
+- Add the canonical last-nonblank `LOOKUP(2,1/(range<>""),range)` regression
+  first, including leading, interior, and trailing error sentinels whose result
+  index must remain aligned with the unfiltered return vector.
+- Make the approximate search helper ignore error keys while preserving
+  original indexes; retain binary search for error-free sorted vectors and
+  avoid changing exact-match error propagation.
+- Update the authoritative function checklist and this report, run all function
+  tests and strict Clippy, then run exact `just check` before opening the PR.
+
 ### 2026-09-04 financial-semantics review follow-up (written before coding)
 
 - Add regression corpus rows first for beginning-of-period `IPMT`/`PPMT`,
@@ -128,6 +139,12 @@ cash-flow scale, so multiplying every cash flow by a currency scale does not
 change convergence. `EFFECT`, `NOMINAL`, cumulative loan functions, and
 zero-life `SLN` now apply their documented Excel error boundaries.
 
+The 2026-09-04 approximate-lookup follow-up gives classic `LOOKUP` an
+error-skipping binary-search view that retains each comparable key's original
+index. The canonical `LOOKUP(2,1/(range<>""),range)` idiom therefore reaches
+the last nonblank result without an intermediate `#DIV/0!` abort. Other
+approximate lookup functions retain their existing error behavior.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -179,6 +196,12 @@ Host: rustc 1.98.0, Linux.
   - Billion-period cumulative calculations remain constant-time with a small
     positive rate and return finite results.
   - Strict all-target Clippy for `omacell-fn` is warning-free.
+- 2026-09-04 approximate-lookup test-first evidence:
+  - Explicit mixed `#DIV/0!`/`#N/A` keys and the computed last-nonblank idiom
+    both failed before the change and pass afterward; an all-error vector still
+    returns `#N/A`.
+  - The complete `omacell-fn` suite passes, including every function corpus,
+    integration test, eager-function panic smoke, and doctest.
 - 2026-09-03 bit-shift test-first evidence:
   - Six cases at 49 and ±53 bits initially returned `#NUM!`; they now return
     zero when the input/result remains within the 48-bit value ceiling.
@@ -230,6 +253,8 @@ Host: rustc 1.98.0, Linux.
 6. **Resolved 2026-09-04:** beginning-of-period loan schedules, financial
    argument errors, and rate-solver convergence now match the documented Excel
    behavior. The live-Excel oracle remains the separately owned WP-28 gate.
+7. **Resolved 2026-09-04:** classic approximate `LOOKUP` skips error sentinels
+   while preserving the return vector's original indexes.
 
 ## RFC (only if a frozen contract changed)
 
@@ -243,6 +268,9 @@ contract.
 
 The financial-semantics follow-up adds one documented solver constant and
 changes no function signature, command schema, or frozen WP-01 type.
+
+The approximate-lookup follow-up changes no public signature or frozen
+contract.
 
 ## Checklist
 

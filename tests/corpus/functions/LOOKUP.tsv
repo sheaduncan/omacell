@@ -10,3 +10,6 @@
 =LOOKUP(2,{3,1,2},{30,10,20})	20	unsorted vector uses approximate binary search (Excel)
 =LOOKUP(,"")		known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. empty lookup in a 1×1 empty result
 =LOOKUP(2,{1,2},{10})	#N/A	result_vector shorter than lookup_vector: out of range is #N/A
+=LOOKUP(2,{#DIV/0!,1,#N/A,1},{10,20,30,40})	40	approximate lookup skips error keys and preserves the original return-vector index
+=LOOKUP(2,1/({"";"first";"";"last"}<>""),{"blank";"first";"blank";"last"})	last	canonical last-nonblank LOOKUP idiom skips division errors
+=LOOKUP(2,{#DIV/0!,#N/A},{10,20})	#N/A	an approximate vector with no comparable keys has no match
