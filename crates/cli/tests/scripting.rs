@@ -55,6 +55,7 @@ fn embedded_script_requires_exact_file_hash_trust_then_saves() {
 omacell.on_before_save(function()
     omacell.cmd("cell.set", {ref = "A2", input = "654"})
 end)
+print("embedded-status")
 omacell.cmd("cell.set", {ref = "A1", input = "321"})
 "#
         .to_vec(),
@@ -73,10 +74,19 @@ omacell.cmd("cell.set", {ref = "A1", input = "321"})
         .args(["trust", "add", book.to_str().unwrap()])
         .assert()
         .success();
-    command(dir.path())
-        .args(["run", "--embedded", book.to_str().unwrap()])
-        .assert()
-        .success();
+    let run = command(dir.path())
+        .args(["--json", "run", "--embedded", book.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap();
+    assert_eq!(json["embedded"], true);
+    assert!(!String::from_utf8_lossy(&run.stdout).contains("embedded-status"));
+    assert!(String::from_utf8_lossy(&run.stderr).contains("embedded-status"));
     command(dir.path())
         .args(["query", book.to_str().unwrap(), "A1"])
         .assert()
