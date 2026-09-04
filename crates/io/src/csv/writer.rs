@@ -231,9 +231,35 @@ fn cell_text(
                 date_system: wb.settings().date_system,
                 width: None,
             };
-            Ok(format_with(FormatValue::Number(n), &code, &opts).text)
+            let formatted = format_with(FormatValue::Number(n), &code, &opts).text;
+            if is_formula_like(&formatted) && !is_unambiguous_numeric_field(&formatted, plan.locale)
+            {
+                return formula_safe_text(&formatted, row, col, plan.formula_text);
+            }
+            check_field_bytes(formatted.len(), row, col)?;
+            Ok(formatted)
         }
     }
+}
+
+fn is_unambiguous_numeric_field(text: &str, locale: omacell_core::locale::LocaleId) -> bool {
+    let separators = locale.separators();
+    let mut normalized = String::with_capacity(text.len());
+    for ch in text.trim().chars() {
+        if ch == separators.thousands {
+            continue;
+        }
+        if ch == separators.decimal {
+            normalized.push('.');
+        } else if ch.is_ascii_digit() || matches!(ch, '+' | '-' | 'e' | 'E') {
+            normalized.push(ch);
+        } else {
+            return false;
+        }
+    }
+    normalized
+        .parse::<f64>()
+        .is_ok_and(|number| number.is_finite())
 }
 
 fn formula_safe_text(
@@ -248,7 +274,7 @@ fn formula_safe_text(
     }
     match policy {
         FormulaTextPolicy::Reject => Err(error::export(format!(
-            "text at row {}, column {} could execute as a spreadsheet formula",
+            "field at row {}, column {} could execute as a spreadsheet formula",
             row + 1,
             u32::from(col) + 1
         ))
@@ -269,7 +295,7 @@ fn is_formula_like(text: &str) -> bool {
 fn check_field_bytes(bytes: usize, row: u32, col: u16) -> Result<(), CoreError> {
     if bytes > MAX_FIELD_BYTES {
         return Err(error::limit(format!(
-            "text at row {}, column {} is {bytes} bytes; maximum is {MAX_FIELD_BYTES}",
+            "field at row {}, column {} is {bytes} bytes; maximum is {MAX_FIELD_BYTES}",
             row + 1,
             u32::from(col) + 1
         )));

@@ -2,6 +2,7 @@
 
 use std::io::{self, Write};
 
+use omacell_core::style::Style;
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_io::csv::{
@@ -118,6 +119,74 @@ fn formula_like_text_is_safe_by_default_and_explicit_otherwise() {
         ..ExportPlan::default()
     };
     assert_eq!(export(&wb, &escape).unwrap(), b"'=2+2\n");
+}
+
+#[test]
+fn formula_like_formatted_number_uses_the_injection_policy() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_number(sheet, 0, 0, 1.0).unwrap();
+    let num_fmt = wb.intern_num_fmt(r#""=1+1""#).unwrap();
+    wb.set_cell_style(
+        sheet,
+        0,
+        0,
+        Style {
+            num_fmt,
+            ..Style::default()
+        },
+    )
+    .unwrap();
+
+    let err = export(&wb, &ExportPlan::default()).unwrap_err();
+    assert_eq!(err.code, omacell_io::error::codes::CSV_EXPORT);
+
+    let escape = ExportPlan {
+        formula_text: FormulaTextPolicy::Escape,
+        ..ExportPlan::default()
+    };
+    assert_eq!(export(&wb, &escape).unwrap(), b"'=1+1\n");
+}
+
+#[test]
+fn unambiguous_negative_numbers_are_not_formula_injection() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_number(sheet, 0, 0, -1.0).unwrap();
+    let num_fmt = wb.intern_num_fmt("#,##0.00").unwrap();
+    wb.set_cell_style(
+        sheet,
+        0,
+        0,
+        Style {
+            num_fmt,
+            ..Style::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(export(&wb, &ExportPlan::default()).unwrap(), b"-1.00\n");
+}
+
+#[test]
+fn formula_like_dash_literal_from_number_format_is_rejected() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_number(sheet, 0, 0, 1.0).unwrap();
+    let num_fmt = wb.intern_num_fmt(r#""-cmd|"0"#).unwrap();
+    wb.set_cell_style(
+        sheet,
+        0,
+        0,
+        Style {
+            num_fmt,
+            ..Style::default()
+        },
+    )
+    .unwrap();
+
+    let err = export(&wb, &ExportPlan::default()).unwrap_err();
+    assert_eq!(err.code, omacell_io::error::codes::CSV_EXPORT);
 }
 
 #[test]

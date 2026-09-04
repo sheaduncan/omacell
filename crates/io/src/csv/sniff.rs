@@ -211,14 +211,48 @@ fn quote_bonus(text: &str, delimiter: char, quote: char) -> i64 {
     let quote = quote as u8;
     let delimiter = delimiter as u8;
     let mut starts = 0i64;
-    for (idx, byte) in bytes.iter().enumerate() {
-        if *byte == quote
-            && (idx == 0 || matches!(bytes[idx - 1], b'\r' | b'\n') || bytes[idx - 1] == delimiter)
-        {
+    let mut at_field_start = true;
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let byte = bytes[idx];
+        if at_field_start && byte == quote {
+            let Some(end) = valid_quoted_field_end(bytes, idx, delimiter, quote) else {
+                at_field_start = false;
+                idx += 1;
+                continue;
+            };
             starts += 1;
+            at_field_start = false;
+            idx = end + 1;
+        } else if byte == delimiter || matches!(byte, b'\r' | b'\n') {
+            at_field_start = true;
+            idx += 1;
+        } else {
+            at_field_start = false;
+            idx += 1;
         }
     }
     starts * 2_000
+}
+
+fn valid_quoted_field_end(bytes: &[u8], start: usize, delimiter: u8, quote: u8) -> Option<usize> {
+    let mut idx = start + 1;
+    while idx < bytes.len() {
+        if bytes[idx] != quote {
+            idx += 1;
+            continue;
+        }
+        if bytes.get(idx + 1) == Some(&quote) {
+            idx += 2;
+            continue;
+        }
+        return match bytes.get(idx + 1) {
+            None => Some(idx),
+            Some(next) if *next == delimiter || matches!(*next, b'\r' | b'\n') => Some(idx),
+            Some(_) => None,
+        };
+    }
+    None
 }
 
 fn sniff_separators(rows: &[Vec<String>], locale: LocaleId) -> (char, Option<char>) {

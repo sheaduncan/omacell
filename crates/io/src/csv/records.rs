@@ -2,6 +2,11 @@
 
 use std::fmt;
 use std::io::{self, Read};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    rc::Rc,
+};
 
 use omacell_core::error::CoreError;
 use omacell_core::limits::MAX_COLS;
@@ -36,10 +41,25 @@ pub(crate) struct FieldLimitReader<R: Read> {
     at_field_start: bool,
     in_quotes: bool,
     quote_pending: bool,
+    last_terminator_was_cr: bool,
+    real_records_seen: u64,
+    blank_runs: Rc<BlankRuns>,
+}
+
+#[derive(Clone, Copy)]
+struct BlankRun {
+    before_record: u64,
+    count: usize,
+}
+
+#[derive(Default)]
+struct BlankRuns {
+    queue: RefCell<VecDeque<BlankRun>>,
+    available: Cell<bool>,
 }
 
 impl<R: Read> FieldLimitReader<R> {
-    pub(crate) fn new(inner: R, plan: &ImportPlan) -> Result<Self, CoreError> {
+    fn new(inner: R, plan: &ImportPlan, blank_runs: Rc<BlankRuns>) -> Result<Self, CoreError> {
         Ok(Self {
             inner,
             delimiter: plan.delimiter_byte()?,
@@ -49,6 +69,9 @@ impl<R: Read> FieldLimitReader<R> {
             at_field_start: true,
             in_quotes: false,
             quote_pending: false,
+            last_terminator_was_cr: false,
+            real_records_seen: 0,
+            blank_runs,
         })
     }
 
@@ -68,7 +91,48 @@ impl<R: Read> FieldLimitReader<R> {
         Ok(())
     }
 
+    fn add_blank_record(&mut self) -> io::Result<()> {
+        let mut runs = self.blank_runs.queue.borrow_mut();
+        if let Some(run) = runs
+            .back_mut()
+            .filter(|run| run.before_record == self.real_records_seen)
+        {
+            run.count = run.count.checked_add(1).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "blank record overflow")
+            })?;
+            return Ok(());
+        }
+        runs.push_back(BlankRun {
+            before_record: self.real_records_seen,
+            count: 1,
+        });
+        self.blank_runs.available.set(true);
+        Ok(())
+    }
+
     fn observe_outside(&mut self, byte: u8) -> io::Result<()> {
+        if matches!(byte, b'\r' | b'\n') {
+            let physical_blank =
+                self.fields_in_record == 1 && self.field_bytes == 0 && self.at_field_start;
+            if byte == b'\n' && self.last_terminator_was_cr && physical_blank {
+                self.last_terminator_was_cr = false;
+                return Ok(());
+            }
+            if physical_blank {
+                self.add_blank_record()?;
+            } else {
+                self.real_records_seen =
+                    self.real_records_seen.checked_add(1).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "CSV record count overflow")
+                    })?;
+            }
+            self.field_bytes = 0;
+            self.fields_in_record = 1;
+            self.at_field_start = true;
+            self.last_terminator_was_cr = byte == b'\r';
+            return Ok(());
+        }
+
         if byte == self.delimiter {
             self.field_bytes = 0;
             self.at_field_start = true;
@@ -84,10 +148,6 @@ impl<R: Read> FieldLimitReader<R> {
                     },
                 ));
             }
-        } else if matches!(byte, b'\r' | b'\n') {
-            self.field_bytes = 0;
-            self.fields_in_record = 1;
-            self.at_field_start = true;
         } else if self.at_field_start && byte == self.quote {
             self.at_field_start = false;
             self.in_quotes = true;
@@ -129,6 +189,75 @@ impl<R: Read> Read for FieldLimitReader<R> {
     }
 }
 
+/// CSV record reader that restores non-trailing physical blank records, which
+/// the underlying parser intentionally skips.
+pub(crate) struct RecordReader<R: Read> {
+    reader: ::csv::Reader<FieldLimitReader<R>>,
+    blank_runs: Rc<BlankRuns>,
+    held_record: Option<::csv::StringRecord>,
+    blanks_before_held: usize,
+}
+
+impl<R: Read> RecordReader<R> {
+    pub(crate) fn new(inner: R, plan: &ImportPlan) -> Result<Self, CoreError> {
+        let blank_runs = Rc::new(BlankRuns::default());
+        let limited = FieldLimitReader::new(inner, plan, Rc::clone(&blank_runs))?;
+        let reader = reader_builder(plan)?.from_reader(limited);
+        Ok(Self {
+            reader,
+            blank_runs,
+            held_record: None,
+            blanks_before_held: 0,
+        })
+    }
+
+    pub(crate) fn read_record(
+        &mut self,
+        record: &mut ::csv::StringRecord,
+    ) -> Result<bool, CoreError> {
+        if self.blanks_before_held > 0 {
+            record.clear();
+            record.push_field("");
+            self.blanks_before_held -= 1;
+            return Ok(true);
+        }
+        if let Some(held) = self.held_record.take() {
+            *record = held;
+            return Ok(true);
+        }
+
+        if !self.reader.read_record(record).map_err(map_csv)? {
+            return Ok(false);
+        }
+        if !self.blank_runs.available.get() {
+            return Ok(true);
+        }
+        let records_read = self.reader.position().record();
+        let mut runs = self.blank_runs.queue.borrow_mut();
+        while runs
+            .front()
+            .is_some_and(|run| run.before_record < records_read)
+        {
+            let Some(run) = runs.pop_front() else {
+                break;
+            };
+            self.blanks_before_held = self
+                .blanks_before_held
+                .checked_add(run.count)
+                .ok_or_else(|| error::limit("blank record count overflow"))?;
+        }
+        self.blank_runs.available.set(!runs.is_empty());
+        drop(runs);
+
+        if self.blanks_before_held > 0 {
+            self.held_record = Some(std::mem::take(record));
+            record.push_field("");
+            self.blanks_before_held -= 1;
+        }
+        Ok(true)
+    }
+}
+
 pub(crate) fn reader_builder(plan: &ImportPlan) -> Result<::csv::ReaderBuilder, CoreError> {
     plan.validate()?;
     let mut b = ::csv::ReaderBuilder::new();
@@ -143,18 +272,17 @@ pub(crate) fn reader_builder(plan: &ImportPlan) -> Result<::csv::ReaderBuilder, 
 
 /// Parse every record from already-decoded UTF-8 bytes.
 pub(crate) fn parse_records(utf8: &[u8], plan: &ImportPlan) -> Result<Vec<Vec<String>>, CoreError> {
-    let limited = FieldLimitReader::new(utf8, plan)?;
-    let mut rdr = reader_builder(plan)?.from_reader(limited);
+    let mut rdr = RecordReader::new(utf8, plan)?;
     collect_records(&mut rdr)
 }
 
 pub(crate) fn collect_records<R: Read>(
-    rdr: &mut ::csv::Reader<R>,
+    rdr: &mut RecordReader<R>,
 ) -> Result<Vec<Vec<String>>, CoreError> {
     let mut rows = Vec::new();
     let mut cells = 0usize;
-    for rec in rdr.records() {
-        let rec = rec.map_err(map_csv)?;
+    let mut rec = ::csv::StringRecord::new();
+    while rdr.read_record(&mut rec)? {
         if rows.len() >= MAX_CLIPBOARD_ROWS {
             return Err(error::limit(format!(
                 "materialized table has more than {MAX_CLIPBOARD_ROWS} rows"

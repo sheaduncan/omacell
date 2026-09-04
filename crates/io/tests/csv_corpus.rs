@@ -200,6 +200,16 @@ fn sniffs_single_quote_quoting() {
 }
 
 #[test]
+fn apostrophe_prefixed_values_do_not_select_single_quote_syntax() {
+    let bytes = b"name,city\n'Twas John's book,Chicago\n'Alice's copy,Boston\n";
+    let sniffed = sniff(bytes).unwrap();
+
+    assert_eq!(sniffed.plan.delimiter, ',');
+    assert_eq!(sniffed.plan.quote, '"');
+    assert_eq!(sniffed.sample_rows[1], ["'Twas John's book", "Chicago"]);
+}
+
+#[test]
 fn sniff_scoring_does_not_overflow_on_ragged_input() {
     let mut text = ",".repeat(9_999);
     text.push('\n');
