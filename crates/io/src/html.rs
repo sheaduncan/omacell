@@ -33,6 +33,9 @@ pub fn open_bytes(bytes: &[u8], kind: ClipboardFormat) -> Result<Workbook, CoreE
     }
     let text = std::str::from_utf8(bytes).map_err(|e| error::html_format(e.to_string()))?;
     table_to_workbook(parse_clipboard(text, kind).map_err(|err| {
+        if err.code != error::codes::CSV_PARSE {
+            return err;
+        }
         let mut mapped = CoreError::new(error::codes::HTML_FORMAT, err.message);
         if let Some(hint) = err.hint {
             mapped = mapped.with_hint(hint);

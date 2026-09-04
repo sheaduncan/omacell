@@ -172,24 +172,63 @@ fn is_md_sep(line: &str) -> bool {
 fn split_md_row(line: &str) -> Result<Vec<String>, CoreError> {
     let t = line.trim();
     let t = t.strip_prefix('|').unwrap_or(t);
-    let t = t.strip_suffix('|').unwrap_or(t);
-    if t.split('|').take(usize::from(MAX_COLS) + 1).count() > usize::from(MAX_COLS) {
+    let t = if t.ends_with('|') && !is_escaped(t, t.len() - 1) {
+        &t[..t.len() - 1]
+    } else {
+        t
+    };
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut chars = t.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '|' => push_md_cell(&mut cells, &mut cell)?,
+            '\\' => match chars.next() {
+                Some(escaped @ ('|' | '\\')) => cell.push(escaped),
+                Some(other) => {
+                    cell.push('\\');
+                    cell.push(other);
+                }
+                None => cell.push('\\'),
+            },
+            other => cell.push(other),
+        }
+        if cell.len() > MAX_FIELD_BYTES {
+            return Err(error::limit(format!(
+                "clipboard field is more than {MAX_FIELD_BYTES} bytes"
+            )));
+        }
+    }
+    push_md_cell(&mut cells, &mut cell)?;
+    Ok(cells)
+}
+
+fn is_escaped(text: &str, byte_index: usize) -> bool {
+    text.as_bytes()[..byte_index]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
+fn push_md_cell(cells: &mut Vec<String>, cell: &mut String) -> Result<(), CoreError> {
+    if cells.len() >= usize::from(MAX_COLS) {
         return Err(error::limit(format!(
             "clipboard row has more than {MAX_COLS} columns"
         )));
     }
-    t.split('|')
-        .map(|cell| {
-            let cell = cell.trim();
-            if cell.len() > MAX_FIELD_BYTES {
-                return Err(error::limit(format!(
-                    "clipboard field is {} bytes; maximum is {MAX_FIELD_BYTES}",
-                    cell.len()
-                )));
-            }
-            Ok(cell.to_string())
-        })
-        .collect()
+    let trimmed = cell.trim();
+    if trimmed.len() > MAX_FIELD_BYTES {
+        return Err(error::limit(format!(
+            "clipboard field is {} bytes; maximum is {MAX_FIELD_BYTES}",
+            trimmed.len()
+        )));
+    }
+    cells.push(trimmed.to_string());
+    cell.clear();
+    Ok(())
 }
 
 fn parse_html(text: &str) -> Result<ClipboardTable, CoreError> {
