@@ -708,6 +708,69 @@ fn stale_socket_for_dead_pid_is_removed() {
 }
 
 #[test]
+fn leftover_socket_for_a_live_pid_without_a_listener_is_stale() {
+    let dir = runtime_dir();
+    omacell_bus::ipc::prepare_runtime_dir(&dir).unwrap();
+    let pid = std::process::id();
+    let path = dir.join(format!("{pid}.sock"));
+    let leftover = UnixListener::bind(&path).unwrap();
+    drop(leftover);
+    assert!(path.exists());
+    assert!(
+        discover_newest(&dir).unwrap().is_none(),
+        "a leftover socket with no listener must not look like a live instance"
+    );
+    let handle = serve(dir.clone(), bus()).expect("bind over a recycled-pid leftover");
+    assert!(handle.socket_path().exists());
+    let newest = discover_newest(&dir).unwrap().unwrap();
+    assert_eq!(newest.pid, pid);
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn script_and_macro_commands_cannot_execute_over_ipc() {
+    let dir = runtime_dir();
+    let mut bus = bus();
+    for id in ["script.source", "macro.record"] {
+        bus.registry_mut()
+            .register::<omacell_bus::args::EmptyArgs, _>(
+                omacell_bus::CommandSpec {
+                    id,
+                    doc: "stub",
+                    kind: omacell_bus::CommandKind::Mutating,
+                    changeset_eligible: false,
+                    exposure: omacell_bus::Exposure::Public,
+                    default_keys: &[],
+                },
+                |_ctx, _args| Ok(omacell_bus::Effect::query(serde_json::json!({}))),
+            )
+            .unwrap();
+    }
+    let handle = serve(dir.clone(), bus).unwrap();
+    let mut client = IpcClient::connect(handle.socket_path()).unwrap();
+    for id in ["script.source", "macro.record"] {
+        let err = client
+            .command(id, serde_json::json!({}), Some(Mode::Execute))
+            .unwrap();
+        assert!(!err.ok, "{id}");
+        assert_eq!(
+            err.error.as_ref().unwrap().code,
+            omacell_bus::codes::IPC_MODE
+        );
+    }
+    let undo = client
+        .command("edit.undo", serde_json::json!({}), Some(Mode::Execute))
+        .unwrap();
+    assert_ne!(
+        undo.error.as_ref().map(|error| error.code.as_str()),
+        Some(omacell_bus::codes::IPC_MODE)
+    );
+    handle.shutdown();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn default_runtime_dir_is_under_xdg_or_tmp() {
     let dir = default_runtime_dir();
     let s = dir.to_string_lossy();

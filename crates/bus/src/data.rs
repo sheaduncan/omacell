@@ -110,7 +110,7 @@ pub struct FilterColumnArg {
 
 /// Filter criteria argument.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FilterCriteriaArg {
     /// Inclusive value list.
     Values {

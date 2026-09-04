@@ -110,6 +110,19 @@ fn filter_toggle_and_clear() {
 }
 
 #[test]
+fn filter_criteria_arg_rejects_unknown_fields() {
+    let err = serde_json::from_value::<omacell_bus::data::FilterCriteriaArg>(json!({
+        "type": "values",
+        "values": ["Apple"],
+        "extra": true
+    }));
+    assert!(
+        err.is_err(),
+        "unknown filter criteria fields must fail closed"
+    );
+}
+
+#[test]
 fn flash_fill_command() {
     let mut bus = data_bus();
     common::exec_ok(

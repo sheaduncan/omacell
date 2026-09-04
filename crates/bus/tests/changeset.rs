@@ -148,6 +148,45 @@ fn review_can_discard_a_proposal_without_mutating() {
 }
 
 #[test]
+fn apply_rejects_a_proposal_after_an_intervening_live_mutation() {
+    let mut bus = common::bus();
+    let proposed = bus
+        .propose(Origin::ExternalAgent, vec![set("A1", "1")])
+        .unwrap();
+    common::exec_ok(&mut bus, "cell.set", json!({"ref": "B1", "input": "2"}));
+    let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::CHANGESET_BASE);
+    assert!(common::cell_value(&bus, 0, 0).is_none());
+    assert_eq!(common::cell_value(&bus, 0, 1), Some(Value::Number(2.0)));
+}
+
+#[test]
+fn apply_succeeds_when_the_workbook_generation_is_unchanged() {
+    let mut bus = common::bus();
+    let proposed = bus
+        .propose(Origin::ExternalAgent, vec![set("A1", "1")])
+        .unwrap();
+    bus.apply(Origin::User, &proposed.id).unwrap();
+    assert_eq!(common::cell_value(&bus, 0, 0), Some(Value::Number(1.0)));
+}
+
+#[test]
+fn applying_one_proposal_invalidates_a_sibling_proposed_at_the_same_base() {
+    let mut bus = common::bus();
+    let first = bus
+        .propose(Origin::ExternalAgent, vec![set("A1", "1")])
+        .unwrap();
+    let second = bus
+        .propose(Origin::ExternalAgent, vec![set("B1", "2")])
+        .unwrap();
+    bus.apply(Origin::User, &first.id).unwrap();
+    let err = bus.apply(Origin::User, &second.id).unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::CHANGESET_BASE);
+    assert_eq!(common::cell_value(&bus, 0, 0), Some(Value::Number(1.0)));
+    assert!(common::cell_value(&bus, 0, 1).is_none());
+}
+
+#[test]
 fn review_preview_reports_before_after_cells_without_mutating() {
     let mut bus = common::bus();
     common::exec_ok(
@@ -423,7 +462,7 @@ fn apply_rechecks_retained_size_before_live_mutation() {
     assert!(outcome.ok, "{:?}", outcome.error);
 
     let err = bus.apply(Origin::User, &changeset.id).unwrap_err();
-    assert_eq!(err.code, omacell_bus::codes::CHANGESET_LIMIT);
+    assert_eq!(err.code, omacell_bus::codes::CHANGESET_BASE);
     let slot = bus
         .workbook()
         .get(bus.workbook().active_sheet(), 0, 0)

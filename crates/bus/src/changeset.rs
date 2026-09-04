@@ -1,6 +1,9 @@
 //! Changeset store and lifecycle.
 
 use std::io::{self, Write};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use indexmap::IndexMap;
 use omacell_core::changeset::{
@@ -31,12 +34,12 @@ struct Entry {
     public: Changeset,
     inverse: Vec<CommandCall>,
     retained_bytes: usize,
+    base_generation: u64,
 }
 
 /// In-memory changeset store. Proposed records keep inverses private so the
 /// frozen [`Changeset`] validator stays satisfied.
 pub struct ChangesetStore {
-    next: u64,
     entries: IndexMap<String, Entry>,
     retained_bytes: usize,
 }
@@ -52,7 +55,6 @@ impl ChangesetStore {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            next: 1,
             entries: IndexMap::new(),
             retained_bytes: 0,
         }
@@ -103,9 +105,10 @@ impl ChangesetStore {
         forward: Vec<CommandCall>,
         inverse: Vec<CommandCall>,
         summary: ChangeSummary,
+        base_generation: u64,
     ) -> Result<Changeset, CoreError> {
         self.ensure_can_propose(&forward)?;
-        let id = ChangesetId::new(format!("cs-{}", self.next))?;
+        let id = allocate_changeset_id()?;
         let public = Changeset {
             id: id.clone(),
             origin,
@@ -123,10 +126,10 @@ impl ChangesetStore {
                 public: public.clone(),
                 inverse,
                 retained_bytes,
+                base_generation,
             },
         );
         self.retained_bytes += retained_bytes;
-        self.next += 1;
         Ok(public)
     }
 
@@ -136,6 +139,7 @@ impl ChangesetStore {
         forward: Vec<CommandCall>,
         inverse: Vec<CommandCall>,
         summary: ChangeSummary,
+        base_generation: u64,
     ) -> Result<Changeset, CoreError> {
         self.ensure_can_retain_forward(&forward)?;
         let entry = self
@@ -158,6 +162,7 @@ impl ChangesetStore {
         entry.public.forward = forward;
         entry.public.summary = summary;
         entry.inverse = inverse;
+        entry.base_generation = base_generation;
         entry.public.validate()?;
         self.retained_bytes = self
             .retained_bytes
@@ -238,6 +243,21 @@ impl ChangesetStore {
             )));
         }
         Ok(entry.inverse.as_slice())
+    }
+
+    pub(crate) fn proposed_base_generation(&self, id: &ChangesetId) -> Result<u64, CoreError> {
+        let entry = self
+            .entries
+            .get(id.as_str())
+            .ok_or_else(|| error::changeset_not_found(id.as_str()))?;
+        if entry.public.status != ChangesetStatus::Proposed {
+            return Err(error::changeset_state(format!(
+                "changeset {} cannot be applied in status {:?}",
+                id.as_str(),
+                entry.public.status
+            )));
+        }
+        Ok(entry.base_generation)
     }
 
     pub(crate) fn forward_for_apply(&self, id: &ChangesetId) -> Result<&[CommandCall], CoreError> {
@@ -334,6 +354,23 @@ impl ChangesetStore {
     }
 }
 
+fn allocate_changeset_id() -> Result<ChangesetId, CoreError> {
+    static SESSION: OnceLock<u64> = OnceLock::new();
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let session = *SESSION.get_or_init(session_nonce);
+    let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+    ChangesetId::new(format!("cs-{session:016x}-{seq}"))
+}
+
+fn session_nonce() -> u64 {
+    let pid = u64::from(std::process::id());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    now ^ pid.rotate_left(32)
+}
+
 fn entry_size(
     forward: &[CommandCall],
     inverse: &[CommandCall],
@@ -397,6 +434,7 @@ mod tests {
                     Vec::new(),
                     Vec::new(),
                     ChangeSummary::default(),
+                    0,
                 )
                 .unwrap();
         }
@@ -406,6 +444,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 ChangeSummary::default(),
+                0,
             )
             .unwrap_err();
         assert_eq!(err.code, crate::error::codes::CHANGESET_LIMIT);
@@ -420,9 +459,42 @@ mod tests {
             args: serde_json::json!({"input": "x".repeat(MAX_CHANGESET_BYTES)}),
         }];
         let err = store
-            .insert_proposed(Origin::User, forward, Vec::new(), ChangeSummary::default())
+            .insert_proposed(
+                Origin::User,
+                forward,
+                Vec::new(),
+                ChangeSummary::default(),
+                0,
+            )
             .unwrap_err();
         assert_eq!(err.code, crate::error::codes::CHANGESET_LIMIT);
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn store_ids_do_not_restart_at_cs_1_across_new_stores() {
+        let mut first = ChangesetStore::new();
+        let a = first
+            .insert_proposed(
+                Origin::User,
+                Vec::new(),
+                Vec::new(),
+                ChangeSummary::default(),
+                0,
+            )
+            .unwrap();
+        let mut second = ChangesetStore::new();
+        let b = second
+            .insert_proposed(
+                Origin::User,
+                Vec::new(),
+                Vec::new(),
+                ChangeSummary::default(),
+                0,
+            )
+            .unwrap();
+        assert_ne!(a.id, b.id);
+        assert_ne!(a.id.as_str(), "cs-1");
+        assert_ne!(b.id.as_str(), "cs-1");
     }
 }
