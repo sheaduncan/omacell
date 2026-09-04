@@ -7,13 +7,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossterm::ExecutableCommand;
+use crossterm::clipboard::CopyToClipboard;
 use crossterm::cursor::Show;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event as CEvent, KeyEventKind,
+    EnableFocusChange, EnableMouseCapture, Event as CEvent, KeyEventKind, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    supports_keyboard_enhancement,
 };
 use omacell_ai::{AiRuntime, AutopilotPolicy, AutopilotScope, Plan, to_calls};
 use omacell_bus::ipc::{IpcHandle, IpcLimits, default_runtime_dir, serve_runner_with_limits};
@@ -40,6 +43,8 @@ use crate::graphics::ChartGraphics;
 use crate::input::{map_key, map_mouse};
 use crate::render;
 use crate::theme::{chart_theme, truecolor_enabled};
+
+const MAX_TERMINAL_CLIPBOARD_BYTES: usize = 100 * 1_024;
 
 /// Objects the CLI composition root hands to the TUI. No second config load.
 pub struct Launch {
@@ -108,6 +113,7 @@ pub struct Tui {
     quit_after: Option<TaskId>,
     file: Option<PathBuf>,
     window_focused: Option<bool>,
+    terminal_clipboard: Option<String>,
     ipc: Option<IpcHandle>,
 }
 
@@ -199,6 +205,7 @@ impl Tui {
             quit_after: None,
             file: None,
             window_focused: None,
+            terminal_clipboard: None,
             ipc: ipc_handle,
         })
     }
@@ -225,6 +232,11 @@ impl Tui {
     #[must_use]
     pub fn message(&self) -> Option<&str> {
         self.message.as_deref()
+    }
+
+    /// Take plain text queued for the host terminal's OSC 52 clipboard.
+    pub fn take_terminal_clipboard(&mut self) -> Option<String> {
+        self.terminal_clipboard.take()
     }
 
     /// Whether workbook changes have not been saved in this TUI session.
@@ -614,7 +626,16 @@ impl Tui {
                             })
                             .and_then(ClipboardPayload::from_bus_result)
                         {
-                            Ok(clipboard) => self.ui.set_clipboard(Some(clipboard)),
+                            Ok(clipboard) => {
+                                if clipboard.tsv.len() <= MAX_TERMINAL_CLIPBOARD_BYTES {
+                                    self.terminal_clipboard = Some(clipboard.tsv.clone());
+                                } else {
+                                    self.message = Some(format!(
+                                        "copied internally; terminal clipboard export exceeds {MAX_TERMINAL_CLIPBOARD_BYTES} bytes"
+                                    ));
+                                }
+                                self.ui.set_clipboard(Some(clipboard));
+                            }
                             Err(error) => {
                                 self.message = Some(format!("{}: {}", error.code, error.message));
                             }
@@ -1668,6 +1689,22 @@ impl Tui {
 
     /// Paste terminal-provided bracketed text at the active cell.
     pub fn paste_text(&mut self, text: &str) -> Result<Outcome, CoreError> {
+        let mut edit = self.ui.edit();
+        if !edit.is_idle() {
+            let next_len = edit.buffer.len().saturating_add(text.len());
+            if next_len > omacell_io::csv::MAX_CLIPBOARD_BYTES {
+                return Err(CoreError::new(
+                    "ui.clipboard",
+                    format!(
+                        "editor paste exceeds {} bytes",
+                        omacell_io::csv::MAX_CLIPBOARD_BYTES
+                    ),
+                ));
+            }
+            edit.insert_text(text);
+            self.ui.set_edit(edit);
+            return Ok(Outcome::success(serde_json::json!({"edited": true})));
+        }
         let args = ClipboardPayload::text_paste_args(text, self.ui.selection().cursor)?;
         self.execute_cmd("range.set", args)
     }
@@ -1758,7 +1795,14 @@ impl Tui {
             mouse: false,
             focus: false,
             bracketed_paste: false,
+            keyboard_enhancement: false,
         };
+        if matches!(supports_keyboard_enhancement(), Ok(true)) {
+            stdout()
+                .execute(PushKeyboardEnhancementFlags(keyboard_enhancement_flags()))
+                .map_err(|e| CoreError::new("tui.tty", e.to_string()))?;
+            restore.keyboard_enhancement = true;
+        }
         let mouse = self.store.snapshot().config.tui.mouse;
         stdout()
             .execute(EnterAlternateScreen)
@@ -1790,6 +1834,7 @@ impl Tui {
     fn event_loop<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<(), CoreError> {
         loop {
             self.poll_reload()?;
+            self.flush_terminal_clipboard()?;
             self.draw(terminal)
                 .map_err(|e| CoreError::new("tui.draw", e.to_string()))?;
             if !event::poll(Duration::from_millis(50))
@@ -1832,9 +1877,8 @@ impl Tui {
                 CEvent::FocusGained => self.sync_ipc_focus(true)?,
                 CEvent::FocusLost => self.sync_ipc_focus(false)?,
                 CEvent::Paste(text) => {
-                    if self.ui.edit().is_idle()
-                        && !self.ui.palette().open
-                        && self.ui.panel().visible.is_none()
+                    let editing = !self.ui.edit().is_idle();
+                    if (editing || (!self.ui.palette().open && self.ui.panel().visible.is_none()))
                         && let Err(error) = self.paste_text(&text)
                     {
                         self.message = Some(format!("{}: {}", error.code, error.message));
@@ -1843,6 +1887,16 @@ impl Tui {
             }
         }
         Ok(())
+    }
+
+    fn flush_terminal_clipboard(&mut self) -> Result<(), CoreError> {
+        let Some(text) = self.take_terminal_clipboard() else {
+            return Ok(());
+        };
+        stdout()
+            .execute(CopyToClipboard::to_clipboard_from(text))
+            .map(|_| ())
+            .map_err(|error| CoreError::new("tui.clipboard", error.to_string()))
     }
 
     fn sync_ipc_focus(&mut self, focused: bool) -> Result<(), CoreError> {
@@ -1931,10 +1985,14 @@ struct TerminalRestore {
     mouse: bool,
     focus: bool,
     bracketed_paste: bool,
+    keyboard_enhancement: bool,
 }
 
 impl Drop for TerminalRestore {
     fn drop(&mut self) {
+        if self.keyboard_enhancement {
+            let _ = stdout().execute(PopKeyboardEnhancementFlags);
+        }
         if self.bracketed_paste {
             let _ = stdout().execute(DisableBracketedPaste);
         }
@@ -1952,6 +2010,10 @@ impl Drop for TerminalRestore {
         }
         let _ = stdout().execute(Show);
     }
+}
+
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
 }
 
 fn has_missing_required_args(command: &CommandJson, args: &serde_json::Value) -> bool {
@@ -2094,4 +2156,18 @@ fn apply_sheet_geometry(ui: &UiSession, workbook: &Workbook, id: SheetId) {
 /// Run the TUI on the current terminal.
 pub fn run(launch: Launch) -> Result<(), CoreError> {
     Tui::new(launch, true)?.run_crossterm()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keyboard_enhancement_flags;
+    use crossterm::event::KeyboardEnhancementFlags;
+
+    #[test]
+    fn terminal_requests_unambiguous_modified_keys() {
+        assert!(
+            keyboard_enhancement_flags()
+                .contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
+    }
 }

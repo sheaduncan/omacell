@@ -38,6 +38,13 @@ Set `graphics = "sixel"` or `"kitty"` only when passthrough is configured, or
 `"off"` to always use Unicode. The setting and chart colors update on live
 configuration/theme reload.
 
+The TUI enables the terminal keyboard-enhancement protocol when supported so
+shifted control shortcuts remain distinct. Bracketed paste inserts into an
+active cell/formula editor; outside editing it remains one bounded table
+mutation. Copy, cut, and yank retain Omacell's rich internal payload and also
+offer the bounded plain-text representation to the host terminal through OSC
+52, including over SSH or configured tmux passthrough.
+
 Without `--socket` or `--all`, `omacell ipc` targets the focused GUI/TUI
 instance. If no frontend has published focus yet, it falls back to the newest
 live owned instance. GUI focus comes from eframe/winit; the TUI enables and

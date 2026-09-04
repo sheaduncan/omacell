@@ -7,7 +7,7 @@ use omacell_core::condfmt::{CfOverlay, CfVisual};
 use omacell_core::geometry::{AxisGeometry, DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::locale::LocaleId;
 use omacell_core::numfmt::{FormatOptions, FormatValue, format_with};
-use omacell_core::sheet::SheetVisibility;
+use omacell_core::sheet::{FreezePanes, SheetVisibility};
 use omacell_core::spill::SpillTable;
 use omacell_core::storage::CellSlot;
 use omacell_core::style::{Color as CellColor, Fill, HorizontalAlign, Underline};
@@ -83,7 +83,7 @@ impl GridHitMap {
     ) -> Vec<omacell_core::addr::RangeRef> {
         let rows = self.rows.iter().map(|row| row.index).collect::<Vec<_>>();
         let cols = self.columns.iter().map(|col| col.index).collect::<Vec<_>>();
-        conditional_format_ranges(&rows, &cols, viewport.freeze)
+        conditional_format_ranges(&rows, &cols, pane_counts(viewport))
     }
 
     pub(crate) fn chart_rect(&self, anchor: ChartAnchor) -> Option<Rect> {
@@ -632,22 +632,26 @@ fn draw_grid(
 
     let columns = visible_columns(&vp, first_col, area, header_w, col_chars, grid_lines);
     let rows = visible_rows(&vp, first_row, area, header_h);
+    let split_x = split_column(&vp, area, header_w, col_chars);
+    let split_y = split_row(&vp, area, header_h);
     let mut lines: Vec<Line<'_>> = Vec::new();
     let mut header = vec![Span::styled(
         format!("{:width$}", "", width = usize::from(header_w)),
         Style::default().fg(ansi.header),
     )];
     for (index, col) in columns.iter().enumerate() {
-        if grid_lines {
+        let split_edge = split_x
+            .is_some_and(|split| index > 0 && columns[index - 1].end <= split && col.start > split);
+        if grid_lines || split_edge {
             let freeze_edge = vp.freeze.cols > 0
                 && col.index >= vp.freeze.cols
                 && index > 0
                 && columns[index - 1].index < vp.freeze.cols;
             header.push(Span::styled(
-                if freeze_edge && unicode {
+                if (freeze_edge || split_edge) && unicode {
                     "┃".to_string()
                 } else {
-                    vbar.to_string()
+                    if grid_lines { vbar } else { "|" }.to_string()
                 },
                 Style::default().fg(ansi.grid),
             ));
@@ -675,6 +679,14 @@ fn draw_grid(
 
     let edit = ui.edit();
     for (vis_i, row) in rows.iter().enumerate() {
+        let split_edge = split_y
+            .is_some_and(|split| vis_i > 0 && rows[vis_i - 1].end <= split && row.start > split);
+        if split_edge {
+            lines.push(Line::from(Span::styled(
+                hbar.to_string().repeat(usize::from(area.width)),
+                Style::default().fg(ansi.grid),
+            )));
+        }
         for subline in 0..row.height {
             let freeze_edge = vp.freeze.rows > 0
                 && row.index < vp.freeze.rows
@@ -695,15 +707,20 @@ fn draw_grid(
             let mut col_i = 0usize;
             while col_i < columns.len() {
                 let col = columns[col_i];
-                if grid_lines {
+                let split_col_edge = split_x.is_some_and(|split| {
+                    col_i > 0 && columns[col_i - 1].end <= split && col.start > split
+                });
+                if grid_lines || split_col_edge {
                     let freeze_col_edge = vp.freeze.cols > 0
                         && col.index >= vp.freeze.cols
                         && col_i > 0
                         && columns[col_i - 1].index < vp.freeze.cols;
-                    let bar = if freeze_col_edge && unicode {
+                    let bar = if (freeze_col_edge || split_col_edge) && unicode {
                         "┃"
-                    } else {
+                    } else if grid_lines {
                         vbar
+                    } else {
+                        "|"
                     };
                     spans.push(Span::styled(
                         bar.to_string(),
@@ -759,6 +776,8 @@ fn draw_grid(
                         usize::from(col.width),
                         align,
                         grid_lines,
+                        (sel.cursor.row == row.index).then_some(sel.cursor.col),
+                        split_x.filter(|split| col.end <= *split),
                     )
                 } else {
                     (0, usize::from(col.width))
@@ -840,6 +859,8 @@ fn overflow_cols(
     col_chars: usize,
     align: Align,
     grid_lines: bool,
+    cursor_col: Option<u16>,
+    split_x: Option<u16>,
 ) -> (usize, usize) {
     if !matches!(align, Align::Left) || text_len <= col_chars {
         return (0, col_chars);
@@ -848,6 +869,9 @@ fn overflow_cols(
     let mut covered = col_chars;
     for next in rest {
         if covered >= text_len {
+            break;
+        }
+        if cursor_col == Some(next.index) || split_x.is_some_and(|split| next.start > split) {
             break;
         }
         if !cell_empty(wb, sheet, row, next.index) {
@@ -876,6 +900,41 @@ fn visible_columns(
 ) -> Vec<HitColumn> {
     let mut columns = Vec::new();
     let mut x = area.x.saturating_add(header_width);
+    if vp.split.is_some() {
+        let panes = pane_counts(vp);
+        let split = split_column(vp, area, header_width, base_chars);
+        if panes.cols > 0 {
+            append_columns(
+                &mut columns,
+                vp,
+                &mut x,
+                split.unwrap_or(area.right()),
+                0,
+                u32::from(panes.cols),
+                base_chars,
+                grid_lines,
+            );
+            let Some(split) = split else {
+                return columns;
+            };
+            x = if grid_lines {
+                split
+            } else {
+                split.saturating_add(1)
+            };
+        }
+        append_columns(
+            &mut columns,
+            vp,
+            &mut x,
+            area.right(),
+            u32::from(first),
+            u32::from(omacell_core::limits::MAX_COLS),
+            base_chars,
+            grid_lines,
+        );
+        return columns;
+    }
     append_columns(
         &mut columns,
         vp,
@@ -939,6 +998,33 @@ fn append_columns(
 fn visible_rows(vp: &Viewport, first: u32, area: Rect, header_height: u16) -> Vec<HitRow> {
     let mut rows = Vec::new();
     let mut y = area.y.saturating_add(header_height);
+    if vp.split.is_some() {
+        let panes = pane_counts(vp);
+        let split = split_row(vp, area, header_height);
+        if panes.rows > 0 {
+            append_rows(
+                &mut rows,
+                vp,
+                &mut y,
+                split.unwrap_or(area.bottom()),
+                0,
+                panes.rows.min(omacell_core::limits::MAX_ROWS),
+            );
+            let Some(split) = split else {
+                return rows;
+            };
+            y = split.saturating_add(1);
+        }
+        append_rows(
+            &mut rows,
+            vp,
+            &mut y,
+            area.bottom(),
+            first,
+            omacell_core::limits::MAX_ROWS,
+        );
+        return rows;
+    }
     append_rows(
         &mut rows,
         vp,
@@ -997,6 +1083,61 @@ fn next_visible(axis: &AxisGeometry, start: u32, limit: u32) -> Option<u32> {
     }
     let index = axis.pixel_to_index(pixel);
     (index >= start && index < limit && axis.size(index).ok()? > 0).then_some(index)
+}
+
+fn pane_counts(viewport: &Viewport) -> FreezePanes {
+    let Some(split) = viewport.split else {
+        return viewport.freeze;
+    };
+    let zoom = viewport.zoom.clamp(0.25, 8.0);
+    let base_x = (f64::from(split.x_px) / zoom).round() as u64;
+    let base_y = (f64::from(split.y_px) / zoom).round() as u64;
+    let cols = if base_x == 0 {
+        0
+    } else {
+        viewport
+            .cols
+            .pixel_to_index(base_x - 1)
+            .saturating_add(1)
+            .min(u32::from(omacell_core::limits::MAX_COLS)) as u16
+    };
+    let rows = if base_y == 0 {
+        0
+    } else {
+        viewport
+            .rows
+            .pixel_to_index(base_y - 1)
+            .saturating_add(1)
+            .min(omacell_core::limits::MAX_ROWS)
+    };
+    FreezePanes { rows, cols }
+}
+
+fn split_column(
+    viewport: &Viewport,
+    area: Rect,
+    header_width: u16,
+    base_chars: u16,
+) -> Option<u16> {
+    let split = viewport.split.filter(|split| split.x_px > 0)?;
+    let cells = u64::from(split.x_px)
+        .saturating_mul(u64::from(base_chars))
+        .saturating_add(u64::from(DEFAULT_COL_PX) / 2)
+        / u64::from(DEFAULT_COL_PX);
+    let cells = u16::try_from(cells).unwrap_or(u16::MAX);
+    let data_start = area.x.saturating_add(header_width);
+    let position = data_start.saturating_add(cells);
+    (position > data_start && position < area.right()).then_some(position)
+}
+
+fn split_row(viewport: &Viewport, area: Rect, header_height: u16) -> Option<u16> {
+    let split = viewport.split.filter(|split| split.y_px > 0)?;
+    let lines = u64::from(split.y_px).saturating_add(u64::from(DEFAULT_ROW_PX) / 2)
+        / u64::from(DEFAULT_ROW_PX);
+    let lines = u16::try_from(lines).unwrap_or(u16::MAX);
+    let data_start = area.y.saturating_add(header_height);
+    let position = data_start.saturating_add(lines);
+    (position > data_start && position < area.bottom()).then_some(position)
 }
 
 fn column_width(vp: &Viewport, col: u16, base_chars: u16) -> u16 {
@@ -1466,27 +1607,7 @@ fn draw_panel(
     ui: &UiSession,
     unicode: bool,
 ) {
-    let width = (panel.width / 8).clamp(20, 40) as u16;
-    let popup = match panel.side.as_str() {
-        "left" => Rect {
-            x: area.x,
-            y: area.y,
-            width: width.min(area.width),
-            height: area.height,
-        },
-        "bottom" => Rect {
-            x: area.x,
-            y: area.bottom().saturating_sub(8),
-            width: area.width,
-            height: 8.min(area.height),
-        },
-        _ => Rect {
-            x: area.right().saturating_sub(width),
-            y: area.y,
-            width: width.min(area.width),
-            height: area.height,
-        },
-    };
+    let popup = panel_rect(area, panel);
     frame.render_widget(Clear, popup);
     let body = panel.body.clone().unwrap_or_else(|| match id {
         "find" => {
@@ -1525,6 +1646,33 @@ fn draw_panel(
         ),
         popup,
     );
+}
+
+fn panel_rect(area: Rect, panel: &PanelState) -> Rect {
+    let width = u16::try_from(panel.width.saturating_add(7) / 8)
+        .unwrap_or(u16::MAX)
+        .max(20)
+        .min(area.width);
+    match panel.side.as_str() {
+        "left" => Rect {
+            x: area.x,
+            y: area.y,
+            width,
+            height: area.height,
+        },
+        "bottom" => Rect {
+            x: area.x,
+            y: area.bottom().saturating_sub(8),
+            width: area.width,
+            height: 8.min(area.height),
+        },
+        _ => Rect {
+            x: area.right().saturating_sub(width),
+            y: area.y,
+            width,
+            height: area.height,
+        },
+    }
 }
 
 fn chrome_block(title: impl Into<String>, unicode: bool) -> Block<'static> {
@@ -1580,9 +1728,16 @@ pub fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::conditional_visual_prefix;
+    use super::{
+        Align, GridHitMap, HitColumn, conditional_visual_prefix, overflow_cols, panel_rect,
+        visible_columns, visible_rows,
+    };
     use omacell_core::condfmt::CfVisual;
+    use omacell_core::sheet::SplitView;
     use omacell_core::style::Color;
+    use omacell_core::workbook::Workbook;
+    use omacell_ui::{PanelState, Viewport};
+    use ratatui::layout::Rect;
 
     #[test]
     fn conditional_visuals_have_bounded_terminal_glyphs() {
@@ -1607,6 +1762,122 @@ mod tests {
                 axis: 0.0,
             }),
             None
+        );
+    }
+
+    #[test]
+    fn split_layout_keeps_leading_and_scrolled_panes_visible() {
+        let viewport = Viewport {
+            first_row: 7,
+            first_col: 5,
+            split: Some(SplitView {
+                x_px: 128,
+                y_px: 40,
+            }),
+            ..Viewport::default()
+        };
+        let area = Rect::new(0, 0, 80, 24);
+
+        let columns = visible_columns(&viewport, 5, area, 4, 8, true);
+        let rows = visible_rows(&viewport, 7, area, 1);
+
+        assert_eq!(
+            columns
+                .iter()
+                .take(3)
+                .map(|column| column.index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 5]
+        );
+        assert_eq!(
+            rows.iter().take(3).map(|row| row.index).collect::<Vec<_>>(),
+            vec![0, 1, 7]
+        );
+
+        let ranges = GridHitMap { columns, rows }.conditional_format_ranges(&viewport);
+        assert_eq!(ranges.len(), 4);
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.end.col < 2 || range.start.col >= 5)
+        );
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.end.row < 2 || range.start.row >= 7)
+        );
+    }
+
+    #[test]
+    fn panel_width_converts_css_pixels_without_an_arbitrary_cap() {
+        let area = Rect::new(0, 0, 80, 24);
+        let panel = PanelState {
+            side: "right".into(),
+            width: 360,
+            ..PanelState::default()
+        };
+        assert_eq!(panel_rect(area, &panel), Rect::new(35, 0, 45, 24));
+
+        let narrow = PanelState {
+            width: 1,
+            ..panel.clone()
+        };
+        assert_eq!(panel_rect(area, &narrow).width, 20);
+        let wide = PanelState {
+            width: u32::MAX,
+            ..panel
+        };
+        assert_eq!(panel_rect(area, &wide).width, 80);
+    }
+
+    #[test]
+    fn overflowing_text_stops_before_the_cursor_or_a_split() {
+        let workbook = Workbook::new();
+        let sheet = workbook.active_sheet();
+        let columns = [
+            HitColumn {
+                index: 1,
+                start: 12,
+                end: 20,
+                width: 8,
+            },
+            HitColumn {
+                index: 2,
+                start: 21,
+                end: 29,
+                width: 8,
+            },
+        ];
+
+        assert_eq!(
+            overflow_cols(
+                &workbook,
+                sheet,
+                0,
+                &columns,
+                20,
+                8,
+                Align::Left,
+                false,
+                Some(1),
+                None,
+            ),
+            (0, 8)
+        );
+        assert_eq!(
+            overflow_cols(
+                &workbook,
+                sheet,
+                0,
+                &columns,
+                20,
+                8,
+                Align::Left,
+                false,
+                None,
+                Some(20),
+            ),
+            (1, 16)
         );
     }
 }
