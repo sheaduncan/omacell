@@ -221,8 +221,11 @@ fn rgb_argb(color: Color) -> Option<u32> {
 pub(crate) fn parse_validations(blobs: &[Vec<u8>]) -> Vec<DataValidation> {
     let mut out = Vec::new();
     for blob in blobs {
+        if is_x14_fragment(blob) {
+            continue;
+        }
         let mut reader = XmlReader::new(blob);
-        let mut current: Option<DataValidation> = None;
+        let mut current: Option<ParsedValidation> = None;
         let mut in_f1 = false;
         let mut in_f2 = false;
         while let Ok(Some(ev)) = reader.next() {
@@ -231,35 +234,41 @@ pub(crate) fn parse_validations(blobs: &[Vec<u8>]) -> Vec<DataValidation> {
                     current = Some(parse_dv_attrs(&attrs));
                 }
                 XmlEvent::Empty { name, attrs } if name == "dataValidation" => {
-                    out.push(parse_dv_attrs(&attrs));
+                    append_validation(&mut out, parse_dv_attrs(&attrs));
                 }
                 XmlEvent::Start { name, .. } if name == "formula1" => {
                     in_f1 = true;
                     if let Some(dv) = current.as_mut() {
-                        dv.formula1 = Some(String::new());
+                        dv.rule.formula1 = Some(String::new());
                     }
                 }
                 XmlEvent::Start { name, .. } if name == "formula2" => {
                     in_f2 = true;
                     if let Some(dv) = current.as_mut() {
-                        dv.formula2 = Some(String::new());
+                        dv.rule.formula2 = Some(String::new());
                     }
                 }
                 XmlEvent::Text(t) if in_f1 => {
                     if let Some(dv) = current.as_mut() {
-                        dv.formula1.get_or_insert_with(String::new).push_str(&t);
+                        dv.rule
+                            .formula1
+                            .get_or_insert_with(String::new)
+                            .push_str(&t);
                     }
                 }
                 XmlEvent::Text(t) if in_f2 => {
                     if let Some(dv) = current.as_mut() {
-                        dv.formula2.get_or_insert_with(String::new).push_str(&t);
+                        dv.rule
+                            .formula2
+                            .get_or_insert_with(String::new)
+                            .push_str(&t);
                     }
                 }
                 XmlEvent::End { name } if name == "formula1" => in_f1 = false,
                 XmlEvent::End { name } if name == "formula2" => in_f2 = false,
                 XmlEvent::End { name } if name == "dataValidation" => {
                     if let Some(dv) = current.take() {
-                        out.push(dv);
+                        append_validation(&mut out, dv);
                     }
                 }
                 _ => {}
@@ -281,6 +290,9 @@ pub(crate) fn parse_validations(blobs: &[Vec<u8>]) -> Vec<DataValidation> {
 pub(crate) fn parse_cond_formats(blobs: &[Vec<u8>], dxfs: &[CfDxf]) -> Vec<CondFormat> {
     let mut out = Vec::new();
     for blob in blobs {
+        if is_x14_fragment(blob) {
+            continue;
+        }
         let mut reader = XmlReader::new(blob);
         let mut sqref = zero_range();
         let mut current: Option<CondFormat> = None;
@@ -298,11 +310,13 @@ pub(crate) fn parse_cond_formats(blobs: &[Vec<u8>], dxfs: &[CfDxf]) -> Vec<CondF
                 }
                 XmlEvent::Start { name, attrs } if name == "cfRule" => {
                     formulas.clear();
-                    current = Some(parse_cf_rule(&attrs, sqref, dxfs));
+                    current = parse_cf_rule(&attrs, sqref, dxfs);
                 }
                 XmlEvent::Empty { name, attrs } if name == "cfRule" => {
                     formulas.clear();
-                    out.push(parse_cf_rule(&attrs, sqref, dxfs));
+                    if let Some(rule) = parse_cf_rule(&attrs, sqref, dxfs) {
+                        out.push(rule);
+                    }
                 }
                 XmlEvent::Start { name, .. } if name == "formula" => {
                     in_formula = true;
@@ -362,32 +376,63 @@ pub(crate) fn parse_cond_formats(blobs: &[Vec<u8>], dxfs: &[CfDxf]) -> Vec<CondF
     out
 }
 
-fn parse_dv_attrs(attrs: &[(String, String)]) -> DataValidation {
-    DataValidation {
-        range: attr(attrs, "sqref")
-            .and_then(|s| s.split_whitespace().next())
-            .and_then(parse_range)
-            .unwrap_or_else(zero_range),
-        kind: dv_type(attr(attrs, "type").unwrap_or("")),
-        op: dv_op(attr(attrs, "operator").unwrap_or("between")),
-        allow_blank: attr(attrs, "allowBlank").is_none_or(truthy),
-        error_style: match attr(attrs, "errorStyle").unwrap_or("stop") {
-            "warning" => DvErrorStyle::Warning,
-            "information" => DvErrorStyle::Information,
-            _ => DvErrorStyle::Stop,
+struct ParsedValidation {
+    rule: DataValidation,
+    ranges: Vec<RangeRef>,
+}
+
+fn parse_dv_attrs(attrs: &[(String, String)]) -> ParsedValidation {
+    ParsedValidation {
+        rule: DataValidation {
+            kind: dv_type(attr(attrs, "type").unwrap_or("")),
+            op: dv_op(attr(attrs, "operator").unwrap_or("between")),
+            allow_blank: attr(attrs, "allowBlank").is_none_or(truthy),
+            error_style: match attr(attrs, "errorStyle").unwrap_or("stop") {
+                "warning" => DvErrorStyle::Warning,
+                "information" => DvErrorStyle::Information,
+                _ => DvErrorStyle::Stop,
+            },
+            error_title: attr(attrs, "errorTitle").map(ToOwned::to_owned),
+            error_message: attr(attrs, "error").map(ToOwned::to_owned),
+            input_title: attr(attrs, "promptTitle").map(ToOwned::to_owned),
+            input_message: attr(attrs, "prompt").map(ToOwned::to_owned),
+            ..DataValidation::default()
         },
-        error_title: attr(attrs, "errorTitle").map(ToOwned::to_owned),
-        error_message: attr(attrs, "error").map(ToOwned::to_owned),
-        input_title: attr(attrs, "promptTitle").map(ToOwned::to_owned),
-        input_message: attr(attrs, "prompt").map(ToOwned::to_owned),
-        ..DataValidation::default()
+        ranges: attr(attrs, "sqref")
+            .into_iter()
+            .flat_map(str::split_whitespace)
+            .filter_map(parse_range)
+            .collect(),
     }
 }
 
-fn parse_cf_rule(attrs: &[(String, String)], range: RangeRef, dxfs: &[CfDxf]) -> CondFormat {
+fn append_validation(out: &mut Vec<DataValidation>, parsed: ParsedValidation) {
+    for range in parsed.ranges {
+        let mut rule = parsed.rule.clone();
+        rule.range = range;
+        out.push(rule);
+    }
+}
+
+fn is_x14_fragment(blob: &[u8]) -> bool {
+    blob.iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .is_some_and(|start| blob[start..].starts_with(b"<x14:"))
+}
+
+fn parse_cf_rule(
+    attrs: &[(String, String)],
+    range: RangeRef,
+    dxfs: &[CfDxf],
+) -> Option<CondFormat> {
     let kind_name = attr(attrs, "type").unwrap_or("cellIs");
     let op = cf_op(attr(attrs, "operator").unwrap_or(""));
     let kind = match kind_name {
+        "cellIs" => CfKind::CellIs {
+            op,
+            formula1: String::new(),
+            formula2: None,
+        },
         "containsText" => CfKind::ContainsText(attr(attrs, "text").unwrap_or("").to_string()),
         "containsBlanks" => CfKind::Blanks,
         "containsErrors" => CfKind::Errors,
@@ -420,17 +465,13 @@ fn parse_cf_rule(attrs: &[(String, String)], range: RangeRef, dxfs: &[CfDxf]) ->
                 .unwrap_or(3),
         },
         "expression" => CfKind::Formula(String::new()),
-        _ => CfKind::CellIs {
-            op,
-            formula1: String::new(),
-            formula2: None,
-        },
+        _ => return None,
     };
     let dxf = attr(attrs, "dxfId")
         .and_then(|s| s.parse::<usize>().ok())
         .and_then(|i| dxfs.get(i).copied())
         .unwrap_or_default();
-    CondFormat {
+    Some(CondFormat {
         range,
         priority: attr(attrs, "priority")
             .and_then(|s| s.parse().ok())
@@ -438,7 +479,7 @@ fn parse_cf_rule(attrs: &[(String, String)], range: RangeRef, dxfs: &[CfDxf]) ->
         stop_if_true: attr(attrs, "stopIfTrue").is_some_and(truthy),
         kind,
         dxf,
-    }
+    })
 }
 
 fn finish_formulas(mut rule: CondFormat, formulas: &[String]) -> CondFormat {
@@ -774,9 +815,13 @@ pub(crate) fn modeled_validations(rules: &[DataValidation]) -> Option<String> {
             DvErrorStyle::Warning => "warning",
             DvErrorStyle::Information => "information",
         };
+        let show_error = dv.error_title.is_some() || dv.error_message.is_some();
+        let show_input = dv.input_title.is_some() || dv.input_message.is_some();
         s.push_str(&format!(
-            r#"<dataValidation type="{ty}" operator="{op}" allowBlank="{}" errorStyle="{style}" sqref="{}""#,
+            r#"<dataValidation type="{ty}" operator="{op}" allowBlank="{}" showErrorMessage="{}" showInputMessage="{}" errorStyle="{style}" sqref="{}""#,
             u8::from(dv.allow_blank),
+            u8::from(show_error),
+            u8::from(show_input),
             escape(&dv.range.to_a1()),
         ));
         if let Some(t) = &dv.error_title {
