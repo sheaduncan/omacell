@@ -22,7 +22,7 @@ encode.
 | LibreOffice array-lifting | Implicit intersection: first element only | Dynamic-array lift (`{2,3}`) | WP-05b |
 | LibreOffice CSV double unary boolean | Keeps `--TRUE` as logical `TRUE` | Coerces to numeric `1` per spec F-3.5 | WP-04 |
 | LibreOffice `YEAR(0)`/`YEAR(1)` | 1899 (LO epoch 1899-12-30) | 1900 (Excel January 0 / 1 Jan 1900) | WP-05b |
-| LibreOffice `YEARFRAC` reversed dates | Absolute value | Signed (Excel) | WP-05b |
+| `YEARFRAC` reversed dates (historical correction) | Absolute value | Same as Excel; an earlier version of this table incorrectly called Excel's result signed | WP-05b |
 | LibreOffice `LEN(TRUE)` | 1 (TRUE as number) | 4 (TRUE as text) | WP-05b |
 | LibreOffice `REGEX*` / `ARRAYTOTEXT` / `VALUETOTEXT` / `TEXTSPLIT` | `#NAME?` or no `_xlfn` mapping | Implemented | WP-05b |
 | Invalid `MAKEARRAY` / stacking / wrapping shapes (`0`, out of grid, overflow) | Excel 365 uses `#CALC!` for some zero-size cases | `#NUM!` for all invalid shapes (checked before allocation) | WP-05c |

@@ -12,3 +12,4 @@
 =DAYS360(DATE(2020,1,31), DATE(2020,3,31), TRUE)	60	EU two 31sts → 30ths = 60
 =DAYS360(DATE(2020,2,29), DATE(2020,3,31), TRUE)	31	EU Feb 29 to Mar 31→30
 =DAYS360(DATE(2020,1,30), DATE(2020,2,29), FALSE)	30	US NASD: start day 30, Feb 29 EOM → end 30, 30 days; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DAYS360(DATE(2024,1,31),DATE(2024,2,29),FALSE)	30	DAYS360 keeps its February EOM adjustment even though YEARFRAC basis 0 does not

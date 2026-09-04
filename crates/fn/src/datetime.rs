@@ -1084,6 +1084,33 @@ fn days360_us(start: CivilDate, end: CivilDate, system: DateSystem) -> i64 {
     (y2 - i64::from(start.year)) * 360 + (m2 - i64::from(start.month)) * 30 + (d2 - d1)
 }
 
+fn yearfrac_days360_us(start: CivilDate, end: CivilDate) -> i64 {
+    // YEARFRAC basis 0 is not identical to DAYS360's February-EOM handling.
+    // Microsoft calls out that distinction as a known YEARFRAC compatibility
+    // edge: https://support.microsoft.com/en-us/office/yearfrac-function-3844141e-c76d-4143-82b6-208454ddc6a8
+    let d1 = if start.day == 31 {
+        30
+    } else {
+        i64::from(start.day)
+    };
+    let mut d2 = i64::from(end.day);
+    let mut m2 = i64::from(end.month);
+    let mut y2 = i64::from(end.year);
+    if d2 == 31 {
+        if d1 < 30 {
+            d2 = 1;
+            m2 += 1;
+            if m2 > 12 {
+                m2 = 1;
+                y2 += 1;
+            }
+        } else {
+            d2 = 30;
+        }
+    }
+    (y2 - i64::from(start.year)) * 360 + (m2 - i64::from(start.month)) * 30 + (d2 - d1)
+}
+
 fn datedif(
     start: CivilDate,
     end: CivilDate,
@@ -1157,7 +1184,6 @@ fn datedif(
 }
 
 fn yearfrac(start: i64, end: i64, basis: i64, system: DateSystem) -> Result<f64, ErrorKind> {
-    let sign = if end < start { -1.0 } else { 1.0 };
     let (s, e) = if start <= end {
         (start, end)
     } else {
@@ -1166,14 +1192,14 @@ fn yearfrac(start: i64, end: i64, basis: i64, system: DateSystem) -> Result<f64,
     let ds = dates::serial_to_date(s, system).ok_or(ErrorKind::Num)?;
     let de = dates::serial_to_date(e, system).ok_or(ErrorKind::Num)?;
     let frac = match basis {
-        0 => days360_us(ds, de, system) as f64 / 360.0,
+        0 => yearfrac_days360_us(ds, de) as f64 / 360.0,
         1 => actual_actual(s, e, ds, de, system)?,
         2 => (e - s) as f64 / 360.0,
         3 => (e - s) as f64 / 365.0,
         4 => days360_eu(ds, de) as f64 / 360.0,
         _ => return Err(ErrorKind::Num),
     };
-    Ok(sign * frac)
+    Ok(frac)
 }
 
 fn actual_actual(

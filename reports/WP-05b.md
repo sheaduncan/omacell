@@ -2,6 +2,18 @@
 
 ## Plan (written before coding)
 
+### 2026-09-04 `YEARFRAC` compatibility follow-up (written before coding)
+
+- Correct the reversed-date corpus and the stale compatibility-table claim
+  first, then add the reviewed basis-0 January-31-to-leap-day case and
+  symmetry checks across all five bases.
+- Keep `DAYS360`'s existing NASD end-of-month behavior unchanged; give
+  `YEARFRAC` basis 0 its own Excel-compatible day-count helper and return the
+  absolute fraction when the date arguments are reversed.
+- Update this report and the authoritative repository-review checklist, run
+  the complete function suite and strict Clippy, then run exact `just check`
+  before opening the PR.
+
 - Files/modules to create:
   - `crates/fn/src/text/` — Tier-0 text functions (~35) plus `REGEXTEST` / `REGEXEXTRACT` / `REGEXREPLACE` (`regex` crate with pattern/haystack/size/nest limits).
   - `crates/fn/src/datetime.rs` — Tier-0 date/time functions (~25), including replacing the WP-05F `NOW` probe with real `NOW`/`TODAY`.
@@ -73,6 +85,11 @@ Key tests:
 
 Review hardening enforces the 32,767-character limit while building `SUBSTITUTE`, joined text, regex replacements, and `ARRAYTOTEXT`, rather than after potentially unbounded allocation. Regex replacement expansion is capture-aware and capped incrementally. `TEXTSPLIT` and lifted `WORKDAY` validate output shapes before allocation; extreme `WORKDAY`, `REPLACE`, `FIXED`, and `DOLLAR` arguments fail closed without integer overflow. The fuzz target now honors each function's declared minimum arity.
 
+The 2026-09-04 `YEARFRAC` follow-up separates basis 0 from `DAYS360`'s
+February end-of-month adjustment and treats reversed dates symmetrically. The
+two functions retain distinct corpus coverage for the January-31-to-leap-day
+case: `YEARFRAC` counts 29/360 while `DAYS360` counts 30 days.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -96,7 +113,10 @@ No commands, schemas, or CLI. Frozen WP-01 types and `WorkbookSettings` unchange
 - **Resolved 2026-08-31:** `CHAR`/`CODE` use Windows-1252 for bytes 1–255, including C1 controls for the five undefined slots.
 - **`WORKDAY`/`WORKDAY.INTL` array lift:** `ArrayBehavior::None` so the holidays argument is a set; start/days are lifted locally (Excel lifts the first two args only).
 - **Corpus runner formats spills as `{…}`.** `format_cell` of a spill origin is the top-left scalar (WP-04); the runner reconstructs the spill so TEXTSPLIT/lift rows can assert shape.
-- **LibreOffice:** 269 documented mismatches (date CSV formatting, no array lift, no REGEX*, serial 0 epoch, signed YEARFRAC). Zero unexplained.
+- **LibreOffice:** the original run recorded 269 documented mismatches (date
+  CSV formatting, no array lift, no REGEX*, and serial 0 epoch). Its reversed
+  `YEARFRAC` result actually agrees with Excel; the former signed-result entry
+  was a stale oracle and is now marked as a historical correction.
 
 ## Measurements
 
@@ -115,6 +135,13 @@ Host: rustc 1.98 / Linux.
   - `len_scan_100k` **297.7 ms**
   - `year_scan_100k` **299.6 ms**
 - Post-review Criterion `--quick`: `textsplit_line` **102.6 µs**, `regex_1k` **41.5 ms**, `len_scan_100k` **318.3 ms**, `year_scan_100k` **300.3 ms**. The safety hardening did not materially change the committed baseline profile.
+- 2026-09-04 `YEARFRAC` test-first evidence: the corrected reverse-date and
+  leap-day matrix produced six corpus mismatches before implementation. All
+  five bases are now symmetric, the reviewed basis-0 edge returns 29/360, the
+  paired `DAYS360` edge remains 30 days, and the complete `omacell-fn` suite
+  plus strict all-target Clippy pass. Microsoft documents basis 0 as US NASD
+  30/360 and flags its last-day-of-February behavior in the
+  [`YEARFRAC` reference](https://support.microsoft.com/en-us/office/yearfrac-function-3844141e-c76d-4143-82b6-208454ddc6a8).
 - WP-04 recalc benches use an empty `FnRegistry` and were not re-run; this package does not change the `=1+1` formula path.
 
 ## Open questions / decisions needed
@@ -126,10 +153,16 @@ Host: rustc 1.98 / Linux.
    applicable year length or the average length of all covered years.
 4. **Resolved:** spilled cells show their values and the formula bar shows the
    anchor formula; only legacy CSE formulas use `{=…}` notation.
+5. **Resolved 2026-09-04:** `YEARFRAC` returns an absolute fraction for
+   reversed dates and uses its own basis-0 month-end rules rather than
+   `DAYS360`'s February adjustment.
 
 ## RFC (only if a frozen contract changed)
 
 None. WP-01 types and `WorkbookSettings` are unchanged.
+
+The `YEARFRAC` compatibility follow-up changes no public signature or frozen
+contract.
 
 ## Checklist
 
