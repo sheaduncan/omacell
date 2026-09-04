@@ -304,8 +304,9 @@ fn parse_workbook_xml(bytes: &[u8], wb: &mut Workbook) -> Result<WorkbookMeta, C
             XmlEvent::Empty { name, attrs } | XmlEvent::Start { name, attrs }
                 if name == "workbookProtection" =>
             {
-                let password =
-                    attr(&attrs, "workbookPassword").map(|value| value.as_bytes().to_vec());
+                let password = attr(&attrs, "workbookHashValue")
+                    .or_else(|| attr(&attrs, "workbookPassword"))
+                    .map(|value| value.as_bytes().to_vec());
                 wb.set_workbook_protection(WorkbookProtectionState {
                     enabled: true,
                     lock_structure: attr(&attrs, "lockStructure").is_some_and(truthy),
