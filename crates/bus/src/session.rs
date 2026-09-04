@@ -68,7 +68,10 @@ impl Bus {
     }
 
     /// Mutable workbook (AI cache persist, composition-root settle).
+    ///
+    /// Out-of-band mutation invalidates outstanding proposal bases.
     pub fn workbook_mut(&mut self) -> &mut Workbook {
+        self.bump_live_generation();
         &mut self.workbook
     }
 
@@ -79,11 +82,15 @@ impl Bus {
     }
 
     /// Mutable engine (startup registry, thread count, locale injectors).
+    ///
+    /// Out-of-band mutation invalidates outstanding proposal bases.
     pub fn engine_mut(&mut self) -> &mut RecalcEngine {
+        self.bump_live_generation();
         &mut self.engine
     }
 
     pub(crate) fn recalc_after_registry_change(&mut self) {
+        self.bump_live_generation();
         let result = self.engine.recalc_rebuild(&mut self.workbook);
         self.events.emit(Event::RecalcDone {
             cells: result.cells_evaluated,
@@ -98,7 +105,10 @@ impl Bus {
     }
 
     /// Mutable registry so later packages can register commands.
+    ///
+    /// Out-of-band mutation invalidates outstanding proposal bases.
     pub fn registry_mut(&mut self) -> &mut CommandRegistry {
+        self.bump_live_generation();
         &mut self.registry
     }
 
@@ -570,6 +580,10 @@ impl Bus {
                 .is_some_and(|command| command.descriptor.mutating)
         })
     }
+
+    fn bump_live_generation(&mut self) {
+        self.live_generation = self.live_generation.saturating_add(1);
+    }
 }
 
 struct Run {
@@ -825,5 +839,22 @@ mod tests {
                 .unwrap()
                 .needs_snapshot_inverse()
         );
+    }
+
+    #[test]
+    fn registry_refresh_invalidates_outstanding_proposal_bases() {
+        let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).unwrap();
+        let proposed = bus
+            .propose(
+                Origin::ExternalAgent,
+                vec![CommandCall {
+                    id: omacell_core::command::CommandId::new("cell.set").unwrap(),
+                    args: serde_json::json!({"ref": "A1", "input": "1"}),
+                }],
+            )
+            .unwrap();
+        bus.recalc_after_registry_change();
+        let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+        assert_eq!(err.code, crate::error::codes::CHANGESET_BASE);
     }
 }

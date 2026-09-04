@@ -450,7 +450,7 @@ fn range_changeset_summary_is_constant_size() {
 }
 
 #[test]
-fn apply_rechecks_retained_size_before_live_mutation() {
+fn apply_base_generation_check_precedes_retained_size_recheck() {
     let mut bus = common::bus();
     let changeset = bus.propose(Origin::User, vec![set("A1", "new")]).unwrap();
     let existing = "x".repeat(omacell_bus::MAX_CHANGESET_BYTES / 2 + 1_024);
@@ -475,4 +475,35 @@ fn apply_rechecks_retained_size_before_live_mutation() {
         bus.workbook().intern().strings.get(id).unwrap().len(),
         omacell_bus::MAX_CHANGESET_BYTES / 2 + 1_024
     );
+}
+
+#[test]
+fn apply_rejects_a_proposal_after_direct_workbook_mutation() {
+    let mut bus = common::bus();
+    let proposed = bus
+        .propose(Origin::ExternalAgent, vec![set("A1", "1")])
+        .unwrap();
+    let sheet = bus.workbook().active_sheet();
+    bus.workbook_mut()
+        .set_text(sheet, 0, 1, "side channel")
+        .unwrap();
+    let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::CHANGESET_BASE);
+    assert!(common::cell_value(&bus, 0, 0).is_none());
+    assert!(matches!(
+        common::cell_value(&bus, 0, 1),
+        Some(Value::Text(_))
+    ));
+}
+
+#[test]
+fn apply_rejects_a_proposal_after_function_registry_refresh() {
+    let mut bus = common::bus();
+    let proposed = bus
+        .propose(Origin::ExternalAgent, vec![set("A1", "1")])
+        .unwrap();
+    let _ = bus.engine_mut();
+    let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::CHANGESET_BASE);
+    assert!(common::cell_value(&bus, 0, 0).is_none());
 }

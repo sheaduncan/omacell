@@ -497,4 +497,33 @@ mod tests {
         assert_ne!(a.id.as_str(), "cs-1");
         assert_ne!(b.id.as_str(), "cs-1");
     }
+
+    #[test]
+    fn store_rejects_an_oversized_applied_inverse() {
+        let mut store = ChangesetStore::new();
+        let proposed = store
+            .insert_proposed(
+                Origin::User,
+                vec![CommandCall {
+                    id: CommandId::new("cell.set").unwrap(),
+                    args: serde_json::json!({"ref": "A1", "input": "1"}),
+                }],
+                Vec::new(),
+                ChangeSummary::default(),
+                0,
+            )
+            .unwrap();
+        let inverse = vec![CommandCall {
+            id: CommandId::new("cell.set").unwrap(),
+            args: serde_json::json!({"input": "x".repeat(MAX_CHANGESET_BYTES)}),
+        }];
+        let err = store
+            .ensure_applied_fits(&proposed.id, &inverse, &ChangeSummary::default())
+            .unwrap_err();
+        assert_eq!(err.code, crate::error::codes::CHANGESET_LIMIT);
+        assert_eq!(
+            store.get(&proposed.id).unwrap().status,
+            omacell_core::changeset::ChangesetStatus::Proposed
+        );
+    }
 }

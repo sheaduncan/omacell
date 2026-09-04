@@ -120,6 +120,22 @@ Discovery record (`<pid>.instance`):
   apply, unique ids across store reset, unknown filter fields, script/macro
   socket execute, and undo execute remaining allowed. No IPC schema change.
 
+### 2026-09-04 proposal-base escape-hatch follow-up plan (written before coding)
+
+- Reproduce the remaining base-generation hole: `live_generation` advances only
+  after mutating commands, so `workbook_mut`, `engine_mut`, `registry_mut`, and
+  `recalc_after_registry_change` can change workbook or formula semantics while
+  a reviewed proposal still applies.
+- Fail closed: every public mutable escape hatch and registry-driven recalc
+  must bump the same generation used by `changeset.base`. Do not change the
+  frozen `Changeset` type.
+- Rename `apply_rechecks_retained_size_before_live_mutation` to a
+  base-generation precedence test. Add a store-level regression that calls
+  `ensure_applied_fits` with an oversized inverse so the retained-size check is
+  covered without an intervening live command.
+- Tests first: direct `workbook_mut` after propose, function/engine refresh
+  after propose, and `ensure_applied_fits` limit rejection.
+
 ## What was built
 
 Versioned JSON-lines IPC on a per-instance Unix socket, wrapping the WP-07a bus without weakening mutation policy.
@@ -178,6 +194,17 @@ recycled markers, and marker symlinks are refused without touching their target.
   the documented same-user session-private execute set. Tests:
   `filter_criteria_arg_rejects_unknown_fields`,
   `script_and_macro_commands_cannot_execute_over_ipc`.
+
+Proposal-base escape-hatch follow-up: `workbook_mut`, `engine_mut`,
+`registry_mut`, and `recalc_after_registry_change` bump the same live
+generation as mutating commands, so a reviewed proposal cannot apply after
+out-of-band workbook or function-registry changes. Tests:
+`apply_rejects_a_proposal_after_direct_workbook_mutation`,
+`apply_rejects_a_proposal_after_function_registry_refresh`,
+`registry_refresh_invalidates_outstanding_proposal_bases`,
+`store_rejects_an_oversized_applied_inverse`. The former retained-size
+apply test is now
+`apply_base_generation_check_precedes_retained_size_recheck`.
 
 ## Interfaces exposed (for dependents)
 
