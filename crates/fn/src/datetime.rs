@@ -8,7 +8,7 @@ use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeArray, RuntimeValue};
 
 use crate::metadata::{ArgKind, ArrayBehavior, FunctionSpec};
-use crate::text::{civil_serial, parse_date_string, parse_time_string};
+use crate::text::{civil_serial, current_year, parse_date_string, parse_time_string};
 use crate::util::{
     self, date_system, err, number, optional, scalar, to_number, to_text, trunc_i64, walk_arg,
 };
@@ -422,7 +422,11 @@ fn datevalue_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    match parse_date_string(&s, ctx.locale(), date_system(ctx)) {
+    let year = match current_year(ctx) {
+        Ok(year) => year,
+        Err(e) => return err(e),
+    };
+    match parse_date_string(&s, ctx.locale(), date_system(ctx), year) {
         Some(n) => number(n as f64),
         None => err(ErrorKind::Value),
     }
@@ -725,6 +729,11 @@ fn workday_common(
     holiday_idx: usize,
 ) -> RuntimeValue {
     let mask = weekend.unwrap_or_else(|| weekend_code(1).unwrap_or(0b0110_0000));
+    // Unlike NETWORKDAYS.INTL, WORKDAY.INTL rejects an all-weekend calendar.
+    // https://support.microsoft.com/en-us/excel/functions/workday-intl-function
+    if mask == 0b0111_1111 {
+        return err(ErrorKind::Value);
+    }
     let holidays = match optional(args, holiday_idx) {
         Some(a) => match holiday_set(ctx, a) {
             Ok(h) => h,
@@ -906,7 +915,17 @@ fn check_serial(serial: i64, system: DateSystem) -> Result<(), ErrorKind> {
 }
 
 fn day_serial(ctx: &mut EvalCtx<'_>, arg: &ArgVal) -> Result<i64, ErrorKind> {
-    let n = to_number(ctx, arg)?;
+    let value = scalar(ctx, arg)?;
+    let n = match &value {
+        Scalar::Text(text) => {
+            let year = current_year(ctx)?;
+            parse_date_string(text, ctx.locale(), date_system(ctx), year)
+                .map(|serial| serial as f64)
+                .or_else(|| coerce::to_number(&value).ok())
+                .ok_or(ErrorKind::Value)?
+        }
+        _ => coerce::to_number(&value)?,
+    };
     let (day, _) = dates::split_serial(n).ok_or(ErrorKind::Num)?;
     dates::serial_to_date(day, date_system(ctx)).ok_or(ErrorKind::Num)?;
     Ok(day)
@@ -918,7 +937,13 @@ fn civil_of(ctx: &mut EvalCtx<'_>, arg: &ArgVal) -> Result<CivilDate, ErrorKind>
 }
 
 fn hms_of(ctx: &mut EvalCtx<'_>, arg: &ArgVal) -> Result<(u8, u8, u8), ErrorKind> {
-    let n = to_number(ctx, arg)?;
+    let value = scalar(ctx, arg)?;
+    let n = match &value {
+        Scalar::Text(text) => parse_time_string(text, ctx.locale())
+            .or_else(|| coerce::to_number(&value).ok())
+            .ok_or(ErrorKind::Value)?,
+        _ => coerce::to_number(&value)?,
+    };
     let (day, frac) = dates::split_serial(n).ok_or(ErrorKind::Num)?;
     dates::serial_to_date(day, date_system(ctx)).ok_or(ErrorKind::Num)?;
     let t = dates::time_from_fraction(frac, 0);

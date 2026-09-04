@@ -2,6 +2,19 @@
 
 ## Plan (written before coding)
 
+### 2026-09-04 text/date parsing follow-up (written before coding)
+
+- Add the reviewed scientific-number, locale-date, omitted-date-part,
+  date-with-time, overflowing-time, text-date extractor, identical separator,
+  and all-weekend-mask cases to their owning corpora before implementation.
+- Keep parsing locale-strict: recognize explicit year-first numeric dates, but
+  do not reinterpret an invalid en-US month as day-first. Use the pass-stable
+  workbook clock only when a text date omits its year.
+- Share date/time text coercion with date extractors, normalize exponent syntax
+  without weakening separator validation, reject identical `NUMBERVALUE`
+  separators and seven-day weekend masks immediately, then update both reports
+  and run the complete function suite, strict Clippy, and exact `just check`.
+
 ### 2026-09-04 `YEARFRAC` compatibility follow-up (written before coding)
 
 - Correct the reversed-date corpus and the stale compatibility-table claim
@@ -90,6 +103,15 @@ February end-of-month adjustment and treats reversed dates symmetrically. The
 two functions retain distinct corpus coverage for the January-31-to-leap-day
 case: `YEARFRAC` counts 29/360 while `DAYS360` counts 30 days.
 
+The 2026-09-04 parsing follow-up accepts scientific notation, explicit
+year-first numeric dates, named dates with omitted parts, and date/time text.
+Date extractors now share the locale-aware text-date parser, while time
+extractors accept recognized text and preserve Excel's overflowing-hour
+normalization. `NUMBERVALUE` rejects identical separators, en-US dates no
+longer fall back to day-first order, and `WORKDAY.INTL` rejects an all-weekend
+calendar before its bounded search. `NETWORKDAYS.INTL` deliberately retains
+Excel's distinct result of zero for that same calendar.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -142,6 +164,22 @@ Host: rustc 1.98 / Linux.
   plus strict all-target Clippy pass. Microsoft documents basis 0 as US NASD
   30/360 and flags its last-day-of-February behavior in the
   [`YEARFRAC` reference](https://support.microsoft.com/en-us/office/yearfrac-function-3844141e-c76d-4143-82b6-208454ddc6a8).
+- 2026-09-04 parsing test-first evidence: 14 focused corpus rows cover the
+  reviewed boundaries; 13 exposed old behavior before implementation (the
+  locale-invalid en-US date was already rejected), and all now pass. The
+  complete `omacell-fn` suite and strict all-target Clippy pass. Microsoft
+  documents that [`DATEVALUE`](https://support.microsoft.com/en-us/office/datevalue-function-df8b07d4-7761-4a93-bc33-b7471bbff252)
+  uses the current year for an omitted year and ignores time, gives an explicit
+  year-first example, and documents that
+  [`TIMEVALUE`](https://support.microsoft.com/en-us/office/timevalue-function-0b615c12-33d8-4431-bf3d-f3eb6d186645)
+  ignores date information. The
+  [`VALUE` reference](https://support.microsoft.com/en-US/Excel/functions/value-function)
+  permits recognized number, date, or time formats. Microsoft also documents
+  the intentional split between
+  [`WORKDAY.INTL`](https://support.microsoft.com/en-us/excel/functions/workday-intl-function),
+  where `1111111` is invalid, and
+  [`NETWORKDAYS.INTL`](https://support.microsoft.com/en-us/excel/functions/networkdays-intl-function),
+  where it returns zero.
 - WP-04 recalc benches use an empty `FnRegistry` and were not re-run; this package does not change the `=1+1` formula path.
 
 ## Open questions / decisions needed
@@ -156,12 +194,17 @@ Host: rustc 1.98 / Linux.
 5. **Resolved 2026-09-04:** `YEARFRAC` returns an absolute fraction for
    reversed dates and uses its own basis-0 month-end rules rather than
    `DAYS360`'s February adjustment.
+6. **Resolved 2026-09-04:** text dates with an omitted year use the
+   pass-stable workbook clock, not a wall-clock read inside the function.
 
 ## RFC (only if a frozen contract changed)
 
 None. WP-01 types and `WorkbookSettings` are unchanged.
 
 The `YEARFRAC` compatibility follow-up changes no public signature or frozen
+contract.
+
+The parsing compatibility follow-up changes no public signature or frozen
 contract.
 
 ## Checklist

@@ -12,3 +12,4 @@
 =HOUR(TRUE)	0	TRUE is 1.0 → hour 0
 =HOUR(DATE(2024,1,1)+TIME(7,0,0))	7	date+time
 =HOUR(TIME(23,0,0))	23	11pm
+=HOUR("25:00")	1	time extractors coerce recognized text and wrap hour overflow

@@ -12,3 +12,4 @@
 =YEAR({1,61})	{1900,1900}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =YEAR(45292)	2024	2024-01-01
 =YEAR(TRUE)	1900	TRUE is serial 1; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=YEAR("1/1/2024")	2024	date extractors coerce recognized locale date text
