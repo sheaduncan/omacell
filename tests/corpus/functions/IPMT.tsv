@@ -10,3 +10,4 @@
 =IPMT(0.1,1,2,-200)-20	0	first-period interest equals rate*pv (pv=-200 → 20)
 =IPMT(0,1,5,-100,50)	0	zero rate still 0 interest with fv
 =IPMT(0.1,1,1,-100,0,0)	10	explicit type 0
+=ROUND(IPMT(0.1,2,2,1000,0,1),2)	-47.62	type 1 period 2 charges interest on the balance after the opening payment

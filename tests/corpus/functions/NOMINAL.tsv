@@ -1,6 +1,6 @@
 # formula	expected	note
 =NOMINAL(0.1025,2)	0.1	inverse of EFFECT(0.1,2)
-=NOMINAL(0,12)	0	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. zero effective
+=NOMINAL(0,12)	#NUM!	Microsoft documents effect_rate <= 0 as #NUM!
 =NOMINAL(0.12,1)	0.12	npery=1 equals the effective rate
 =NOMINAL(-0.1,12)	#NUM!	effective ≤ 0 is #NUM!
 =NOMINAL(0.12,0)	#NUM!	npery < 1 is #NUM!

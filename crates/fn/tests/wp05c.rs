@@ -212,14 +212,14 @@ fn financial_solvers_converge_and_fail_closed() {
 
 #[test]
 fn financial_period_calculations_are_constant_time_for_large_inputs() {
-    assert_eq!(
-        eval_formula("=CUMIPMT(0,1000000000,100,1,1000000000,0)"),
-        "0"
-    );
-    assert_eq!(
-        eval_formula("=CUMPRINC(0,1000000000,100,1,1000000000,0)"),
-        "-100"
-    );
+    let interest = eval_formula("=CUMIPMT(0.000000000001,1000000000,100,1,1000000000,0)")
+        .parse::<f64>()
+        .expect("numeric CUMIPMT result");
+    assert!(interest.is_finite() && interest < 0.0);
+    let principal = eval_formula("=CUMPRINC(0.000000000001,1000000000,100,1,1000000000,0)")
+        .parse::<f64>()
+        .expect("numeric CUMPRINC result");
+    assert!((principal + 100.0).abs() < 1e-6);
     assert_eq!(eval_formula("=DB(1000,100,1000000000,1000000000)"), "0");
     assert_eq!(
         eval_formula("=DDB(1000,100,1000000000,1000000000,1000000000)"),

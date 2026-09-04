@@ -1056,6 +1056,9 @@ fn wait_tasks(harness: &mut Harness<'_, Gui>) {
     while harness.state().runner().tracked_tasks() != 0 {
         harness.step();
         assert!(started.elapsed() < Duration::from_secs(5));
+        // The task runner completes work on another thread. Yield explicitly so
+        // this polling loop cannot starve it on a single-core or loaded CI host.
+        std::thread::yield_now();
     }
     harness.step();
 }

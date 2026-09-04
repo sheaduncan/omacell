@@ -1,7 +1,8 @@
 //! Financial core (WP-05c).
 //!
 //! Solver policy: Newton–Raphson; `RATE`/`IRR` at most 20 iterations;
-//! `XIRR` at most 100; success when `|f| < 1e-8`; otherwise `#NUM!`.
+//! `XIRR` at most 100; success when the normalized residual is below `1e-8`
+//! or successive rate estimates differ by at most `1e-7`; otherwise `#NUM!`.
 //! Default guess is `0.1`.
 
 use omacell_core::coerce::{self, Scalar};
@@ -15,8 +16,10 @@ use crate::metadata::{ArgKind, ArrayBehavior, FunctionSpec};
 pub const RATE_IRR_MAX_ITERS: u32 = 20;
 /// Maximum Newton iterations for `XIRR`.
 pub const XIRR_MAX_ITERS: u32 = 100;
-/// Absolute residual that counts as convergence.
+/// Normalized residual that counts as convergence.
 pub const SOLVER_TOL: f64 = 1e-8;
+/// Maximum difference between successive rate estimates.
+pub const SOLVER_RATE_TOL: f64 = 1e-7;
 /// Default guess for iterative rate solvers.
 pub const DEFAULT_GUESS: f64 = 0.1;
 
@@ -471,9 +474,14 @@ fn ipmt_value(
         return Ok(0.0);
     }
     let pmt = pmt_value(rate, nper, pv, fv, typ)?;
-    let period = if typ == 1.0 { per - 1.0 } else { per };
-    let remaining = fv_value(rate, period - 1.0, pmt, pv, typ)?;
-    Ok(remaining * rate)
+    let prior_periods = if typ == 1.0 { per - 2.0 } else { per - 1.0 };
+    let remaining = fv_value(rate, prior_periods, pmt, pv, typ)?;
+    let post_payment = if typ == 1.0 {
+        remaining - pmt
+    } else {
+        remaining
+    };
+    Ok(post_payment * rate)
 }
 
 fn pmt_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -679,35 +687,50 @@ fn npv_deriv(rate: f64, values: &[f64]) -> f64 {
         .sum()
 }
 
-fn newton_rate<F, G>(guess: f64, max_iters: u32, mut f: F, mut df: G) -> Result<f64, ErrorKind>
+fn newton_rate<F, G>(
+    guess: f64,
+    max_iters: u32,
+    scale: f64,
+    mut f: F,
+    mut df: G,
+) -> Result<f64, ErrorKind>
 where
     F: FnMut(f64) -> f64,
     G: FnMut(f64) -> f64,
 {
+    let residual_tolerance = SOLVER_TOL * scale.max(1.0);
     let mut x = guess;
     for _ in 0..max_iters {
         let fx = f(x);
         if !fx.is_finite() {
             return Err(ErrorKind::Num);
         }
-        if fx.abs() < SOLVER_TOL {
+        if fx == 0.0 {
             return Ok(x);
         }
         let d = df(x);
-        if !d.is_finite() || d.abs() < 1e-14 {
+        if !d.is_finite() || d == 0.0 {
             return Err(ErrorKind::Num);
         }
-        x -= fx / d;
-        if !x.is_finite() {
+        let next = x - fx / d;
+        if !next.is_finite() {
             return Err(ErrorKind::Num);
         }
+        if fx.abs() <= residual_tolerance || (next - x).abs() <= SOLVER_RATE_TOL {
+            return Ok(next);
+        }
+        x = next;
     }
     let fx = f(x);
-    if fx.is_finite() && fx.abs() < SOLVER_TOL {
+    if fx.is_finite() && fx.abs() <= residual_tolerance {
         Ok(x)
     } else {
         Err(ErrorKind::Num)
     }
+}
+
+fn cashflow_scale(values: &[f64]) -> f64 {
+    values.iter().map(|value| value.abs()).fold(1.0, f64::max)
 }
 
 fn irr_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
@@ -718,6 +741,7 @@ fn irr_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         let r = newton_rate(
             guess,
             RATE_IRR_MAX_ITERS,
+            cashflow_scale(&values),
             |r| npv_poly(r, &values),
             |r| npv_deriv(r, &values),
         )?;
@@ -744,6 +768,7 @@ fn xirr_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         let r = newton_rate(
             guess,
             XIRR_MAX_ITERS,
+            cashflow_scale(&values),
             |r| xnpv_of(r, &values, &dates).unwrap_or(f64::NAN),
             |r| {
                 if r <= -1.0 {
@@ -827,12 +852,14 @@ fn rate_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         if nper == 0.0 {
             return Err(ErrorKind::Num);
         }
-        if (pmt + pv + fv).abs() < SOLVER_TOL && nper != 0.0 {
+        if pv + pmt * nper + fv == 0.0 {
             return Ok(0.0);
         }
+        let scale = pmt.abs().max(pv.abs()).max(fv.abs());
         let r = newton_rate(
             guess,
             RATE_IRR_MAX_ITERS,
+            scale,
             |r| annuity_eq(r, nper, pmt, pv, fv, typ),
             |r| annuity_d_rate(r, nper, pmt, pv, fv, typ),
         )?;
@@ -881,7 +908,7 @@ fn sln_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         let salvage = args::number(ctx, args.get(1).ok_or(ErrorKind::Value)?)?;
         let life = args::number(ctx, args.get(2).ok_or(ErrorKind::Value)?)?;
         if life == 0.0 {
-            return Err(ErrorKind::Num);
+            return Err(ErrorKind::Div0);
         }
         Ok((cost - salvage) / life)
     })() {
@@ -996,7 +1023,7 @@ fn effect_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         let nominal = args::number(ctx, args.first().ok_or(ErrorKind::Value)?)?;
         let npery = args::number(ctx, args.get(1).ok_or(ErrorKind::Value)?)?;
         let n = args::trunc_i64(npery)?;
-        if nominal < 0.0 || n < 1 {
+        if nominal <= 0.0 || n < 1 {
             return Err(ErrorKind::Num);
         }
         Ok((n as f64 * (nominal / n as f64).ln_1p()).exp_m1())
@@ -1011,7 +1038,7 @@ fn nominal_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         let effective = args::number(ctx, args.first().ok_or(ErrorKind::Value)?)?;
         let npery = args::number(ctx, args.get(1).ok_or(ErrorKind::Value)?)?;
         let n = args::trunc_i64(npery)?;
-        if effective < 0.0 || n < 1 {
+        if effective <= 0.0 || n < 1 {
             return Err(ErrorKind::Num);
         }
         Ok(n as f64 * ((1.0 + effective).powf(1.0 / n as f64) - 1.0))
@@ -1029,6 +1056,25 @@ fn cumprinc_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     cum(ctx, args, false)
 }
 
+fn signed_balance_after_payments(
+    rate: f64,
+    payments: i64,
+    pmt: f64,
+    pv: f64,
+    typ: f64,
+) -> Result<f64, ErrorKind> {
+    if payments == 0 {
+        return Ok(-pv);
+    }
+    let elapsed = if typ == 1.0 {
+        (payments - 1) as f64
+    } else {
+        payments as f64
+    };
+    let balance = fv_value(rate, elapsed, pmt, pv, typ)?;
+    Ok(if typ == 1.0 { balance - pmt } else { balance })
+}
+
 fn cum(ctx: &mut EvalCtx<'_>, args: &[ArgVal], interest: bool) -> RuntimeValue {
     match (|| {
         let rate = args::number(ctx, args.first().ok_or(ErrorKind::Value)?)?;
@@ -1037,14 +1083,14 @@ fn cum(ctx: &mut EvalCtx<'_>, args: &[ArgVal], interest: bool) -> RuntimeValue {
         let start = args::number(ctx, args.get(3).ok_or(ErrorKind::Value)?)?;
         let end = args::number(ctx, args.get(4).ok_or(ErrorKind::Value)?)?;
         let typ = type_flag(args::number(ctx, args.get(5).ok_or(ErrorKind::Value)?)?)?;
-        if rate <= -1.0 || nper <= 0.0 || start < 1.0 || end > nper || start > end {
+        if rate <= 0.0 || nper <= 0.0 || pv <= 0.0 || start < 1.0 || end > nper || start > end {
             return Err(ErrorKind::Num);
         }
         let s = args::trunc_i64(start)?;
         let e = args::trunc_i64(end)?;
         let pmt = pmt_value(rate, nper, pv, 0.0, typ)?;
-        let before = fv_value(rate, (s - 1) as f64, pmt, pv, typ)?;
-        let after = fv_value(rate, e as f64, pmt, pv, typ)?;
+        let before = signed_balance_after_payments(rate, s - 1, pmt, pv, typ)?;
+        let after = signed_balance_after_payments(rate, e, pmt, pv, typ)?;
         let principal = before - after;
         let result = if interest {
             pmt * (e - s + 1) as f64 - principal
