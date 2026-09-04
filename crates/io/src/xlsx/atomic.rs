@@ -255,19 +255,24 @@ pub(crate) fn atomic_write(
     fail_before_rename: bool,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(), CoreError> {
-    let dir = path
+    let destination = write_destination(path)?;
+    let dir = destination
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
+    let replacement_metadata = replacement_metadata(&destination)?;
     if lock {
         acquire_lock(path)?;
     }
     let result = (|| {
-        let (mut temp_file, tmp) = create_unique_temp(path, dir)?;
+        let (mut temp_file, tmp) = create_unique_temp(&destination, dir)?;
         let mut cleanup = TempCleanup::new(tmp.clone());
         temp_file
             .write_all(bytes)
             .map_err(|e| error::xlsx_write(e.to_string()))?;
+        if let Some(metadata) = &replacement_metadata {
+            apply_replacement_metadata(&temp_file, metadata)?;
+        }
         temp_file
             .sync_all()
             .map_err(|e| error::xlsx_write(e.to_string()))?;
@@ -286,7 +291,7 @@ pub(crate) fn atomic_write(
         {
             rotate_backups(path, keep_backups)?;
         }
-        fs::rename(&tmp, path).map_err(|e| error::xlsx_write(e.to_string()))?;
+        fs::rename(&tmp, &destination).map_err(|e| error::xlsx_write(e.to_string()))?;
         cleanup.disarm();
         File::open(dir)
             .and_then(|dirf| dirf.sync_all())
@@ -300,6 +305,68 @@ pub(crate) fn atomic_write(
         return Err(unlock_error);
     }
     result
+}
+
+fn write_destination(path: &Path) -> Result<PathBuf, CoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => fs::canonicalize(path).map_err(|e| {
+            error::xlsx_write(format!(
+                "cannot resolve destination link {}: {e}",
+                path.display()
+            ))
+        }),
+        Ok(_) => Ok(path.to_path_buf()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(e) => Err(error::xlsx_write(format!(
+            "cannot inspect destination {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
+struct ReplacementMetadata {
+    permissions: fs::Permissions,
+    #[cfg(unix)]
+    uid: u32,
+    #[cfg(unix)]
+    gid: u32,
+}
+
+fn replacement_metadata(path: &Path) -> Result<Option<ReplacementMetadata>, CoreError> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(Some(ReplacementMetadata {
+            permissions: metadata.permissions(),
+            #[cfg(unix)]
+            uid: metadata.uid(),
+            #[cfg(unix)]
+            gid: metadata.gid(),
+        })),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(error::xlsx_write(format!(
+            "cannot inspect destination metadata {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
+fn apply_replacement_metadata(
+    file: &File,
+    metadata: &ReplacementMetadata,
+) -> Result<(), CoreError> {
+    #[cfg(unix)]
+    {
+        let current = file
+            .metadata()
+            .map_err(|e| error::xlsx_write(format!("inspect temporary file metadata: {e}")))?;
+        let uid = (current.uid() != metadata.uid).then(|| rustix::fs::Uid::from_raw(metadata.uid));
+        let gid = (current.gid() != metadata.gid).then(|| rustix::fs::Gid::from_raw(metadata.gid));
+        if uid.is_some() || gid.is_some() {
+            rustix::fs::fchown(file, uid, gid)
+                .map_err(|e| error::xlsx_write(format!("preserve destination ownership: {e}")))?;
+        }
+    }
+    file.set_permissions(metadata.permissions.clone())
+        .map_err(|e| error::xlsx_write(format!("preserve destination permissions: {e}")))
 }
 
 fn rotate_backups(path: &Path, keep: u32) -> Result<(), CoreError> {
@@ -757,6 +824,61 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"V3");
         assert_eq!(fs::read(dir.join("book.xlsx.bak.1")).unwrap(), b"V2");
         assert_eq!(fs::read(dir.join("book.xlsx.bak.2")).unwrap(), b"V1");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_through_symbolic_link_keeps_link_and_replaces_referent() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!(
+            "omacell-xlsx-save-symlink-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target.xlsx");
+        let path = dir.join("book.xlsx");
+        fs::write(&target, b"ORIGINAL").unwrap();
+        symlink("target.xlsx", &path).unwrap();
+
+        atomic_write(&path, b"REPLACEMENT", 0, false, false, None).unwrap();
+
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_link(&path).unwrap(), PathBuf::from("target.xlsx"));
+        assert_eq!(fs::read(&target).unwrap(), b"REPLACEMENT");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacement_retains_mode_and_owner_group() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let dir = std::env::temp_dir().join(format!(
+            "omacell-xlsx-save-metadata-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("book.xlsx");
+        fs::write(&path, b"ORIGINAL").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let before = fs::metadata(&path).unwrap();
+
+        atomic_write(&path, b"REPLACEMENT", 0, false, false, None).unwrap();
+
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(after.mode() & 0o7777, before.mode() & 0o7777);
+        assert_eq!(after.uid(), before.uid());
+        assert_eq!(after.gid(), before.gid());
+        assert_eq!(fs::read(&path).unwrap(), b"REPLACEMENT");
         let _ = fs::remove_dir_all(&dir);
     }
 
