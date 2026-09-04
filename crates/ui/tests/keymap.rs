@@ -87,6 +87,122 @@ model = "classic"
 }
 
 #[test]
+fn named_keys_are_not_pending_prefixes() {
+    let (_dir, _session, _registry, mut modal) = load_session("keys/modal.toml");
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent {
+                code: KeyCode::Char('S'),
+                ctrl: false,
+                alt: false,
+                shift: true,
+            },
+        ),
+        KeyOutcome::Unbound
+    ));
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            },
+        ),
+        KeyOutcome::Pending
+    ));
+    modal.reset_pending();
+    assert_eq!(
+        modal.dispatch(omacell_ui::Mode::Normal, KeyEvent::new(KeyCode::Space),),
+        KeyOutcome::Pending
+    );
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent::new(KeyCode::Char('a')),
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "ai.plan"
+    ));
+
+    let mut uppercase = Keymap::parse(
+        r#"
+[meta]
+name = "uppercase chord"
+model = "modal"
+[bindings.normal]
+ZZ = "edit.undo"
+F4x = "edit.redo"
+"g+" = "edit.repeat"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        uppercase.dispatch(omacell_ui::Mode::Normal, KeyEvent::new(KeyCode::Char('Z')),),
+        KeyOutcome::Pending
+    );
+    assert!(matches!(
+        uppercase.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent::new(KeyCode::Char('Z')),
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "edit.undo"
+    ));
+    assert_eq!(
+        uppercase.dispatch(omacell_ui::Mode::Normal, KeyEvent::new(KeyCode::F(4))),
+        KeyOutcome::Pending
+    );
+    assert!(matches!(
+        uppercase.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent::new(KeyCode::Char('x')),
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "edit.redo"
+    ));
+    assert_eq!(
+        uppercase.dispatch(omacell_ui::Mode::Normal, KeyEvent::new(KeyCode::Char('g')),),
+        KeyOutcome::Pending
+    );
+    assert!(matches!(
+        uppercase.dispatch(
+            omacell_ui::Mode::Normal,
+            KeyEvent::new(KeyCode::Char('+')),
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "edit.repeat"
+    ));
+}
+
+#[test]
+fn visual_mode_has_motion_and_escape() {
+    let (_dir, _session, _registry, mut modal) = load_session("keys/modal.toml");
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Visual,
+            KeyEvent {
+                code: KeyCode::Esc,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            },
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "mode.normal"
+    ));
+    assert!(matches!(
+        modal.dispatch(
+            omacell_ui::Mode::Visual,
+            KeyEvent {
+                code: KeyCode::Char('h'),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            },
+        ),
+        KeyOutcome::Command { cmd, .. } if cmd == "nav.left"
+    ));
+}
+
+#[test]
 fn invalid_command_id_is_rejected() {
     let err = Keymap::parse(
         r#"

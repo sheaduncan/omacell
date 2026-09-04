@@ -4,6 +4,7 @@ use omacell_bus::Bus;
 use omacell_conf::{Paths, load};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::eval::FnRegistry;
+use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::sheet::FreezePanes;
 use omacell_core::workbook::Workbook;
@@ -55,8 +56,8 @@ fn freeze_and_split_are_mutually_exclusive_in_both_dispatch_paths() {
     assert!(bus.execute(Origin::User, "view.split", json!({})).ok);
     assert_eq!(session.viewport().freeze, FreezePanes::default());
     assert!(session.viewport().split.is_some());
-    assert_eq!(session.viewport().first_row, 2);
-    assert_eq!(session.viewport().first_col, 3);
+    assert_eq!(session.viewport().first_row, 0);
+    assert_eq!(session.viewport().first_col, 0);
     assert!(bus.execute(Origin::User, "view.freeze", json!({})).ok);
     assert_eq!(session.viewport().freeze, FreezePanes { rows: 2, cols: 3 });
     assert!(session.viewport().split.is_none());
@@ -65,14 +66,153 @@ fn freeze_and_split_are_mutually_exclusive_in_both_dispatch_paths() {
         .unwrap()
         .unwrap();
     assert_eq!(session.viewport().freeze, FreezePanes::default());
-    assert!(session.viewport().split.is_some());
-    assert_eq!(session.viewport().first_row, 2);
-    assert_eq!(session.viewport().first_col, 3);
+    let split = session.viewport().split.expect("split");
+    assert_eq!(split.y_px, session.viewport().rows.index_to_pixel(2) as u32);
+    assert_eq!(split.x_px, session.viewport().cols.index_to_pixel(3) as u32);
     apply_local_command(&session, bus.workbook(), "view.freeze", &json!({}))
         .unwrap()
         .unwrap();
     assert_eq!(session.viewport().freeze, FreezePanes { rows: 2, cols: 3 });
     assert!(session.viewport().split.is_none());
+}
+
+#[test]
+fn modal_insert_tab_stays_in_the_edit_buffer() {
+    let (_dir, session, _bus) = harness_with_keymap("keys/modal.toml");
+    session.begin_edit(EditSurface::InCell, "hello");
+    let outcome = session.handle_key(KeyEvent {
+        code: KeyCode::Tab,
+        ctrl: false,
+        alt: false,
+        shift: false,
+    });
+    assert!(matches!(outcome, KeyOutcome::Pending));
+    assert_eq!(session.mode(), Mode::Insert);
+    assert_eq!(session.edit().buffer, "hello\t");
+}
+
+#[test]
+fn point_mode_arrows_update_the_ref_and_enter_commits_from_the_origin() {
+    let (_dir, session, mut bus) = harness_with_keymap("keys/classic.toml");
+    session.begin_edit(EditSurface::InCell, "=");
+    assert_eq!(
+        session.handle_key(KeyEvent::new(KeyCode::Down)),
+        KeyOutcome::Pending
+    );
+    assert_eq!(session.edit().buffer, "=A2");
+    assert_eq!(
+        session.handle_key(KeyEvent::new(KeyCode::Right)),
+        KeyOutcome::Pending
+    );
+    assert_eq!(session.edit().buffer, "=B2");
+    let outcome = session.handle_key(KeyEvent {
+        code: KeyCode::Enter,
+        ctrl: false,
+        alt: false,
+        shift: false,
+    });
+    assert!(matches!(outcome, KeyOutcome::Command { ref cmd, .. } if cmd == "nav.enter"));
+    assert_eq!(session.selection().cursor.row, 0);
+    assert_eq!(session.selection().cursor.col, 0);
+    execute_key(&mut bus, outcome);
+    assert!(session.edit().is_idle());
+    assert_eq!(session.selection().cursor.row, 1);
+    let slot = bus
+        .workbook()
+        .get(bus.workbook().active_sheet(), 0, 0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        bus.workbook().intern().formulas.get(slot.formula.unwrap()),
+        Some("=B2")
+    );
+}
+
+#[test]
+fn point_mode_external_selection_updates_the_provisional_ref() {
+    let (_dir, session, _bus) = harness_with_keymap("keys/classic.toml");
+    session.begin_edit(EditSurface::FormulaBar, "=");
+    let mut selection = session.selection();
+    selection.move_by(2, 2);
+    session.set_selection(selection.clone());
+    assert_eq!(session.edit().buffer, "=C3");
+
+    selection.move_by(0, 1);
+    session.set_selection(selection);
+    assert_eq!(session.edit().buffer, "=D3");
+}
+
+#[test]
+fn visual_navigation_preserves_shape_and_escape_resets_extension() {
+    let (_dir, session, mut bus) = harness_with_keymap("keys/modal.toml");
+    let mut selection = session.selection();
+    selection.move_by(1, 1);
+    session.set_selection(selection);
+
+    for command in ["sel.visual", "nav.down", "nav.top"] {
+        apply_local_command(&session, bus.workbook(), command, &json!({}))
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(session.selection().active().normalized(), (0, 1, 1, 1));
+    assert_eq!(session.selection().extend, omacell_ui::ExtendMode::Extend);
+
+    apply_local_command(&session, bus.workbook(), "mode.normal", &json!({}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.selection().extend, omacell_ui::ExtendMode::Replace);
+    apply_local_command(&session, bus.workbook(), "nav.right", &json!({}))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.selection().active().normalized(), (0, 2, 0, 2));
+
+    let mut selection = session.selection();
+    selection.move_by(1, -1);
+    session.set_selection(selection);
+    for command in ["sel.visualrow", "nav.down", "nav.right"] {
+        apply_local_command(&session, bus.workbook(), command, &json!({}))
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(
+        session.selection().active().normalized(),
+        (1, 0, 2, MAX_COLS - 1)
+    );
+
+    apply_local_command(&session, bus.workbook(), "mode.normal", &json!({}))
+        .unwrap()
+        .unwrap();
+    let mut selection = session.selection();
+    selection.replace(omacell_ui::Area::cell(omacell_core::addr::CellRef {
+        row: 1,
+        col: 1,
+        ..selection.cursor
+    }));
+    session.set_selection(selection);
+    for command in ["sel.visualcol", "nav.right", "nav.down"] {
+        apply_local_command(&session, bus.workbook(), command, &json!({}))
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(
+        session.selection().active().normalized(),
+        (0, 1, MAX_ROWS - 1, 2)
+    );
+
+    assert!(bus.execute(Origin::User, "mode.normal", json!({})).ok);
+    let mut selection = session.selection();
+    selection.replace(omacell_ui::Area::cell(omacell_core::addr::CellRef {
+        row: 1,
+        col: 1,
+        ..selection.cursor
+    }));
+    session.set_selection(selection);
+    for command in ["sel.visual", "nav.down", "nav.top"] {
+        let outcome = bus.execute(Origin::User, command, json!({}));
+        assert!(outcome.ok, "{command}: {:?}", outcome.error);
+    }
+    assert_eq!(session.selection().active().normalized(), (0, 1, 1, 1));
+    assert_eq!(session.selection().extend, omacell_ui::ExtendMode::Extend);
 }
 
 #[test]

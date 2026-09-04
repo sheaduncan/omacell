@@ -32,6 +32,8 @@ pub struct EditState {
     pub origin: Option<CellRef>,
     /// True when the next navigation inserts a reference.
     pub point: bool,
+    /// Byte range of the reference currently controlled by point navigation.
+    point_span: Option<(usize, usize)>,
     /// Model-proposed suffix rendered as ghost text and accepted with `Tab`.
     pub ghost: Option<String>,
 }
@@ -146,6 +148,7 @@ impl EditState {
         self.cursor = self.buffer.len();
         self.origin = Some(origin);
         self.point = looks_like_formula(&self.buffer) && point_ready(&self.buffer);
+        self.point_span = None;
         self.ghost = None;
     }
 
@@ -157,6 +160,7 @@ impl EditState {
 
     /// Insert a character at the cursor.
     pub fn insert_char(&mut self, c: char) {
+        self.stop_pointing();
         self.ghost = None;
         self.clamp_cursor();
         self.buffer.insert(self.cursor, c);
@@ -166,6 +170,7 @@ impl EditState {
 
     /// Insert text at the cursor.
     pub fn insert_text(&mut self, text: &str) {
+        self.stop_pointing();
         self.ghost = None;
         self.clamp_cursor();
         self.buffer.insert_str(self.cursor, text);
@@ -175,6 +180,7 @@ impl EditState {
 
     /// Remove the character immediately before the cursor.
     pub fn backspace(&mut self) {
+        self.stop_pointing();
         self.ghost = None;
         self.clamp_cursor();
         let Some((start, _)) = self.buffer[..self.cursor].char_indices().next_back() else {
@@ -187,6 +193,7 @@ impl EditState {
 
     /// Remove the character at the cursor.
     pub fn delete_forward(&mut self) {
+        self.stop_pointing();
         self.ghost = None;
         self.clamp_cursor();
         let Some(ch) = self.buffer[self.cursor..].chars().next() else {
@@ -199,6 +206,7 @@ impl EditState {
 
     /// Move the caret one Unicode scalar to the left.
     pub fn move_left(&mut self) {
+        self.stop_pointing();
         self.ghost = None;
         self.clamp_cursor();
         if let Some((start, _)) = self.buffer[..self.cursor].char_indices().next_back() {
@@ -208,6 +216,7 @@ impl EditState {
 
     /// Move the caret one Unicode scalar to the right.
     pub fn move_right(&mut self) {
+        self.stop_pointing();
         self.ghost = None;
         self.clamp_cursor();
         if let Some(ch) = self.buffer[self.cursor..].chars().next() {
@@ -217,6 +226,7 @@ impl EditState {
 
     /// Move the caret to the same character column on the previous line.
     pub fn move_up(&mut self) {
+        self.stop_pointing();
         self.ghost = None;
         self.clamp_cursor();
         let line_start = self.buffer[..self.cursor]
@@ -235,6 +245,7 @@ impl EditState {
 
     /// Move the caret to the same character column on the next line.
     pub fn move_down(&mut self) {
+        self.stop_pointing();
         self.ghost = None;
         self.clamp_cursor();
         let line_start = self.buffer[..self.cursor]
@@ -255,18 +266,21 @@ impl EditState {
 
     /// Move the caret to the start of the edit buffer.
     pub fn move_home(&mut self) {
+        self.stop_pointing();
         self.ghost = None;
         self.cursor = 0;
     }
 
     /// Move the caret to the end of the edit buffer.
     pub fn move_end(&mut self) {
+        self.stop_pointing();
         self.ghost = None;
         self.cursor = self.buffer.len();
     }
 
     /// Replace text supplied by a toolkit editor and reset completion state.
     pub fn replace_from_toolkit(&mut self, text: String) {
+        self.point_span = None;
         self.buffer = text;
         self.cursor = self.buffer.len();
         self.ghost = None;
@@ -313,7 +327,7 @@ impl EditState {
         text
     }
 
-    /// Insert an A1 reference at the cursor (point mode).
+    /// Insert or update the A1 reference controlled by point navigation.
     pub fn insert_ref(&mut self, cell: CellRef) -> Result<(), CoreError> {
         if !self.point {
             return Err(error::edit("not in point mode"));
@@ -321,10 +335,22 @@ impl EditState {
         self.clamp_cursor();
         self.ghost = None;
         let text = a1(&cell)?;
-        self.buffer.insert_str(self.cursor, &text);
-        self.cursor += text.len();
-        self.point = point_ready(&self.buffer);
+        let start = if let Some((start, end)) = self.point_span {
+            self.buffer.replace_range(start..end, &text);
+            start
+        } else {
+            let start = self.cursor;
+            self.buffer.insert_str(start, &text);
+            start
+        };
+        self.cursor = start + text.len();
+        self.point_span = Some((start, self.cursor));
+        self.point = true;
         Ok(())
+    }
+
+    pub(crate) fn has_point_ref(&self) -> bool {
+        self.point_span.is_some()
     }
 
     /// Excel `F4` cycle on the reference containing the cursor.
@@ -363,8 +389,15 @@ impl EditState {
                 (start, end, format!("{prefix}{body}"))
             }
         };
+        let was_point_ref = self.point_span == Some((start, end));
         self.buffer.replace_range(start..end, &replacement);
         self.cursor = start + replacement.len();
+        if was_point_ref {
+            self.point_span = Some((start, self.cursor));
+            self.point = true;
+        } else {
+            self.update_point();
+        }
         Ok(())
     }
 
@@ -376,7 +409,13 @@ impl EditState {
     }
 
     fn update_point(&mut self) {
+        self.point_span = None;
         self.point = looks_like_formula(&self.buffer) && point_ready(&self.buffer);
+    }
+
+    fn stop_pointing(&mut self) {
+        self.point_span = None;
+        self.point = false;
     }
 
     /// Colorization spans for formula references (`references.0`..`7`).

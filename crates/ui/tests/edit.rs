@@ -21,6 +21,12 @@ fn point_mode_inserts_refs() {
     assert!(edit.point);
     edit.insert_ref(cell(0, 1)).unwrap();
     assert_eq!(edit.buffer, "=B1");
+    assert!(edit.point);
+    edit.insert_ref(cell(1, 2)).unwrap();
+    assert_eq!(edit.buffer, "=C2");
+    edit.insert_char('+');
+    edit.insert_ref(cell(2, 3)).unwrap();
+    assert_eq!(edit.buffer, "=C2+D3");
 }
 
 #[test]

@@ -3,6 +3,8 @@
 use omacell_core::addr::{CellRef, RangeRef, SheetId};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 
+use crate::mode::Mode;
+
 /// How the next movement treats the selection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ExtendMode {
@@ -143,6 +145,67 @@ impl Selection {
                 self.extend = ExtendMode::Extend;
             }
         }
+    }
+
+    /// Move while preserving the shape implied by a modal Visual mode.
+    pub(crate) fn move_in_mode(&mut self, mode: Mode, drow: i64, dcol: i64) {
+        match mode {
+            Mode::Visual => {
+                self.extend = ExtendMode::Extend;
+                self.move_by(drow, dcol);
+            }
+            Mode::VisualRow => self.extend_rows_by(drow),
+            Mode::VisualCol => self.extend_cols_by(dcol),
+            _ => self.move_by(drow, dcol),
+        }
+    }
+
+    /// Jump to a cell, extending instead of replacing in a Visual mode.
+    pub(crate) fn jump_in_mode(&mut self, mode: Mode, target: CellRef) {
+        if matches!(mode, Mode::Visual | Mode::VisualRow | Mode::VisualCol) {
+            let current = self.cursor;
+            self.move_in_mode(
+                mode,
+                i64::from(target.row) - i64::from(current.row),
+                i64::from(target.col) - i64::from(current.col),
+            );
+        } else {
+            self.replace(Area::cell(target));
+        }
+    }
+
+    fn extend_rows_by(&mut self, drow: i64) {
+        self.cursor.row = clamp_row(i64::from(self.cursor.row).saturating_add(drow));
+        self.cursor.col = 0;
+        let mut end = self.cursor;
+        end.col = MAX_COLS - 1;
+        if let Some(active) = self.areas.last_mut() {
+            active.start.col = 0;
+            active.end = end;
+        } else {
+            self.areas.push(Area {
+                start: self.cursor,
+                end,
+            });
+        }
+        self.extend = ExtendMode::Extend;
+    }
+
+    fn extend_cols_by(&mut self, dcol: i64) {
+        self.cursor.col = clamp_col(i64::from(self.cursor.col).saturating_add(dcol));
+        self.cursor.row = 0;
+        let mut end = self.cursor;
+        end.row = MAX_ROWS - 1;
+        if let Some(active) = self.areas.last_mut() {
+            active.start.row = 0;
+            active.end = end;
+        } else {
+            self.areas.push(Area {
+                start: self.cursor,
+                end,
+            });
+        }
+        self.extend = ExtendMode::Extend;
     }
 
     /// Select a whole row through the cursor.
