@@ -2,8 +2,10 @@
 
 use std::io::{Cursor, Read, Write};
 
+use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::{RecalcEngine, format_cell};
+use omacell_core::validation::{DataValidation, DvType};
 use omacell_core::value::Value;
 use omacell_io::xlsx::{open_bytes, save_bytes, save_workbook_bytes};
 use zip::ZipWriter;
@@ -228,6 +230,15 @@ fn worksheet_extensions_keep_registered_containers_and_revision_namespace() {
  </extLst>
 </worksheet>"#;
     let doc = open_bytes(&package_with_sheet(sheet)).unwrap();
+    let loaded_sheet = doc.workbook.sheet(doc.workbook.active_sheet()).unwrap();
+    assert!(
+        loaded_sheet.cond_formats.is_empty(),
+        "unsupported x14 formatting must not become a modeled A1 rule"
+    );
+    assert!(
+        loaded_sheet.validations.is_empty(),
+        "unsupported x14 validation must not become a modeled A1 rule"
+    );
     let saved = save_bytes(&doc).unwrap();
     let reopened = open_bytes(&saved).unwrap();
     let xml = std::str::from_utf8(
@@ -306,6 +317,76 @@ fn worksheet_extensions_keep_registered_containers_and_revision_namespace() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn unsupported_conditional_format_stays_opaque_instead_of_becoming_cell_is() {
+    let sheet = br#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+ <sheetData/><conditionalFormatting sqref="C3"><cfRule type="futureRule" operator="greaterThan" priority="1"><formula>5</formula></cfRule></conditionalFormatting>
+</worksheet>"#;
+    let doc = open_bytes(&package_with_sheet(sheet)).unwrap();
+    assert!(
+        doc.workbook
+            .sheet(doc.workbook.active_sheet())
+            .unwrap()
+            .cond_formats
+            .is_empty()
+    );
+    let saved = save_bytes(&doc).unwrap();
+    let reopened = open_bytes(&saved).unwrap();
+    let xml = std::str::from_utf8(
+        &reopened
+            .package
+            .part("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    assert!(xml.contains(r#"<cfRule type="futureRule" operator="greaterThan" priority="1">"#));
+    assert!(xml.contains("<formula>5</formula>"));
+}
+
+#[test]
+fn multi_area_validations_expand_and_modeled_messages_enable_their_ui() {
+    let sheet = br#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+ <sheetData/><dataValidations count="1"><dataValidation type="whole" operator="between" allowBlank="1" showErrorMessage="1" showInputMessage="1" errorTitle="Invalid" error="Choose 1-10" promptTitle="Allowed" prompt="Enter 1-10" sqref="A1 C3:D4"><formula1>1</formula1><formula2>10</formula2></dataValidation></dataValidations>
+</worksheet>"#;
+    let doc = open_bytes(&package_with_sheet(sheet)).unwrap();
+    let loaded = &doc
+        .workbook
+        .sheet(doc.workbook.active_sheet())
+        .unwrap()
+        .validations;
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].range.to_a1(), "A1:A1");
+    assert_eq!(loaded[1].range.to_a1(), "C3:D4");
+
+    let mut workbook = doc.workbook;
+    let id = workbook.active_sheet();
+    let modeled = DataValidation {
+        range: RangeRef::from_corners(CellRef::new(4, 4).unwrap(), CellRef::new(4, 4).unwrap()),
+        kind: DvType::Whole,
+        formula1: Some("1".into()),
+        formula2: Some("10".into()),
+        error_title: Some("Invalid".into()),
+        error_message: Some("Choose 1-10".into()),
+        input_title: Some("Allowed".into()),
+        input_message: Some("Enter 1-10".into()),
+        ..DataValidation::default()
+    };
+    workbook.set_validations(id, vec![modeled]).unwrap();
+    let saved = save_workbook_bytes(&workbook).unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(&saved)).unwrap();
+    let mut xml = String::new();
+    archive
+        .by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut xml)
+        .unwrap();
+    assert!(xml.contains(r#"showErrorMessage="1""#), "{xml}");
+    assert!(xml.contains(r#"showInputMessage="1""#), "{xml}");
 }
 
 fn package_with_sheet(sheet: &[u8]) -> Vec<u8> {
