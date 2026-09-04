@@ -471,6 +471,12 @@ impl Bus {
         self.changesets.list()
     }
 
+    /// Whether any retained changeset is still proposed.
+    #[must_use]
+    pub(crate) fn has_proposed_changeset(&self) -> bool {
+        self.changesets.has_proposed()
+    }
+
     /// Fetch one changeset.
     pub fn get_changeset(&self, id: &ChangesetId) -> Result<&Changeset, CoreError> {
         self.changesets.get(id)
