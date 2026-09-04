@@ -100,6 +100,34 @@ fn redaction_applied_on_card_path() {
 }
 
 #[test]
+fn detected_numeric_columns_do_not_leak_min_or_max() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_cell_contents(sheet, 0, 0, "payment card").unwrap();
+    wb.set_cell_contents(sheet, 1, 0, "4111111111111111")
+        .unwrap();
+    let mut config = package_defaults().unwrap();
+    config.ai.privacy.send = "full".into();
+    config.ai.privacy.suggest_redaction = true;
+    let policy = PolicySnapshot::capture(&config, Some(&wb), false);
+    let (card, suggestions) = build_card(
+        &wb,
+        None,
+        CardRequest {
+            level: CardLevel::Columns,
+            ..CardRequest::default()
+        },
+        &policy,
+    )
+    .unwrap();
+    let dumped = card.to_string();
+    assert!(!dumped.contains("4111111111111111"), "{dumped}");
+    assert!(suggestions.iter().any(|item| item.kind.as_str() == "card"));
+    assert!(card["columns"][0].get("min").is_none(), "{dumped}");
+    assert!(card["columns"][0].get("max").is_none(), "{dumped}");
+}
+
+#[test]
 fn workbook_override_and_loopback_defaults() {
     let mut wb = Workbook::new();
     let part = WorkbookAi {

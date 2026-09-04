@@ -105,6 +105,25 @@ fn workbook_scope_still_blocks_security_and_policy_commands() {
     }
 }
 
+#[test]
+fn commands_with_implicit_or_payload_sized_targets_stay_review_only() {
+    let wb = Workbook::new();
+    for (id, args) in [
+        ("edit.insert", json!({"range":"B2", "shift":"down"})),
+        ("edit.delcells", json!({"range":"B2", "shift":"down"})),
+        ("edit.paste", json!({"range":"B2", "payload":{}})),
+        ("edit.move", json!({"src":"B2:C3", "dest":"D4"})),
+        ("edit.texttocolumns", json!({"range":"B2:B3"})),
+    ] {
+        let mut policy = AutopilotPolicy::new(AutopilotScope::Workbook, 10);
+        let error = policy
+            .authorize_and_record(&[call(id, args)], &wb)
+            .unwrap_err();
+        assert_eq!(error.code, "ai.autopilot", "{id}");
+        assert_eq!(policy.used_ops(), 0, "{id}");
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 64,
