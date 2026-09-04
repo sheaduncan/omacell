@@ -237,7 +237,10 @@ pub fn exact_eq(a: &Scalar, b: &Scalar) -> bool {
         (Scalar::Error(_), _) | (_, Scalar::Error(_)) => false,
         (Scalar::Number(x), Scalar::Number(y)) => x == y,
         (Scalar::Bool(x), Scalar::Bool(y)) => x == y,
-        (Scalar::Text(x), Scalar::Text(y)) => x.eq_ignore_ascii_case(y),
+        (Scalar::Text(x), Scalar::Text(y)) => x
+            .chars()
+            .flat_map(char::to_lowercase)
+            .eq(y.chars().flat_map(char::to_lowercase)),
         (Scalar::Empty, Scalar::Empty) => true,
         (Scalar::Empty, Scalar::Text(t)) | (Scalar::Text(t), Scalar::Empty) => t.is_empty(),
         _ => false,

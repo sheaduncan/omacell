@@ -306,7 +306,7 @@ const WRAPROWS = {
     array: ArrayBehavior::ReturnsArray,
     async_node: false,
     signature: "WRAPROWS(vector, wrap_count, [pad_with])",
-    doc: "Wraps a vector into rows of `wrap_count` columns. Invalid wrap_count is `#NUM!` before allocation.",
+    doc: "Wraps a one-dimensional vector into rows of `wrap_count` columns. Invalid wrap_count is `#NUM!` before allocation.",
     body: FnBody::Eager(wraprows_impl),
 };
 }
@@ -324,7 +324,7 @@ const WRAPCOLS = {
     array: ArrayBehavior::ReturnsArray,
     async_node: false,
     signature: "WRAPCOLS(vector, wrap_count, [pad_with])",
-    doc: "Wraps a vector into columns of `wrap_count` rows. Invalid wrap_count is `#NUM!` before allocation.",
+    doc: "Wraps a one-dimensional vector into columns of `wrap_count` rows. Invalid wrap_count is `#NUM!` before allocation.",
     body: FnBody::Eager(wrapcols_impl),
 };
 }
@@ -1248,7 +1248,10 @@ fn wrap(ctx: &mut EvalCtx<'_>, args: &[ArgVal], as_rows: bool) -> RuntimeValue {
         Ok(None) => Scalar::Error(ErrorKind::Na),
         Err(e) => return err(e),
     };
-    let vec: Vec<Scalar> = array.values.iter().cloned().collect();
+    let vec = match args::as_vector(&array) {
+        Ok(values) => values,
+        Err(e) => return err(e),
+    };
     let n = vec.len() as u32;
     let groups = n.div_ceil(wrap_count);
     if as_rows {
