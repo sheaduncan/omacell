@@ -80,7 +80,7 @@ List workbooks open in this MCP session.
 
 ## `workbook_open`
 
-Open a workbook from disk, replacing the current session workbook.
+Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed.
 
 ## `workbook_save`
 

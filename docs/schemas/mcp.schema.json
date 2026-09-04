@@ -430,7 +430,7 @@
       "name": "workbook_list"
     },
     {
-      "description": "Open a workbook from disk, replacing the current session workbook.",
+      "description": "Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,

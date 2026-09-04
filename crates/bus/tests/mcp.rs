@@ -374,3 +374,166 @@ fn stub_card_is_summary_level() {
     assert_eq!(card["file"], "book.xlsx");
     assert!(card.get("sample").is_none());
 }
+
+#[derive(Clone, Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct RecordingArgs {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    sheet: Option<String>,
+    #[serde(default)]
+    range: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+fn record_origin(
+    bus: &mut Bus,
+    id: &'static str,
+    kind: CommandKind,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<(String, Origin)>>>,
+) {
+    bus.registry_mut()
+        .register::<RecordingArgs, _>(
+            CommandSpec {
+                id,
+                doc: "record origin",
+                kind,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            move |ctx, _args| {
+                seen.lock().unwrap().push((id.to_string(), ctx.origin()));
+                Ok(Effect::query(json!({})))
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn mcp_session_tools_do_not_impersonate_the_user() {
+    let mut bus = bus();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observer = std::sync::Arc::clone(&seen);
+    bus.observe_commands(std::sync::Arc::new(move |origin, call| {
+        observer
+            .lock()
+            .unwrap()
+            .push((call.id.as_str().to_string(), origin));
+    }));
+    record_origin(
+        &mut bus,
+        "file.open",
+        CommandKind::Mutating,
+        std::sync::Arc::clone(&seen),
+    );
+    record_origin(
+        &mut bus,
+        "file.save",
+        CommandKind::Mutating,
+        std::sync::Arc::clone(&seen),
+    );
+    record_origin(
+        &mut bus,
+        "file.export",
+        CommandKind::Mutating,
+        std::sync::Arc::clone(&seen),
+    );
+    record_origin(
+        &mut bus,
+        "test.query",
+        CommandKind::Query,
+        std::sync::Arc::clone(&seen),
+    );
+
+    let mut ctx = McpCtx {
+        open_path: Some("book.xlsx".into()),
+        ..McpCtx::default()
+    };
+    call_ok(
+        &mut bus,
+        &mut ctx,
+        "workbook_open",
+        json!({"path": "book.xlsx"}),
+    );
+    call_ok(&mut bus, &mut ctx, "workbook_save", json!({}));
+    call_ok(&mut bus, &mut ctx, "export", json!({"path": "out.csv"}));
+    call_ok(&mut bus, &mut ctx, "recalc", json!({}));
+    call_ok(&mut bus, &mut ctx, "audit", json!({}));
+    call_ok(
+        &mut bus,
+        &mut ctx,
+        "command_run",
+        json!({"id": "test.query", "args": {}}),
+    );
+
+    let seen = seen.lock().unwrap().clone();
+    assert!(!seen.is_empty());
+    for (id, origin) in &seen {
+        assert_ne!(
+            *origin,
+            Origin::User,
+            "{id} must not impersonate Origin::User"
+        );
+    }
+    let origin_of = |id: &str| {
+        seen.iter()
+            .find(|(name, _)| name == id)
+            .map(|(_, origin)| *origin)
+            .unwrap()
+    };
+    assert_eq!(origin_of("file.open"), Origin::Ipc);
+    assert_eq!(origin_of("file.save"), Origin::Ipc);
+    assert_eq!(origin_of("file.export"), Origin::Ipc);
+    assert_eq!(origin_of("calc.recalc"), Origin::Ipc);
+    assert_eq!(origin_of("audit.run"), Origin::ExternalAgent);
+    assert_eq!(origin_of("test.query"), Origin::ExternalAgent);
+}
+
+#[test]
+fn mcp_open_does_not_discard_a_pending_proposal() {
+    let mut bus = bus();
+    bus.registry_mut()
+        .register::<RecordingArgs, _>(
+            CommandSpec {
+                id: "file.open",
+                doc: "test workbook open",
+                kind: CommandKind::Mutating,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, _args| {
+                Ok(Effect {
+                    events: vec![Event::WorkbookOpened {
+                        path: Some("next.xlsx".into()),
+                    }],
+                    ..Effect::default()
+                })
+            },
+        )
+        .unwrap();
+    let proposed = bus
+        .propose(
+            Origin::ExternalAgent,
+            vec![omacell_core::changeset::CommandCall {
+                id: omacell_core::command::CommandId::new("cell.set").unwrap(),
+                args: json!({"ref": "A1", "input": "old"}),
+            }],
+        )
+        .unwrap();
+    let mut ctx = McpCtx::default();
+    let err = call(
+        &mut bus,
+        &mut ctx,
+        "workbook_open",
+        json!({"path": "next.xlsx"}),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, codes::COMMAND_DENIED);
+    assert_eq!(bus.list_changesets().len(), 1);
+    assert_eq!(bus.list_changesets()[0].id, proposed.id);
+}

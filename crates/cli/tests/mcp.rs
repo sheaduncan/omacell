@@ -270,17 +270,21 @@ async fn rmcp_client_exercises_every_tool_and_resource() {
         .unwrap_err();
     assert!(bad_card.contains("mcp.args"));
 
-    call_tool(
+    let open_err = call_tool(
         &client,
         "workbook_open",
         json!({"path": book.display().to_string()}),
     )
     .await
-    .unwrap();
+    .unwrap_err();
+    assert!(open_err.contains("command.denied"));
     let changesets = call_tool(&client, "changeset_list", json!({}))
         .await
         .unwrap();
-    assert!(changesets.as_array().unwrap().is_empty());
+    assert!(
+        !changesets.as_array().unwrap().is_empty(),
+        "opening another workbook must not discard a pending proposal"
+    );
 
     let render_err = call_tool(&client, "render", json!({"range": "A1"}))
         .await

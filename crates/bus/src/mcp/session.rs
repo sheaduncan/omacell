@@ -1,7 +1,7 @@
 //! Sync MCP tool/resource dispatch over [`crate::Bus`].
 
 use omacell_core::addr::{RefKind, col_to_letters, parse_a1, quote_sheet_name};
-use omacell_core::changeset::{Changeset, ChangesetId, CommandCall};
+use omacell_core::changeset::{Changeset, ChangesetId, ChangesetStatus, CommandCall};
 use omacell_core::command::{CommandId, Origin};
 use omacell_core::error::CoreError;
 use omacell_core::value::Value;
@@ -208,8 +208,26 @@ fn outcome_json(outcome: omacell_core::command::Outcome) -> Result<Json, CoreErr
     }
 }
 
-fn user_execute(bus: &mut Bus, id: &str, args: Json) -> Result<Json, CoreError> {
-    outcome_json(bus.execute(Origin::User, id, args))
+fn query_execute(bus: &mut Bus, id: &str, args: Json) -> Result<Json, CoreError> {
+    outcome_json(bus.execute(Origin::ExternalAgent, id, args))
+}
+
+fn session_execute(bus: &mut Bus, id: &str, args: Json) -> Result<Json, CoreError> {
+    outcome_json(bus.execute(Origin::Ipc, id, args))
+}
+
+fn ensure_no_pending_proposals(bus: &Bus) -> Result<(), CoreError> {
+    if bus
+        .list_changesets()
+        .iter()
+        .any(|changeset| changeset.status == ChangesetStatus::Proposed)
+    {
+        return Err(crate::error::denied(
+            "cannot replace the workbook while a changeset is still proposed",
+        )
+        .with_hint("apply or discard the proposal before opening another workbook"));
+    }
+    Ok(())
 }
 
 fn write_calls(
@@ -237,7 +255,8 @@ fn workbook_open(
     ctx: &mut McpCtx,
     args: WorkbookOpenArgs,
 ) -> Result<Json, CoreError> {
-    let result = user_execute(bus, "file.open", serde_json::json!({"path": args.path}))?;
+    ensure_no_pending_proposals(bus)?;
+    let result = session_execute(bus, "file.open", serde_json::json!({"path": args.path}))?;
     ctx.open_path = result
         .get("path")
         .and_then(Json::as_str)
@@ -266,7 +285,7 @@ fn workbook_save(
     } else if let Some(path) = &ctx.open_path {
         payload.insert("path".into(), Json::String(path.clone()));
     }
-    let result = user_execute(bus, "file.save", Json::Object(payload))?;
+    let result = session_execute(bus, "file.save", Json::Object(payload))?;
     if let Some(path) = result.get("path").and_then(Json::as_str) {
         ctx.open_path = Some(path.to_string());
     }
@@ -463,7 +482,7 @@ fn command_run(bus: &mut Bus, ctx: &McpCtx, args: CommandRunArgs) -> Result<Json
         )
         .with_hint("use a dedicated MCP tool or a changeset-eligible command"));
     }
-    user_execute(bus, &args.id, args.args)
+    query_execute(bus, &args.id, args.args)
 }
 
 fn commands_list(bus: &Bus, _args: EmptyArgs) -> Result<Json, CoreError> {
@@ -474,7 +493,7 @@ fn commands_list(bus: &Bus, _args: EmptyArgs) -> Result<Json, CoreError> {
 }
 
 fn recalc(bus: &mut Bus, args: RecalcArgs) -> Result<Json, CoreError> {
-    let result = user_execute(bus, "calc.recalc", serde_json::json!({"mode": "rebuild"}))?;
+    let result = session_execute(bus, "calc.recalc", serde_json::json!({"mode": "rebuild"}))?;
     Ok(serde_json::json!({
         "recalc": result,
         "wait": args.wait,
@@ -483,7 +502,7 @@ fn recalc(bus: &mut Bus, args: RecalcArgs) -> Result<Json, CoreError> {
 }
 
 fn audit(bus: &mut Bus, _args: EmptyArgs) -> Result<Json, CoreError> {
-    user_execute(bus, "audit.run", serde_json::json!({}))
+    query_execute(bus, "audit.run", serde_json::json!({}))
 }
 
 fn changeset_propose(
@@ -524,7 +543,7 @@ fn changeset_list(bus: &Bus, _args: EmptyArgs) -> Result<Json, CoreError> {
 }
 
 fn export(bus: &mut Bus, args: ExportArgs) -> Result<Json, CoreError> {
-    user_execute(
+    session_execute(
         bus,
         "file.export",
         serde_json::json!({

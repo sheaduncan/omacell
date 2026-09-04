@@ -285,7 +285,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "workbook_open",
-        doc: "Open a workbook from disk, replacing the current session workbook.",
+        doc: "Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed.",
         schema: schema_of::<WorkbookOpenArgs>,
     },
     ToolSpec {
