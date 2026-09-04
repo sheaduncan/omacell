@@ -776,6 +776,58 @@ fn diff_is_symmetric_and_detects_added_content() {
 }
 
 #[test]
+fn diff_compares_parseable_formulas_canonically_and_invalid_sources_exactly() {
+    let base = open(&corpus_dir().join("l1_values.xlsx")).unwrap();
+    let mut left = base.clone();
+    let mut right = base.clone();
+    let sheet = left.workbook.active_sheet();
+    left.workbook
+        .set_formula_text(sheet, 20, 0, "=sum( a1 , 1.0 )")
+        .unwrap();
+    right
+        .workbook
+        .set_formula_text(sheet, 20, 0, "=SUM(A1,1)")
+        .unwrap();
+    left.workbook
+        .define_name(DefinedName {
+            name: "CanonicalFormula".into(),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Formula("sum( a1 , 1.0 )".into()),
+            comment: None,
+        })
+        .unwrap();
+    right
+        .workbook
+        .define_name(DefinedName {
+            name: "CanonicalFormula".into(),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Formula("SUM(A1,1)".into()),
+            comment: None,
+        })
+        .unwrap();
+    assert!(diff(&left, &right).empty, "{:?}", diff(&left, &right));
+    assert!(diff(&right, &left).empty, "{:?}", diff(&right, &left));
+
+    right
+        .workbook
+        .set_formula_text(sheet, 20, 0, "=SUM(A1,2)")
+        .unwrap();
+    assert!(!diff(&left, &right).cells.is_empty());
+
+    let mut invalid_left = base.clone();
+    let mut invalid_right = base;
+    invalid_left
+        .workbook
+        .set_formula_text(sheet, 20, 0, "=A1+")
+        .unwrap();
+    invalid_right
+        .workbook
+        .set_formula_text(sheet, 20, 0, "=A1+ ")
+        .unwrap();
+    assert!(!diff(&invalid_left, &invalid_right).cells.is_empty());
+}
+
+#[test]
 fn macro_workbook_content_type_is_preserved() {
     const MACRO_CT: &str = "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
     let mut doc = open(&corpus_dir().join("l1_values.xlsx")).unwrap();
