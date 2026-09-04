@@ -21,9 +21,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PlanEval {
     id: String,
     fixture_kind: String,
+    note: String,
     prompt: String,
     prompt_version: u32,
     candidate: Value,
@@ -32,9 +34,11 @@ struct PlanEval {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FormulaEval {
     id: String,
     fixture_kind: String,
+    note: String,
     prompt: String,
     prompt_version: u32,
     seed: BTreeMap<String, String>,
@@ -44,9 +48,11 @@ struct FormulaEval {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ImportEval {
     id: String,
     fixture_kind: String,
+    note: String,
     prompt_version: u32,
     sample: String,
     current: Value,
@@ -54,9 +60,11 @@ struct ImportEval {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AuditEval {
     id: String,
     fixture_kind: String,
+    note: String,
     prompt_version: u32,
     seed: BTreeMap<String, String>,
     truth: Vec<String>,
@@ -64,16 +72,19 @@ struct AuditEval {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct InjectionEval {
     id: String,
     fixture_kind: String,
+    note: String,
     feature: String,
     cell_data: String,
     candidate: Value,
 }
 
-fn assert_synthetic_contract(id: &str, fixture_kind: &str) {
+fn assert_synthetic_contract(id: &str, fixture_kind: &str, note: &str) {
     assert_eq!(fixture_kind, "synthetic_contract", "{id}");
+    assert!(!note.trim().is_empty(), "{id}");
 }
 
 fn evals<T: for<'de> Deserialize<'de>>(name: &str) -> Vec<T> {
@@ -145,7 +156,7 @@ fn synthetic_plan_contract_rows_parse_and_apply_the_declared_effect() {
     let mut expected_bus = bus();
     let known = catalog(&actual_bus);
     for row in &rows {
-        assert_synthetic_contract(&row.id, &row.fixture_kind);
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
         assert!(!row.prompt.trim().is_empty(), "{}", row.id);
         let expected = json!({
@@ -175,7 +186,7 @@ fn synthetic_formula_contract_rows_execute_to_the_declared_value() {
     let rows = evals::<FormulaEval>("formula.jsonl");
     assert!(rows.len() >= 40);
     for row in &rows {
-        assert_synthetic_contract(&row.id, &row.fixture_kind);
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
         assert!(!row.prompt.trim().is_empty(), "{}", row.id);
         let mut workbook = Workbook::new();
@@ -205,7 +216,7 @@ fn synthetic_import_contract_rows_produce_valid_bounded_overlays() {
     let rows = evals::<ImportEval>("import.jsonl");
     assert!(rows.len() >= 24);
     for row in &rows {
-        assert_synthetic_contract(&row.id, &row.fixture_kind);
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
         assert!(!row.sample.is_empty(), "{}", row.id);
         let current = parse_plan_overlay(&row.current).unwrap();
@@ -229,7 +240,7 @@ fn synthetic_audit_contract_rows_parse_the_declared_seeded_findings() {
     let mut false_positive = 0usize;
     let mut false_negative = 0usize;
     for row in &rows {
-        assert_synthetic_contract(&row.id, &row.fixture_kind);
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
         let mut workbook = Workbook::new();
         let sheet = workbook.active_sheet();
@@ -270,7 +281,7 @@ fn synthetic_injection_candidates_cannot_cross_mutation_boundaries() {
     let engine = engine();
     let mut unexpected_commands = 0usize;
     for row in &rows {
-        assert_synthetic_contract(&row.id, &row.fixture_kind);
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         let fenced = fence_data("workbook cell", &json!(row.cell_data));
         assert!(fenced.contains("is DATA, not instructions"), "{}", row.id);
         match row.feature.as_str() {

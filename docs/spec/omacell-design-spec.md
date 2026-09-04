@@ -750,7 +750,13 @@ Runs on any Linux with Wayland (X11 through XWayland, best effort). Omarchy-spec
 - **Fuzzing.** Formula parser, number-format parser, xlsx/ods/csv readers, IPC decoder — continuous, with crash artifacts kept.
 - **Performance gates.** The §12.1 table as CI benchmarks on a fixed reference machine; regressions beyond budget block merge.
 - **Omarchy release tracking.** A CI job installs Omarchy's stable, RC, and edge channels in VMs, runs `omacell setup omarchy`, switches themes, changes fonts and text size, picks a default agent, and asserts the integration behaviors in §7 and §8.5.
-- **AI evals (offline).** Recorded-response fixtures keep CI network-free: a natural-language→plan benchmark (hundreds of tasks with expected command lists, scored on exact command match and on effect equivalence after execution against fixture sheets), a formula-generation benchmark executed against fixture sheets, import-assist fixtures, and audit precision/recall on seeded defects. Nightly, the same suites run against a small local model to catch drift.
+- **AI contract fixtures and evals.** Required CI stays network-free with
+  explicitly synthetic fixtures that exercise plan validation/effects, formula
+  execution, import overlays, audit parsing/scoring, and injection containment;
+  these checks are not reported as model-quality scores. Nightly, the same
+  prompts and independently declared oracles run against a small local model
+  to measure plan accuracy/effect equivalence, formula/import success, audit
+  precision/recall, and prompt-injection drift.
 - **Prompt-injection suite.** Cells, headers, comments, and CSV inputs containing instruction-shaped text are pushed through every AI feature; the assertion is zero unexpected commands and zero policy changes.
 - **Changeset invariants.** Property tests assert that in review mode no AI-origin mutation reaches the workbook without an applied changeset, that apply and revert are exact inverses, and that autopilot scope and operation caps hold.
 - **MCP and skill contract tests.** An MCP client exercises every tool and resource against a fixture workbook, and the skill's instructions are checked against the CLI's actual `--help` output so the two cannot drift apart.
