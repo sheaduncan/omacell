@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use omacell_core::addr::col_to_letters;
+use omacell_core::formula::{parse, print};
 use omacell_core::intern::Interners;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::storage::CellSlot;
@@ -220,7 +221,7 @@ fn compare_slot(
 ) {
     let fa = a.formula.and_then(|id| ia.formulas.get(id));
     let fb = b.formula.and_then(|id| ib.formulas.get(id));
-    if fa != fb {
+    if !formulas_eq(fa, fb) {
         report
             .cells
             .push(format!("{address}: formula {fa:?} vs {fb:?}"));
@@ -231,6 +232,24 @@ fn compare_slot(
     if !styles_eq(wa, ia, a, wb, ib, b) {
         report.styles.push(format!("{address}: style differs"));
     }
+}
+
+fn formulas_eq(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => formula_sources_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn formula_sources_eq(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let (Ok(a), Ok(b)) = (parse(a), parse(b)) else {
+        return false;
+    };
+    print(&a) == print(&b)
 }
 
 fn styles_eq(
@@ -341,7 +360,7 @@ fn defined_names_eq(ia: &Interners, a: &DefinedName, ib: &Interners, b: &Defined
     }
     match (&a.referent, &b.referent) {
         (NameReferent::Range(a), NameReferent::Range(b)) => a == b,
-        (NameReferent::Formula(a), NameReferent::Formula(b)) => a == b,
+        (NameReferent::Formula(a), NameReferent::Formula(b)) => formula_sources_eq(a, b),
         (NameReferent::Constant(a), NameReferent::Constant(b)) => values_eq(ia, *a, ib, *b, 0),
         _ => false,
     }
