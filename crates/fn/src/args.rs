@@ -321,6 +321,32 @@ pub fn last_le(keys: &[Scalar], lookup: &Scalar) -> Result<Option<usize>, ErrorK
     Ok(found)
 }
 
+/// Last original index whose non-error key is `<=` lookup.
+pub fn last_le_skipping_errors(
+    keys: &[Scalar],
+    lookup: &Scalar,
+) -> Result<Option<usize>, ErrorKind> {
+    let comparable: Vec<(usize, &Scalar)> = keys
+        .iter()
+        .enumerate()
+        .filter(|(_, key)| !matches!(key, Scalar::Error(_)))
+        .collect();
+    let mut lo = 0usize;
+    let mut hi = comparable.len();
+    let mut found = None;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        match coerce::compare(comparable[mid].1, lookup)? {
+            Cmp::Lt | Cmp::Eq => {
+                found = Some(comparable[mid].0);
+                lo = mid + 1;
+            }
+            Cmp::Gt => hi = mid,
+        }
+    }
+    Ok(found)
+}
+
 /// Last index whose key is `>=` lookup, for descending-sorted MATCH type `-1`.
 pub fn last_ge_desc(keys: &[Scalar], lookup: &Scalar) -> Result<Option<usize>, ErrorKind> {
     if keys.is_empty() {
