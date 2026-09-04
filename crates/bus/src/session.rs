@@ -535,7 +535,7 @@ impl Bus {
             }
         };
         if self.calls_are_mutating(calls) {
-            self.live_generation = self.live_generation.saturating_add(1);
+            self.bump_live_generation();
         }
         if how.emit {
             emit_events(&mut self.events, &live_effect, extra);
@@ -582,7 +582,10 @@ impl Bus {
     }
 
     fn bump_live_generation(&mut self) {
-        self.live_generation = self.live_generation.saturating_add(1);
+        // Every consecutive mutation must produce a different token. Saturating
+        // at `u64::MAX` would pin the token and make later proposals immune to
+        // invalidation; wrapping preserves next-mutation invalidation.
+        self.live_generation = self.live_generation.wrapping_add(1);
     }
 }
 
@@ -854,6 +857,26 @@ mod tests {
             )
             .unwrap();
         bus.recalc_after_registry_change();
+        let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+        assert_eq!(err.code, crate::error::codes::CHANGESET_BASE);
+    }
+
+    #[test]
+    fn proposal_base_invalidation_survives_generation_rollover() {
+        let mut bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new())).unwrap();
+        bus.live_generation = u64::MAX;
+        let proposed = bus
+            .propose(
+                Origin::ExternalAgent,
+                vec![CommandCall {
+                    id: omacell_core::command::CommandId::new("cell.set").unwrap(),
+                    args: serde_json::json!({"ref": "A1", "input": "1"}),
+                }],
+            )
+            .unwrap();
+
+        let _ = bus.workbook_mut();
+        assert_eq!(bus.live_generation, 0);
         let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
         assert_eq!(err.code, crate::error::codes::CHANGESET_BASE);
     }

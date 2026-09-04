@@ -497,12 +497,24 @@ fn apply_rejects_a_proposal_after_direct_workbook_mutation() {
 }
 
 #[test]
-fn apply_rejects_a_proposal_after_function_registry_refresh() {
+fn apply_rejects_a_proposal_after_mutable_engine_access() {
     let mut bus = common::bus();
     let proposed = bus
         .propose(Origin::ExternalAgent, vec![set("A1", "1")])
         .unwrap();
     let _ = bus.engine_mut();
+    let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
+    assert_eq!(err.code, omacell_bus::codes::CHANGESET_BASE);
+    assert!(common::cell_value(&bus, 0, 0).is_none());
+}
+
+#[test]
+fn apply_rejects_a_proposal_after_mutable_command_registry_access() {
+    let mut bus = common::bus();
+    let proposed = bus
+        .propose(Origin::ExternalAgent, vec![set("A1", "1")])
+        .unwrap();
+    let _ = bus.registry_mut();
     let err = bus.apply(Origin::User, &proposed.id).unwrap_err();
     assert_eq!(err.code, omacell_bus::codes::CHANGESET_BASE);
     assert!(common::cell_value(&bus, 0, 0).is_none());

@@ -198,10 +198,15 @@ recycled markers, and marker symlinks are refused without touching their target.
 Proposal-base escape-hatch follow-up: `workbook_mut`, `engine_mut`,
 `registry_mut`, and `recalc_after_registry_change` bump the same live
 generation as mutating commands, so a reviewed proposal cannot apply after
-out-of-band workbook or function-registry changes. Tests:
+out-of-band workbook or function-registry changes. Review hardening routes
+ordinary command mutations through that same helper and uses wrapping
+advancement, because saturating at `u64::MAX` would otherwise pin the token
+and stop future mutations from invalidating proposals. Tests:
 `apply_rejects_a_proposal_after_direct_workbook_mutation`,
-`apply_rejects_a_proposal_after_function_registry_refresh`,
+`apply_rejects_a_proposal_after_mutable_engine_access`,
+`apply_rejects_a_proposal_after_mutable_command_registry_access`,
 `registry_refresh_invalidates_outstanding_proposal_bases`,
+`proposal_base_invalidation_survives_generation_rollover`,
 `store_rejects_an_oversized_applied_inverse`. The former retained-size
 apply test is now
 `apply_base_generation_check_precedes_retained_size_recheck`.
@@ -261,6 +266,10 @@ Host: local Linux.
   CLI `changeset` and `ipc_focus` tests pass.
   `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/home/duncan/.cache/omacell/target just check`
   is green (fmt, workspace clippy `-D warnings`, workspace tests, rustdoc).
+- Proposal-base escape-hatch follow-up (2026-09-04):
+  `cargo test -p omacell-bus` passes, including 8 library tests and 23
+  changeset tests. The exact workspace `just check` gate passes after review
+  hardening (formatting, strict workspace Clippy, all tests, and rustdoc).
 
 No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-approved). `libfuzzer-sys` remains fuzz-workspace only.
 
