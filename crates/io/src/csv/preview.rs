@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::encode::{DecodingReader, bom_len};
 use super::infer::{ConvertedKind, convert_cell};
 use super::plan::{DEFAULT_PREVIEW_ROWS, ImportPlan, MAX_PREVIEW_ROWS};
-use super::records::{FieldLimitReader, reader_builder, record_to_row};
+use super::records::{RecordReader, record_to_row};
 use crate::error;
 
 /// One preview cell.
@@ -88,26 +88,26 @@ fn preview_reader<R: Read>(
             "preview requested {take} rows; maximum is {MAX_PREVIEW_ROWS}"
         )));
     }
-    let limited = FieldLimitReader::new(reader, plan)?;
-    let mut rdr = reader_builder(plan)?.from_reader(limited);
-    let mut records = rdr.records();
+    let mut records = RecordReader::new(reader, plan)?;
+    let mut record = ::csv::StringRecord::new();
     for _ in 0..plan.skip_rows {
-        let Some(rec) = records.next() else {
+        if !records.read_record(&mut record)? {
             break;
-        };
-        record_to_row(&rec.map_err(super::records::map_csv)?)?;
+        }
+        record_to_row(&record)?;
     }
     let header = if plan.has_header {
-        match records.next() {
-            Some(rec) => Some(record_to_row(&rec.map_err(super::records::map_csv)?)?),
-            None => Some(Vec::new()),
+        if records.read_record(&mut record)? {
+            Some(record_to_row(&record)?)
+        } else {
+            Some(Vec::new())
         }
     } else {
         None
     };
     let mut rows = Vec::with_capacity(take);
-    for rec in records.take(take) {
-        let rec = record_to_row(&rec.map_err(super::records::map_csv)?)?;
+    while rows.len() < take && records.read_record(&mut record)? {
+        let rec = record_to_row(&record)?;
         let mut row = Vec::with_capacity(rec.len());
         for (i, raw) in rec.iter().enumerate() {
             row.push(PreviewCell::from_raw(raw, i, plan));

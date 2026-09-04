@@ -180,7 +180,7 @@ pub struct ImportPlan {
     /// First non-skipped record is a header.
     #[serde(default)]
     pub has_header: bool,
-    /// Records to skip before the header/data.
+    /// Physical records to skip before the header/data, including blank ones.
     #[serde(default)]
     pub skip_rows: u32,
     /// Locale for separators and date order (Excel LCID).
@@ -316,14 +316,14 @@ pub enum ValueMode {
     Formulas,
 }
 
-/// Handling for text that spreadsheet programs may execute as a formula.
+/// Handling for non-numeric value-mode fields that a spreadsheet may execute as a formula.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FormulaTextPolicy {
-    /// Reject the export. This is the safe default for untrusted workbook text.
+    /// Reject the export. This is the safe default for untrusted workbook content.
     #[default]
     Reject,
-    /// Preserve text exactly. Use only when the recipient will not execute CSV formulas.
+    /// Preserve the field exactly. Use only when the recipient will not execute CSV formulas.
     Preserve,
     /// Prefix an apostrophe so common spreadsheet programs treat the field as text.
     Escape,
@@ -359,7 +359,7 @@ pub struct ExportPlan {
     /// Values or formulas.
     #[serde(default)]
     pub values: ValueMode,
-    /// Policy for formula-like text when exporting values.
+    /// Policy for formula-like rendered fields when exporting values.
     #[serde(default)]
     pub formula_text: FormulaTextPolicy,
     /// Locale for number-format rendering.

@@ -160,6 +160,7 @@ pub struct DecodingReader<R: Read> {
     out_pos: usize,
     skip: usize,
     eof: bool,
+    utf16_needs_input: bool,
 }
 
 impl<R: Read> DecodingReader<R> {
@@ -179,6 +180,7 @@ impl<R: Read> DecodingReader<R> {
             out_pos: 0,
             skip,
             eof: false,
+            utf16_needs_input: true,
         }
     }
 }
@@ -267,13 +269,14 @@ impl<R: Read> DecodingReader<R> {
             .decoder
             .as_mut()
             .ok_or_else(|| io::Error::other("utf-16 decoder missing"))?;
-        if !self.eof {
+        if !self.eof && self.utf16_needs_input {
             let mut tmp = [0u8; 8192];
             let n = self.inner.read(&mut tmp)?;
             if n == 0 {
                 self.eof = true;
             } else {
                 self.pending.extend_from_slice(&tmp[..n]);
+                self.utf16_needs_input = false;
             }
         }
         if self.pending.is_empty() && !self.eof {
@@ -284,7 +287,16 @@ impl<R: Read> DecodingReader<R> {
         self.out.extend_from_slice(&dst[..written]);
         self.pending.drain(..read);
         match result {
-            encoding_rs::CoderResult::InputEmpty | encoding_rs::CoderResult::OutputFull => Ok(()),
+            encoding_rs::CoderResult::InputEmpty => {
+                self.utf16_needs_input = true;
+                Ok(())
+            }
+            encoding_rs::CoderResult::OutputFull => {
+                if self.pending.is_empty() {
+                    self.utf16_needs_input = true;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -326,5 +338,39 @@ mod tests {
         let mut out = String::new();
         r.read_to_string(&mut out).unwrap();
         assert_eq!(out, src);
+    }
+
+    #[test]
+    fn utf16_pending_input_stays_bounded_when_utf8_expands() {
+        let src = "€".repeat(100_000);
+        let bytes = encode_all(&src, TextEncoding::Utf16Le, false).unwrap();
+        let mut reader = DecodingReader::new(std::io::Cursor::new(bytes), TextEncoding::Utf16Le, 0);
+        let mut decoded = Vec::new();
+        let mut buf = [0u8; 8192];
+        let mut max_pending = 0usize;
+        loop {
+            let read = reader.read(&mut buf).unwrap();
+            max_pending = max_pending.max(reader.pending.len());
+            if read == 0 {
+                break;
+            }
+            decoded.extend_from_slice(&buf[..read]);
+        }
+
+        assert_eq!(decoded, src.as_bytes());
+        assert!(
+            max_pending <= 8192,
+            "UTF-16 pending input grew to {max_pending} bytes"
+        );
+    }
+
+    #[test]
+    fn utf16_decoder_refills_after_exact_output_boundary() {
+        let src = format!("{}tail", "a".repeat(8192));
+        let bytes = encode_all(&src, TextEncoding::Utf16Be, false).unwrap();
+        let mut reader = DecodingReader::new(std::io::Cursor::new(bytes), TextEncoding::Utf16Be, 0);
+        let mut decoded = String::new();
+        reader.read_to_string(&mut decoded).unwrap();
+        assert_eq!(decoded, src);
     }
 }

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use super::encode::{CountingReader, DecodingReader, bom_len};
 use super::infer::{Converted, convert_cell};
 use super::plan::ImportPlan;
-use super::records::{FieldLimitReader, check_record, map_csv, reader_builder};
+use super::records::{RecordReader, check_record};
 use crate::error;
 
 /// Progress callback payload.
@@ -145,8 +145,7 @@ fn load_reader<R: Read>(
             .map_err(|e| error::parse(e.to_string()))?,
     );
     let decoded = DecodingReader::new(buffered, plan.encoding, skip);
-    let limited = FieldLimitReader::new(decoded, plan)?;
-    let mut rdr = reader_builder(plan)?.from_reader(limited);
+    let mut rdr = RecordReader::new(decoded, plan)?;
 
     let undo_was = wb.undo_log().is_enabled();
     wb.undo_log_mut().set_enabled(false);
@@ -185,7 +184,7 @@ fn resolve_sheet(wb: &mut Workbook, name: Option<&str>) -> Result<SheetId, CoreE
 fn load_records<R: Read>(
     wb: &mut Workbook,
     sheet: SheetId,
-    rdr: &mut ::csv::Reader<R>,
+    rdr: &mut RecordReader<R>,
     plan: &ImportPlan,
     opts: &LoadOptions,
     bytes: &std::rc::Rc<std::cell::Cell<u64>>,
@@ -197,7 +196,8 @@ fn load_records<R: Read>(
     let origin_row = opts.origin_row;
     let origin_col = opts.origin_col;
 
-    for rec in rdr.records() {
+    let mut rec = ::csv::StringRecord::new();
+    while rdr.read_record(&mut rec)? {
         if opts
             .cancel
             .as_ref()
@@ -206,7 +206,6 @@ fn load_records<R: Read>(
             cancelled = true;
             break;
         }
-        let rec = rec.map_err(map_csv)?;
         check_record(&rec)?;
         if rec_index < u64::from(plan.skip_rows) {
             rec_index += 1;

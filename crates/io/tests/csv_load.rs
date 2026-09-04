@@ -1,10 +1,12 @@
 //! Progressive load, cancellation, and formula-injection guard.
 
+use std::io::{self, Read};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use omacell_core::value::Value;
-use omacell_io::csv::{LoadOptions, LoadProgress, load, sniff};
+use omacell_core::workbook::Workbook;
+use omacell_io::csv::{ImportPlan, LoadOptions, LoadProgress, load, load_into, preview, sniff};
 use omacell_io::error::codes;
 
 #[test]
@@ -92,4 +94,91 @@ fn oversized_field_is_rejected() {
     csv.push(b'\n');
     let err = load(&csv, &Default::default(), Default::default()).unwrap_err();
     assert_eq!(err.code, codes::CSV_LIMIT);
+}
+
+#[test]
+fn physical_blank_records_become_blank_workbook_rows() {
+    let plan = ImportPlan::default();
+    let (wb, result) = load(b"alpha\n\nbravo\n", &plan, Default::default()).unwrap();
+    let sheet = wb.active_sheet();
+
+    assert_eq!(result.rows_written, 3);
+    assert!(wb.get(sheet, 1, 0).unwrap().is_none());
+    let bravo = wb.get(sheet, 2, 0).unwrap().unwrap();
+    let Value::Text(id) = bravo.value else {
+        panic!("expected text, got {:?}", bravo.value);
+    };
+    assert_eq!(wb.intern().strings.get(id), Some("bravo"));
+
+    let shown = preview(b"alpha\n\nbravo\n", &plan, 3).unwrap();
+    assert_eq!(shown.rows.len(), 3);
+    assert_eq!(shown.rows[1].len(), 1);
+    assert_eq!(shown.rows[1][0].raw, "");
+}
+
+#[test]
+fn skip_rows_counts_physical_blank_records() {
+    let plan = ImportPlan {
+        skip_rows: 2,
+        ..ImportPlan::default()
+    };
+    let (wb, result) = load(b"ignore\n\nkeep\n", &plan, Default::default()).unwrap();
+
+    assert_eq!(result.rows_written, 1);
+    let kept = wb.get(wb.active_sheet(), 0, 0).unwrap().unwrap();
+    let Value::Text(id) = kept.value else {
+        panic!("expected text, got {:?}", kept.value);
+    };
+    assert_eq!(wb.intern().strings.get(id), Some("keep"));
+}
+
+#[test]
+fn blank_record_preservation_handles_line_endings_and_trailing_lines() {
+    for bytes in [
+        b"alpha\r\n\r\nbravo\r\n".as_slice(),
+        b"alpha\r\rbravo\r".as_slice(),
+    ] {
+        let (wb, result) = load(bytes, &ImportPlan::default(), Default::default()).unwrap();
+        assert_eq!(result.rows_written, 3, "{bytes:?}");
+        assert!(wb.get(wb.active_sheet(), 1, 0).unwrap().is_none());
+        assert!(wb.get(wb.active_sheet(), 2, 0).unwrap().is_some());
+    }
+
+    let (_, trailing) = load(b"alpha\n\n", &ImportPlan::default(), Default::default()).unwrap();
+    assert_eq!(trailing.rows_written, 1);
+
+    let (_, explicit_empty) =
+        load(b"alpha\n\"\"\n", &ImportPlan::default(), Default::default()).unwrap();
+    assert_eq!(explicit_empty.rows_written, 2);
+}
+
+#[test]
+fn blank_record_tracking_survives_stream_chunk_boundaries() {
+    struct OneByteReader<'a> {
+        bytes: &'a [u8],
+        position: usize,
+    }
+
+    impl Read for OneByteReader<'_> {
+        fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+            if out.is_empty() || self.position == self.bytes.len() {
+                return Ok(0);
+            }
+            out[0] = self.bytes[self.position];
+            self.position += 1;
+            Ok(1)
+        }
+    }
+
+    let input = b"alpha,\"quoted\r\nnewline\"\r\n\r\nbravo,last\r\n";
+    let reader = OneByteReader {
+        bytes: input,
+        position: 0,
+    };
+    let mut wb = Workbook::new();
+    let result = load_into(&mut wb, reader, &ImportPlan::default(), Default::default()).unwrap();
+
+    assert_eq!(result.rows_written, 3);
+    assert!(wb.get(wb.active_sheet(), 1, 0).unwrap().is_none());
+    assert!(wb.get(wb.active_sheet(), 2, 1).unwrap().is_some());
 }
