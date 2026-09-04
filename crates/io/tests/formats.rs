@@ -190,6 +190,39 @@ fn json_rejects_non_objects_flattening_collisions_and_duplicate_headers() {
 }
 
 #[test]
+fn json_preserves_integers_outside_the_exact_float_range_as_text() {
+    let wb = json::open_bytes(
+        br#"[{"n":9007199254740992},{"n":-9007199254740992},{"n":9007199254740993},{"n":-9007199254740993},{"n":18446744073709551615},{"n":1.25}]"#,
+    )
+    .unwrap();
+    let sheet = wb.active_sheet();
+
+    assert_eq!(
+        wb.get(sheet, 1, 0).unwrap().unwrap().value,
+        omacell_core::value::Value::Number(9_007_199_254_740_992.0)
+    );
+    assert_eq!(
+        wb.get(sheet, 2, 0).unwrap().unwrap().value,
+        omacell_core::value::Value::Number(-9_007_199_254_740_992.0)
+    );
+    for (row, expected) in [
+        (3, "9007199254740993"),
+        (4, "-9007199254740993"),
+        (5, "18446744073709551615"),
+    ] {
+        let slot = wb.get(sheet, row, 0).unwrap().unwrap();
+        let omacell_core::value::Value::Text(id) = slot.value else {
+            panic!("JSON integer at row {row} was rounded instead of preserved");
+        };
+        assert_eq!(wb.intern().strings.get(id), Some(expected));
+    }
+    assert_eq!(
+        wb.get(sheet, 6, 0).unwrap().unwrap().value,
+        omacell_core::value::Value::Number(1.25)
+    );
+}
+
+#[test]
 fn ods_rejects_invalid_values_and_expands_repeated_cells() {
     let invalid = ods_package(
         r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"><office:body><office:spreadsheet><table:table table:name="Sheet1"><table:table-row><table:table-cell office:value-type="float" office:value="not-a-number"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
@@ -328,6 +361,33 @@ fn html_and_markdown_files_import() {
     assert_eq!(cell_text(&wb, 1, 1), "02115");
     let markup = html::export_html(&wb).unwrap();
     assert!(String::from_utf8_lossy(&markup).contains("<table>"));
+}
+
+#[test]
+fn markdown_exported_pipe_and_backslash_cells_reimport_exactly() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_text(sheet, 0, 0, "value").unwrap();
+    wb.set_text(sheet, 0, 1, "path").unwrap();
+    wb.set_text(sheet, 1, 0, "left|right").unwrap();
+    wb.set_text(sheet, 1, 1, r"C:\tmp").unwrap();
+
+    let markdown = html::export_markdown(&wb).unwrap();
+    let reopened = html::open_bytes(&markdown, ClipboardFormat::Markdown).unwrap();
+    assert_eq!(cell_text(&reopened, 1, 0), "left|right");
+    assert_eq!(cell_text(&reopened, 1, 1), r"C:\tmp");
+}
+
+#[test]
+fn table_import_preserves_shared_parser_limit_errors() {
+    let mut html_text = String::from("<table><tr>");
+    for _ in 0..=usize::from(omacell_core::limits::MAX_COLS) {
+        html_text.push_str("<td>x</td>");
+    }
+    html_text.push_str("</tr></table>");
+
+    let error = html::open_bytes(html_text.as_bytes(), ClipboardFormat::Html).unwrap_err();
+    assert_eq!(error.code, codes::CSV_LIMIT);
 }
 
 #[test]

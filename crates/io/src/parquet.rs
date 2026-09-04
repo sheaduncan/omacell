@@ -105,12 +105,10 @@ fn write_arrow_cell(
         return Ok(());
     }
     if let Some(a) = array.as_any().downcast_ref::<Float64Array>() {
-        return wb.set_number(sheet, row, col, a.value(idx)).map(|_| ());
+        return write_float(wb, sheet, row, col, a.value(idx));
     }
     if let Some(a) = array.as_any().downcast_ref::<Float32Array>() {
-        return wb
-            .set_number(sheet, row, col, f64::from(a.value(idx)))
-            .map(|_| ());
+        return write_float(wb, sheet, row, col, f64::from(a.value(idx)));
     }
     if let Some(a) = array.as_any().downcast_ref::<Int64Array>() {
         return write_signed(wb, sheet, row, col, a.value(idx));
@@ -149,6 +147,28 @@ fn write_arrow_cell(
         "unsupported Arrow array type {}",
         array.data_type()
     )))
+}
+
+fn write_float(
+    wb: &mut Workbook,
+    sheet: omacell_core::addr::SheetId,
+    row: u32,
+    col: u16,
+    value: f64,
+) -> Result<(), CoreError> {
+    if value.is_finite() {
+        wb.set_number(sheet, row, col, value)?;
+    } else {
+        let text = if value.is_nan() {
+            "NaN"
+        } else if value.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        };
+        wb.set_text(sheet, row, col, text)?;
+    }
+    Ok(())
 }
 
 fn supported_type(data_type: &DataType) -> bool {
@@ -202,7 +222,7 @@ fn write_unsigned(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{Float64Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use parquet::arrow::arrow_writer::ArrowWriter;
@@ -283,6 +303,43 @@ mod tests {
         assert_eq!(
             open_bytes(&buf).unwrap_err().code,
             crate::error::codes::PARQUET_FORMAT
+        );
+    }
+
+    #[test]
+    fn preserves_non_finite_floats_as_text() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Float64Array::from(vec![
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                1.25,
+            ]))],
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let wb = open_bytes(&buf).unwrap();
+        let sheet = wb.active_sheet();
+        for (row, expected) in [(1, "NaN"), (2, "Infinity"), (3, "-Infinity")] {
+            let slot = wb.get(sheet, row, 0).unwrap().unwrap();
+            let omacell_core::value::Value::Text(id) = slot.value else {
+                panic!("non-finite Parquet value at row {row} was stored as a number");
+            };
+            assert_eq!(wb.intern().strings.get(id), Some(expected));
+        }
+        assert_eq!(
+            wb.get(sheet, 4, 0).unwrap().unwrap().value,
+            omacell_core::value::Value::Number(1.25)
         );
     }
 }

@@ -14,6 +14,7 @@ use crate::xlsx::peer_lock_blocks;
 const MAX_JSON_BYTES: usize = 64 * 1_048_576;
 const MAX_JSON_DEPTH: usize = 64;
 const MAX_JSON_TABLE_CELLS: u64 = 1_000_000;
+const MAX_EXACT_INTEGER: u64 = 1u64 << 53;
 
 /// Open a JSON file (root array of objects).
 pub fn open(path: &Path) -> Result<Workbook, CoreError> {
@@ -255,8 +256,22 @@ fn write_json_cell(
             Ok(())
         }
         Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                wb.set_number(sheet, row, col, f)?;
+            if let Some(integer) = n.as_i64() {
+                if integer.unsigned_abs() <= MAX_EXACT_INTEGER {
+                    wb.set_number(sheet, row, col, integer as f64)?;
+                } else {
+                    wb.set_text(sheet, row, col, &integer.to_string())?;
+                }
+            } else if let Some(integer) = n.as_u64() {
+                if integer <= MAX_EXACT_INTEGER {
+                    wb.set_number(sheet, row, col, integer as f64)?;
+                } else {
+                    wb.set_text(sheet, row, col, &integer.to_string())?;
+                }
+            } else if let Some(number) = n.as_f64() {
+                wb.set_number(sheet, row, col, number)?;
+            } else {
+                return Err(error::json_format("JSON number cannot be represented"));
             }
             Ok(())
         }
