@@ -23,9 +23,9 @@ use omacell_core::{PRODUCT_DISPLAY_NAME, PRODUCT_NAME};
 use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
     AgentRole, Area, ChangesetReview, ClipboardPayload, EditSurface, FormulaAssist,
-    ImportPlanReview, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, SessionState, UiSession,
-    apply_command_panel, apply_local_command, apply_search_result, command_changes_workbook,
-    inject_selection_args,
+    ImportPlanReview, KeyCode, KeyEvent, KeyOutcome, KeymapRoots, MAX_CLIPBOARD_BYTES,
+    SessionState, UiSession, apply_command_panel, apply_local_command, apply_search_result,
+    command_changes_workbook, inject_selection_args,
 };
 use serde_json::json;
 
@@ -96,6 +96,7 @@ pub struct Gui {
     dirty: bool,
     discard_armed: Option<String>,
     close_requested: bool,
+    close_after_save: bool,
     active_sheet: SheetId,
     grid: GridLayout,
     palette_index: usize,
@@ -207,6 +208,7 @@ impl Gui {
             dirty: false,
             discard_armed: None,
             close_requested: false,
+            close_after_save: false,
             active_sheet,
             grid: GridLayout::default(),
             palette_index: 0,
@@ -473,6 +475,10 @@ impl Gui {
                             workbook_changed = true;
                         }
                     }
+                    if state.command == "file.save" && self.close_after_save {
+                        self.close_after_save = false;
+                        self.close_requested = true;
+                    }
                     self.ui.remember_command(&state.command);
                     if state.command == "script.source"
                         && let Err(error) = self.scripts.source()
@@ -526,6 +532,9 @@ impl Gui {
                     }
                 }
                 TaskEvent::Failed { state, message, .. } => {
+                    if state.command == "file.save" {
+                        self.close_after_save = false;
+                    }
                     if self.import_assist_task == Some(state.id) {
                         self.import_assist_task = None;
                     }
@@ -676,6 +685,9 @@ impl Gui {
         if self.ui.panel().visible.as_deref() == Some("find") {
             return self.step_find_panel(event);
         }
+        if let Some(id @ ("goto" | "command")) = self.ui.panel().visible.as_deref() {
+            return self.step_location_panel(event, id);
+        }
         if self.ui.panel().visible.as_deref() == Some("changeset") {
             return self.step_changeset_review(event);
         }
@@ -730,6 +742,53 @@ impl Gui {
                     self.ui.set_panel(panel);
                 }
             }
+            _ => {}
+        }
+        Ok(KeyOutcome::Pending)
+    }
+
+    fn step_location_panel(&mut self, event: KeyEvent, id: &str) -> Result<KeyOutcome, CoreError> {
+        match (event.code, event.ctrl, event.alt) {
+            (KeyCode::Esc, false, false) => {
+                if id == "command" {
+                    self.dismiss_command_line()?;
+                } else {
+                    let mut panel = self.ui.panel();
+                    panel.dismiss();
+                    self.ui.set_panel(panel);
+                }
+            }
+            (KeyCode::Backspace, false, false) => {
+                let mut goto = self.ui.goto();
+                goto.target.pop();
+                self.ui.set_goto(goto);
+            }
+            (KeyCode::Char(character), false, false) => {
+                let mut goto = self.ui.goto();
+                goto.target.push(character);
+                self.ui.set_goto(goto);
+            }
+            (KeyCode::Space, false, false) => {
+                let mut goto = self.ui.goto();
+                goto.target.push(' ');
+                self.ui.set_goto(goto);
+            }
+            (KeyCode::Enter, false, false) if id == "goto" => {
+                let target = self.ui.goto().target;
+                if !target.is_empty()
+                    && self
+                        .execute_cmd("view.select", json!({"range": target}))?
+                        .ok
+                {
+                    let mut goto = self.ui.goto();
+                    goto.target.clear();
+                    self.ui.set_goto(goto);
+                    let mut panel = self.ui.panel();
+                    panel.dismiss();
+                    self.ui.set_panel(panel);
+                }
+            }
+            (KeyCode::Enter, false, false) => self.execute_command_line()?,
             _ => {}
         }
         Ok(KeyOutcome::Pending)
@@ -1639,6 +1698,45 @@ impl Gui {
         }
     }
 
+    fn execute_command_line(&mut self) -> Result<(), CoreError> {
+        let input = self.ui.goto().target.trim().to_string();
+        if input.is_empty() {
+            return Ok(());
+        }
+        match input.as_str() {
+            "q" | "quit" => self.request_close(),
+            "q!" | "quit!" => self.close_requested = true,
+            "w" | "write" => {
+                if self.execute_cmd("file.save", json!({}))?.ok {
+                    self.dismiss_command_line()?;
+                }
+            }
+            "wq" | "x" => {
+                if self.execute_cmd("file.save", json!({}))?.ok {
+                    self.close_after_save = true;
+                    self.dismiss_command_line()?;
+                }
+            }
+            _ => match parse_command_line(&input) {
+                Ok((command, args)) => {
+                    if self.execute_cmd(&command, args)?.ok {
+                        self.dismiss_command_line()?;
+                    }
+                }
+                Err(error) => self.message = Some(error.message),
+            },
+        }
+        Ok(())
+    }
+
+    fn dismiss_command_line(&mut self) -> Result<(), CoreError> {
+        self.execute_cmd("mode.normal", json!({}))?;
+        let mut goto = self.ui.goto();
+        goto.target.clear();
+        self.ui.set_goto(goto);
+        Ok(())
+    }
+
     fn submit_palette_plan(&mut self, prompt: String) -> Result<(), CoreError> {
         let (id, cancel) = self.runner.handle().submit(
             Origin::User,
@@ -1693,35 +1791,54 @@ impl Gui {
         let cfg = self.ui.config();
         let compact = ctx.screen_rect().width() < cfg.layout.compact_below_width as f32;
         let edit = self.ui.edit();
-        let find_panel_open = self.ui.panel().visible.as_deref() == Some("find");
+        let text_overlay_open = accepts_composed_text(&self.ui);
         let input = ctx.input(|i| i.clone());
         let grid_owns_clipboard =
             edit.is_idle() && !self.ui.palette().open && self.ui.panel().visible.is_none();
         let clipboard_copy = grid_owns_clipboard && input::copy_requested(&input.events);
         let clipboard_cut = grid_owns_clipboard && input::cut_requested(&input.events);
-        let clipboard_paste = grid_owns_clipboard
-            .then(|| input::pasted_text(&input.events).map(str::to_owned))
-            .flatten();
+        let clipboard_paste = input::pasted_text(&input.events).map(str::to_owned);
         if clipboard_copy {
             let _ = self.execute_cmd("edit.copy", json!({}));
         }
         if clipboard_cut {
             let _ = self.execute_cmd("edit.cut", json!({}));
         }
-        if let Some(text) = clipboard_paste.as_deref()
-            && let Err(error) = self.paste_text(text)
-        {
-            self.message = Some(format!("{}: {}", error.code, error.message));
+        let mut clipboard_paste_handled = false;
+        if let Some(text) = clipboard_paste.as_deref() {
+            let result = if text_overlay_open {
+                clipboard_paste_handled = true;
+                self.insert_composed_text(text)
+            } else if edit.surface == EditSurface::InCell {
+                clipboard_paste_handled = true;
+                self.paste_text(text).map(|_| ())
+            } else if grid_owns_clipboard {
+                clipboard_paste_handled = true;
+                if self
+                    .ui
+                    .clipboard()
+                    .is_some_and(|clipboard| clipboard.tsv == text)
+                {
+                    self.execute_cmd("edit.paste", json!({})).map(|_| ())
+                } else {
+                    self.paste_text(text).map(|_| ())
+                }
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
+                self.message = Some(format!("{}: {}", error.code, error.message));
+            }
         }
         for key in input::pressed_keys(&input.events) {
             if (clipboard_copy && key.ctrl && key.code == KeyCode::Char('c'))
                 || (clipboard_cut && key.ctrl && key.code == KeyCode::Char('x'))
-                || (clipboard_paste.is_some() && key.ctrl && key.code == KeyCode::Char('v'))
+                || (clipboard_paste_handled && key.ctrl && key.code == KeyCode::Char('v'))
             {
                 continue;
             }
             if toolkit_owns_key(&edit, &key)
-                || find_panel_open
+                || text_overlay_open
                     && !key.ctrl
                     && !key.alt
                     && matches!(key.code, KeyCode::Char(_) | KeyCode::Space)
@@ -1730,13 +1847,9 @@ impl Gui {
             }
             let _ = self.step_key(key);
         }
-        if (!self.ui.edit().is_idle() && self.ui.edit().surface == EditSurface::InCell)
-            || find_panel_open
-        {
+        if edit.surface == EditSurface::InCell || text_overlay_open {
             for text in input::text_events(&input.events) {
-                for c in text.chars() {
-                    let _ = self.step_key(KeyEvent::new(KeyCode::Char(c)));
-                }
+                let _ = self.insert_composed_text(text);
             }
         }
         if input.modifiers.ctrl && input.raw_scroll_delta.y.abs() > 0.0 {
@@ -1755,8 +1868,11 @@ impl Gui {
                 input.raw_scroll_delta.y
             };
             let mut vp = self.ui.viewport();
-            let cols: i16 = if delta > 0.0 { -1 } else { 1 };
-            vp.first_col = vp.first_col.saturating_add_signed(cols);
+            let cols = if delta > 0.0 { -1 } else { 1 };
+            vp.first_col = i64::from(vp.first_col).saturating_add(cols).clamp(
+                i64::from(vp.freeze.cols),
+                i64::from(omacell_core::limits::MAX_COLS - 1),
+            ) as u16;
             self.ui.set_viewport(vp);
         } else if input.raw_scroll_delta.y.abs() > 0.0 {
             let mut vp = self.ui.viewport();
@@ -1765,7 +1881,10 @@ impl Gui {
             } else {
                 3
             };
-            vp.first_row = vp.first_row.saturating_add_signed(rows);
+            vp.first_row = i64::from(vp.first_row).saturating_add(rows).clamp(
+                i64::from(vp.freeze.rows),
+                i64::from(omacell_core::limits::MAX_ROWS - 1),
+            ) as u32;
             self.ui.set_viewport(vp);
         }
 
@@ -1966,8 +2085,32 @@ impl Gui {
     }
 
     fn paste_text(&mut self, text: &str) -> Result<Outcome, CoreError> {
+        let mut edit = self.ui.edit();
+        if edit.surface == EditSurface::InCell {
+            let next_len = edit.buffer.len().saturating_add(text.len());
+            if next_len > MAX_CLIPBOARD_BYTES {
+                return Err(CoreError::new(
+                    "ui.clipboard",
+                    format!("editor paste exceeds {} bytes", MAX_CLIPBOARD_BYTES),
+                ));
+            }
+            edit.insert_text(text);
+            self.ui.set_edit(edit);
+            return Ok(Outcome::success(json!({"edited": true})));
+        }
         let args = ClipboardPayload::text_paste_args(text, self.ui.selection().cursor)?;
         self.execute_cmd("range.set", args)
+    }
+
+    fn insert_composed_text(&mut self, text: &str) -> Result<(), CoreError> {
+        if !accepts_composed_text(&self.ui) && self.ui.edit().surface == EditSurface::InCell {
+            self.paste_text(text)?;
+            return Ok(());
+        }
+        for character in text.chars() {
+            self.step_key(KeyEvent::new(KeyCode::Char(character)))?;
+        }
+        Ok(())
     }
 
     fn activate_sheet(&mut self, workbook: &omacell_core::workbook::Workbook, id: SheetId) {
@@ -2340,6 +2483,14 @@ fn toolkit_owns_key(edit: &omacell_ui::EditState, event: &KeyEvent) -> bool {
     }
 }
 
+fn accepts_composed_text(ui: &UiSession) -> bool {
+    ui.palette().open
+        || matches!(
+            ui.panel().visible.as_deref(),
+            Some("find" | "goto" | "command" | "agent")
+        )
+}
+
 fn has_missing_required_args(command: &CommandJson, args: &serde_json::Value) -> bool {
     command
         .arg_schema
@@ -2351,6 +2502,33 @@ fn has_missing_required_args(command: &CommandJson, args: &serde_json::Value) ->
                 .filter_map(serde_json::Value::as_str)
                 .any(|name| args.get(name).is_none_or(serde_json::Value::is_null))
         })
+}
+
+fn parse_command_line(input: &str) -> Result<(String, serde_json::Value), CoreError> {
+    if let Some(path) = input
+        .strip_prefix("e ")
+        .or_else(|| input.strip_prefix("open "))
+    {
+        return Ok(("file.open".into(), json!({"path": path.trim()})));
+    }
+    if let Some(range) = input.strip_prefix("goto ") {
+        return Ok(("view.select".into(), json!({"range": range.trim()})));
+    }
+    let (command, raw_args) = input.split_once(char::is_whitespace).unwrap_or((input, ""));
+    let args = if raw_args.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(raw_args.trim()).map_err(|error| {
+            CoreError::new("gui.command", format!("invalid JSON arguments: {error}"))
+        })?
+    };
+    if !args.is_object() {
+        return Err(CoreError::new(
+            "gui.command",
+            "command arguments must be a JSON object",
+        ));
+    }
+    Ok((command.to_string(), args))
 }
 
 fn catalog_from_bus(bus: &Bus) -> Result<Vec<CommandJson>, CoreError> {

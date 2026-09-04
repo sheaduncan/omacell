@@ -6,7 +6,7 @@ use egui::{
 use omacell_bus::ConditionalFormatSnapshot;
 use omacell_core::addr::{SheetId, col_to_letters};
 use omacell_core::condfmt::CfVisual;
-use omacell_core::geometry::{DEFAULT_COL_PX, DEFAULT_ROW_PX};
+use omacell_core::geometry::{AxisGeometry, DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::locale::LocaleId;
 use omacell_core::numfmt::{FormatValue, format};
@@ -23,7 +23,6 @@ use crate::theme::{GuiTheme, WorkbookFontCache};
 const EDGE_PX: f32 = 4.0;
 const MAX_PAINTED_ROWS: usize = 512;
 const MAX_PAINTED_COLS: usize = 256;
-const MAX_PANE_AXIS_SCAN: usize = 4_096;
 
 /// Geometry of the last painted grid, for hit-testing.
 #[derive(Clone, Debug)]
@@ -208,14 +207,14 @@ pub(crate) fn paint(
         .filter(|y| *y > data_top && *y < rect.bottom());
     let mut col_x = data_left;
     let mut header_cols: Vec<(u16, f32, f32)> = Vec::new();
-    for col in (0..panes.cols).take(MAX_PANE_AXIS_SCAN) {
+    for col in visible_axis_indices(&vp.cols, 0, u32::from(panes.cols), MAX_PAINTED_COLS) {
         if header_cols.len() >= MAX_PAINTED_COLS || col_x >= split_x.unwrap_or(rect.right()) {
             break;
         }
+        let Ok(col) = u16::try_from(col) else {
+            break;
+        };
         let w = snap(vp.col_px(col) as f32, ppp);
-        if w <= 0.0 {
-            continue;
-        }
         let x0 = snap_pos(col_x, ppp);
         let x1 = snap_pos(
             (col_x + w)
@@ -233,27 +232,22 @@ pub(crate) fn paint(
     } else {
         vp.first_col.max(panes.cols)
     };
-    let mut scanned_cols = 0usize;
-    while col_x < rect.right()
-        && col < MAX_COLS
-        && header_cols.len() < MAX_PAINTED_COLS
-        && scanned_cols < MAX_PANE_AXIS_SCAN
-    {
-        scanned_cols += 1;
+    while col_x < rect.right() && col < MAX_COLS && header_cols.len() < MAX_PAINTED_COLS {
         if split.is_none() && col < panes.cols {
-            col = col.saturating_add(1);
-            continue;
+            col = panes.cols;
         }
-        let w = snap(vp.col_px(col) as f32, ppp);
-        if w <= 0.0 {
-            col = col.saturating_add(1);
-            continue;
-        }
+        let Some(visible) = next_visible(&vp.cols, u32::from(col), u32::from(MAX_COLS)) else {
+            break;
+        };
+        let Ok(visible_col) = u16::try_from(visible) else {
+            break;
+        };
+        let w = snap(vp.col_px(visible_col) as f32, ppp);
         let x0 = snap_pos(col_x, ppp);
         let x1 = snap_pos(col_x + w, ppp);
-        header_cols.push((col, x0, x1));
+        header_cols.push((visible_col, x0, x1));
         col_x = x1;
-        col = col.saturating_add(1);
+        col = visible_col.saturating_add(1);
     }
 
     for (col, x0, x1) in &header_cols {
@@ -274,14 +268,11 @@ pub(crate) fn paint(
 
     let mut row_stops: Vec<(u32, f32, f32)> = Vec::new();
     let mut row_y = data_top;
-    for row in (0..panes.rows).take(MAX_PANE_AXIS_SCAN) {
+    for row in visible_axis_indices(&vp.rows, 0, panes.rows.min(MAX_ROWS), MAX_PAINTED_ROWS) {
         if row_stops.len() >= MAX_PAINTED_ROWS || row_y >= split_y.unwrap_or(rect.bottom()) {
             break;
         }
         let h = snap(vp.row_px(row) as f32, ppp);
-        if h <= 0.0 {
-            continue;
-        }
         let y0 = snap_pos(row_y, ppp);
         let y1 = snap_pos(
             (row_y + h)
@@ -299,25 +290,19 @@ pub(crate) fn paint(
     } else {
         vp.first_row.max(panes.rows)
     };
-    let mut scanned_rows = 0usize;
-    while row < MAX_ROWS
-        && row_y < rect.bottom()
-        && row_stops.len() < MAX_PAINTED_ROWS
-        && scanned_rows < MAX_PANE_AXIS_SCAN
-    {
-        scanned_rows += 1;
-        if (split.is_some() || row >= panes.rows) && vp.row_px(row) != 0 {
-            let h = snap(vp.row_px(row) as f32, ppp);
-            let y0 = snap_pos(row_y, ppp);
-            let y1 = snap_pos((row_y + h).min(rect.bottom()), ppp);
-            row_stops.push((row, y0, y1));
-            row_y = y1;
+    while row < MAX_ROWS && row_y < rect.bottom() && row_stops.len() < MAX_PAINTED_ROWS {
+        if split.is_none() && row < panes.rows {
+            row = panes.rows;
         }
-        let next = row.saturating_add(1);
-        if next <= row {
+        let Some(visible_row) = next_visible(&vp.rows, row, MAX_ROWS) else {
             break;
-        }
-        row = next;
+        };
+        let h = snap(vp.row_px(visible_row) as f32, ppp);
+        let y0 = snap_pos(row_y, ppp);
+        let y1 = snap_pos((row_y + h).min(rect.bottom()), ppp);
+        row_stops.push((visible_row, y0, y1));
+        row_y = y1;
+        row = visible_row.saturating_add(1);
     }
 
     let active = sel.active();
@@ -452,11 +437,12 @@ pub(crate) fn paint(
                     );
                 }
             }
+            let cell_painter = painter.with_clip_rect(cell_rect);
             let icon = overlay
                 .and_then(|overlay| overlay.visual)
                 .and_then(conditional_icon);
             if let Some(icon) = icon {
-                painter.text(
+                cell_painter.text(
                     pos2(cell_rect.left() + 3.0, cell_rect.center().y),
                     Align2::LEFT_CENTER,
                     icon,
@@ -486,7 +472,7 @@ pub(crate) fn paint(
                     )
                 },
             );
-            painter.text(galley_pos, anchor, text, cell_font, color);
+            cell_painter.text(galley_pos, anchor, text, cell_font, color);
             if grid_lines {
                 let stroke = Stroke::new(hair, theme.grid_line);
                 painter.line_segment([pos2(*x0, y0), pos2(*x0, y1)], stroke);
@@ -634,6 +620,31 @@ fn split_dividers(
     let x = (x > rect.left() + header_w && x < rect.right()).then_some(x);
     let y = (y > rect.top() + header_h && y < rect.bottom()).then_some(y);
     (x, y)
+}
+
+fn visible_axis_indices(axis: &AxisGeometry, start: u32, limit: u32, maximum: usize) -> Vec<u32> {
+    let mut indices = Vec::with_capacity(maximum.min(512));
+    let mut candidate = start;
+    while indices.len() < maximum {
+        let Some(index) = next_visible(axis, candidate, limit) else {
+            break;
+        };
+        indices.push(index);
+        candidate = index.saturating_add(1);
+    }
+    indices
+}
+
+fn next_visible(axis: &AxisGeometry, start: u32, limit: u32) -> Option<u32> {
+    if start >= limit || start >= axis.len() {
+        return None;
+    }
+    let pixel = axis.index_to_pixel(start);
+    if pixel >= axis.total_px() {
+        return None;
+    }
+    let index = axis.pixel_to_index(pixel);
+    (index >= start && index < limit && axis.size(index).ok()? > 0).then_some(index)
 }
 
 pub(crate) fn pane_counts(viewport: &Viewport) -> FreezePanes {
@@ -960,9 +971,9 @@ mod tests {
         GridLayout, conditional_icon, data_bar_rect, explicit_color, pane_counts, split_dividers,
         strongest_border, style_fill, visible_axis_indices,
     };
-    use omacell_core::geometry::AxisGeometry;
     use egui::{Color32, Rect, pos2};
     use omacell_core::condfmt::CfVisual;
+    use omacell_core::geometry::AxisGeometry;
     use omacell_core::style::{BorderSide, BorderStyle, Color, Fill, Style};
     use omacell_ui::Viewport;
 

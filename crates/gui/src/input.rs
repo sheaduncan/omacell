@@ -33,19 +33,7 @@ pub fn map_key(key: Key, modifiers: Modifiers) -> Option<KeyEvent> {
         Key::F10 => KeyCode::F(10),
         Key::F11 => KeyCode::F(11),
         Key::F12 => KeyCode::F(12),
-        other => {
-            let name = other.name();
-            let mut chars = name.chars();
-            let c = chars.next()?;
-            if chars.next().is_some() {
-                return None;
-            }
-            KeyCode::Char(if modifiers.shift {
-                c
-            } else {
-                c.to_ascii_lowercase()
-            })
-        }
+        other => KeyCode::Char(logical_character(other, modifiers.shift)?),
     };
     Some(KeyEvent {
         code,
@@ -53,6 +41,49 @@ pub fn map_key(key: Key, modifiers: Modifiers) -> Option<KeyEvent> {
         alt: modifiers.alt,
         shift: modifiers.shift,
     })
+}
+
+fn logical_character(key: Key, shift: bool) -> Option<char> {
+    let character = match (key, shift) {
+        (Key::Num0, true) => ')',
+        (Key::Num1, true) => '!',
+        (Key::Num2, true) => '@',
+        (Key::Num3, true) => '#',
+        (Key::Num4, true) => '$',
+        (Key::Num5, true) => '%',
+        (Key::Num6, true) => '^',
+        (Key::Num7, true) => '&',
+        (Key::Num8, true) => '*',
+        (Key::Num9, true) => '(',
+        (Key::Backtick, true) => '~',
+        (Key::Minus, true) => '_',
+        (Key::Equals, true) => '+',
+        (Key::Plus, true) => '=',
+        (Key::Plus, false) => '+',
+        (Key::Semicolon, true) => ':',
+        (Key::Colon, true) => ';',
+        (Key::Colon, false) => ':',
+        (Key::Quote, true) => '"',
+        (Key::Backslash, true) | (Key::Pipe, _) => '|',
+        (Key::Slash, true) | (Key::Questionmark, _) => '?',
+        (Key::OpenBracket, true) | (Key::OpenCurlyBracket, _) => '{',
+        (Key::CloseBracket, true) | (Key::CloseCurlyBracket, _) => '}',
+        (Key::Exclamationmark, _) => '!',
+        (other, _) => {
+            let name = other.name();
+            let mut chars = name.chars();
+            let character = chars.next()?;
+            if chars.next().is_some() {
+                return None;
+            }
+            if shift {
+                character
+            } else {
+                character.to_ascii_lowercase()
+            }
+        }
+    };
+    Some(character)
 }
 
 /// Iterate pressed-key events from this frame.
@@ -174,5 +205,10 @@ mod tests {
 
         let underscore = map_key(Key::Minus, Modifiers::CTRL | Modifiers::SHIFT).unwrap();
         assert_eq!(underscore.code, KeyCode::Char('_'));
+
+        let insert = map_key(Key::Plus, Modifiers::CTRL | Modifiers::SHIFT).unwrap();
+        assert_eq!(insert.code, KeyCode::Char('='));
+        let time = map_key(Key::Colon, Modifiers::CTRL | Modifiers::SHIFT).unwrap();
+        assert_eq!(time.code, KeyCode::Char(';'));
     }
 }

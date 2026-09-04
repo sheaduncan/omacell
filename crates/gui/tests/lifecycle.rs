@@ -286,10 +286,7 @@ fn matching_toolkit_paste_uses_the_retained_rich_clipboard() {
         .state_mut()
         .execute_cmd("view.select", serde_json::json!({"range": "B2"}))
         .unwrap();
-    harness
-        .input_mut()
-        .events
-        .push(Event::Paste(exported));
+    harness.input_mut().events.push(Event::Paste(exported));
     harness.step();
     wait_tasks(&mut harness);
 
@@ -297,7 +294,11 @@ fn matching_toolkit_paste_uses_the_retained_rich_clipboard() {
     let sheet = snapshot.workbook.active_sheet();
     let slot = snapshot.workbook.get(sheet, 1, 1).unwrap().unwrap();
     assert_eq!(
-        snapshot.workbook.intern().formulas.get(slot.formula.unwrap()),
+        snapshot
+            .workbook
+            .intern()
+            .formulas
+            .get(slot.formula.unwrap()),
         Some("=C1*2"),
         "an in-app paste must retain and shift the copied formula"
     );
@@ -382,7 +383,11 @@ fn wheel_scrolling_stays_inside_the_sheet_bounds() {
     viewport.first_col = omacell_core::limits::MAX_COLS - 1;
     harness.state().ui_session().set_viewport(viewport);
 
-    harness.input_mut().raw_scroll_delta = egui::vec2(-1.0, -1.0);
+    harness.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-1.0, -1.0),
+        modifiers: Modifiers::NONE,
+    });
     harness.step();
 
     let viewport = harness.state().ui_session().viewport();

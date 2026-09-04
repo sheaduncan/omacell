@@ -289,12 +289,13 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
         "print" => tr("panel-print-title"),
         other => other,
     };
-    let width = (panel.width as f32 / 8.0).clamp(180.0, 360.0);
+    let width = panel_width_points(panel.width);
     match panel.side.as_str() {
         "left" => {
             egui::SidePanel::left("omacell-panel")
                 .resizable(true)
-                .min_width(width)
+                .default_width(width)
+                .min_width(180.0)
                 .show_inside(ui, |ui| {
                     ui.heading(title);
                     ui.label(RichText::new(body).color(theme.foreground));
@@ -311,13 +312,18 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
         _ => {
             egui::SidePanel::right("omacell-panel")
                 .resizable(true)
-                .min_width(width)
+                .default_width(width)
+                .min_width(180.0)
                 .show_inside(ui, |ui| {
                     ui.heading(title);
                     ui.label(body);
                 });
         }
     }
+}
+
+fn panel_width_points(width: u32) -> f32 {
+    (width as f32).max(180.0)
 }
 
 #[cfg(test)]
@@ -328,7 +334,7 @@ mod panel_tests {
     fn panel_width_is_already_expressed_in_css_pixels() {
         assert_eq!(panel_width_points(360), 360.0);
         assert_eq!(panel_width_points(1), 180.0);
-        assert_eq!(panel_width_points(u32::MAX), 360.0);
+        assert_eq!(panel_width_points(500), 500.0);
     }
 }
 

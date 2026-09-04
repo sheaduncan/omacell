@@ -1,6 +1,7 @@
 //! Desktop reduced-motion integration.
 
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 /// Resolve Omacell's `system | on | off` preference against the desktop hint.
 #[must_use]
@@ -24,15 +25,18 @@ fn desktop_animations_enabled() -> bool {
     if let Some(value) = std::env::var_os("OMACELL_REDUCED_MOTION") {
         return !matches!(value.to_string_lossy().as_ref(), "1" | "true" | "yes");
     }
-    let Ok(output) = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "enable-animations"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
-        return true;
-    };
-    output.status.success() && String::from_utf8_lossy(&output.stdout).trim() != "false"
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        let Ok(output) = Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "enable-animations"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        else {
+            return true;
+        };
+        output.status.success() && String::from_utf8_lossy(&output.stdout).trim() != "false"
+    })
 }
 
 #[cfg(test)]
