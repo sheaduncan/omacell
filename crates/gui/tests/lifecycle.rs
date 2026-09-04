@@ -262,6 +262,135 @@ fn toolkit_clipboard_events_copy_internal_cells_and_paste_external_tables() {
 }
 
 #[test]
+fn matching_toolkit_paste_uses_the_retained_rich_clipboard() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state_mut()
+        .execute_cmd("view.select", serde_json::json!({"range": "A2"}))
+        .unwrap();
+    harness.input_mut().events.push(Event::Copy);
+    harness.step();
+    wait_tasks(&mut harness);
+    let exported = harness
+        .state()
+        .ui_session()
+        .clipboard()
+        .expect("copy should retain the rich payload")
+        .tsv;
+
+    harness
+        .state_mut()
+        .execute_cmd("view.select", serde_json::json!({"range": "B2"}))
+        .unwrap();
+    harness
+        .input_mut()
+        .events
+        .push(Event::Paste(exported));
+    harness.step();
+    wait_tasks(&mut harness);
+
+    let snapshot = harness.state().runner().snapshot();
+    let sheet = snapshot.workbook.active_sheet();
+    let slot = snapshot.workbook.get(sheet, 1, 1).unwrap().unwrap();
+    assert_eq!(
+        snapshot.workbook.intern().formulas.get(slot.formula.unwrap()),
+        Some("=C1*2"),
+        "an in-app paste must retain and shift the copied formula"
+    );
+}
+
+#[test]
+fn toolkit_paste_inserts_into_the_active_grid_editor() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state()
+        .ui_session()
+        .begin_edit(EditSurface::InCell, "Hello");
+
+    harness
+        .input_mut()
+        .events
+        .push(Event::Paste(" wide world".into()));
+    harness.step();
+
+    assert_eq!(
+        harness.state().ui_session().edit().buffer,
+        "Hello wide world"
+    );
+    assert!(!harness.state().runner().is_busy());
+}
+
+#[test]
+fn goto_and_command_panels_accept_composed_text() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::F(5)))
+        .unwrap();
+    harness.input_mut().events.push(Event::Text("B2".into()));
+    harness.step();
+    assert_eq!(harness.state().ui_session().goto().target, "B2");
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Enter))
+        .unwrap();
+    let cursor = harness.state().ui_session().selection().cursor;
+    assert_eq!((cursor.row, cursor.col), (1, 1));
+    assert!(harness.state().ui_session().panel().visible.is_none());
+
+    harness
+        .state_mut()
+        .execute_cmd("command.line", serde_json::json!({}))
+        .unwrap();
+    harness
+        .input_mut()
+        .events
+        .push(Event::Text("nav.a1".into()));
+    harness.step();
+    assert_eq!(harness.state().ui_session().goto().target, "nav.a1");
+    harness
+        .state_mut()
+        .step_key(KeyEvent::new(KeyCode::Enter))
+        .unwrap();
+    let cursor = harness.state().ui_session().selection().cursor;
+    assert_eq!((cursor.row, cursor.col), (0, 0));
+    assert!(harness.state().ui_session().panel().visible.is_none());
+}
+
+#[test]
+fn wheel_scrolling_stays_inside_the_sheet_bounds() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    let mut viewport = harness.state().ui_session().viewport();
+    viewport.first_row = omacell_core::limits::MAX_ROWS - 1;
+    viewport.first_col = omacell_core::limits::MAX_COLS - 1;
+    harness.state().ui_session().set_viewport(viewport);
+
+    harness.input_mut().raw_scroll_delta = egui::vec2(-1.0, -1.0);
+    harness.step();
+
+    let viewport = harness.state().ui_session().viewport();
+    assert_eq!(viewport.first_row, omacell_core::limits::MAX_ROWS - 1);
+    assert_eq!(viewport.first_col, omacell_core::limits::MAX_COLS - 1);
+}
+
+#[test]
 fn fill_handle_and_drag_move_execute_atomic_edit_commands() {
     let parts = launch_theme(None);
     let mut harness = Harness::builder()

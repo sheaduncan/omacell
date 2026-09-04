@@ -162,4 +162,17 @@ mod tests {
         assert_eq!(event.code, KeyCode::Right);
         assert!(event.ctrl);
     }
+
+    #[test]
+    fn maps_shifted_punctuation_to_logical_keymap_characters() {
+        let at = map_key(Key::Num2, Modifiers::CTRL | Modifiers::SHIFT).unwrap();
+        assert_eq!(at.code, KeyCode::Char('@'));
+        assert!(at.ctrl && at.shift);
+
+        let quote = map_key(Key::Quote, Modifiers::SHIFT).unwrap();
+        assert_eq!(quote.code, KeyCode::Char('"'));
+
+        let underscore = map_key(Key::Minus, Modifiers::CTRL | Modifiers::SHIFT).unwrap();
+        assert_eq!(underscore.code, KeyCode::Char('_'));
+    }
 }

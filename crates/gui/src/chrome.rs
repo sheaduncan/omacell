@@ -320,6 +320,18 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
     }
 }
 
+#[cfg(test)]
+mod panel_tests {
+    use super::panel_width_points;
+
+    #[test]
+    fn panel_width_is_already_expressed_in_css_pixels() {
+        assert_eq!(panel_width_points(360), 360.0);
+        assert_eq!(panel_width_points(1), 180.0);
+        assert_eq!(panel_width_points(u32::MAX), 360.0);
+    }
+}
+
 /// Optional classic menu bar.
 pub fn menu_bar(ui: &mut Ui) -> Option<&'static str> {
     let mut cmd = None;

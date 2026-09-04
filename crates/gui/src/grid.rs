@@ -958,8 +958,9 @@ pub fn autofit_col_px(wb: &Workbook, session: &UiSession, col: u16) -> u32 {
 mod tests {
     use super::{
         GridLayout, conditional_icon, data_bar_rect, explicit_color, pane_counts, split_dividers,
-        strongest_border, style_fill,
+        strongest_border, style_fill, visible_axis_indices,
     };
+    use omacell_core::geometry::AxisGeometry;
     use egui::{Color32, Rect, pos2};
     use omacell_core::condfmt::CfVisual;
     use omacell_core::style::{BorderSide, BorderStyle, Color, Fill, Style};
@@ -995,6 +996,19 @@ mod tests {
         let panes = pane_counts(&viewport);
         assert_eq!(panes.cols, 2, "100px spans one full and one partial column");
         assert_eq!(panes.rows, 2);
+    }
+
+    #[test]
+    fn visible_axis_indices_skip_long_hidden_runs_without_a_scan_budget() {
+        let mut rows = AxisGeometry::rows();
+        for row in 0..5_000 {
+            rows.set_size(row, 0).unwrap();
+        }
+
+        assert_eq!(
+            visible_axis_indices(&rows, 0, 10_000, 3),
+            vec![5_000, 5_001, 5_002]
+        );
     }
 
     #[test]
