@@ -20,6 +20,8 @@ pub mod codes {
     pub const CHANGESET_NOT_FOUND: &str = "changeset.not_found";
     /// Changeset lifecycle does not allow this operation.
     pub const CHANGESET_STATE: &str = "changeset.state";
+    /// Apply is blocked because the workbook changed after the proposal.
+    pub const CHANGESET_BASE: &str = "changeset.base";
     /// Changeset count, command count, retained bytes, or effect records exceeded a limit.
     pub const CHANGESET_LIMIT: &str = "changeset.limit";
     /// IPC envelope version is missing or not 1.
@@ -108,6 +110,14 @@ pub(crate) fn changeset_state(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::CHANGESET_STATE, message)
 }
 
+pub(crate) fn changeset_base(id: &str) -> CoreError {
+    CoreError::new(
+        codes::CHANGESET_BASE,
+        format!("changeset {id} was proposed against a different workbook generation"),
+    )
+    .with_hint("re-propose after the intervening live mutation")
+}
+
 pub(crate) fn changeset_limit(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::CHANGESET_LIMIT, message)
         .with_hint("split the work into smaller reviewed changesets or start a new session")
@@ -129,7 +139,7 @@ pub(crate) fn ipc_protocol(message: impl Into<String>) -> CoreError {
 
 pub(crate) fn ipc_mode(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::IPC_MODE, message).with_hint(
-        "mutating registry commands default to propose; execute is not allowed on the socket",
+        "mutating registry commands default to propose; script and macro commands cannot execute on the socket",
     )
 }
 

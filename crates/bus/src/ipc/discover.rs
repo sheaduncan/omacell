@@ -3,6 +3,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::ErrorKind;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -124,7 +125,11 @@ pub(super) fn set_instance_focused(dir: &Path, pid: u32, focused: bool) -> Resul
     Ok(())
 }
 
-/// Remove a leftover socket only when we own it and the pid is dead.
+/// Remove a leftover socket only when we own it and nothing is listening.
+///
+/// Pid liveness is not sufficient: after a crash the kernel can reuse the
+/// pid while the previous process's socket file remains. A connect probe
+/// distinguishes a live listener from that leftover.
 pub fn remove_stale_socket(dir: &Path, pid: u32) -> Result<(), CoreError> {
     let path = socket_path(dir, pid);
     if !path.exists() && fs::symlink_metadata(&path).is_err() {
@@ -144,18 +149,16 @@ pub fn remove_stale_socket(dir: &Path, pid: u32) -> Result<(), CoreError> {
             path.display()
         )));
     }
-    if pid_is_alive(pid) {
+    if socket_has_listener(&path) {
         return Err(error::ipc_socket(format!(
-            "pid {pid} is still alive; not removing {}",
+            "{} still has a live listener; not removing",
             path.display()
         )));
     }
     fs::remove_file(&path)
         .map_err(|err| error::ipc_socket(format!("remove stale {}: {err}", path.display())))?;
-    let inst = instance_path(dir, pid);
-    if inst.exists() {
-        let _ = fs::remove_file(inst);
-    }
+    remove_owned_regular_file(&instance_path(dir, pid));
+    remove_owned_regular_file(&focus_path(dir, pid));
     Ok(())
 }
 
@@ -235,7 +238,11 @@ pub fn list_live_instances(dir: &Path) -> Result<Vec<Discovery>, CoreError> {
             Ok(m) => m,
             Err(_) => continue,
         };
-        if !meta.file_type().is_socket() || !owned_by_self(&meta) || !pid_is_alive(pid) {
+        if !meta.file_type().is_socket() || !owned_by_self(&meta) {
+            continue;
+        }
+        if !pid_is_alive(pid) || !socket_has_listener(&path) {
+            let _ = remove_stale_socket(dir, pid);
             continue;
         }
         let inst = instance_path(dir, pid);
@@ -320,6 +327,32 @@ pub fn pid_is_alive(pid: u32) -> bool {
         Ok(meta) => meta.is_dir(),
         Err(_) => false,
     }
+}
+
+fn socket_has_listener(path: &Path) -> bool {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !meta.file_type().is_socket() {
+        return false;
+    }
+    match UnixStream::connect(path) {
+        Ok(_) => true,
+        Err(err) => !matches!(
+            err.kind(),
+            ErrorKind::ConnectionRefused | ErrorKind::NotFound
+        ),
+    }
+}
+
+fn remove_owned_regular_file(path: &Path) {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() || !owned_by_self(&meta) {
+        return;
+    }
+    let _ = fs::remove_file(path);
 }
 
 fn owned_by_self(meta: &fs::Metadata) -> bool {

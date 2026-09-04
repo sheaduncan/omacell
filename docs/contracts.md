@@ -217,6 +217,8 @@ startup, and shutdown, and symlinks or malformed markers are ignored/refused.
 
 Proposed changesets carry no inverse commands. WP-07a computes inverses from trusted workbook state before moving a changeset to `Applied`; applied and reverted non-empty changesets must carry those inverses. Agent-supplied inverses are not trusted.
 
+`ChangesetId` remains an opaque non-empty string. The bus assigns collision-resistant ids (`cs-{session}-{seq}`) from a process-wide counter so reconstructing the in-memory store cannot reissue `cs-1`. Apply records a private live-generation at propose time and rejects a proposal whose generation no longer matches (`changeset.base`) without adding fields to the frozen `Changeset` type or IPC v1 envelopes.
+
 `Workbook::clone_for_scratch()` is an additive WP-07a validation API. It
 copies the complete logical workbook state using the same copy-on-write
 storage as ordinary `Clone`, but starts with an empty undo/redo log. Ordinary

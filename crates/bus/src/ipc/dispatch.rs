@@ -189,6 +189,16 @@ fn dispatch_command(
             ),
         );
     }
+    if origin == Origin::Ipc
+        && kind == CommandKind::Mutating
+        && mode == Mode::Execute
+        && ipc_forbids_direct_mutate(command)
+    {
+        return Reply::err(
+            id,
+            error::ipc_mode("script and macro commands cannot use mode execute over IPC"),
+        );
+    }
     match mode {
         Mode::Execute => outcome_reply(id, target.execute(origin, command, args)),
         Mode::DryRun => match target.dry_run(origin, command, args) {
@@ -254,6 +264,10 @@ fn dispatch_control(
             Reply::err(id, error::ipc_protocol("invalid subscription dispatch"))
         }
     }
+}
+
+fn ipc_forbids_direct_mutate(command: &str) -> bool {
+    command.starts_with("script.") || command.starts_with("macro.")
 }
 
 fn serialized_reply(id: u64, value: impl serde::Serialize, label: &str) -> Reply {

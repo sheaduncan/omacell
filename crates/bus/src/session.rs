@@ -41,6 +41,7 @@ pub struct Bus {
     events: EventBus,
     last_repeatable: Option<CommandCall>,
     command_observers: Vec<CommandObserver>,
+    live_generation: u64,
 }
 
 impl Bus {
@@ -56,6 +57,7 @@ impl Bus {
             events: EventBus::new(),
             last_repeatable: None,
             command_observers: Vec::new(),
+            live_generation: 0,
         })
     }
 
@@ -261,9 +263,13 @@ impl Bus {
         }
         self.changesets.ensure_can_propose(&forward)?;
         let effect = self.run(origin, &forward, Run::propose())?;
-        let changeset =
-            self.changesets
-                .insert_proposed(origin, forward, effect.inverse, effect.summary)?;
+        let changeset = self.changesets.insert_proposed(
+            origin,
+            forward,
+            effect.inverse,
+            effect.summary,
+            self.live_generation,
+        )?;
         self.events.emit(Event::ChangesetProposed {
             id: changeset.id.clone(),
         });
@@ -284,9 +290,13 @@ impl Bus {
         }
         let proposal_origin = self.changesets.get(id)?.origin;
         let effect = self.run(proposal_origin, &forward, Run::propose())?;
-        let changeset =
-            self.changesets
-                .replace_proposed(id, forward, effect.inverse, effect.summary)?;
+        let changeset = self.changesets.replace_proposed(
+            id,
+            forward,
+            effect.inverse,
+            effect.summary,
+            self.live_generation,
+        )?;
         self.events.emit(Event::ChangesetProposed {
             id: changeset.id.clone(),
         });
@@ -396,6 +406,10 @@ impl Bus {
         // Validate the lifecycle before dispatch. Running first and rejecting in
         // `mark_applied` would let an invalid second apply mutate live state.
         let forward = self.changesets.forward_for_apply(id)?.to_vec();
+        let base = self.changesets.proposed_base_generation(id)?;
+        if base != self.live_generation {
+            return Err(bus_error::changeset_base(id.as_str()));
+        }
         let effect = self.run(origin, &forward, Run::apply(id.clone()))?;
         let changeset = self
             .changesets
@@ -510,6 +524,9 @@ impl Bus {
                 return Err(err);
             }
         };
+        if self.calls_are_mutating(calls) {
+            self.live_generation = self.live_generation.saturating_add(1);
+        }
         if how.emit {
             emit_events(&mut self.events, &live_effect, extra);
         }
@@ -544,6 +561,14 @@ impl Bus {
             }
         }
         Ok(())
+    }
+
+    fn calls_are_mutating(&self, calls: &[CommandCall]) -> bool {
+        calls.iter().any(|call| {
+            self.registry
+                .get(&call.id)
+                .is_some_and(|command| command.descriptor.mutating)
+        })
     }
 }
 

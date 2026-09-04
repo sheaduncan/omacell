@@ -91,6 +91,35 @@ Discovery record (`<pid>.instance`):
 | Socket mode | 0600 |
 | Default request timeout (client) | 5s |
 
+### 2026-09-04 IPC lifecycle follow-up plan (written before coding)
+
+- Reproduce the remaining WP-07b findings from
+  `reports/review-2026-09-02.md` before implementation: a leftover socket for
+  the current pid cannot be removed because `pid_is_alive` is true, apply does
+  not record the workbook generation it was proposed against, changeset ids
+  restart at `cs-1` whenever a store is constructed, `FilterCriteriaArg`
+  accepts unknown fields, and `script.*` / `macro.*` default to direct execute
+  on the socket.
+- Replace pid-liveness as the bind/discovery oracle with a connect probe: an
+  owned socket without a listener is stale even when that pid is alive (crash
+  plus pid reuse). Refuse to treat a leftover socket as a live instance, and
+  remove owned companions (`.sock`, `.instance`, `.focus`) only after that
+  probe. Keep symlink refusal.
+- Record a private live-generation on each proposal. Any successful live
+  mutating command, apply, or revert advances the generation; apply of a
+  proposal whose generation no longer matches fails closed with a dedicated
+  `changeset.base` code before dispatch. Do not add fields to the frozen
+  `Changeset` type or IPC v1 envelopes.
+- Assign collision-resistant opaque ids (`cs-{session}-{seq}`) from a
+  process-wide counter so opening a workbook, which reconstructs the store,
+  cannot reissue `cs-1`. Keep `ChangesetId` an opaque non-empty string.
+- Add `#[serde(deny_unknown_fields)]` to `FilterCriteriaArg`. Reject
+  `script.*` and `macro.*` execute over IPC; keep `edit.undo` / `edit.redo` /
+  `calc.recalc` as the documented same-user session-private execute set.
+- Tests first: leftover current-pid bind and discovery, intervening-mutation
+  apply, unique ids across store reset, unknown filter fields, script/macro
+  socket execute, and undo execute remaining allowed. No IPC schema change.
+
 ## What was built
 
 Versioned JSON-lines IPC on a per-instance Unix socket, wrapping the WP-07a bus without weakening mutation policy.
@@ -127,6 +156,29 @@ publish it; default discovery prefers the newest valid focused live instance
 and falls back to the original newest-live rule. Startup and shutdown clear
 recycled markers, and marker symlinks are refused without touching their target.
 
+2026-09-04 IPC lifecycle follow-up:
+
+- Stale-socket removal uses a connect probe instead of pid liveness, so a
+  leftover `{pid}.sock` after crash-plus-pid-reuse is not treated as live and
+  can be replaced on bind. Owned `.instance` / `.focus` companions are removed
+  with the stale socket. Tests:
+  `leftover_socket_for_a_live_pid_without_a_listener_is_stale`,
+  `stale_socket_for_dead_pid_is_removed`.
+- Propose records a private live-generation; any successful live mutating
+  command, apply, or revert advances it. Apply of a stale proposal fails with
+  `changeset.base` before dispatch. Tests:
+  `apply_rejects_a_proposal_after_an_intervening_live_mutation`,
+  `apply_succeeds_when_the_workbook_generation_is_unchanged`,
+  `applying_one_proposal_invalidates_a_sibling_proposed_at_the_same_base`.
+- Changeset ids are `cs-{session:016x}-{seq}` from a process-wide counter, so
+  reconstructing the store cannot reissue `cs-1`. Test:
+  `store_ids_do_not_restart_at_cs_1_across_new_stores`.
+- `FilterCriteriaArg` now `deny_unknown_fields`. `script.*` and `macro.*`
+  cannot execute over IPC; `edit.undo` / `edit.redo` / `calc.recalc` remain
+  the documented same-user session-private execute set. Tests:
+  `filter_criteria_arg_rejects_unknown_fields`,
+  `script_and_macro_commands_cannot_execute_over_ipc`.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -136,7 +188,7 @@ recycled markers, and marker symlinks are refused without touching their target.
 | `ipc::{Request, Reply, ServerRecord, Discovery, Mode, ControlOp}` | v1 envelopes |
 | `ipc::{decode_request, decode_request_bytes, IpcLimits, MAX_*}` | decoder + hard/runtime limits |
 | `ipc::{discover_focused, discover_default, discover_newest, default_runtime_dir}` | focused/default/newest live owned instance selection |
-| Error codes | `ipc.version`, `ipc.frame`, `ipc.protocol`, `ipc.mode`, `ipc.limit`, `ipc.socket`, `ipc.timeout`, `ipc.disconnected`, `ipc.overflow` |
+| Error codes | `ipc.version`, `ipc.frame`, `ipc.protocol`, `ipc.mode`, `ipc.limit`, `ipc.socket`, `ipc.timeout`, `ipc.disconnected`, `ipc.overflow`, `changeset.base` |
 | Schemas | `docs/schemas/ipc/*.schema.json` |
 
 WP-13 should use `IpcClient`; it must not reach into server internals. Origin on the wire is always `Origin::Ipc`.
@@ -147,6 +199,8 @@ WP-13 should use `IpcClient`; it must not reach into server internals. Origin on
 - **Event filter names** use frozen `Event` tags (`cell_changed`) rather than spec prose `cell.changed`.
 - **`edit.undo` / `edit.redo` / `calc.recalc`** execute directly (not changeset-eligible). Eligible mutating commands cannot use `mode: execute`.
 - **Focused-window discovery was completed after WP-14/WP-16.** The frozen discovery JSON stays unchanged; a private companion marker carries ephemeral focus state. `discover_newest` retains its exact original behavior for explicit callers.
+- **Stale-socket liveness is a connect probe, not `/proc/<pid>`.** A leftover socket whose pid has been reused by a live process is stale if nothing is listening. This matches the package's "stale entries removed only after validating ownership and process liveness" rule under pid reuse.
+- **`script.*` / `macro.*` cannot execute on the socket.** Same-user CLI still needs undo/redo/recalc and file lifecycle over IPC; those stay direct-execute. MCP origin cleanup for open/save/export remains WP-21.
 
 ## Measurements
 
@@ -173,6 +227,13 @@ Host: local Linux.
 - Repeat-boundary follow-up: `cargo test -p omacell-bus` passes, including 22
   server/client tests; the 3-test CLI scripting bridge suite, strict workspace
   Clippy, and workspace rustdoc also pass.
+- IPC lifecycle follow-up (2026-09-04): `cargo test -p omacell-bus` passes
+  (24 server/client tests, 20 changeset tests, 10 data-tool tests).
+  `cargo clippy -p omacell-bus --all-targets -- -D warnings` passes.
+  `RUSTDOCFLAGS="-D warnings" cargo doc -p omacell-bus --no-deps` passes.
+  CLI `changeset` and `ipc_focus` tests pass.
+  `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/home/duncan/.cache/omacell/target just check`
+  is green (fmt, workspace clippy `-D warnings`, workspace tests, rustdoc).
 
 No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-approved). `libfuzzer-sys` remains fuzz-workspace only.
 
@@ -186,6 +247,13 @@ No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-a
    commands.
 
 ## RFC (only if a frozen contract changed)
+
+This follow-up does not change IPC v1 envelopes, discovery JSON, or the frozen
+`Changeset` struct. `ChangesetId` remains an opaque non-empty string; only the
+bus assignment policy changes. `changeset.base` is an additive bus error code.
+`FilterCriteriaArg` unknown-field rejection is the registry's existing
+`deny_unknown_fields` contract, applied to the one public arg enum that lacked
+it.
 
 The owner-provided WP-07b.2 decision and instruction to complete the pre-WP-28
 integration queue approve raising the frozen frame limit from 1 MiB to a 16 MiB
@@ -215,7 +283,7 @@ preferable.
 - [x] Request/reply/event fixtures validate against the committed IPC v1 schemas and round-trip through client/server — `ipc_protocol.rs`, `ipc_server.rs`
 - [x] Integration tests cover query, proposed mutation, explicit apply/revert, subscription, two concurrent clients, request ordering, timeouts, and shutdown of active clients — `ipc_server.rs`
 - [x] Malformed, partial, deeply nested, oversized, unknown-version, unknown-field, and internal-command inputs are rejected without panic or server death — `ipc_protocol.rs`, `mutating_execute_is_rejected_internal_ids_are_rejected`
-- [x] Socket directory/permissions, owner validation, stale cleanup, and symlink resistance are tested on Linux — `runtime_dir_rejects_symlink_and_world_writable`, `stale_socket_for_dead_pid_is_removed`
+- [x] Socket directory/permissions, owner validation, stale cleanup, and symlink resistance are tested on Linux — `runtime_dir_rejects_symlink_and_world_writable`, `stale_socket_for_dead_pid_is_removed`, `leftover_socket_for_a_live_pid_without_a_listener_is_stale`
 - [x] A stalled or selectively filtered subscriber cannot block mutations or overflow on irrelevant events — `stalled_subscriber_does_not_block_another_client`, `filtered_events_do_not_consume_the_subscriber_queue`
 - [x] Decoder fuzz target is listed by `cargo fuzz list` and runs in the existing nightly job; review smoke 10,000 runs clean
 - [x] Local request/reply benchmark records IPC overhead separately from recalculation — `ipc_roundtrip` ping ~10.5 µs, propose ~51.5 µs
