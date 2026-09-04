@@ -47,6 +47,34 @@ fn zip_text_part(bytes: &[u8], name: &str) -> String {
     text
 }
 
+fn rewrite_zip_text_part<F>(bytes: &[u8], target: &str, transform: F) -> Vec<u8>
+where
+    F: FnOnce(String) -> String,
+{
+    let mut input = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut output = Cursor::new(Vec::new());
+    let mut transform = Some(transform);
+    {
+        let mut writer = zip::ZipWriter::new(&mut output);
+        let options = zip::write::SimpleFileOptions::default();
+        for index in 0..input.len() {
+            let mut entry = input.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut body = Vec::new();
+            entry.read_to_end(&mut body).unwrap();
+            if name == target {
+                let text = String::from_utf8(body).unwrap();
+                body = transform.take().unwrap()(text).into_bytes();
+            }
+            writer.start_file(name, options).unwrap();
+            writer.write_all(&body).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+    assert!(transform.is_none(), "missing fixture part {target}");
+    output.into_inner()
+}
+
 fn modern_protection_fixture() -> Vec<u8> {
     let base = save_workbook_bytes(&Workbook::new()).unwrap();
     let mut input = zip::ZipArchive::new(Cursor::new(base)).unwrap();
@@ -870,6 +898,20 @@ fn wp17_l2_records_roundtrip_together() {
     .unwrap();
 
     let bytes = save_workbook_bytes(&wb).unwrap();
+    let legacy = zip_text_part(&bytes, "xl/comments1.xml");
+    let threaded = zip_text_part(&bytes, "xl/threadedComments/threadedComment1.xml");
+    let thread_id = threaded
+        .split(r#" id=""#)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap();
+    assert!(
+        legacy.contains(&format!("<author>tc={thread_id}</author>")),
+        "{legacy}"
+    );
+    assert!(legacy.contains(r#"<comment ref="A1""#), "{legacy}");
+    let vml = zip_text_part(&bytes, "xl/drawings/vmlDrawing1.vml");
+    assert_eq!(vml.matches(r#"ObjectType="Note""#).count(), 1, "{vml}");
     let doc = open_bytes(&bytes).unwrap();
     let loaded = &doc.workbook;
     let loaded_sheet = loaded.sheet(loaded.active_sheet()).unwrap();
@@ -877,6 +919,7 @@ fn wp17_l2_records_roundtrip_together() {
         loaded_sheet.comments.get(&(0, 0)),
         wb.sheet(sheet).unwrap().comments.get(&(0, 0))
     );
+    assert!(!loaded_sheet.notes.contains_key(&(0, 0)));
     assert_eq!(loaded_sheet.hyperlinks, wb.sheet(sheet).unwrap().hyperlinks);
     assert_eq!(loaded_sheet.protection, wb.sheet(sheet).unwrap().protection);
     assert_eq!(loaded.protection(), wb.protection());
@@ -892,6 +935,127 @@ fn wp17_l2_records_roundtrip_together() {
             .is_some()
     );
     assert!(diff(&doc, &open_bytes(&save_bytes(&doc).unwrap()).unwrap()).empty);
+}
+
+#[test]
+fn annotation_vml_reconciles_note_shapes_and_keeps_opaque_shapes() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_note(
+        sheet,
+        0,
+        0,
+        Some(Note {
+            author: Some("Ada".into()),
+            text: "first".into(),
+        }),
+    )
+    .unwrap();
+    let original = save_workbook_bytes(&wb).unwrap();
+    let with_opaque = rewrite_zip_text_part(&original, "xl/drawings/vmlDrawing1.vml", |xml| {
+        xml.replace(
+                "</xml>",
+                r##"<v:shape id="opaque-control" type="#_x0000_t202"><x:ClientData ObjectType="Button"/></v:shape></xml>"##,
+            )
+    });
+    let mut doc = open_bytes(&with_opaque).unwrap();
+    doc.workbook
+        .set_note(
+            sheet,
+            1,
+            1,
+            Some(Note {
+                author: Some("Lin".into()),
+                text: "second".into(),
+            }),
+        )
+        .unwrap();
+
+    let saved = save_bytes(&doc).unwrap();
+    let vml = zip_text_part(&saved, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.contains("opaque-control"), "{vml}");
+    assert_eq!(vml.matches(r#"ObjectType="Note""#).count(), 2, "{vml}");
+    assert!(vml.contains("<x:Row>0</x:Row><x:Column>0</x:Column>"));
+    assert!(vml.contains("<x:Row>1</x:Row><x:Column>1</x:Column>"));
+    let reopened = open_bytes(&saved).unwrap();
+    assert_eq!(reopened.workbook.sheet(sheet).unwrap().notes.len(), 2);
+    assert!(reopened.workbook.sheet(sheet).unwrap().comments.is_empty());
+}
+
+#[test]
+fn generated_vml_shape_ids_are_unique_across_sheets() {
+    let mut wb = Workbook::new();
+    let first = wb.active_sheet();
+    let second = wb.add_sheet("Second").unwrap();
+    for sheet in [first, second] {
+        wb.set_note(
+            sheet,
+            0,
+            0,
+            Some(Note {
+                author: None,
+                text: "note".into(),
+            }),
+        )
+        .unwrap();
+    }
+    let bytes = save_workbook_bytes(&wb).unwrap();
+    let first_vml = zip_text_part(&bytes, "xl/drawings/vmlDrawing1.vml");
+    let second_vml = zip_text_part(&bytes, "xl/drawings/vmlDrawing2.vml");
+    let shape_id = |xml: &str| {
+        xml.split(r#"<v:shape id=""#)
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap()
+            .to_string()
+    };
+    assert_ne!(shape_id(&first_vml), shape_id(&second_vml));
+}
+
+#[test]
+fn self_parented_threaded_comment_is_recoverable() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_comment(
+        sheet,
+        0,
+        0,
+        Some(Comment {
+            author: "Ada".into(),
+            text: "review".into(),
+            replies: Vec::new(),
+            resolved: false,
+        }),
+    )
+    .unwrap();
+    let original = save_workbook_bytes(&wb).unwrap();
+    let malformed = rewrite_zip_text_part(
+        &original,
+        "xl/threadedComments/threadedComment1.xml",
+        |xml| {
+            let id = xml
+                .split(r#" id=""#)
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .unwrap()
+                .to_string();
+            xml.replacen(
+                &format!(r#" id="{id}""#),
+                &format!(r#" id="{id}" parentId="{id}""#),
+                1,
+            )
+        },
+    );
+
+    let doc = open_bytes(&malformed).unwrap();
+    assert!(doc.workbook.sheet(sheet).unwrap().comments.is_empty());
+    assert!(doc.workbook.sheet(sheet).unwrap().notes.is_empty());
+    assert!(
+        doc.warnings
+            .items
+            .iter()
+            .any(|warning| warning.code == "xlsx.comment")
+    );
 }
 
 #[test]

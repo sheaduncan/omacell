@@ -1,6 +1,6 @@
 //! Load an OPC package into a [`Workbook`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use omacell_core::addr::{CellRef, RangeRef, RefKind, parse_a1, parse_a1_cell};
 use omacell_core::condfmt::CfDxf;
@@ -2107,6 +2107,9 @@ fn load_comments(
     persons: &HashMap<String, String>,
     warnings: &mut FileWarnings,
 ) -> Result<(), CoreError> {
+    let has_threaded_comments = rels
+        .iter()
+        .any(|relationship| relationship.rel_type == REL_THREADED_COMMENTS);
     for rel in rels.iter().filter(|r| r.rel_type == REL_COMMENTS) {
         let Some(part) = package.part(&rel.target) else {
             warnings.push(
@@ -2154,6 +2157,11 @@ fn load_comments(
                             .get(comment_author)
                             .filter(|author| !author.is_empty())
                             .cloned();
+                        if has_threaded_comments
+                            && author.as_deref().is_some_and(is_threaded_placeholder)
+                        {
+                            continue;
+                        }
                         let _ = wb.set_note(
                             sheet,
                             cell.row,
@@ -2174,6 +2182,22 @@ fn load_comments(
     }
     load_threaded_comments(wb, sheet, package, rels, persons, warnings)?;
     Ok(())
+}
+
+fn is_threaded_placeholder(author: &str) -> bool {
+    author
+        .strip_prefix("tc={")
+        .and_then(|id| id.strip_suffix('}'))
+        .is_some_and(|id| {
+            id.len() == 36
+                && id.chars().enumerate().all(|(index, ch)| {
+                    if matches!(index, 8 | 13 | 18 | 23) {
+                        ch == '-'
+                    } else {
+                        ch.is_ascii_hexdigit()
+                    }
+                })
+        })
 }
 
 #[derive(Clone)]
@@ -2239,6 +2263,24 @@ fn load_threaded_comments(
                 _ => {}
             }
         }
+        let invalid: Vec<String> = records
+            .keys()
+            .filter(|id| !threaded_ancestry_is_valid(id, &records))
+            .cloned()
+            .collect();
+        if !invalid.is_empty() {
+            warnings.push(
+                "xlsx.comment",
+                format!(
+                    "skipped {} threaded comments with cyclic, missing, or over-deep parents",
+                    invalid.len()
+                ),
+                Some(rel.target.clone()),
+            );
+            for id in invalid {
+                records.remove(&id);
+            }
+        }
         let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for record in records.values() {
             if let Some(parent) = &record.parent {
@@ -2262,6 +2304,24 @@ fn load_threaded_comments(
         }
     }
     Ok(())
+}
+
+fn threaded_ancestry_is_valid(id: &str, records: &BTreeMap<String, RawThreadComment>) -> bool {
+    let mut seen = HashSet::new();
+    let mut current = id;
+    for _ in 0..64 {
+        if !seen.insert(current) {
+            return false;
+        }
+        let Some(record) = records.get(current) else {
+            return false;
+        };
+        let Some(parent) = record.parent.as_deref() else {
+            return true;
+        };
+        current = parent;
+    }
+    false
 }
 
 fn build_thread_comment(
