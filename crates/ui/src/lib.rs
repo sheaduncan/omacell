@@ -50,6 +50,7 @@ pub use import_review::ImportPlanReview;
 pub use keymap::{Binding, KeyOutcome, Keymap, KeymapRoots, command_is_known, resolve_keymap_path};
 pub use local::{apply_local_command, command_changes_workbook, is_local_command};
 pub use mode::{KeyModel, Mode};
+pub use omacell_io::csv::MAX_CLIPBOARD_BYTES;
 pub use palette::{AiPlanProvider, Palette, PaletteHit};
 pub use panel::{PanelState, apply_command_panel};
 pub use persist::SessionState;
