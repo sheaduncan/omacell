@@ -1,6 +1,6 @@
 //! Parse and emit worksheet print fragments from [`PageSetup`].
 
-use omacell_core::addr::{RangeRef, col_to_letters, parse_a1};
+use omacell_core::addr::{RangeRef, col_to_letters, parse_a1, quote_sheet_name};
 use omacell_core::print::{Orientation, PageSetup, PaperSize, PrintTitleBand};
 use omacell_core::sheet::Sheet;
 
@@ -126,11 +126,12 @@ fn apply_break(setup: &mut PageSetup, attrs: &[(String, String)], col: bool) {
     let Some(id) = attr(attrs, "id").and_then(|s| s.parse::<u32>().ok()) else {
         return;
     };
-    if id < 2 {
+    if id < 1 {
         return;
     }
-    // OOXML id is 1-based first row/col of the *new* page.
-    let stored = id - 2;
+    // OOXML identifies the zero-based row/column at the break, while the
+    // model stores the preceding zero-based row/column.
+    let stored = id - 1;
     if col {
         if let Ok(c) = u16::try_from(stored) {
             setup.col_breaks.push(c);
@@ -219,7 +220,7 @@ pub(crate) fn modeled_print_xml(setup: &PageSetup) -> Vec<String> {
         let n = breaks.len();
         let mut s = format!(r#"<rowBreaks count="{n}" manualBreakCount="{n}">"#);
         for b in breaks {
-            s.push_str(&format!(r#"<brk id="{}" man="1" max="16383"/>"#, b + 2));
+            s.push_str(&format!(r#"<brk id="{}" man="1" max="16383"/>"#, b + 1));
         }
         s.push_str("</rowBreaks>");
         out.push(s);
@@ -233,7 +234,7 @@ pub(crate) fn modeled_print_xml(setup: &PageSetup) -> Vec<String> {
         for b in breaks {
             s.push_str(&format!(
                 r#"<brk id="{}" man="1" max="1048575"/>"#,
-                u32::from(b) + 2
+                u32::from(b) + 1
             ));
         }
         s.push_str("</colBreaks>");
@@ -348,10 +349,10 @@ fn parse_print_range(text: &str) -> Option<RangeRef> {
 pub(crate) fn print_names_xml(sheet: &Sheet, local_sheet_id: usize) -> String {
     let mut s = String::new();
     if let Some(area) = sheet.page_setup.print_area {
+        let referent = format!("{}!{}", quote_sheet_name(&sheet.name), area.to_a1());
         s.push_str(&format!(
-            r#"<definedName name="_xlnm.Print_Area" localSheetId="{local_sheet_id}">{}!{}</definedName>"#,
-            escape_name(&sheet.name),
-            escape(&area.to_a1())
+            r#"<definedName name="_xlnm.Print_Area" localSheetId="{local_sheet_id}">{}</definedName>"#,
+            escape(&referent)
         ));
     }
     let title_rows = sheet.page_setup.row_title_band(0);
@@ -361,7 +362,7 @@ pub(crate) fn print_names_xml(sheet: &Sheet, local_sheet_id: usize) -> String {
         if let Some(band) = title_rows {
             parts.push(format!(
                 "{}!${}:${}",
-                escape_name(&sheet.name),
+                quote_sheet_name(&sheet.name),
                 band.start.saturating_add(1),
                 band.end.saturating_add(1)
             ));
@@ -369,7 +370,7 @@ pub(crate) fn print_names_xml(sheet: &Sheet, local_sheet_id: usize) -> String {
         if let Some(band) = title_cols {
             let start = col_to_letters(band.start).unwrap_or_else(|_| "A".into());
             let end = col_to_letters(band.end).unwrap_or_else(|_| start.clone());
-            parts.push(format!("{}!${start}:${end}", escape_name(&sheet.name)));
+            parts.push(format!("{}!${start}:${end}", quote_sheet_name(&sheet.name)));
         }
         s.push_str(&format!(
             r#"<definedName name="_xlnm.Print_Titles" localSheetId="{local_sheet_id}">{}</definedName>"#,
@@ -377,14 +378,6 @@ pub(crate) fn print_names_xml(sheet: &Sheet, local_sheet_id: usize) -> String {
         ));
     }
     s
-}
-
-fn escape_name(name: &str) -> String {
-    if name.chars().any(|c| !c.is_ascii_alphanumeric()) {
-        format!("'{}'", name.replace('\'', "''"))
-    } else {
-        name.to_string()
-    }
 }
 
 #[cfg(test)]
@@ -406,6 +399,24 @@ mod tests {
         assert_eq!(setup.fit_to_width, None);
         assert_eq!(setup.fit_to_height, Some(2));
         setup.validate().unwrap();
+    }
+
+    #[test]
+    fn page_break_ids_translate_from_ooxml_zero_based_boundaries() {
+        let mut setup = PageSetup::default();
+        apply_print_xml(
+            &mut setup,
+            &[
+                br#"<rowBreaks><brk id="1" man="1"/></rowBreaks>"#.to_vec(),
+                br#"<colBreaks><brk id="10" man="1"/></colBreaks>"#.to_vec(),
+            ],
+        );
+        assert_eq!(setup.row_breaks, vec![0]);
+        assert_eq!(setup.col_breaks, vec![9]);
+
+        let emitted = modeled_print_xml(&setup).join("");
+        assert!(emitted.contains(r#"<brk id="1" man="1" max="16383"/>"#));
+        assert!(emitted.contains(r#"<brk id="10" man="1" max="1048575"/>"#));
     }
 
     #[test]
@@ -467,6 +478,25 @@ mod tests {
             setup.title_row_band,
             Some(PrintTitleBand { start: 2, end: 3 }),
             "cell ranges are not valid print-title bands"
+        );
+    }
+
+    #[test]
+    fn print_names_quote_numeric_and_cell_like_sheet_names() {
+        let mut numeric = Sheet::new(omacell_core::addr::SheetId::new(0), "2024").unwrap();
+        numeric.page_setup.print_area = parse_print_range("$A$1:$B$2");
+        let numeric_xml = print_names_xml(&numeric, 0);
+        assert!(
+            numeric_xml.contains("&apos;2024&apos;!$A$1:$B$2"),
+            "{numeric_xml}"
+        );
+
+        let mut cell_like = Sheet::new(omacell_core::addr::SheetId::new(1), "Q1").unwrap();
+        cell_like.page_setup.title_row_band = Some(PrintTitleBand { start: 0, end: 1 });
+        let cell_like_xml = print_names_xml(&cell_like, 1);
+        assert!(
+            cell_like_xml.contains("&apos;Q1&apos;!$1:$2"),
+            "{cell_like_xml}"
         );
     }
 }

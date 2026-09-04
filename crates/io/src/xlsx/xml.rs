@@ -213,6 +213,9 @@ pub fn escape(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
+            '\n' => out.push_str("&#xA;"),
+            '\r' => out.push_str("&#xD;"),
+            '\t' => out.push_str("&#x9;"),
             _ => out.push(c),
         }
     }
@@ -317,5 +320,20 @@ mod tests {
         let escaped = escape_ooxml_text(input);
         assert_eq!(escaped, "before_x0001__x005F_x0002_after");
         assert_eq!(decode_ooxml_text(&escaped), input);
+    }
+
+    #[test]
+    fn attribute_whitespace_survives_xml_normalization() {
+        let input = "line one\nline two\rline three\tend";
+        let document = format!(r#"<a value="{}"/>"#, escape(input));
+        assert!(document.contains("&#xA;"));
+        assert!(document.contains("&#xD;"));
+        assert!(document.contains("&#x9;"));
+
+        let mut reader = XmlReader::new(document.as_bytes());
+        let Some(XmlEvent::Empty { attrs, .. }) = reader.next().unwrap() else {
+            panic!("expected one empty element");
+        };
+        assert_eq!(attr(&attrs, "value"), Some(input));
     }
 }
