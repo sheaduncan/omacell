@@ -451,7 +451,22 @@ fn retained_lua_ai_function_waits_for_user_edit_then_settles_through_the_runner(
 
     std::fs::write(
         paths.user_config.join("config.toml"),
-        "[scripting]\nenabled = false\n",
+        r#"[scripting]
+enabled = false
+[ai]
+enabled = true
+[ai.providers.local]
+kind = "openai_compatible"
+endpoint = "http://127.0.0.1:9/v1"
+local = true
+[ai.providers.gateway]
+kind = "openai_compatible"
+endpoint = "http://127.0.0.1:8/v1"
+local = true
+[ai.models]
+default = "local:test-model"
+fast = "local:test-model"
+"#,
     )
     .unwrap();
     let disabled = ConfigStore::load_with(paths, LoadOptions::default()).unwrap();

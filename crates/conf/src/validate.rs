@@ -175,6 +175,14 @@ impl Config {
                     "must be an absolute HTTP or HTTPS URL",
                 );
             }
+            if provider.endpoint.starts_with("http://")
+                && !plaintext_endpoint_is_loopback(&provider.endpoint)
+            {
+                return invalid(
+                    &format!("ai.providers.{name}.endpoint"),
+                    "plaintext HTTP is restricted to loopback; use HTTPS for remote providers",
+                );
+            }
             if provider.secret_env.is_some() && provider.secret_cmd.is_some() {
                 return invalid(
                     &format!("ai.providers.{name}"),
@@ -211,6 +219,12 @@ impl Config {
             "ai.functions.max_requests_per_minute",
             self.ai.functions.max_requests_per_minute,
         )?;
+        if !(1..=1_048_576).contains(&self.ai.functions.max_tokens_per_request) {
+            return invalid(
+                "ai.functions.max_tokens_per_request",
+                "must be between 1 and 1048576",
+            );
+        }
         nonzero(
             "ai.agent.autopilot_max_ops",
             self.ai.agent.autopilot_max_ops,
@@ -297,6 +311,43 @@ fn relative_path(path: &str, value: &str) -> Result<(), CoreError> {
     }
 }
 
+fn plaintext_endpoint_is_loopback(endpoint: &str) -> bool {
+    let Some(rest) = endpoint.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = if let Some(bracketed) = authority.strip_prefix('[') {
+        bracketed.split(']').next().unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
 fn invalid<T>(path: &str, message: &str) -> Result<T, CoreError> {
     Err(error::schema(format!("{path}: {message}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::schema::package_defaults;
+
+    #[test]
+    fn remote_plaintext_ai_endpoint_is_rejected() {
+        let mut config = package_defaults().unwrap();
+        config.ai.providers.get_mut("ollama").unwrap().endpoint =
+            "http://models.example.test/v1".into();
+        let error = config.validate().unwrap_err();
+        assert!(error.message.contains("plaintext HTTP"), "{error:?}");
+    }
+
+    #[test]
+    fn loopback_plaintext_ai_endpoints_remain_valid() {
+        let mut config = package_defaults().unwrap();
+        config.ai.providers.get_mut("ollama").unwrap().endpoint = "http://[::1]:11434/v1".into();
+        config.validate().unwrap();
+    }
 }

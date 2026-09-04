@@ -55,9 +55,10 @@ impl Provider for OpenAiCompat {
             body[openai_output_limit_key(&req.model)] = json!(req.max_output_tokens);
         }
         if let Some(schema) = &req.json_schema {
+            let strict = schema_supports_strict_mode(schema);
             body["response_format"] = json!({
                 "type": "json_schema",
-                "json_schema": { "name": "omacell", "schema": schema, "strict": true }
+                "json_schema": { "name": "omacell", "schema": schema, "strict": strict }
             });
         }
         if !req.tools.is_empty() {
@@ -110,6 +111,81 @@ impl Provider for OpenAiCompat {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+fn schema_supports_strict_mode(schema: &Value) -> bool {
+    match schema {
+        Value::Object(object) => {
+            if object.contains_key("$ref") {
+                return false;
+            }
+            if object.get("type").and_then(Value::as_str) == Some("object") {
+                if object.get("additionalProperties") != Some(&Value::Bool(false)) {
+                    return false;
+                }
+                let Some(properties) = object.get("properties").and_then(Value::as_object) else {
+                    return false;
+                };
+                let Some(required) = object.get("required").and_then(Value::as_array) else {
+                    return false;
+                };
+                if !properties
+                    .keys()
+                    .all(|key| required.iter().any(|item| item.as_str() == Some(key)))
+                {
+                    return false;
+                }
+            }
+            object.values().all(schema_supports_strict_mode)
+        }
+        Value::Array(items) => items.iter().all(schema_supports_strict_mode),
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::schema_supports_strict_mode;
+    use serde_json::json;
+
+    #[test]
+    fn strict_mode_requires_closed_objects_and_every_property() {
+        assert!(schema_supports_strict_mode(&json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "name": {"type": "string"},
+                "count": {"type": "integer"}
+            },
+            "required": ["name", "count"]
+        })));
+        assert!(!schema_supports_strict_mode(&json!({
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"]
+        })));
+        assert!(!schema_supports_strict_mode(&json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"name": {"type": "string"}},
+            "required": []
+        })));
+    }
+
+    #[test]
+    fn strict_mode_rejects_unresolved_references() {
+        assert!(!schema_supports_strict_mode(&json!({
+            "$ref": "#/$defs/Result",
+            "$defs": {
+                "Result": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"]
+                }
+            }
+        })));
     }
 }
 

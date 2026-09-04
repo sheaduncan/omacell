@@ -995,7 +995,7 @@ fn cmd_recalc(
         && let Some(ai) = app.ai.clone()
     {
         let policy = ai.policy(Some(app.bus.workbook()));
-        ai.settle(&policy)?;
+        ai.settle_for_workbook(&policy, app.bus.workbook())?;
         outcome = app.execute("calc.recalc", serde_json::json!({"mode": "incremental"}));
     }
     if write && outcome.ok {

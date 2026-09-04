@@ -20,6 +20,7 @@ Configuration is layered from package defaults, user TOML, workbook settings, en
 | `ai.functions.keep_stale` | boolean | — | Keep stale values. |
 | `ai.functions.max_cells_per_recalc` | uint32 | — | Confirm above this many cells. |
 | `ai.functions.max_requests_per_minute` | uint32 | — | Rate limit. |
+| `ai.functions.max_tokens_per_request` | uint32 | `4096` | Maximum generated tokens in one provider request. |
 | `ai.functions.refresh_on_full_recalc` | boolean | — | Refresh on full recalc. |
 | `ai.functions.xlsx_export` | `formulas` / `values` | — | `formulas` / `values`. |
 | `ai.models.agent` | string | `""` | Agent slot. |

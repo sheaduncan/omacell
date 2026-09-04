@@ -336,6 +336,13 @@ pub(crate) fn validate_provider_spec(spec: &AiProvider) -> Result<(), AiError> {
             "provider endpoint must be absolute HTTP or HTTPS",
         ));
     }
+    if url.scheme() == "http" && !endpoint_is_loopback(&spec.endpoint) {
+        return Err(AiError::new(
+            codes::PROVIDER,
+            "plaintext HTTP provider endpoints must use a loopback host",
+        )
+        .with_hint("use HTTPS for remote providers"));
+    }
     if !url.username().is_empty() || url.password().is_some() {
         return Err(AiError::new(
             codes::PROVIDER,
