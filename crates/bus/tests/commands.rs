@@ -7,8 +7,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use omacell_bus::args::EmptyArgs;
 use omacell_bus::{CommandKind, CommandSpec, Effect, Exposure};
-use omacell_core::command::Origin;
+use omacell_core::addr::{CellRef, RangeRef};
+use omacell_core::changeset::CommandCall;
+use omacell_core::command::{CommandId, Origin};
 use omacell_core::event::Event;
+use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::value::Value;
 use serde_json::json;
 
@@ -205,6 +208,95 @@ fn name_define_and_remove() {
     assert!(bus.workbook().names().is_empty());
     let err = common::exec_err(&mut bus, "name.remove", json!({"name": "Missing"}));
     assert_eq!(err.code, "name.defined");
+}
+
+#[test]
+fn name_remove_changeset_restores_exact_imported_range() {
+    let mut bus = common::bus();
+    common::exec_ok(&mut bus, "sheet.add", json!({"name": "Data"}));
+    let sheet = bus.workbook().sheet_by_name("Data").unwrap().id;
+    let expected = DefinedName {
+        name: "ImportedRange".into(),
+        scope: NameScope::Sheet(sheet),
+        referent: NameReferent::Range(RangeRef::from_corners(
+            CellRef::with_abs(2, 1, true, false)
+                .unwrap()
+                .on_sheet(sheet),
+            CellRef::with_abs(4, 3, false, true)
+                .unwrap()
+                .on_sheet(sheet),
+        )),
+        comment: Some("preserve exact imported definition".into()),
+    };
+    bus.workbook_mut().define_name(expected.clone()).unwrap();
+    let changeset = bus
+        .propose(
+            Origin::ExternalAgent,
+            vec![CommandCall {
+                id: CommandId::new("name.remove").unwrap(),
+                args: json!({"name": expected.name, "sheet": "Data"}),
+            }],
+        )
+        .unwrap();
+
+    bus.apply(Origin::User, &changeset.id).unwrap();
+    assert!(
+        bus.workbook()
+            .names()
+            .get(expected.scope, &expected.name)
+            .is_none()
+    );
+    bus.revert(Origin::User, &changeset.id).unwrap();
+    assert_eq!(
+        bus.workbook().names().get(expected.scope, &expected.name),
+        Some(&expected)
+    );
+}
+
+#[test]
+fn name_remove_changeset_restores_formula_and_logical_text_constant() {
+    let mut bus = common::bus();
+    let text = bus.workbook_mut().intern_text("exact text constant");
+    let expected = [
+        DefinedName {
+            name: "ImportedFormula".into(),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Formula("=SUM(Sheet1!$A$1:$A$3)".into()),
+            comment: Some("formula comment".into()),
+        },
+        DefinedName {
+            name: "ImportedText".into(),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Constant(Value::Text(text)),
+            comment: Some("constant comment".into()),
+        },
+    ];
+    for definition in &expected {
+        bus.workbook_mut().define_name(definition.clone()).unwrap();
+    }
+    let changeset = bus
+        .propose(
+            Origin::ExternalAgent,
+            expected
+                .iter()
+                .map(|definition| CommandCall {
+                    id: CommandId::new("name.remove").unwrap(),
+                    args: json!({"name": definition.name}),
+                })
+                .collect(),
+        )
+        .unwrap();
+
+    bus.apply(Origin::User, &changeset.id).unwrap();
+    bus.revert(Origin::User, &changeset.id).unwrap();
+    for definition in &expected {
+        assert_eq!(
+            bus.workbook()
+                .names()
+                .get(definition.scope, &definition.name),
+            Some(definition)
+        );
+    }
 }
 
 #[test]

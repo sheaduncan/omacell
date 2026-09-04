@@ -525,3 +525,18 @@ fn formula_id_is_source_only() {
     let slot: CellSlot = *wb.get(id, 0, 0).unwrap().unwrap();
     assert_eq!(slot.formula, Some(fid));
 }
+
+#[test]
+fn scratch_clone_keeps_logical_state_without_undo_history() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_text(sheet, 0, 0, "current").unwrap();
+    assert!(wb.undo_log().can_undo());
+
+    let scratch = wb.clone_for_scratch();
+
+    assert_eq!(scratch.get(sheet, 0, 0), wb.get(sheet, 0, 0));
+    assert!(!scratch.undo_log().can_undo());
+    assert!(!scratch.undo_log().can_redo());
+    assert!(wb.undo_log().can_undo());
+}

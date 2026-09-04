@@ -68,6 +68,35 @@
   event ordering, and the frozen command/effect wire contracts. Validate with
   focused bus tests, strict bus Clippy, and the exact repository gate.
 
+### 2026-09-04 changeset restoration follow-up plan (written before coding)
+
+- Reproduce the remaining command-bus findings from
+  `reports/review-2026-09-02.md` before implementation: structural proposals
+  must restore pivot definitions as well as shifted cells, and removing an
+  imported defined name must retain its exact range flags, scope, sheet
+  identity, formula, comment, or logical constant rather than round-tripping
+  through the narrower public `name.define` arguments.
+- Extend the internal logical restore format with pivot-registry differences
+  and a private `name.restore` command. Keep both commands internal and absent
+  from schema-1 `commands_json()`; encode logical values instead of workbook
+  interner handles, and cover apply/revert plus ordinary undo behavior.
+- Replace the two full `BTreeMap` cell copies in generic inverse generation
+  with a constant-auxiliary-memory merge of the stores' ordered iterators.
+  Charge each cell/sheet restore record while it is built and fail with the
+  stable changeset-limit error before an inverse can grow past the retained
+  changeset budget.
+- Add `Workbook::clone_for_scratch` as a narrow additive core method so bus
+  validation and preview clones share copy-on-write workbook data without
+  deep-copying the 64 MiB undo/redo history. Preserve the ordinary `Clone`
+  contract, and retain full history only when preflighting `edit.undo` or
+  `edit.redo`. Record this additive frozen-contract change in the RFC section
+  and `docs/contracts.md` for approval by merge.
+- Reconcile stale parts of the original report explicitly: proposal command
+  count and forward-byte limits already run before dispatch, and PR #86 moved
+  37 high-frequency commands to bounded local inverses. Run focused regression
+  tests first, the complete bus/core suites, strict Clippy and rustdoc, and the
+  exact `just check` gate before opening the PR.
+
 ## What was built
 
 In-process command bus in `omacell-bus`: typed registry, origin policy, COW preflight, atomic live execution, changeset store, bounded events, and dry-run.
@@ -91,6 +120,29 @@ per-command workbook clone; WP-17 format actions produce per-cell
 `style.restore` commands before mutation. Legacy structural handlers retain
 the exact snapshot fallback until they gain command-local inverses.
 
+The 2026-09-04 restoration follow-up completes and bounds that compatibility
+path. Exact structural patches now include pivot-registry differences,
+including the OOXML identity fields omitted from ordinary serde payloads, so a
+revert restores shifted pivot definitions byte-for-byte at the logical model
+boundary. `name.remove` records a private logical `name.restore` inverse that
+preserves range absolute flags and sheet ids, scope, formula source, comment,
+and text/array/error constants without retaining interner handles. Both restore
+commands remain internal and absent from the public command catalog.
+
+Generic cell diffs now merge the two row-major stores directly instead of
+materializing maps and a union set. Restore records are charged against the
+1 MiB changeset budget as they are constructed, including cells in a removed
+sheet, and construction stops with `changeset.limit` before an oversized patch
+can be retained. Proposal command-count and forward-payload checks were
+already performed before dispatch on current `main`; that part of the original
+finding was stale and required no code change.
+
+Bus validation, preview, and snapshot-inverse paths use the additive
+`Workbook::clone_for_scratch`, which keeps logical copy-on-write state but
+starts without the live 64 MiB undo/redo history. Preflight retains ordinary
+`Clone` only for `edit.undo` and `edit.redo`, whose behavior depends on that
+history.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -104,8 +156,8 @@ the exact snapshot fallback until they gain command-local inverses.
 | Error codes | `omacell_bus::codes` (`command.unknown`, `command.args`, `command.denied`, `command.internal`, `command.ineligible`, `range.size`, `changeset.not_found`, `changeset.state`) |
 | Catalog schema | `docs/schemas/commands.schema.json` |
 | Public command ids | `cell.set`, `cell.clear`, `range.set`, `range.clear`, `sheet.add`, `sheet.rename`, `sheet.visibility`, `name.define`, `name.remove`, `format.number`, `style.set`, `calc.recalc`, `calc.mode`, `edit.undo`, `edit.redo` |
-| Internal ids | `cell.restore`, `style.restore`, `sheet.remove` |
-| Workbook | `set_cell_contents`, `intern_formula`/`release_formula`, `remove_name`, `set_calc_mode`, `intern_num_fmt`/`num_fmt_code`, `transact_try`, `undo_log` |
+| Internal ids | `cell.restore`, `style.restore`, `edit.restore`, `name.restore` (plus package-specific inverse ids) |
+| Workbook | `set_cell_contents`, `intern_formula`/`release_formula`, `remove_name`, `set_calc_mode`, `intern_num_fmt`/`num_fmt_code`, `transact_try`, `undo_log`, additive `clone_for_scratch` |
 
 No CLI. `core ↛ bus`.
 
@@ -119,6 +171,11 @@ No CLI. `core ↛ bus`.
 - **`Ipc` is a trusted in-process origin.** WP-07b applies propose-by-default on the wire.
 - **Range commands reject area > `MAX_ROWS`.** Full-grid fills are WP-17-scale.
 - **`style.set` is a patch of common fields**, not a full OOXML `Style` (core `Style` has no `JsonSchema`). Exact restore uses internal `style.restore`.
+- **The proposed forward-command allocation fix was already present.**
+  `ChangesetStore::ensure_can_propose` rejects command count and serialized
+  forward bytes before scratch dispatch, and PR #86 already converted 37
+  high-frequency commands to local inverses. This follow-up changes only the
+  remaining generic structural fallback and exact name removal.
 
 ## Measurements
 
@@ -132,6 +189,22 @@ sub-2-KiB `style.restore` command on a workbook containing 10,000 unrelated
 cells. `cargo test -p omacell-bus`, strict bus Clippy, and the exact
 `CARGO_BUILD_JOBS=2 just check` gate pass.
 
+Changeset-restoration follow-up: focused regressions first reproduced lossy
+defined-name range flags, a pivot-protected structural revert that could not
+restore the shifted cells, copied undo history during dry-run, and inverse
+construction that accumulated a removed sheet before applying the retained
+byte cap. Verification on 2026-09-04:
+
+- `cargo test -p omacell-core -p omacell-bus` — pass, including all 17
+  changeset tests, 16 command tests, 7 analysis tests, 22 IPC server tests,
+  73 core unit tests, 20 workbook-model tests, and 103 core doctests.
+- `cargo clippy -p omacell-core -p omacell-bus --all-targets -- -D warnings`
+  — pass.
+- `RUSTDOCFLAGS='-D warnings' cargo doc -p omacell-core -p omacell-bus
+  --no-deps` — pass.
+- Exact `CARGO_BUILD_JOBS=2 just check` — pass: workspace formatting, strict
+  Clippy, all workspace tests, and workspace documentation.
+
 ## Open questions / decisions needed
 
 1. **Resolved:** WP-14 binds `Ctrl+Z` / `Ctrl+Y` to `edit.undo` / `edit.redo`.
@@ -142,7 +215,12 @@ cells. `cargo test -p omacell-bus`, strict bus Clippy, and the exact
 
 ## RFC (only if a frozen contract changed)
 
-None. Frozen WP-01 types are unchanged. Command catalog v1 is a new freeze point, recorded in `docs/contracts.md`.
+The original package changed no frozen WP-01 type. This follow-up additively
+exposes `Workbook::clone_for_scratch()` on the frozen WP-02 workbook API.
+Ordinary `Clone`, the workbook data model, command catalog v1, changeset types,
+and all wire schemas remain unchanged. The method exists solely to copy
+logical state without retained undo/redo history; approval is recorded by
+merge of this RFC and in `docs/contracts.md`.
 
 ## Checklist
 
@@ -163,3 +241,23 @@ None. Frozen WP-01 types are unchanged. Command catalog v1 is a new freeze point
 - [x] Dry-run leaves workbook, recalc state, undo/redo, changeset store, and events unchanged — `dry_run_leaves_all_session_state_untouched`
 - [x] Event subscriptions are bounded; a stalled subscriber cannot block a command or cause unbounded growth — `stalled_subscriber_cannot_block_or_grow`
 - [x] Existing evaluator/recalc correctness, determinism, and performance gates remain green — `cargo test -p omacell-core --test recalc --test eval`
+
+### Acceptance (2026-09-04 changeset restoration follow-up)
+
+- [x] A structural changeset apply/revert restores shifted pivot definitions,
+  including serde-skipped OOXML identity —
+  `structural_changeset_revert_restores_shifted_pivot_definition`
+- [x] `name.remove` changesets restore exact imported range flags, formulas,
+  comments, scope, and logical text constants —
+  `name_remove_changeset_restores_exact_imported_range`,
+  `name_remove_changeset_restores_formula_and_logical_text_constant`
+- [x] Generic cell inverse discovery uses ordered iterator merge with constant
+  auxiliary index memory, and removed-sheet construction fails at the 1 MiB
+  budget before retaining the complete oversized inverse —
+  `removed_sheet_inverse_stops_at_the_construction_budget`
+- [x] Scratch clones retain logical state without undo/redo history, while
+  dry-running `edit.undo` still sees history and does not touch live state —
+  `scratch_clone_keeps_logical_state_without_undo_history`,
+  `dry_run_undo_keeps_history_available_and_live_state_untouched`
+- [x] `name.restore` remains internal and is excluded from schema-1
+  `commands_json()` — `commands_json_is_sorted_stable_and_matches_schema`

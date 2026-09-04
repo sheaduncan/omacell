@@ -166,6 +166,14 @@ fn stored_value(wb: &Workbook, value: Value, depth: usize) -> Result<StoredValue
     })
 }
 
+pub(crate) fn store_logical_value(
+    wb: &Workbook,
+    value: Value,
+) -> Result<serde_json::Value, CoreError> {
+    serde_json::to_value(stored_value(wb, value, 0)?)
+        .map_err(|err| bus_error::args(format!("cannot encode logical value: {err}")))
+}
+
 pub(crate) fn restore_cell_value(
     wb: &mut Workbook,
     encoded: serde_json::Value,
