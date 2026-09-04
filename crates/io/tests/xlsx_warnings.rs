@@ -64,6 +64,78 @@ fn formula_cached_values_keep_their_declared_types() {
 }
 
 #[test]
+fn cells_without_references_follow_row_sequence() {
+    let sheet = br#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+<row r="2"><c r="B2"><v>1</v></c><c><v>2</v></c><c><v>3</v></c></row>
+<row r="3"><c><v>4</v></c></row>
+</sheetData></worksheet>"#;
+    let doc = open_bytes(&package_with_sheet(sheet)).unwrap();
+    let id = doc.workbook.active_sheet();
+    for (row, col, expected) in [(1, 1, 1.0), (1, 2, 2.0), (1, 3, 3.0), (2, 0, 4.0)] {
+        assert_eq!(
+            doc.workbook.get(id, row, col).unwrap().unwrap().value,
+            Value::Number(expected)
+        );
+    }
+}
+
+#[test]
+fn worksheet_zoom_is_clamped_to_excel_bounds() {
+    for (zoom, expected) in [("5", 0.1), ("900", 4.0)] {
+        let sheet = format!(
+            r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView zoomScale="{zoom}"/></sheetViews><sheetData/></worksheet>"#
+        );
+        let doc = open_bytes(&package_with_sheet(sheet.as_bytes())).unwrap();
+        let view = &doc
+            .workbook
+            .sheet(doc.workbook.active_sheet())
+            .unwrap()
+            .view;
+        assert!((view.zoom - expected).abs() < f64::EPSILON, "zoom {zoom}");
+    }
+}
+
+#[test]
+fn internal_hyperlink_ranges_cover_each_cell_and_drop_fragment_marker() {
+    let sheet = br##"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData/><hyperlinks><hyperlink ref="A1:B2" location="#Sheet1!D4"/></hyperlinks>
+</worksheet>"##;
+    let doc = open_bytes(&package_with_sheet(sheet)).unwrap();
+    let loaded = doc.workbook.sheet(doc.workbook.active_sheet()).unwrap();
+    for cell in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        assert_eq!(
+            loaded
+                .hyperlinks
+                .get(&cell)
+                .map(|link| link.target.as_str()),
+            Some("Sheet1!D4"),
+            "cell {cell:?}"
+        );
+    }
+}
+
+#[test]
+fn oversized_hyperlink_ranges_are_not_expanded() {
+    let sheet = br#"<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData/><hyperlinks><hyperlink ref="A1:XFD1048576" location="Sheet1!A1"/></hyperlinks>
+</worksheet>"#;
+    let doc = open_bytes(&package_with_sheet(sheet)).unwrap();
+    let loaded = doc.workbook.sheet(doc.workbook.active_sheet()).unwrap();
+    assert!(loaded.hyperlinks.is_empty());
+    assert!(
+        doc.warnings
+            .items
+            .iter()
+            .any(|warning| warning.code == "xlsx.limit"),
+        "{:?}",
+        doc.warnings
+    );
+}
+
+#[test]
 fn phonetic_runs_do_not_change_shared_string_text() {
     let sheet = br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#;
     let bytes = package_with_sheet(sheet);
