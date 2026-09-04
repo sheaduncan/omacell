@@ -37,7 +37,7 @@ const MAP = {
     array: ArrayBehavior::ReturnsArray,
     async_node: false,
     signature: "MAP(array1, [array2], ..., lambda)",
-    doc: "Applies a LAMBDA to each element of one or more arrays.",
+    doc: "Applies a LAMBDA to each coordinate of one or more arrays, padding missing coordinates with `#N/A`.",
     body: FnBody::Eager(map_impl),
 };
 }
@@ -91,7 +91,7 @@ const BYROW = {
     array: ArrayBehavior::ReturnsArray,
     async_node: false,
     signature: "BYROW(array, lambda)",
-    doc: "Applies a LAMBDA to each row of an array.",
+    doc: "Applies a scalar-returning LAMBDA to each row of an array.",
     body: FnBody::Eager(byrow_impl),
 };
 }
@@ -109,7 +109,7 @@ const BYCOL = {
     array: ArrayBehavior::ReturnsArray,
     async_node: false,
     signature: "BYCOL(array, lambda)",
-    doc: "Applies a LAMBDA to each column of an array.",
+    doc: "Applies a scalar-returning LAMBDA to each column of an array.",
     body: FnBody::Eager(bycol_impl),
 };
 }
@@ -239,11 +239,6 @@ fn map_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     }
     let rows = arrays.iter().map(|a| a.rows).max().unwrap_or(1);
     let cols = arrays.iter().map(|a| a.cols).max().unwrap_or(1);
-    for a in &arrays {
-        if (a.rows != 1 && a.rows != rows) || (a.cols != 1 && a.cols != cols) {
-            return err(ErrorKind::Value);
-        }
-    }
     let Ok(len) = args::check_shape(rows, cols) else {
         return err(ErrorKind::Num);
     };
@@ -252,9 +247,12 @@ fn map_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         for c in 0..cols {
             let mut argv = Vec::with_capacity(arrays.len());
             for a in &arrays {
-                let rr = if a.rows == 1 { 0 } else { r };
-                let cc = if a.cols == 1 { 0 } else { c };
-                argv.push(RuntimeValue::Scalar(args::at(a, rr, cc)));
+                let value = if r < a.rows && c < a.cols {
+                    args::at(a, r, c)
+                } else {
+                    Scalar::Error(ErrorKind::Na)
+                };
+                argv.push(RuntimeValue::Scalar(value));
             }
             let out = args::apply_lambda(ctx, &lam, argv);
             match scalarize(out) {
@@ -373,7 +371,7 @@ fn by_axis(ctx: &mut EvalCtx<'_>, args: &[ArgVal], by_row: bool) -> RuntimeValue
         Err(e) => return err(e),
     };
     let n = if by_row { array.rows } else { array.cols };
-    let mut rows_out: Vec<Vec<Scalar>> = Vec::with_capacity(n as usize);
+    let mut values = Vec::with_capacity(n as usize);
     for i in 0..n {
         let slice = if by_row {
             let mut v = Vec::with_capacity(array.cols as usize);
@@ -396,49 +394,26 @@ fn by_axis(ctx: &mut EvalCtx<'_>, args: &[ArgVal], by_row: bool) -> RuntimeValue
         };
         let out = args::apply_lambda(ctx, &lam, vec![slice]);
         match out {
-            RuntimeValue::Scalar(s) => rows_out.push(vec![s]),
+            RuntimeValue::Scalar(s) => values.push(s),
             RuntimeValue::Array(a) => {
                 if let Err(e) = a.validate() {
                     return err(e);
                 }
-                if by_row && a.rows != 1 {
+                if a.rows != 1 || a.cols != 1 {
                     return err(ErrorKind::Calc);
                 }
-                if !by_row && a.cols != 1 {
+                let Some(value) = a.values.first().cloned() else {
                     return err(ErrorKind::Calc);
-                }
-                rows_out.push(a.values.iter().cloned().collect());
+                };
+                values.push(value);
             }
             RuntimeValue::Lambda(_) | RuntimeValue::Ref(_) => return err(ErrorKind::Value),
         }
     }
     if by_row {
-        let cols = rows_out.first().map(|r| r.len() as u32).unwrap_or(1);
-        if rows_out.iter().any(|r| r.len() as u32 != cols) {
-            return err(ErrorKind::Calc);
-        }
-        let rows = n;
-        let Ok(_) = args::check_shape(rows, cols) else {
-            return err(ErrorKind::Num);
-        };
-        let values: Vec<Scalar> = rows_out.into_iter().flatten().collect();
-        args::array_result(rows, cols, values)
+        args::array_result(n, 1, values)
     } else {
-        let rows = rows_out.first().map(|r| r.len() as u32).unwrap_or(1);
-        if rows_out.iter().any(|r| r.len() as u32 != rows) {
-            return err(ErrorKind::Calc);
-        }
-        let cols = n;
-        let Ok(len) = args::check_shape(rows, cols) else {
-            return err(ErrorKind::Num);
-        };
-        let mut values = Vec::with_capacity(len);
-        for r in 0..rows as usize {
-            for col in &rows_out {
-                values.push(col.get(r).cloned().unwrap_or(Scalar::Empty));
-            }
-        }
-        args::array_result(rows, cols, values)
+        args::array_result(1, n, values)
     }
 }
 

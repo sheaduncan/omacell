@@ -2,6 +2,21 @@
 
 ## Plan (written before coding)
 
+### 2026-09-04 lookup/lambda/array edge follow-up (written before coding)
+
+- Add the reviewed non-ASCII exact lookup, signed `MATCH` mode, mismatched
+  `MAP` shape, nested `BYROW`/`BYCOL` result, and 2-D `WRAPROWS`/`WRAPCOLS`
+  cases to their owning corpora before implementation.
+- Make type-strict text lookup comparison Unicode case-insensitive and
+  normalize nonzero `MATCH` modes by sign without changing its documented
+  approximate binary-search behavior.
+- Match Excel's array contracts: reject non-vector wrap inputs, pad missing
+  `MAP` coordinates with `#N/A` rather than broadcasting, and reject a
+  multi-cell per-axis lambda result with `#CALC!`; keep every output shape
+  checked before allocation.
+- Update the authoritative review ledger, run the complete function suite and
+  strict Clippy, then run exact `just check` before opening the PR.
+
 ### 2026-09-04 one-row array and sort-order follow-up (written before coding)
 
 - Correct the existing `SORT`, `UNIQUE`, `TAKE`, and `DROP` corpus rows first
@@ -164,6 +179,14 @@ second size argument as columns. Sort keys use a stable total ordering instead
 of treating an error as equal to every value: ordinary values sort normally,
 errors form an equal group after them, and blank cells remain last.
 
+The 2026-09-04 lookup/lambda/array follow-up extends exact text lookup's
+case-insensitive comparison beyond ASCII and applies classic `MATCH`'s
+positive/negative mode semantics to every signed mode value. `WRAPROWS` and
+`WRAPCOLS` reject matrices instead of silently flattening them. `MAP` sizes its
+result to the largest input and supplies `#N/A` for coordinates missing from a
+smaller input, while `BYROW` and `BYCOL` reject multi-cell lambda results with
+`#CALC!` instead of constructing unsupported nested arrays.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -197,7 +220,7 @@ Host: rustc 1.98.0, Linux.
 - `just check` — pass
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — pass
 - `cargo deny check` — pass (advisories/bans/licenses/sources ok)
-- Corpus: **77** function files, **934** rows, all ≥10, all pass (`cargo test -p omacell-fn --test wp05c`; 11 tests after review hardening)
+- Corpus: **77** function files, **943** rows, all ≥10, all pass (`cargo test -p omacell-fn --test wp05c`; 11 tests after review hardening)
 - Catalog: **82** specs (`all_specs`); **79** registered (`LET`/`LAMBDA`/`ISOMITTED` catalog-only); **5** remaining probes (`ABS`/`SUM`/`IF`/`NOW`/`RAND`)
 - Implemented WP-05c functions: **74** (16 lookup + 18 array + 6 lambda helpers + 20 financial + 14 engineering) + **3** metadata-only language constructs
 - `scripts/lo-crosscheck.py` on the original 77-file set: 861 evaluated, **0 unexplained**, 186 known (LibreOffice CSV/`_xlfn` gaps). Review re-check of updated `XNPV.tsv`: 12 evaluated, 10 known, **0 unexplained**.
@@ -229,6 +252,18 @@ Host: rustc 1.98.0, Linux.
   - Default row orientation follows Microsoft's [`SORT`](https://support.microsoft.com/en-us/excel/sort-function)
     documentation; equal error grouping and final blank placement follow its
     documented [sort order](https://support.microsoft.com/en-us/excel/sort-data-in-a-workbook-in-the-browser).
+- 2026-09-04 lookup/lambda/array test-first evidence:
+  - Nine corpus cases reproduced all remaining review claims before the
+    implementation: non-ASCII exact lookup, positive and negative noncanonical
+    `MATCH` modes, both 2-D wrapping paths, both nested per-axis lambda paths,
+    and two mismatched-`MAP` padding paths. All nine pass afterward.
+  - The complete `omacell-fn` suite passes, including every function corpus,
+    integration test, eager-function panic smoke, and doctest; strict
+    all-target Clippy and exact `just check` pass.
+  - Scalar-return enforcement follows Microsoft's [`BYROW`](https://support.microsoft.com/en-us/excel/functions/byrow-function)
+    contract, and vector rejection follows its documented [`WRAPROWS`](https://support.microsoft.com/en-us/excel/wraprows-function)
+    error behavior. The signed `MATCH` and mismatched `MAP` cases retain the
+    review's live-compatibility-oracle results as executable corpus evidence.
 - 2026-09-03 bit-shift test-first evidence:
   - Six cases at 49 and ±53 bits initially returned `#NUM!`; they now return
     zero when the input/result remains within the 48-bit value ceiling.
@@ -285,6 +320,9 @@ Host: rustc 1.98.0, Linux.
 8. **Resolved 2026-09-04:** one-row dynamic arrays retain row-oriented defaults,
    `TAKE`/`DROP` use their documented row and column positions, and sort errors
    no longer violate comparator transitivity.
+9. **Resolved 2026-09-04:** exact lookup handles non-ASCII case, all signed
+   `MATCH` modes follow their sign, wrap functions reject matrices, `MAP` pads
+   mismatched shapes, and per-axis lambdas cannot return nested arrays.
 
 ## RFC (only if a frozen contract changed)
 
@@ -304,6 +342,9 @@ contract.
 
 The array-orientation and sort-order follow-up changes no public signature or
 frozen contract.
+
+The lookup/lambda/array edge follow-up changes no public signature or frozen
+contract.
 
 ## Checklist
 

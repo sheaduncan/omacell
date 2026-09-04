@@ -805,7 +805,7 @@ fn match_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Ok(v) => v,
         Err(e) => return err(e),
     };
-    let found = match match_type {
+    let found = match match_type.signum() {
         0 => {
             let mut hit = None;
             for (i, k) in keys.iter().enumerate() {

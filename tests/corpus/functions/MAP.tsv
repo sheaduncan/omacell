@@ -10,3 +10,5 @@
 =MAP({1,2},LAMBDA(x,x))	{1,2}	identity map origin
 =INDEX(MAP({1,2,3},LAMBDA(x,IF(x=2,x,x))),2)	2	lambda body can call other functions
 =MAP({1},LAMBDA(x,x+TRUE))	2	TRUE coerces to 1 inside the lambda
+=MAP({1,2,3},{10,20},LAMBDA(a,b,a+b))	{11,22,#N/A}	shorter arrays pad missing coordinates with #N/A
+=MAP({1,2},{10,20,30},LAMBDA(a,b,IFNA(a+b,99)))	{11,22,99}	missing coordinates are passed to the lambda as #N/A

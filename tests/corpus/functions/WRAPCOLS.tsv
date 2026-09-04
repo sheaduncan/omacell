@@ -10,3 +10,4 @@
 =WRAPCOLS({1,2},#N/A)	#N/A	wrap_count error propagates
 =WRAPCOLS(5,1)	5	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. scalar wrap of 1 is itself
 =COLUMNS(WRAPCOLS({1,2,3,4,5},3))	2	ceil(5/3)=2 cols
+=WRAPCOLS({1,2;3,4},2)	#VALUE!	vector must be one-dimensional

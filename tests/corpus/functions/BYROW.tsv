@@ -10,3 +10,4 @@
 =COLUMNS(BYROW({1,2;3,4},LAMBDA(r,SUM(r))))	1	scalar-per-row result is n×1
 =SUM(BYROW({1,2;3,4},LAMBDA(r,SUM(r))))	10	3+7
 =BYROW({10,20},LAMBDA(r,INDEX(r,1,2)))	20	lambda receives a 1×n array
+=BYROW({1,2;3,4},LAMBDA(r,r))	#CALC!	per-row lambda must return one value, not a nested array

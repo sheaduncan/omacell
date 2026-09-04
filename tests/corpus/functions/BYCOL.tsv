@@ -10,3 +10,4 @@
 =ROWS(BYCOL({1,2;3,4},LAMBDA(c,SUM(c))))	1	scalar-per-col result is 1×n
 =SUM(BYCOL({1,2;3,4},LAMBDA(c,SUM(c))))	10	4+6
 =BYCOL({10;20},LAMBDA(c,INDEX(c,2)))	20	lambda receives an n×1 array
+=BYCOL({1,2;3,4},LAMBDA(c,c))	#CALC!	per-column lambda must return one value, not a nested array
