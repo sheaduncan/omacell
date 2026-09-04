@@ -45,6 +45,22 @@ fn changeset_list_show_export_apply_revert_and_dry_run() {
     let shown = run_json(&xdg, &home, &["changeset", "show", id]);
     assert_eq!(shown["status"], "proposed");
 
+    let extra = run_json(
+        &xdg,
+        &home,
+        &["ipc", "cell.set", r#"{"ref":"B1","input":"8"}"#],
+    );
+    let extra_id = extra["id"].as_str().unwrap();
+    let discarded = run_json(&xdg, &home, &["changeset", "discard", extra_id]);
+    assert_eq!(discarded["id"], extra_id);
+    assert_eq!(
+        run_json(&xdg, &home, &["changeset", "list"])
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
     let dry_export = home.path().join("dry.omc");
     let dry = run_json(
         &xdg,
@@ -74,6 +90,13 @@ fn changeset_list_show_export_apply_revert_and_dry_run() {
         ],
     );
     assert!(exported.is_file());
+
+    let dry_discard = run_json(&xdg, &home, &["--dry-run", "changeset", "discard", id]);
+    assert_eq!(dry_discard["dry_run"], true);
+    assert_eq!(
+        run_json(&xdg, &home, &["changeset", "show", id])["status"],
+        "proposed"
+    );
 
     let dry_apply = run_json(&xdg, &home, &["--dry-run", "changeset", "apply", id]);
     assert_eq!(dry_apply["dry_run"], true);

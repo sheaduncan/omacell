@@ -81,6 +81,27 @@ fn ping_and_propose_apply_revert_round_trip() {
         proposed.result.as_ref().unwrap()["status"].as_str(),
         Some("proposed")
     );
+    let discarded = client
+        .command(
+            "cell.set",
+            serde_json::json!({"ref":"B1","input":"9"}),
+            Some(Mode::Propose),
+        )
+        .unwrap();
+    let discarded_id = discarded.result.as_ref().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dropped = client.discard(&discarded_id).unwrap();
+    assert!(dropped.ok, "{:?}", dropped.error);
+    assert!(
+        bus.lock()
+            .unwrap()
+            .list_changesets()
+            .iter()
+            .all(|cs| cs.id.as_str() != discarded_id)
+    );
+
     let applied = client.apply(&cs).unwrap();
     assert!(applied.ok, "{:?}", applied.error);
     {

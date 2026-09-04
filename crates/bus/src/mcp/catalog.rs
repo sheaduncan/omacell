@@ -235,7 +235,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "export",
-        doc: "Export the open workbook (`file.export`).",
+        doc: "Export is a user action; MCP is denied. Use the CLI/GUI.",
         schema: schema_of::<ExportArgs>,
     },
     ToolSpec {
@@ -255,7 +255,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "recalc",
-        doc: "Recalculate the workbook. `wait` is reserved for async AI cells (WP-22).",
+        doc: "Recalculate the live workbook. Denied while a changeset is still proposed. `wait` is reserved for async AI cells (WP-22).",
         schema: schema_of::<RecalcArgs>,
     },
     ToolSpec {
@@ -285,12 +285,12 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "workbook_open",
-        doc: "Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed.",
+        doc: "Open a workbook from disk, replacing the current session workbook. Denied while a changeset is still proposed; discard from `omacell changeset discard`.",
         schema: schema_of::<WorkbookOpenArgs>,
     },
     ToolSpec {
         name: "workbook_save",
-        doc: "Save the open workbook.",
+        doc: "Save is a user action; MCP is denied. Use the CLI/GUI.",
         schema: schema_of::<WorkbookSaveArgs>,
     },
 ];
@@ -332,7 +332,7 @@ pub fn catalog_json() -> Value {
 pub fn render_markdown() -> String {
     let mut out = String::from("# MCP tools\n\n");
     out.push_str("Generated from `omacell_bus::mcp::TOOLS`. Do not edit by hand.\n\n");
-    out.push_str("Write tools default to proposing a changeset. `apply=true` is denied for external agents; apply from `omacell changeset apply`.\n\n");
+    out.push_str("Write tools default to proposing a changeset. `apply=true` is denied for external agents; apply or discard from `omacell changeset apply|discard`.\n\n");
     out.push_str("JSON-RPC input frames are capped at 2 MiB; the optional Unix socket allows 32 concurrent clients and is mode 0600.\n\n");
     for tool in TOOLS {
         out.push_str(&format!("## `{}`\n\n{}\n\n", tool.name, tool.doc));

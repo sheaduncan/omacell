@@ -193,6 +193,12 @@ remains 32. Frame overflow retains the frozen `ipc.frame` classification and
 directs callers to split large ranges into multiple commands. The envelopes
 and version remain unchanged.
 
+WP-21 additively defines `changeset.discard` as a control operation using the
+existing changeset-id request and reply envelopes. It removes only a still-
+proposed changeset, requires the same user-authorized origin as apply/revert,
+and does not mutate workbook state. Older servers reject the unknown operation;
+older clients remain compatible because they never send it.
+
 Bus-backed and live runner-backed servers both implement the frozen
 subscribe/unsubscribe controls. Each connection gets an independent filtered
 queue bounded to 64 events and 256 KiB; overflow emits the frozen overflow

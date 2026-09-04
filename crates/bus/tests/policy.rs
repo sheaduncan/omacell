@@ -2,6 +2,7 @@
 
 mod common;
 
+use omacell_bus::MutationPolicy;
 use omacell_core::changeset::CommandCall;
 use omacell_core::command::{CommandId, Origin};
 use serde_json::json;
@@ -67,6 +68,22 @@ fn model_origins_cannot_apply() {
         .unwrap();
     let err = bus.apply(Origin::InAppAgent, &cs.id).unwrap_err();
     assert_eq!(err.code, omacell_bus::codes::COMMAND_DENIED);
+}
+
+#[test]
+fn mcp_session_allowlist_excludes_path_writes() {
+    assert!(MutationPolicy::allow_mcp_session_mutate("file.open"));
+    assert!(MutationPolicy::allow_mcp_session_mutate("calc.recalc"));
+    assert!(!MutationPolicy::allow_mcp_session_mutate("file.save"));
+    assert!(!MutationPolicy::allow_mcp_session_mutate("file.export"));
+    assert!(!MutationPolicy::allow_mcp_session_mutate("cell.set"));
+    let mut bus = common::bus();
+    let out = bus.execute(
+        Origin::ExternalAgent,
+        "cell.set",
+        json!({"ref": "A1", "input": "1"}),
+    );
+    assert!(!out.ok);
 }
 
 #[test]

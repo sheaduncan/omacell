@@ -30,7 +30,7 @@
     - mutating + changeset-eligible → propose;
     - mutating + not eligible (`calc.recalc`, `edit.undo`, `edit.redo`) → execute (Ipc is trusted in-process; these cannot be proposed).
     - `mode: execute` on a changeset-eligible mutating command is **rejected** (`ipc.mode`) so the socket cannot bypass review.
-  - **Control `op`:** `subscribe`, `unsubscribe`, `changeset.apply`, `changeset.revert`, `changeset.list`, `changeset.get`, `ping`.
+  - **Control `op`:** `subscribe`, `unsubscribe`, `changeset.apply`, `changeset.revert`, `changeset.list`, `changeset.get`, `changeset.discard`, `ping`.
   - **Event filter names:** frozen Event `type` strings (`cell_changed`, `recalc_done`, …). Empty `events` on subscribe means all types.
   - **Overflow:** per-client queue 64 events / 256 KiB. On overflow the server writes an overflow record and disconnects. Command dispatch never waits on a client write beyond a short socket timeout.
   - **Limits:** see table below. Checked before allocating the parsed value (frame size and nesting) or before accept (connection count).
@@ -120,6 +120,22 @@ Discovery record (`<pid>.instance`):
   apply, unique ids across store reset, unknown filter fields, script/macro
   socket execute, and undo execute remaining allowed. No IPC schema change.
 
+### 2026-09-04 proposal-base escape-hatch follow-up plan (written before coding)
+
+- Reproduce the remaining base-generation hole: `live_generation` advances only
+  after mutating commands, so `workbook_mut`, `engine_mut`, `registry_mut`, and
+  `recalc_after_registry_change` can change workbook or formula semantics while
+  a reviewed proposal still applies.
+- Fail closed: every public mutable escape hatch and registry-driven recalc
+  must bump the same generation used by `changeset.base`. Do not change the
+  frozen `Changeset` type.
+- Rename `apply_rechecks_retained_size_before_live_mutation` to a
+  base-generation precedence test. Add a store-level regression that calls
+  `ensure_applied_fits` with an oversized inverse so the retained-size check is
+  covered without an intervening live command.
+- Tests first: direct `workbook_mut` after propose, function/engine refresh
+  after propose, and `ensure_applied_fits` limit rejection.
+
 ## What was built
 
 Versioned JSON-lines IPC on a per-instance Unix socket, wrapping the WP-07a bus without weakening mutation policy.
@@ -179,6 +195,22 @@ recycled markers, and marker symlinks are refused without touching their target.
   `filter_criteria_arg_rejects_unknown_fields`,
   `script_and_macro_commands_cannot_execute_over_ipc`.
 
+Proposal-base escape-hatch follow-up: `workbook_mut`, `engine_mut`,
+`registry_mut`, and `recalc_after_registry_change` bump the same live
+generation as mutating commands, so a reviewed proposal cannot apply after
+out-of-band workbook or function-registry changes. Review hardening routes
+ordinary command mutations through that same helper and uses wrapping
+advancement, because saturating at `u64::MAX` would otherwise pin the token
+and stop future mutations from invalidating proposals. Tests:
+`apply_rejects_a_proposal_after_direct_workbook_mutation`,
+`apply_rejects_a_proposal_after_mutable_engine_access`,
+`apply_rejects_a_proposal_after_mutable_command_registry_access`,
+`registry_refresh_invalidates_outstanding_proposal_bases`,
+`proposal_base_invalidation_survives_generation_rollover`,
+`store_rejects_an_oversized_applied_inverse`. The former retained-size
+apply test is now
+`apply_base_generation_check_precedes_retained_size_recheck`.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -234,6 +266,10 @@ Host: local Linux.
   CLI `changeset` and `ipc_focus` tests pass.
   `CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/home/duncan/.cache/omacell/target just check`
   is green (fmt, workspace clippy `-D warnings`, workspace tests, rustdoc).
+- Proposal-base escape-hatch follow-up (2026-09-04):
+  `cargo test -p omacell-bus` passes, including 8 library tests and 23
+  changeset tests. The exact workspace `just check` gate passes after review
+  hardening (formatting, strict workspace Clippy, all tests, and rustdoc).
 
 No new product-graph crates.io dependencies. `criterion` is workspace-dev (pre-approved). `libfuzzer-sys` remains fuzz-workspace only.
 
