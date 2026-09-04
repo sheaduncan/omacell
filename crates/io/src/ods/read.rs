@@ -2,12 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use omacell_core::addr::{CellRef, RangeRef, SheetId};
+use omacell_core::addr::{CellRef, RangeRef, SheetId, quote_sheet_name};
 use omacell_core::date_system::DateSystem;
 use omacell_core::dates::{CivilDate, date_to_serial};
 use omacell_core::error::CoreError;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
+use omacell_core::sheet::Note;
 use omacell_core::style::{Color, Fill, Font, Style};
 use omacell_core::workbook::Workbook;
 
@@ -16,6 +17,8 @@ use crate::error;
 use crate::xlsx::xml::{XmlEvent, XmlReader, attr};
 
 const MAX_REPEATED: u32 = 1_048_576;
+const MAX_ODS_MATERIALIZED_CELLS: u64 = 1_000_000;
+const MAX_ODS_CELL_TEXT_BYTES: usize = 1_000_000;
 
 /// Open ODS bytes.
 pub fn open_bytes(bytes: &[u8]) -> Result<Workbook, CoreError> {
@@ -442,12 +445,21 @@ fn parse_table(
     styles: &BTreeMap<String, CellStyle>,
 ) -> Result<(), CoreError> {
     let mut row: u32 = 0;
+    let mut materialized_cells = 0u64;
     while let Some(ev) = reader.next()? {
         match ev {
             XmlEvent::Start { name, attrs } if name == "table-row" => {
                 let repeat = repeated(&attrs, "number-rows-repeated", MAX_ROWS)?;
                 let start_row = row;
-                parse_row(wb, reader, sheet, start_row, styles)?;
+                parse_row(
+                    wb,
+                    reader,
+                    sheet,
+                    start_row,
+                    repeat,
+                    &mut materialized_cells,
+                    styles,
+                )?;
                 row = row
                     .checked_add(repeat)
                     .filter(|r| *r <= MAX_ROWS)
@@ -476,17 +488,32 @@ fn parse_row(
     reader: &mut XmlReader<'_>,
     sheet: SheetId,
     row: u32,
+    row_repeat: u32,
+    materialized_cells: &mut u64,
     styles: &BTreeMap<String, CellStyle>,
 ) -> Result<(), CoreError> {
     let mut col: u32 = 0;
+    let mut expansion = RowExpansion {
+        row_repeat,
+        materialized_cells,
+        styles,
+    };
     while let Some(ev) = reader.next()? {
         match ev {
             XmlEvent::Start { name, attrs } if name == "table-cell" => {
-                let text = collect_cell_text(reader)?;
-                col = emit_cell(wb, sheet, row, col, attrs, &text, styles)?;
+                let content = collect_cell_text(reader)?;
+                col = emit_cell(wb, sheet, row, col, attrs, &content, &mut expansion)?;
             }
             XmlEvent::Empty { name, attrs } if name == "table-cell" => {
-                col = emit_cell(wb, sheet, row, col, attrs, "", styles)?;
+                col = emit_cell(
+                    wb,
+                    sheet,
+                    row,
+                    col,
+                    attrs,
+                    &CollectedCell::default(),
+                    &mut expansion,
+                )?;
             }
             XmlEvent::Start { name, attrs } if name == "covered-table-cell" => {
                 col = col
@@ -518,14 +545,26 @@ fn parse_row(
     ))
 }
 
+#[derive(Default)]
+struct CollectedCell {
+    text: String,
+    note: Option<Note>,
+}
+
+struct RowExpansion<'a> {
+    row_repeat: u32,
+    materialized_cells: &'a mut u64,
+    styles: &'a BTreeMap<String, CellStyle>,
+}
+
 fn emit_cell(
     wb: &mut Workbook,
     sheet: SheetId,
     row: u32,
     col: u32,
     attrs: Vec<(String, String)>,
-    text: &str,
-    styles: &BTreeMap<String, CellStyle>,
+    content: &CollectedCell,
+    expansion: &mut RowExpansion<'_>,
 ) -> Result<u32, CoreError> {
     let repeat = repeated(&attrs, "number-columns-repeated", u32::from(MAX_COLS))?;
     let span_cols = positive_count(&attrs, "number-columns-spanned", u32::from(MAX_COLS))?;
@@ -539,10 +578,40 @@ fn emit_cell(
         .checked_add(span_rows - 1)
         .filter(|end| *end < MAX_ROWS)
         .ok_or_else(|| error::ods_format("cell span exceeds the row grid"))?;
+    let materializes = !content.text.is_empty()
+        || content.note.is_some()
+        || attr(&attrs, "formula").is_some()
+        || attr(&attrs, "style-name").is_some()
+        || matches!(
+            attr(&attrs, "value-type"),
+            Some("float" | "percentage" | "currency" | "boolean" | "date")
+        )
+        || span_cols > 1
+        || span_rows > 1;
+    if materializes {
+        let expanded = u64::from(repeat)
+            .checked_mul(u64::from(expansion.row_repeat))
+            .and_then(|count| expansion.materialized_cells.checked_add(count))
+            .filter(|count| *count <= MAX_ODS_MATERIALIZED_CELLS)
+            .ok_or_else(|| {
+                error::ods_format(format!(
+                    "ODS expansion exceeds {MAX_ODS_MATERIALIZED_CELLS} materialized cells"
+                ))
+            })?;
+        *expansion.materialized_cells = expanded;
+    }
     for index in 0..repeat {
         let start_col = col + index * span_cols;
         let end_col = start_col + span_cols - 1;
-        write_cell(wb, sheet, row, start_col as u16, &attrs, text, styles)?;
+        write_cell(
+            wb,
+            sheet,
+            row,
+            start_col as u16,
+            &attrs,
+            content,
+            expansion.styles,
+        )?;
         if span_cols > 1 || span_rows > 1 {
             let start = CellRef::new(row, start_col as u16)?;
             let end = CellRef::new(end_row, end_col as u16)?;
@@ -552,28 +621,131 @@ fn emit_cell(
     Ok(advance)
 }
 
-fn collect_cell_text(reader: &mut XmlReader<'_>) -> Result<String, CoreError> {
+fn collect_cell_text(reader: &mut XmlReader<'_>) -> Result<CollectedCell, CoreError> {
     let mut text = String::new();
+    let mut note_text = String::new();
+    let mut note_author = String::new();
     let mut depth = 1u32;
+    let mut annotation_depth = None;
+    let mut paragraph_depth = None;
+    let mut creator_depth = None;
+    let mut date_depth = None;
+    let mut saw_annotation = false;
     while let Some(ev) = reader.next()? {
         match ev {
-            XmlEvent::Start { .. } => depth += 1,
-            XmlEvent::Text(t) => text.push_str(&t),
-            XmlEvent::End { name } => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 && name == "table-cell" {
-                    return Ok(text.trim_end_matches('\n').to_string());
+            XmlEvent::Start { name, attrs } => {
+                depth = depth.saturating_add(1);
+                if name == "annotation" && annotation_depth.is_none() {
+                    annotation_depth = Some(depth);
+                    saw_annotation = true;
+                } else if annotation_depth.is_some() && name == "creator" {
+                    creator_depth = Some(depth);
+                } else if annotation_depth.is_some() && name == "date" {
+                    date_depth = Some(depth);
+                } else if name == "p" {
+                    paragraph_depth = Some(depth);
                 }
-                if name == "p" {
-                    text.push('\n');
+                append_whitespace_element(
+                    &name,
+                    &attrs,
+                    annotation_depth.is_some(),
+                    paragraph_depth.is_some(),
+                    &mut text,
+                    &mut note_text,
+                )?;
+            }
+            XmlEvent::Empty { name, attrs } => append_whitespace_element(
+                &name,
+                &attrs,
+                annotation_depth.is_some(),
+                paragraph_depth.is_some(),
+                &mut text,
+                &mut note_text,
+            )?,
+            XmlEvent::Text(fragment) => {
+                if creator_depth.is_some() {
+                    append_ods_text(&mut note_author, &fragment)?;
+                } else if date_depth.is_none() && paragraph_depth.is_some() {
+                    if annotation_depth.is_some() {
+                        append_ods_text(&mut note_text, &fragment)?;
+                    } else {
+                        append_ods_text(&mut text, &fragment)?;
+                    }
                 }
             }
-            _ => {}
+            XmlEvent::End { name } => {
+                if name == "p" && paragraph_depth == Some(depth) {
+                    if annotation_depth.is_some() {
+                        append_ods_text(&mut note_text, "\n")?;
+                    } else {
+                        append_ods_text(&mut text, "\n")?;
+                    }
+                    paragraph_depth = None;
+                }
+                if name == "creator" && creator_depth == Some(depth) {
+                    creator_depth = None;
+                }
+                if name == "date" && date_depth == Some(depth) {
+                    date_depth = None;
+                }
+                if name == "annotation" && annotation_depth == Some(depth) {
+                    annotation_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+                if depth == 0 && name == "table-cell" {
+                    let note = saw_annotation.then(|| Note {
+                        author: (!note_author.trim().is_empty())
+                            .then(|| note_author.trim().to_string()),
+                        text: note_text.trim_end_matches('\n').to_string(),
+                    });
+                    return Ok(CollectedCell {
+                        text: text.trim_end_matches('\n').to_string(),
+                        note,
+                    });
+                }
+            }
         }
     }
     Err(error::ods_format(
         "unexpected end of content.xml inside table cell",
     ))
+}
+
+fn append_whitespace_element(
+    name: &str,
+    attrs: &[(String, String)],
+    in_annotation: bool,
+    in_paragraph: bool,
+    text: &mut String,
+    note_text: &mut String,
+) -> Result<(), CoreError> {
+    if !in_paragraph {
+        return Ok(());
+    }
+    let target = if in_annotation { note_text } else { text };
+    match name {
+        "s" => {
+            let count = positive_count(attrs, "c", MAX_ODS_CELL_TEXT_BYTES as u32)?;
+            let spaces = usize::try_from(count)
+                .map_err(|_| error::ods_format("ODS text space count does not fit memory"))?;
+            if target.len().saturating_add(spaces) > MAX_ODS_CELL_TEXT_BYTES {
+                return Err(error::ods_format("ODS cell text exceeds the size limit"));
+            }
+            target.extend(std::iter::repeat_n(' ', spaces));
+        }
+        "tab" => append_ods_text(target, "\t")?,
+        "line-break" => append_ods_text(target, "\n")?,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn append_ods_text(target: &mut String, text: &str) -> Result<(), CoreError> {
+    if target.len().saturating_add(text.len()) > MAX_ODS_CELL_TEXT_BYTES {
+        return Err(error::ods_format("ODS cell text exceeds the size limit"));
+    }
+    target.push_str(text);
+    Ok(())
 }
 
 fn skip_until(reader: &mut XmlReader<'_>, end: &str) -> Result<(), CoreError> {
@@ -601,9 +773,10 @@ fn write_cell(
     row: u32,
     col: u16,
     attrs: &[(String, String)],
-    text: &str,
+    content: &CollectedCell,
     styles: &BTreeMap<String, CellStyle>,
 ) -> Result<(), CoreError> {
+    let text = content.text.as_str();
     let value_type = attr(attrs, "value-type").unwrap_or("string");
     if let Some(formula) = attr(attrs, "formula") {
         let src = ods_formula_to_excel(formula);
@@ -664,6 +837,9 @@ fn write_cell(
         }
         wb.set_cell_style(sheet, row, col, style)?;
     }
+    if let Some(note) = &content.note {
+        wb.set_note(sheet, row, col, Some(note.clone()))?;
+    }
     Ok(())
 }
 
@@ -691,25 +867,114 @@ fn ods_formula_to_excel(src: &str) -> String {
     if !rest.starts_with('=') {
         out.push('=');
     }
-    let mut chars = rest.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '[' {
-            while chars.peek().is_some_and(|c| *c != ']') {
-                let Some(n) = chars.next() else {
-                    break;
-                };
-                if n != '.' {
-                    out.push(n);
-                }
+    let mut index = 0usize;
+    let mut quoted = false;
+    while index < rest.len() {
+        let ch = rest[index..].chars().next().unwrap_or('\0');
+        let width = ch.len_utf8();
+        if ch == '"' {
+            out.push(ch);
+            if quoted && rest.as_bytes().get(index + width) == Some(&b'"') {
+                out.push('"');
+                index += width * 2;
+                continue;
             }
-            let _ = chars.next();
-        } else if ch == ';' {
+            quoted = !quoted;
+            index += width;
+        } else if ch == '[' && !quoted {
+            let Some(end) = ods_reference_end(rest, index + width) else {
+                out.push(ch);
+                index += width;
+                continue;
+            };
+            let reference = &rest[index + width..end];
+            if let Some(converted) = ods_reference_to_excel(reference) {
+                out.push_str(&converted);
+            } else {
+                out.push_str(&rest[index..=end]);
+            }
+            index = end + 1;
+        } else if ch == ';' && !quoted {
             out.push(',');
+            index += width;
         } else {
             out.push(ch);
+            index += width;
         }
     }
     out
+}
+
+fn ods_reference_end(formula: &str, start: usize) -> Option<usize> {
+    let bytes = formula.as_bytes();
+    let mut index = start;
+    let mut quoted = false;
+    while index < bytes.len() {
+        if bytes[index] == b'\'' {
+            if quoted && bytes.get(index + 1) == Some(&b'\'') {
+                index += 2;
+                continue;
+            }
+            quoted = !quoted;
+        } else if bytes[index] == b']' && !quoted {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn ods_reference_to_excel(reference: &str) -> Option<String> {
+    let (start, end) = split_ods_reference_range(reference);
+    let start = ods_reference_endpoint(start)?;
+    let Some(end) = end else {
+        return Some(start);
+    };
+    Some(format!("{start}:{}", ods_reference_endpoint(end)?))
+}
+
+fn split_ods_reference_range(reference: &str) -> (&str, Option<&str>) {
+    let bytes = reference.as_bytes();
+    let mut quoted = false;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'\'' {
+            if quoted && bytes.get(index + 1) == Some(&b'\'') {
+                index += 2;
+                continue;
+            }
+            quoted = !quoted;
+        } else if bytes[index] == b':' && !quoted {
+            return (&reference[..index], Some(&reference[index + 1..]));
+        }
+        index += 1;
+    }
+    (reference, None)
+}
+
+fn ods_reference_endpoint(endpoint: &str) -> Option<String> {
+    let endpoint = endpoint.trim();
+    let endpoint = if endpoint.starts_with("$'") {
+        &endpoint[1..]
+    } else {
+        endpoint
+    };
+    if let Some(local) = endpoint.strip_prefix('.') {
+        parse_a1_cell(local)?;
+        return Some(local.to_string());
+    }
+    if let Some((sheet, cell)) = split_ods_sheet(endpoint) {
+        parse_a1_cell(cell)?;
+        let sheet = sheet.trim_start_matches('$');
+        if sheet.is_empty() {
+            Some(cell.to_string())
+        } else {
+            Some(format!("{}!{cell}", quote_sheet_name(sheet)))
+        }
+    } else {
+        parse_a1_cell(endpoint)?;
+        Some(endpoint.to_string())
+    }
 }
 
 fn repeated(attrs: &[(String, String)], name: &str, maximum: u32) -> Result<u32, CoreError> {

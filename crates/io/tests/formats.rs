@@ -220,6 +220,64 @@ fn ods_rejects_invalid_values_and_expands_repeated_cells() {
 }
 
 #[test]
+fn ods_rejects_materializing_repeat_products_before_expansion() {
+    let repeated = ods_package(
+        r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="Sheet1"><table:table-row table:number-rows-repeated="1001"><table:table-cell table:number-columns-repeated="1000" office:value-type="string"><text:p>x</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
+    );
+    let started = std::time::Instant::now();
+    let error = ods::open_bytes(&repeated).unwrap_err();
+    assert_eq!(error.code, codes::ODS_FORMAT);
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+
+    let structural = ods_package(
+        r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"><office:body><office:spreadsheet><table:table table:name="Sheet1"><table:table-row table:number-rows-repeated="1048576"><table:table-cell table:number-columns-repeated="16384"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
+    );
+    let workbook = ods::open_bytes(&structural).unwrap();
+    assert!(
+        workbook
+            .used_range(workbook.active_sheet())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn ods_formula_text_whitespace_and_annotations_keep_their_meaning() {
+    let bytes = ods_package(
+        r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/"><office:body><office:spreadsheet><table:table table:name="Sheet1"><table:table-row><table:table-cell table:formula="of:=IF([.$A$1]=&quot;a;b&quot;;[$'Sheet 2'.$B$2];0)"/></table:table-row><table:table-row><table:table-cell office:value-type="string"><text:p>A<text:s text:c="2"/>B<text:tab/>C<text:line-break/>D</text:p><office:annotation><dc:creator>Ada</dc:creator><dc:date>2026-09-04T00:00:00Z</dc:date><text:p>Review<text:s/>this</text:p></office:annotation></table:table-cell></table:table-row></table:table><table:table table:name="Sheet 2"><table:table-row><table:table-cell/><table:table-cell office:value-type="float" office:value="1"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
+    );
+    let workbook = ods::open_bytes(&bytes).unwrap();
+    let sheet = workbook.sheet_by_name("Sheet1").unwrap();
+    let formula = workbook
+        .get(sheet.id, 0, 0)
+        .unwrap()
+        .unwrap()
+        .formula
+        .and_then(|id| workbook.intern().formulas.get(id))
+        .unwrap();
+    assert_eq!(formula, r#"=IF($A$1="a;b",'Sheet 2'!$B$2,0)"#);
+    assert_eq!(cell_text(&workbook, 1, 0), "A  B\tC\nD");
+    let note = sheet.notes.get(&(1, 0)).unwrap();
+    assert_eq!(note.author.as_deref(), Some("Ada"));
+    assert_eq!(note.text, "Review this");
+}
+
+#[test]
+fn xml_exports_reject_forbidden_control_characters() {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook.set_text(sheet, 0, 0, "bad\u{1}text").unwrap();
+    assert_eq!(
+        ods::save_bytes(&workbook).unwrap_err().code,
+        codes::ODS_FORMAT
+    );
+    assert_eq!(
+        html::export_html(&workbook).unwrap_err().code,
+        codes::HTML_FORMAT
+    );
+}
+
+#[test]
 fn ods_reads_number_format_styles() {
     let formatted = ods_package(
         r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"><office:automatic-styles><number:percentage-style style:name="N1"><number:number number:decimal-places="1" number:min-integer-digits="1"/><number:text>%</number:text></number:percentage-style><style:style style:name="ce1" style:family="table-cell" style:data-style-name="N1"/></office:automatic-styles><office:body><office:spreadsheet><table:table table:name="Sheet1"><table:table-row><table:table-cell table:style-name="ce1" office:value-type="percentage" office:value="0.125"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,

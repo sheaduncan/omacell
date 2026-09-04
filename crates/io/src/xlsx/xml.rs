@@ -171,7 +171,7 @@ impl<'a> XmlReader<'a> {
     }
 }
 
-fn is_xml10_char(ch: char) -> bool {
+pub(crate) fn is_xml10_char(ch: char) -> bool {
     matches!(ch, '\u{9}' | '\u{A}' | '\u{D}')
         || ('\u{20}'..='\u{D7FF}').contains(&ch)
         || ('\u{E000}'..='\u{FFFD}').contains(&ch)

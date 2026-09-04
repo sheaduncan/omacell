@@ -7,7 +7,7 @@ use omacell_core::workbook::Workbook;
 
 use crate::csv::{ClipboardFormat, ClipboardTable, parse_clipboard};
 use crate::error;
-use crate::xlsx::xml::escape;
+use crate::xlsx::xml::{escape, is_xml10_char};
 use crate::xlsx::{SaveOptions, atomic_write_bytes, peer_lock_blocks};
 
 const MAX_TABLE_FILE_BYTES: usize = 8 * 1_048_576;
@@ -137,7 +137,7 @@ fn export_markup(wb: &Workbook, kind: Markup) -> Result<String, CoreError> {
                 out.push_str("<tr>");
                 let tag = if i == 0 { "th" } else { "td" };
                 for cell in rec {
-                    out.push_str(&format!("<{tag}>{}</{tag}>", escape(cell)));
+                    out.push_str(&format!("<{tag}>{}</{tag}>", html_escape(cell)?));
                 }
                 out.push_str("</tr>\n");
             }
@@ -163,6 +163,16 @@ fn export_markup(wb: &Workbook, kind: Markup) -> Result<String, CoreError> {
             out
         }
     })
+}
+
+fn html_escape(value: &str) -> Result<String, CoreError> {
+    if let Some(ch) = value.chars().find(|ch| !is_xml10_char(*ch)) {
+        return Err(error::html_format(format!(
+            "HTML text contains XML-forbidden character U+{:04X}",
+            u32::from(ch)
+        )));
+    }
+    Ok(escape(value))
 }
 
 fn md_row(rec: &[String]) -> String {
