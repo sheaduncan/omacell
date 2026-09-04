@@ -1125,8 +1125,9 @@ fn split_column(
         .saturating_add(u64::from(DEFAULT_COL_PX) / 2)
         / u64::from(DEFAULT_COL_PX);
     let cells = u16::try_from(cells).unwrap_or(u16::MAX);
-    let position = area.x.saturating_add(header_width).saturating_add(cells);
-    (position < area.right()).then_some(position)
+    let data_start = area.x.saturating_add(header_width);
+    let position = data_start.saturating_add(cells);
+    (position > data_start && position < area.right()).then_some(position)
 }
 
 fn split_row(viewport: &Viewport, area: Rect, header_height: u16) -> Option<u16> {
@@ -1134,8 +1135,9 @@ fn split_row(viewport: &Viewport, area: Rect, header_height: u16) -> Option<u16>
     let lines = u64::from(split.y_px).saturating_add(u64::from(DEFAULT_ROW_PX) / 2)
         / u64::from(DEFAULT_ROW_PX);
     let lines = u16::try_from(lines).unwrap_or(u16::MAX);
-    let position = area.y.saturating_add(header_height).saturating_add(lines);
-    (position < area.bottom()).then_some(position)
+    let data_start = area.y.saturating_add(header_height);
+    let position = data_start.saturating_add(lines);
+    (position > data_start && position < area.bottom()).then_some(position)
 }
 
 fn column_width(vp: &Viewport, col: u16, base_chars: u16) -> u16 {
@@ -1794,14 +1796,16 @@ mod tests {
 
         let ranges = GridHitMap { columns, rows }.conditional_format_ranges(&viewport);
         assert_eq!(ranges.len(), 4);
-        assert!(ranges.iter().all(|range| {
-            let (_, c0, _, c1) = range.normalized();
-            c1 < 2 || c0 >= 5
-        }));
-        assert!(ranges.iter().all(|range| {
-            let (r0, _, r1, _) = range.normalized();
-            r1 < 2 || r0 >= 7
-        }));
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.end.col < 2 || range.start.col >= 5)
+        );
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.end.row < 2 || range.start.row >= 7)
+        );
     }
 
     #[test]
