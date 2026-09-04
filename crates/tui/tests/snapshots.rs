@@ -6,6 +6,7 @@ use common::{draw_text, harness_theme, harness_workbook, seed_demo};
 use insta::assert_snapshot;
 use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::chart::{Axis, Chart, ChartAnchor, ChartId, ChartKind, LegendPos, Series};
+use omacell_core::sheet::SplitView;
 use omacell_core::workbook::Workbook;
 
 const THEMES: [&str; 3] = ["tokyo-night", "catppuccin-latte", "nord"];
@@ -49,6 +50,40 @@ fn formula_bar_shows_active_cell() {
     let text = draw_text(&h.tui, 80, 24);
     assert!(text.contains("fx"), "{text}");
     assert!(text.contains("Hello"), "{text}");
+}
+
+#[test]
+fn split_view_renders_leading_and_scrolled_panes_with_dividers() {
+    let mut h = harness_theme("nord");
+    seed_demo(&mut h.tui);
+    h.tui
+        .execute_cmd(
+            "cell.set",
+            serde_json::json!({"ref": "F8", "input": "SCROLLED"}),
+        )
+        .unwrap();
+    common::wait_tasks(&mut h.tui);
+    let mut viewport = h.tui.ui().viewport();
+    viewport.first_row = 7;
+    viewport.first_col = 5;
+    viewport.split = Some(SplitView {
+        x_px: 128,
+        y_px: 40,
+    });
+    h.tui.ui().set_viewport(viewport);
+
+    let text = draw_text(&h.tui, 80, 24);
+
+    assert!(text.contains("Hello"), "leading pane missing:\n{text}");
+    assert!(text.contains("SCROLLED"), "scrolled pane missing:\n{text}");
+    assert!(
+        text.contains('┃'),
+        "vertical split divider missing:\n{text}"
+    );
+    assert!(
+        text.contains('─'),
+        "horizontal split divider missing:\n{text}"
+    );
 }
 
 #[test]

@@ -9,7 +9,7 @@ use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::condfmt::{CfDxf, CfKind, CfOp, CondFormat};
 use omacell_core::style::Color;
 use omacell_core::workbook::Workbook;
-use omacell_ui::{FindScope, KeyCode, KeyEvent, KeyOutcome};
+use omacell_ui::{EditSurface, FindScope, KeyCode, KeyEvent, KeyOutcome};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code)
@@ -312,6 +312,55 @@ fn internal_and_bracketed_text_paste_flow_through_the_bus() {
         snapshot.workbook.get(sheet, 5, 5).unwrap().unwrap().value,
         omacell_core::value::Value::Number(10.0)
     );
+}
+
+#[test]
+fn bracketed_paste_inserts_into_the_active_editor() {
+    let mut h = harness();
+    seed_demo(&mut h.tui);
+    h.tui.ui().begin_edit(EditSurface::InCell, "Hello");
+
+    h.tui.paste_text(" wide\nworld").unwrap();
+
+    assert_eq!(h.tui.ui().edit().buffer, "Hello wide\nworld");
+    assert!(!h.tui.has_pending_tasks());
+}
+
+#[test]
+fn copy_queues_plain_text_for_the_terminal_clipboard() {
+    let mut h = harness();
+    seed_demo(&mut h.tui);
+    h.tui
+        .step_key(KeyEvent {
+            code: KeyCode::Char('c'),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        })
+        .unwrap();
+    wait_tasks(&mut h.tui);
+
+    assert_eq!(h.tui.take_terminal_clipboard().as_deref(), Some("Hello"));
+    assert!(h.tui.take_terminal_clipboard().is_none());
+    assert_eq!(
+        h.tui.ui().clipboard().map(|clipboard| clipboard.tsv),
+        Some("Hello".into())
+    );
+}
+
+#[test]
+fn wheel_scrolling_stays_inside_the_sheet_bounds() {
+    let mut h = harness();
+    let mut viewport = h.tui.ui().viewport();
+    viewport.first_row = omacell_core::limits::MAX_ROWS - 1;
+    viewport.first_col = omacell_core::limits::MAX_COLS - 1;
+    h.tui.ui().set_viewport(viewport);
+
+    h.tui.step_scroll(1, 1, false).unwrap();
+
+    let viewport = h.tui.ui().viewport();
+    assert_eq!(viewport.first_row, omacell_core::limits::MAX_ROWS - 1);
+    assert_eq!(viewport.first_col, omacell_core::limits::MAX_COLS - 1);
 }
 
 #[test]
