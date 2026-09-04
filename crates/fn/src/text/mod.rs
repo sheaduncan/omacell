@@ -16,7 +16,7 @@ use crate::util::{
     take_chars, text, to_bool, to_number, to_text, too_long, trunc_i64, trunc_u32_len,
 };
 
-pub(crate) use parse::{civil_serial, parse_date_string, parse_time_string};
+pub(crate) use parse::{civil_serial, current_year, parse_date_string, parse_time_string};
 
 use format::{arraytotext_impl, dollar_impl, fixed_impl, text_impl, valuetotext_impl};
 use parse::{numbervalue_impl, value_impl};

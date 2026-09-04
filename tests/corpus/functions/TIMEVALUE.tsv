@@ -12,3 +12,5 @@
 =TIMEVALUE("12:00:00 AM")	0	12 AM is midnight
 =TIMEVALUE("1:30")	0.0625	1:30
 =TIMEVALUE({"12:00","6:00"})	{0.5,0.25}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=TIMEVALUE("25:00")	0.041666667	hour overflow wraps to the time portion of the next day
+=TIMEVALUE("22-Aug-2011 6:35 AM")	0.274305556	date information in time_text is ignored

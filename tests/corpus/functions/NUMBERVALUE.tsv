@@ -12,3 +12,4 @@
 =NUMBERVALUE("(2)")	-2	accounting parens; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =NUMBERVALUE("1,5", ",", ".")	1.5	explicit decimal comma: 1,5 = 1.5
 =NUMBERVALUE({"1","2"})	{1,2}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=NUMBERVALUE("1.2",".",".")	#VALUE!	decimal and group separators must differ

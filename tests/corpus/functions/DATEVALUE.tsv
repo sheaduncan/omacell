@@ -12,3 +12,8 @@
 =DATEVALUE("9999-12-31")	2958465	Excel max date
 =DATEVALUE("2/29/2024")	45351	leap day 2024 en-US
 =DATEVALUE({"1/1/2024","1/2/2024"})	{45292,45293}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=DATEVALUE("1/2/2024 12:00")	45293	time information in date_text is ignored
+=DATEVALUE("2024/01/05")	45296	an explicit four-digit leading year selects year-month-day order
+=DATEVALUE("June 2024")	45444	a named month and year default to the first day
+=DATEVALUE("5-Jan")	44931	an omitted year uses the pass-stable current year (2023 at the corpus clock)
+=DATEVALUE("13/2/2024")	#VALUE!	en-US does not reinterpret an invalid month as day-first

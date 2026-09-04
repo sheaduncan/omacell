@@ -12,3 +12,6 @@
 =VALUE("")	0	empty text is 0; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
 =VALUE("  8  ")	8	trimmed
 =VALUE({"1","2"})	{1,2}	array-lifting; known difference: LibreOffice CSV/calc (see docs/compat/known-differences.md)
+=VALUE("1E3")	1000	scientific notation is a recognized numeric format
+=VALUE("-1.25e-2")	-0.0125	scientific notation accepts a signed exponent
+=VALUE("1/2/2024 12:00")	45293.5	recognized date-and-time text preserves both serial portions
