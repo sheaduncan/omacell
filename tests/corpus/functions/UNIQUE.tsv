@@ -1,7 +1,7 @@
 # formula	expected	note
-=SUM(UNIQUE({1,1,2}))	3	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. distinct 1 and 2
+=SUM(UNIQUE({1,1,2}))	4	default uniqueness is by row, so a one-row array is unchanged
 =ROWS(UNIQUE({1;1;2}))	2	two unique rows
-=INDEX(UNIQUE({1,1,2},FALSE,TRUE),1)	2	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. exactly_once keeps values that appear once
+=INDEX(UNIQUE({1,1,2},FALSE,TRUE),1)	1	the one row appears exactly once and remains intact
 =ROWS(UNIQUE({1;1;2},FALSE,TRUE))	1	only 2 appears once
 =UNIQUE({1,2,3})	{1,2,3}	already unique vector; spill origin is first
 =UNIQUE(5)	5	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. scalar is unique
@@ -9,4 +9,4 @@
 =ROWS(UNIQUE({1,2;1,2}))	1	duplicate rows collapsed
 =COLUMNS(UNIQUE({1,1,2},TRUE))	2	by_col TRUE unique columns of a row vector
 =INDEX(UNIQUE({"a";"A"}),1)	a	text uniqueness is case-insensitive; first spelling wins
-=UNIQUE({1,1},FALSE,TRUE)	#CALC!	known difference: LibreOffice CSV/engine disagrees; Omacell matches Excel. nothing appears exactly once → #CALC!
+=UNIQUE({1,1},FALSE,TRUE)	{1,1}	the one row appears exactly once
