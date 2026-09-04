@@ -42,7 +42,7 @@ pub enum ReloadEvent {
         /// Revalidated path in the user configuration tree.
         path: PathBuf,
     },
-    /// Parse/schema error; previous config kept.
+    /// Invalid input or unavailable live watcher; previous config kept.
     Invalid {
         /// Path that changed.
         path: PathBuf,
@@ -174,13 +174,27 @@ impl ConfigStore {
             .map(|config| config.config.config.live_reload)
             .unwrap_or(false);
         let watcher = if live_reload {
-            Some(spawn_watcher(
+            match spawn_watcher(
                 paths.clone(),
                 options.clone(),
                 inner.clone(),
                 event_sink.clone(),
                 debounce,
-            )?)
+            ) {
+                Ok(watcher) => Some(watcher),
+                Err(problem) => {
+                    tracing::warn!(
+                        path = %paths.user_config.display(),
+                        error = %problem,
+                        "configuration watch disabled"
+                    );
+                    event_sink.send(ReloadEvent::Invalid {
+                        path: paths.user_config.clone(),
+                        message: format!("configuration watch disabled: {}", problem.message),
+                    });
+                    None
+                }
+            }
         } else {
             None
         };

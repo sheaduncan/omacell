@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use serde_json::json;
 use toml::Value;
+use toml_edit::{DocumentMut, Item};
 
 use omacell_core::workbook::{CalcMode, WorkbookSettings};
 
@@ -365,8 +366,7 @@ fn read_and_migrate_user(
         .as_table_mut()
         .ok_or_else(|| error::schema("user config root must be a table"))?;
     table.insert("schema".into(), Value::Integer(i64::from(CURRENT_SCHEMA)));
-    let rewritten = toml::to_string_pretty(&value)
-        .map_err(|e| error::schema(format!("migrated config: {e}")))?;
+    let rewritten = rewrite_schema_preserving_layout(&original)?;
     atomic_write(path, rewritten.as_bytes())?;
     Ok((
         value,
@@ -376,6 +376,23 @@ fn read_and_migrate_user(
             backup,
         }),
     ))
+}
+
+fn rewrite_schema_preserving_layout(
+    original: &str,
+) -> Result<String, omacell_core::error::CoreError> {
+    let mut document = original
+        .parse::<DocumentMut>()
+        .map_err(|error| crate::error::parse(format!("user config: {error}")))?;
+    let current = document
+        .get_mut("schema")
+        .and_then(Item::as_value_mut)
+        .ok_or_else(|| crate::error::schema("schema must be a root scalar value"))?;
+    let decor = current.decor().clone();
+    let mut next = toml_edit::Value::from(i64::from(CURRENT_SCHEMA));
+    *next.decor_mut() = decor;
+    *current = next;
+    Ok(document.to_string())
 }
 
 fn backup_user_text(paths: &Paths, text: &str) -> Result<PathBuf, omacell_core::error::CoreError> {
@@ -395,7 +412,17 @@ fn backup_user_text(paths: &Paths, text: &str) -> Result<PathBuf, omacell_core::
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), omacell_core::error::CoreError> {
-    let parent = path
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| error::io(e.to_string()))?;
+    let target = if metadata.file_type().is_symlink() {
+        std::fs::canonicalize(path).map_err(|e| error::io(e.to_string()))?
+    } else {
+        path.to_path_buf()
+    };
+    let target_metadata = std::fs::metadata(&target).map_err(|e| error::io(e.to_string()))?;
+    if !target_metadata.is_file() {
+        return Err(error::io("config migration target is not a regular file"));
+    }
+    let parent = target
         .parent()
         .ok_or_else(|| error::io("config path has no parent"))?;
     let stamp = unique_stamp()?;
@@ -407,7 +434,8 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), omacell_core::error::Co
             .open(&temp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        std::fs::rename(&temp, path)
+        std::fs::set_permissions(&temp, target_metadata.permissions())?;
+        std::fs::rename(&temp, &target)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temp);

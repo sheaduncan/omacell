@@ -1,7 +1,9 @@
 //! `setup omarchy` writes only under the fake $HOME.
 
 use omacell_conf::paths::Paths;
-use omacell_conf::setup::{HYPRLAND_SNIPPET, SetupOptions, setup_omarchy};
+use omacell_conf::setup::{
+    HYPRLAND_SNIPPET, SetupOptions, THEME_HOOK, setup_omarchy, uninstall_omarchy,
+};
 
 const SKILL_LINKS: &[&str] = &[
     ".agents/skills/omacell",
@@ -154,6 +156,12 @@ fn hyprland_snippet_uses_the_quattro_launch_table() {
 }
 
 #[test]
+fn theme_hook_succeeds_when_no_instance_is_running() {
+    assert!(THEME_HOOK.contains("|| :"), "{THEME_HOOK}");
+    assert!(!THEME_HOOK.contains("exec omacell"), "{THEME_HOOK}");
+}
+
+#[test]
 fn setup_with_menu_confirmation_writes_jsonc() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
@@ -216,6 +224,108 @@ fn setup_preserves_existing_menu_rows_and_comments() {
         1,
         "setup must be idempotent"
     );
+}
+
+#[test]
+fn reformatted_existing_menu_commands_are_not_duplicated() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    let menu = paths.omarchy_config.join("extensions/omarchy-menu.jsonc");
+    std::fs::create_dir_all(menu.parent().unwrap()).unwrap();
+    std::fs::write(
+        &menu,
+        "{\n  \"rows\": [\n    {\"command\":\"omacell\",\"label\":\"Sheets\"},\n    {\"command\": \"omacell --clipboard\", \"label\": \"Paste\"}\n  ]\n}\n",
+    )
+    .unwrap();
+
+    let report = setup_omarchy(
+        &paths,
+        SetupOptions {
+            confirm_menu: true,
+            link_skill: false,
+        },
+    )
+    .unwrap();
+    assert!(!report.written.contains(&menu));
+    let unchanged = std::fs::read_to_string(menu).unwrap();
+    assert_eq!(unchanged.matches("omacell").count(), 2);
+}
+
+#[test]
+fn menu_comment_decoys_and_symlinks_are_preserved() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    let menu = paths.omarchy_config.join("extensions/omarchy-menu.jsonc");
+    std::fs::create_dir_all(menu.parent().unwrap()).unwrap();
+    let target = dir.path().join("shared-menu.jsonc");
+    std::fs::write(
+        &target,
+        "{\n  // decoy \"rows\": [ must stay a comment\n  \"rows\": [\n    { \"label\": \"Terminal\", \"command\": \"foot\" }\n  ]\n}\n",
+    )
+    .unwrap();
+    symlink(&target, &menu).unwrap();
+
+    setup_omarchy(
+        &paths,
+        SetupOptions {
+            confirm_menu: true,
+            link_skill: false,
+        },
+    )
+    .unwrap();
+    assert!(
+        std::fs::symlink_metadata(&menu)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let merged = std::fs::read_to_string(&target).unwrap();
+    assert!(merged.contains("decoy"));
+    assert_eq!(merged.matches("\"command\": \"omacell\"").count(), 1);
+    assert_eq!(merged.matches("omacell --clipboard").count(), 1);
+}
+
+#[test]
+fn uninstall_removes_only_unchanged_omacell_assets_and_menu_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    let menu = paths.omarchy_config.join("extensions/omarchy-menu.jsonc");
+    std::fs::create_dir_all(menu.parent().unwrap()).unwrap();
+    std::fs::write(
+        &menu,
+        "{\n  // retain user rows\n  \"rows\": [\n    { \"label\": \"Terminal\", \"command\": \"foot\" }\n  ]\n}\n",
+    )
+    .unwrap();
+    setup_omarchy(
+        &paths,
+        SetupOptions {
+            confirm_menu: true,
+            link_skill: true,
+        },
+    )
+    .unwrap();
+    let template = paths.omarchy_config.join("themed/omacell.toml.tpl");
+    std::fs::write(&template, "# user changed this\n").unwrap();
+
+    let report = uninstall_omarchy(&paths, true).unwrap();
+    assert!(template.is_file(), "modified user file must remain");
+    assert!(report.skipped.iter().any(|item| item.contains("modified")));
+    assert!(
+        !paths
+            .omarchy_config
+            .join("hooks/theme-set.d/omacell")
+            .exists()
+    );
+    for relative in SKILL_LINKS {
+        assert!(!dir.path().join(relative).exists(), "{relative}");
+    }
+    let remaining_menu = std::fs::read_to_string(menu).unwrap();
+    assert!(remaining_menu.contains("retain user rows"));
+    assert!(remaining_menu.contains("Terminal"));
+    assert!(!remaining_menu.contains("\"command\": \"omacell\""));
+    assert!(!remaining_menu.contains("omacell --clipboard"));
 }
 
 #[test]

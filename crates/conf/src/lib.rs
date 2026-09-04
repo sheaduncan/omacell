@@ -36,6 +36,8 @@ pub use layer::{
 pub use notify::{NotifyKind, allowed as notify_allowed, send as notify_send};
 pub use paths::Paths;
 pub use schema::Config;
-pub use setup::{HYPRLAND_SNIPPET, SetupOptions, SetupReport, setup_omarchy};
+pub use setup::{
+    HYPRLAND_SNIPPET, SetupOptions, SetupReport, UninstallReport, setup_omarchy, uninstall_omarchy,
+};
 pub use theme::{ColorsToml, Rgb, ThemeRoles, mix, resolve_roles, resolve_roles_with_override};
 pub use watch::{ConfigStore, ReloadEvent, ReloadHandle};

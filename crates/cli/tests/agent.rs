@@ -27,6 +27,8 @@ fn handoff_records_args_and_cwd_when_default_agent_set() {
 
     let output = Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", home.path().join("run"))
         .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
@@ -90,6 +92,8 @@ fn diagnose_without_book_writes_a_private_bundle_and_passes_it_in_the_prompt() {
 
     let output = Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_STATE_HOME", home.path().join("state"))
         .env("XDG_RUNTIME_DIR", home.path().join("run"))
@@ -125,6 +129,8 @@ fn hidden_without_default_agent() {
 
     let output = Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", home.path().join("run"))
         .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
@@ -159,6 +165,8 @@ fn hidden_when_omarchy_missing() {
     let home = TempDir::new().unwrap();
     let output = Command::cargo_bin("omacell")
         .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", home.path().join("run"))
         .env("PATH", "/usr/bin:/bin")

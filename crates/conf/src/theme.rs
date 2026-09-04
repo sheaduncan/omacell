@@ -80,6 +80,9 @@ impl Rgb {
     pub fn parse(s: &str) -> Result<Self, omacell_core::error::CoreError> {
         let s = s.trim();
         let h = s.strip_prefix('#').unwrap_or(s);
+        if !h.is_ascii() {
+            return Err(error::theme(format!("invalid color {s}")));
+        }
         match h.len() {
             3 => {
                 let r = u8::from_str_radix(&h[0..1], 16)
@@ -337,28 +340,20 @@ pub fn resolve_roles_with_override(
     enforce_contrast: bool,
     portal_light: bool,
 ) -> Result<ThemeRoles, omacell_core::error::CoreError> {
-    let (mut roles, active_dir) = if let Some(dir) = active_theme_dir(paths) {
-        let fallback = dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("theme");
-        let mut colors = ColorsToml::parse(
-            &std::fs::read_to_string(dir.join("colors.toml"))
-                .map_err(|e| error::theme(e.to_string()))?,
-        )?;
-        if dir.join("light.mode").is_file() {
-            colors.mode = "light".into();
-        }
-        let name = theme_name(&dir, fallback);
-        (ThemeRoles::from_colors(&name, &colors, false)?, Some(dir))
-    } else {
-        let colors = neutral_colors(portal_light)?;
-        (ThemeRoles::from_colors("neutral", &colors, false)?, None)
+    let mut roles = match active_theme_dir(paths) {
+        Some(dir) => match roles_from_ambient_theme(&dir) {
+            Ok(roles) => roles,
+            Err(problem) => {
+                tracing::warn!(
+                    path = %dir.display(),
+                    error = %problem,
+                    "invalid ambient Omarchy theme; using neutral palette"
+                );
+                neutral_roles(portal_light)?
+            }
+        },
+        None => neutral_roles(portal_light)?,
     };
-
-    if let Some(dir) = &active_dir {
-        overlay_role_file(&dir.join("omacell.toml"), &mut roles)?;
-    }
     overlay_role_file(&paths.user_theme_toml(), &mut roles)?;
     if let Some(path) = override_path {
         if !path.is_file() {
@@ -372,6 +367,29 @@ pub fn resolve_roles_with_override(
     if enforce_contrast {
         enforce_role_contrast(&mut roles)?;
     }
+    Ok(roles)
+}
+
+fn neutral_roles(portal_light: bool) -> Result<ThemeRoles, omacell_core::error::CoreError> {
+    let colors = neutral_colors(portal_light)?;
+    ThemeRoles::from_colors("neutral", &colors, false)
+}
+
+fn roles_from_ambient_theme(dir: &Path) -> Result<ThemeRoles, omacell_core::error::CoreError> {
+    let fallback = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("theme");
+    let mut colors = ColorsToml::parse(
+        &std::fs::read_to_string(dir.join("colors.toml"))
+            .map_err(|e| error::theme(e.to_string()))?,
+    )?;
+    if dir.join("light.mode").is_file() {
+        colors.mode = "light".into();
+    }
+    let name = theme_name(dir, fallback);
+    let mut roles = ThemeRoles::from_colors(&name, &colors, false)?;
+    overlay_role_file(&dir.join("omacell.toml"), &mut roles)?;
     Ok(roles)
 }
 

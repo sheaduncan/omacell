@@ -130,6 +130,29 @@ fn mix_is_linear() {
 }
 
 #[test]
+fn non_ascii_short_colors_are_rejected_without_panicking() {
+    let result = std::panic::catch_unwind(|| Rgb::parse("#é1"));
+    assert!(result.is_ok(), "invalid UTF-8 boundaries must not panic");
+    assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn malformed_ambient_theme_falls_back_but_user_overlay_remains_strict() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = omacell_conf::Paths::from_home(dir.path());
+    let theme = paths.omarchy_state.join("current/theme");
+    std::fs::create_dir_all(&theme).unwrap();
+    std::fs::write(theme.join("colors.toml"), "background = \"#é1\"\n").unwrap();
+
+    let roles = resolve_roles_with_override(&paths, None, false, false).unwrap();
+    assert_eq!(roles.name, "neutral");
+
+    std::fs::create_dir_all(&paths.user_config).unwrap();
+    std::fs::write(paths.user_theme_toml(), "[state]\ncursor = \"#é1\"\n").unwrap();
+    assert!(resolve_roles_with_override(&paths, None, false, false).is_err());
+}
+
+#[test]
 fn light_mode_grid_is_darker_than_background() {
     let text = include_str!("../../../tests/fixtures/omarchy-themes/catppuccin-latte/colors.toml");
     let colors = ColorsToml::parse(text).unwrap();

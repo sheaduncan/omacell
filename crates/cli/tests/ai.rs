@@ -8,7 +8,11 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("omacell").unwrap()
+    let mut command = Command::cargo_bin("omacell").unwrap();
+    command
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME");
+    command
 }
 
 fn walk_files(root: &Path, out: &mut Vec<std::path::PathBuf>) {
@@ -36,6 +40,7 @@ fn port_open(port: u16) -> bool {
 fn setup_with_fake_local_servers_writes_only_config() {
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
+    let config_home = home.path().join(".config");
     let _ollama = TcpListener::bind("127.0.0.1:11434").ok();
     let _lm = TcpListener::bind("127.0.0.1:1234").ok();
     assert!(
@@ -45,13 +50,14 @@ fn setup_with_fake_local_servers_writes_only_config() {
 
     let mut cmd = bin();
     cmd.env("HOME", home.path());
+    cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime.path());
     cmd.args(["--json", "ai", "setup"])
         .assert()
         .success()
         .stdout(predicate::str::contains("127.0.0.1"));
 
-    let config = home.path().join(".config/omacell/config.toml");
+    let config = config_home.join("omacell/config.toml");
     assert!(config.is_file(), "setup must write {}", config.display());
     let text = std::fs::read_to_string(&config).unwrap();
     assert!(text.contains("openai_compatible"), "{text}");

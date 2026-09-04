@@ -18,6 +18,8 @@ fn corpus_xlsx() -> PathBuf {
 
 fn command(home: &Path) -> Command {
     let mut command = Command::cargo_bin("omacell").unwrap();
+    command.env_remove("XDG_CONFIG_HOME");
+    command.env_remove("XDG_STATE_HOME");
     command.env("HOME", home);
     command.env("XDG_RUNTIME_DIR", home.join("run"));
     command
