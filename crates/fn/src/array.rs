@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use omacell_core::coerce::{self, Cmp, Scalar};
+use omacell_core::coerce::{self, Scalar};
 use omacell_core::error::ErrorKind;
 use omacell_core::eval::{ArgVal, EvalCtx, FnBody, FnRegistry, RuntimeArray, RuntimeValue};
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
@@ -466,12 +466,41 @@ fn filter_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     }
 }
 
-fn sort_key(a: &Scalar, b: &Scalar) -> std::cmp::Ordering {
-    match coerce::compare(a, b) {
-        Ok(Cmp::Lt) => std::cmp::Ordering::Less,
-        Ok(Cmp::Eq) => std::cmp::Ordering::Equal,
-        Ok(Cmp::Gt) => std::cmp::Ordering::Greater,
-        Err(_) => std::cmp::Ordering::Equal,
+fn sort_key(a: &Scalar, b: &Scalar, descending: bool) -> std::cmp::Ordering {
+    // Excel groups errors as equal and keeps blank cells last:
+    // https://support.microsoft.com/en-us/excel/sort-data-in-a-workbook-in-the-browser
+    fn rank(value: &Scalar) -> u8 {
+        match value {
+            Scalar::Number(_) => 0,
+            Scalar::Text(_) => 1,
+            Scalar::Bool(_) => 2,
+            Scalar::Error(_) => 3,
+            Scalar::Empty => 4,
+        }
+    }
+
+    let a_rank = rank(a);
+    let b_rank = rank(b);
+    let ordinary = a_rank < 3 && b_rank < 3;
+    let ordering = if a_rank != b_rank {
+        a_rank.cmp(&b_rank)
+    } else {
+        match (a, b) {
+            (Scalar::Number(a), Scalar::Number(b)) => a.total_cmp(b),
+            (Scalar::Text(a), Scalar::Text(b)) => a.to_lowercase().cmp(&b.to_lowercase()),
+            (Scalar::Bool(a), Scalar::Bool(b)) => a.cmp(b),
+            // Excel treats all error values as equal for sorting. Blank cells
+            // likewise retain their input order at the end of the result.
+            (Scalar::Error(_), Scalar::Error(_)) | (Scalar::Empty, Scalar::Empty) => {
+                std::cmp::Ordering::Equal
+            }
+            _ => std::cmp::Ordering::Equal,
+        }
+    };
+    if descending && ordinary {
+        ordering.reverse()
+    } else {
+        ordering
     }
 }
 
@@ -502,13 +531,8 @@ fn sort_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Ok(b) => b,
         Err(e) => return err(e),
     };
-    let by_col = if array.rows == 1 && array.cols > 1 {
-        true
-    } else if array.cols == 1 && array.rows > 1 {
-        false
-    } else {
-        by_col
-    };
+    // `by_col` defaults to false even when the input has exactly one row:
+    // https://support.microsoft.com/en-us/excel/sort-function
     let (n, breadth) = if by_col {
         (array.cols as usize, array.rows)
     } else {
@@ -530,8 +554,7 @@ fn sort_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         } else {
             args::at(&array, b as u32, key_i)
         };
-        let ord = sort_key(&ka, &kb);
-        if order == -1 { ord.reverse() } else { ord }
+        sort_key(&ka, &kb, order == -1)
     });
     reorder(&array, &idx, by_col)
 }
@@ -627,8 +650,7 @@ fn sortby_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         for (by, order) in &keys {
             let ka = key_at(by, a);
             let kb = key_at(by, b);
-            let ord = sort_key(&ka, &kb);
-            let ord = if *order == -1 { ord.reverse() } else { ord };
+            let ord = sort_key(&ka, &kb, *order == -1);
             if ord != std::cmp::Ordering::Equal {
                 return ord;
             }
@@ -656,15 +678,7 @@ fn unique_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Err(e) => return err(e),
     };
     let by_col = match args::opt_bool(ctx, args, 1, false) {
-        Ok(b) => {
-            if array.rows == 1 && array.cols > 1 {
-                true
-            } else if array.cols == 1 && array.rows > 1 {
-                false
-            } else {
-                b
-            }
-        }
+        Ok(b) => b,
         Err(e) => return err(e),
     };
     let exactly_once = match args::opt_bool(ctx, args, 2, false) {
@@ -898,14 +912,6 @@ fn take_drop(ctx: &mut EvalCtx<'_>, args: &[ArgVal], drop: bool) -> RuntimeValue
     if rows_n.is_none() && cols_n.is_none() {
         return err(ErrorKind::Value);
     }
-    // A vector's first size argument applies along its long axis (Excel TAKE/DROP).
-    let (rows_n, cols_n) = if array.rows == 1 && array.cols > 1 && cols_n.is_none() {
-        (None, rows_n)
-    } else if array.cols == 1 && array.rows > 1 && cols_n.is_none() {
-        (rows_n, None)
-    } else {
-        (rows_n, cols_n)
-    };
     let (r0, r1) = match slice_range(array.rows, rows_n, drop) {
         Ok(v) => v,
         Err(e) => {

@@ -2,6 +2,18 @@
 
 ## Plan (written before coding)
 
+### 2026-09-04 one-row array and sort-order follow-up (written before coding)
+
+- Correct the existing `SORT`, `UNIQUE`, `TAKE`, and `DROP` corpus rows first
+  so a one-row array retains row-oriented defaults; add explicit `by_col` or
+  columns arguments where column-wise behavior is intended.
+- Give `SORT`/`SORTBY` a deterministic value ordering in which ordinary values
+  compare normally, errors compare equal after ordinary values, and true blank
+  cells remain last; keep the sort stable for equal keys.
+- Remove the one-row axis overrides, update the authoritative review checklist
+  and compatibility evidence, then run the complete function suite, strict
+  Clippy, and exact `just check` before opening the PR.
+
 ### 2026-09-04 approximate-lookup error follow-up (written before coding)
 
 - Add the canonical last-nonblank `LOOKUP(2,1/(range<>""),range)` regression
@@ -145,6 +157,13 @@ index. The canonical `LOOKUP(2,1/(range<>""),range)` idiom therefore reaches
 the last nonblank result without an intermediate `#DIV/0!` abort. Other
 approximate lookup functions retain their existing error behavior.
 
+The 2026-09-04 array follow-up keeps `SORT` and `UNIQUE` row-oriented unless
+`by_col` is explicitly true, including for one-row inputs. `TAKE` and `DROP`
+now always interpret their first size argument as rows and their optional
+second size argument as columns. Sort keys use a stable total ordering instead
+of treating an error as equal to every value: ordinary values sort normally,
+errors form an equal group after them, and blank cells remain last.
+
 ## Interfaces exposed (for dependents)
 
 | Item | Where |
@@ -202,6 +221,14 @@ Host: rustc 1.98.0, Linux.
     returns `#N/A`.
   - The complete `omacell-fn` suite passes, including every function corpus,
     integration test, eager-function panic smoke, and doctest.
+- 2026-09-04 array test-first evidence:
+  - Correcting the existing one-row expectations and adding stable error-order
+    cases produced 12 corpus mismatches before implementation; all now pass.
+  - The complete `omacell-fn` suite and strict all-target Clippy pass, including
+    every function corpus and eager-function panic smoke.
+  - Default row orientation follows Microsoft's [`SORT`](https://support.microsoft.com/en-us/excel/sort-function)
+    documentation; equal error grouping and final blank placement follow its
+    documented [sort order](https://support.microsoft.com/en-us/excel/sort-data-in-a-workbook-in-the-browser).
 - 2026-09-03 bit-shift test-first evidence:
   - Six cases at 49 and ±53 bits initially returned `#NUM!`; they now return
     zero when the input/result remains within the 48-bit value ceiling.
@@ -255,6 +282,9 @@ Host: rustc 1.98.0, Linux.
    behavior. The live-Excel oracle remains the separately owned WP-28 gate.
 7. **Resolved 2026-09-04:** classic approximate `LOOKUP` skips error sentinels
    while preserving the return vector's original indexes.
+8. **Resolved 2026-09-04:** one-row dynamic arrays retain row-oriented defaults,
+   `TAKE`/`DROP` use their documented row and column positions, and sort errors
+   no longer violate comparator transitivity.
 
 ## RFC (only if a frozen contract changed)
 
@@ -271,6 +301,9 @@ changes no function signature, command schema, or frozen WP-01 type.
 
 The approximate-lookup follow-up changes no public signature or frozen
 contract.
+
+The array-orientation and sort-order follow-up changes no public signature or
+frozen contract.
 
 ## Checklist
 
