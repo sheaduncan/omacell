@@ -2,7 +2,7 @@
 
 use omacell_conf::paths::Paths;
 use omacell_conf::setup::{
-    HYPRLAND_SNIPPET, THEME_HOOK, SetupOptions, setup_omarchy, uninstall_omarchy,
+    HYPRLAND_SNIPPET, SetupOptions, THEME_HOOK, setup_omarchy, uninstall_omarchy,
 };
 
 const SKILL_LINKS: &[&str] = &[
@@ -252,6 +252,42 @@ fn reformatted_existing_menu_commands_are_not_duplicated() {
 }
 
 #[test]
+fn menu_comment_decoys_and_symlinks_are_preserved() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::from_home(dir.path());
+    let menu = paths.omarchy_config.join("extensions/omarchy-menu.jsonc");
+    std::fs::create_dir_all(menu.parent().unwrap()).unwrap();
+    let target = dir.path().join("shared-menu.jsonc");
+    std::fs::write(
+        &target,
+        "{\n  // decoy \"rows\": [ must stay a comment\n  \"rows\": [\n    { \"label\": \"Terminal\", \"command\": \"foot\" }\n  ]\n}\n",
+    )
+    .unwrap();
+    symlink(&target, &menu).unwrap();
+
+    setup_omarchy(
+        &paths,
+        SetupOptions {
+            confirm_menu: true,
+            link_skill: false,
+        },
+    )
+    .unwrap();
+    assert!(
+        std::fs::symlink_metadata(&menu)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let merged = std::fs::read_to_string(&target).unwrap();
+    assert!(merged.contains("decoy"));
+    assert_eq!(merged.matches("\"command\": \"omacell\"").count(), 1);
+    assert_eq!(merged.matches("omacell --clipboard").count(), 1);
+}
+
+#[test]
 fn uninstall_removes_only_unchanged_omacell_assets_and_menu_rows() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
@@ -276,7 +312,12 @@ fn uninstall_removes_only_unchanged_omacell_assets_and_menu_rows() {
     let report = uninstall_omarchy(&paths, true).unwrap();
     assert!(template.is_file(), "modified user file must remain");
     assert!(report.skipped.iter().any(|item| item.contains("modified")));
-    assert!(!paths.omarchy_config.join("hooks/theme-set.d/omacell").exists());
+    assert!(
+        !paths
+            .omarchy_config
+            .join("hooks/theme-set.d/omacell")
+            .exists()
+    );
     for relative in SKILL_LINKS {
         assert!(!dir.path().join(relative).exists(), "{relative}");
     }

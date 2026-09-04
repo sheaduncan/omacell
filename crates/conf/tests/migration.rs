@@ -39,7 +39,8 @@ fn migration_preserves_comments_formatting_mode_and_symlink() {
     let paths = Paths::from_home(dir.path());
     std::fs::create_dir_all(&paths.user_config).unwrap();
     let target = dir.path().join("shared-config.toml");
-    let original = "# keep this heading\nschema=0 # keep this note\n[appearance]\ngrid_lines = false\n";
+    let original =
+        "# keep this heading\nschema=0 # keep this note\n[appearance]\ngrid_lines = false\n";
     std::fs::write(&target, original).unwrap();
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
     symlink(&target, paths.user_config_toml()).unwrap();

@@ -121,6 +121,7 @@ fn live_reload_false_does_not_start_a_watcher() {
 fn watcher_setup_failure_keeps_the_loaded_configuration() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::from_home(dir.path());
+    std::fs::create_dir_all(paths.user_config.parent().unwrap()).unwrap();
     std::fs::write(&paths.user_config, "not a directory").unwrap();
 
     let store = ConfigStore::load_and_watch(paths.clone()).unwrap();
