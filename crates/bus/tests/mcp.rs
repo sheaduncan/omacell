@@ -459,8 +459,10 @@ fn mcp_session_tools_do_not_impersonate_the_user() {
         "workbook_open",
         json!({"path": "book.xlsx"}),
     );
-    call_ok(&mut bus, &mut ctx, "workbook_save", json!({}));
-    call_ok(&mut bus, &mut ctx, "export", json!({"path": "out.csv"}));
+    let save_err = call(&mut bus, &mut ctx, "workbook_save", json!({})).unwrap_err();
+    assert_eq!(save_err.code, codes::COMMAND_DENIED);
+    let export_err = call(&mut bus, &mut ctx, "export", json!({"path": "out.csv"})).unwrap_err();
+    assert_eq!(export_err.code, codes::COMMAND_DENIED);
     call_ok(&mut bus, &mut ctx, "recalc", json!({}));
     call_ok(&mut bus, &mut ctx, "audit", json!({}));
     call_ok(
@@ -478,6 +480,11 @@ fn mcp_session_tools_do_not_impersonate_the_user() {
             Origin::User,
             "{id} must not impersonate Origin::User"
         );
+        assert_ne!(
+            *origin,
+            Origin::Ipc,
+            "{id} must not impersonate Origin::Ipc"
+        );
     }
     let origin_of = |id: &str| {
         seen.iter()
@@ -485,12 +492,14 @@ fn mcp_session_tools_do_not_impersonate_the_user() {
             .map(|(_, origin)| *origin)
             .unwrap()
     };
-    assert_eq!(origin_of("file.open"), Origin::Ipc);
-    assert_eq!(origin_of("file.save"), Origin::Ipc);
-    assert_eq!(origin_of("file.export"), Origin::Ipc);
-    assert_eq!(origin_of("calc.recalc"), Origin::Ipc);
+    assert_eq!(origin_of("file.open"), Origin::ExternalAgent);
+    assert_eq!(origin_of("calc.recalc"), Origin::ExternalAgent);
     assert_eq!(origin_of("audit.run"), Origin::ExternalAgent);
     assert_eq!(origin_of("test.query"), Origin::ExternalAgent);
+    assert!(
+        seen.iter()
+            .all(|(id, _)| id != "file.save" && id != "file.export")
+    );
 }
 
 #[test]
@@ -536,4 +545,79 @@ fn mcp_open_does_not_discard_a_pending_proposal() {
     assert_eq!(err.code, codes::COMMAND_DENIED);
     assert_eq!(bus.list_changesets().len(), 1);
     assert_eq!(bus.list_changesets()[0].id, proposed.id);
+}
+
+#[test]
+fn mcp_recalc_does_not_invalidate_a_pending_proposal() {
+    let mut bus = bus();
+    let mut ctx = McpCtx::default();
+    let proposed = call_ok(
+        &mut bus,
+        &mut ctx,
+        "range_write",
+        json!({"range": "A1", "values": [["1"]]}),
+    );
+    let id = omacell_core::changeset::ChangesetId::new(proposed["id"].as_str().unwrap()).unwrap();
+    let err = call(&mut bus, &mut ctx, "recalc", json!({})).unwrap_err();
+    assert_eq!(err.code, codes::COMMAND_DENIED);
+    bus.apply(Origin::User, &id).unwrap();
+    assert_eq!(
+        bus.workbook()
+            .get(bus.workbook().active_sheet(), 0, 0)
+            .unwrap()
+            .unwrap()
+            .value,
+        omacell_core::value::Value::Number(1.0)
+    );
+}
+
+#[test]
+fn mcp_open_succeeds_after_user_discards_a_proposal() {
+    let mut bus = bus();
+    bus.registry_mut()
+        .register::<RecordingArgs, _>(
+            CommandSpec {
+                id: "file.open",
+                doc: "test workbook open",
+                kind: CommandKind::Mutating,
+                changeset_eligible: false,
+                exposure: Exposure::Public,
+                default_keys: &[],
+            },
+            |_ctx, _args| {
+                Ok(Effect {
+                    events: vec![Event::WorkbookOpened {
+                        path: Some("next.xlsx".into()),
+                    }],
+                    ..Effect::default()
+                })
+            },
+        )
+        .unwrap();
+    let proposed = bus
+        .propose(
+            Origin::ExternalAgent,
+            vec![omacell_core::changeset::CommandCall {
+                id: omacell_core::command::CommandId::new("cell.set").unwrap(),
+                args: json!({"ref": "A1", "input": "old"}),
+            }],
+        )
+        .unwrap();
+    let mut ctx = McpCtx::default();
+    let err = call(
+        &mut bus,
+        &mut ctx,
+        "workbook_open",
+        json!({"path": "next.xlsx"}),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, codes::COMMAND_DENIED);
+    bus.discard_proposal(Origin::User, &proposed.id).unwrap();
+    call_ok(
+        &mut bus,
+        &mut ctx,
+        "workbook_open",
+        json!({"path": "next.xlsx"}),
+    );
+    assert!(bus.list_changesets().is_empty());
 }

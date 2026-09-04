@@ -52,6 +52,10 @@ fn help_snapshots() {
     assert_snapshot!("changeset_list", help(&["changeset", "list", "--help"]));
     assert_snapshot!("changeset_show", help(&["changeset", "show", "--help"]));
     assert_snapshot!("changeset_apply", help(&["changeset", "apply", "--help"]));
+    assert_snapshot!(
+        "changeset_discard",
+        help(&["changeset", "discard", "--help"])
+    );
     assert_snapshot!("changeset_revert", help(&["changeset", "revert", "--help"]));
     assert_snapshot!("changeset_export", help(&["changeset", "export", "--help"]));
     assert_snapshot!("diff", help(&["diff", "--help"]));
