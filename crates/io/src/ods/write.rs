@@ -13,7 +13,7 @@ use zip::write::SimpleFileOptions;
 
 use crate::error;
 use crate::xlsx::opc::MAX_PACKAGE_BYTES;
-use crate::xlsx::xml::escape;
+use crate::xlsx::xml::{escape, is_xml10_char};
 
 const MAX_ODS_DENSE_CELLS: u64 = 1_000_000;
 
@@ -104,7 +104,7 @@ fn content_xml(wb: &Workbook) -> Result<String, CoreError> {
     for sheet in wb.sheets() {
         out.push_str(&format!(
             r#"<table:table table:name="{}">"#,
-            escape(&sheet.name)
+            ods_escape(&sheet.name)?
         ));
         if let Some(used) = sheet.used_range() {
             for row in 0..=used.max_row {
@@ -142,7 +142,7 @@ fn content_xml(wb: &Workbook) -> Result<String, CoreError> {
                                 let of = excel_formula_to_ods(src)?;
                                 out.push_str(&format!(
                                     r#"<table:table-cell table:formula="{}"{style_attr}{span}/>"#,
-                                    escape(&of)
+                                    ods_escape(&of)?
                                 ));
                             } else {
                                 match slot.value {
@@ -166,13 +166,13 @@ fn content_xml(wb: &Workbook) -> Result<String, CoreError> {
                                         let t = wb.intern().strings.get(id).unwrap_or("");
                                         out.push_str(&format!(
                                             r#"<table:table-cell office:value-type="string"{style_attr}{span}><text:p>{}</text:p></table:table-cell>"#,
-                                            escape(t)
+                                            ods_escape(t)?
                                         ));
                                     }
                                     Value::Error(kind) => {
                                         out.push_str(&format!(
                                             r#"<table:table-cell office:value-type="string"{style_attr}{span}><text:p>{}</text:p></table:table-cell>"#,
-                                            escape(kind.as_str())
+                                            ods_escape(kind.as_str())?
                                         ));
                                     }
                                     Value::Empty | Value::Array(_) => {
@@ -214,8 +214,8 @@ fn content_xml(wb: &Workbook) -> Result<String, CoreError> {
             };
             out.push_str(&format!(
                 r#"<table:named-range table:name="{}" table:cell-range-address="{}"/>"#,
-                escape(&name.name),
-                escape(&addr)
+                ods_escape(&name.name)?,
+                ods_escape(&addr)?
             ));
         }
     }
@@ -282,6 +282,16 @@ fn rgb(color: Color) -> Option<u32> {
         Color::Rgb { argb } => Some(argb),
         _ => None,
     }
+}
+
+fn ods_escape(value: &str) -> Result<String, CoreError> {
+    if let Some(ch) = value.chars().find(|ch| !is_xml10_char(*ch)) {
+        return Err(error::ods_format(format!(
+            "ODS text contains XML 1.0-forbidden character U+{:04X}",
+            u32::from(ch)
+        )));
+    }
+    Ok(escape(value))
 }
 
 fn excel_formula_to_ods(src: &str) -> Result<String, CoreError> {
