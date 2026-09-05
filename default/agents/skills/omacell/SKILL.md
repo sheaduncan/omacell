@@ -69,7 +69,7 @@ the user's harness). Tools:
 | `commands_list` | Same catalog as `omacell commands --json` |
 | `recalc` | Live workbook only; denied while a proposal is pending |
 | `audit` | Same report as `omacell audit --json` |
-| `card` | Summary-level workbook card until WP-22 |
+| `card` | Privacy-filtered summary-level workbook card |
 | `changeset_propose` / `changeset_list` | Review queue |
 | `changeset_apply` / `changeset_revert` | Denied for agents; user applies or discards from the CLI |
 | `export` | Denied; user exports from the CLI/GUI |
@@ -109,4 +109,5 @@ Before declaring a workbook task done:
 - **Do not edit** `~/.config/omarchy` or `/usr/share/omarchy` from this skill.
 - Embedded scripts and trust (`omacell trust`) are user decisions, not agent
   tools.
-- `omacell ai` arrives in WP-22. Use the CLI, MCP, and the default agent.
+- Use `omacell ai setup|card|plan|log|usage` for provider and planning tasks;
+  workbook mutations still cross the normal changeset-review boundary.

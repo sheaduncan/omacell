@@ -84,8 +84,8 @@
 999999	#,##0	en-US	1900	999,999	six-digit group
 -999999	#,##0	en-US	1900	-999,999	neg group
 123.456	0.0E+00	en-US	1900	1.2E+02	1 dp scientific
-TRUE	[>=1]Y;N	en-US	1900	Y	TRUE as 1 matches [>=1]
-FALSE	[>=1]Y;N	en-US	1900	N	FALSE as 0
+TRUE	[>=1]Y;N	en-US	1900	TRUE	custom conditions do not coerce Boolean cells
+FALSE	[>=1]Y;N	en-US	1900	FALSE	custom conditions do not coerce Boolean cells
 4.2	0	en-US	1900	4	trunc-round
 4.5	0	en-US	1900	5	4.5→5
 -4.5	0	en-US	1900	-5	-4.5→-5

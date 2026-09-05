@@ -55,17 +55,17 @@ pub fn builtin_format(id: u32, locale: LocaleId) -> Option<Cow<'static, str>> {
         38 => Some(Cow::Borrowed("#,##0 ;[Red](#,##0)")),
         39 => Some(Cow::Borrowed("#,##0.00;(#,##0.00)")),
         40 => Some(Cow::Borrowed("#,##0.00;[Red](#,##0.00)")),
-        41 => Some(currency_fmt(
+        41 => Some(Cow::Borrowed("_(* #,##0_);_(* (#,##0);_(* \"-\"_);_(@_)")),
+        42 => Some(currency_fmt(
             "_($* #,##0_);_($* (#,##0);_($* \"-\"_);_(@_)",
             currency,
         )),
-        42 => Some(Cow::Borrowed("_(* #,##0_);_(* (#,##0);_(* \"-\"_);_(@_)")),
-        43 => Some(currency_fmt(
+        43 => Some(Cow::Borrowed(
+            "_(* #,##0.00_);_(* (#,##0.00);_(* \"-\"??_);_(@_)",
+        )),
+        44 => Some(currency_fmt(
             "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)",
             currency,
-        )),
-        44 => Some(Cow::Borrowed(
-            "_(* #,##0.00_);_(* (#,##0.00);_(* \"-\"??_);_(@_)",
         )),
         45 => Some(Cow::Borrowed("mm:ss")),
         46 => Some(Cow::Borrowed("[h]:mm:ss")),

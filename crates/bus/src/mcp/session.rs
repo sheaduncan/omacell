@@ -32,7 +32,7 @@ pub const MAX_RANGE_READ_BYTES: usize = 1_048_576;
 
 /// Called after an `ExternalAgent` proposal is stored.
 pub type ProposeHook = Box<dyn Fn(&Changeset) + Send + Sync>;
-/// Optional WP-22 workbook card (defaults to [`stub_card`]).
+/// Optional privacy-filtered workbook card (defaults to [`stub_card`]).
 pub type CardHook = Box<dyn Fn(&Workbook, Option<&str>) -> Json + Send + Sync>;
 
 /// Session-side MCP state (open path, render capability, notify hook).
@@ -636,7 +636,7 @@ fn sheet_summary(wb: &Workbook, name: &str) -> Result<Json, CoreError> {
     }))
 }
 
-/// Summary-level workbook card (WP-22 replaces this payload).
+/// Minimal summary-level fallback workbook card.
 #[must_use]
 pub fn stub_card(wb: &Workbook, path: Option<&str>) -> Json {
     let mut formula_count = 0u64;
