@@ -460,7 +460,7 @@ fn wp28_manual_and_release_automation_are_present() {
     assert!(rename.contains("crates/core/src/product.rs"));
     let nightly =
         fs::read_to_string(root.join(".github/workflows/nightly.yml")).expect("read nightly");
-    assert!(nightly.contains("cargo +nightly fuzz list"));
+    assert!(nightly.contains("cargo +nightly-2026-08-28 fuzz list"));
     assert!(nightly.contains("cargo deny check"));
     let release =
         fs::read_to_string(root.join(".github/workflows/release.yml")).expect("read release");
@@ -628,7 +628,10 @@ fn wp28_workflows_are_bounded_and_fail_closed() {
         "test \"${#fuzz_targets[@]}\" -gt 0",
         "curl --fail --silent --show-error http://127.0.0.1:11434/api/tags",
     ] {
-        assert!(nightly.contains(needle), "nightly workflow missing {needle}");
+        assert!(
+            nightly.contains(needle),
+            "nightly workflow missing {needle}"
+        );
     }
     assert!(
         !nightly.contains("cargo +nightly "),
@@ -636,7 +639,10 @@ fn wp28_workflows_are_bounded_and_fail_closed() {
     );
     let ready = nightly.find("/api/tags").expect("Ollama readiness probe");
     let pull = nightly.find("ollama pull").expect("Ollama model pull");
-    assert!(ready < pull, "Ollama must be ready before pulling the model");
+    assert!(
+        ready < pull,
+        "Ollama must be ready before pulling the model"
+    );
 
     let packaging =
         fs::read_to_string(workflows.join("packaging.yml")).expect("read packaging workflow");
@@ -650,9 +656,14 @@ fn wp28_workflows_are_bounded_and_fail_closed() {
     );
 
     let release = fs::read_to_string(workflows.join("release.yml")).expect("read release");
-    let toolchain = release.find("Install Rust toolchain").expect("toolchain step");
+    let toolchain = release
+        .find("Install Rust toolchain")
+        .expect("toolchain step");
     let metadata = release.find("cargo metadata").expect("metadata check");
-    assert!(toolchain < metadata, "cargo metadata ran before toolchain setup");
+    assert!(
+        toolchain < metadata,
+        "cargo metadata ran before toolchain setup"
+    );
     assert!(release.contains("mesa-vulkan-drivers"));
     assert!(release.contains("omacell-${version}.tar.gz"));
     assert!(
@@ -686,8 +697,7 @@ fn wp28_packaging_and_rename_paths_are_reproducible() {
         assert!(binary.contains(needle), "binary PKGBUILD missing {needle}");
     }
 
-    let smoke =
-        fs::read_to_string(root.join("scripts/arch-package-smoke.sh")).expect("read smoke");
+    let smoke = fs::read_to_string(root.join("scripts/arch-package-smoke.sh")).expect("read smoke");
     assert!(
         !smoke.contains("bsdtar -tf \"$package_file\" |"),
         "archive membership must not rely on a pipefail/SIGPIPE-sensitive pipeline"
@@ -715,7 +725,8 @@ fn wp28_review_named_parsers_have_fuzz_coverage() {
             "fuzz manifest missing {target}"
         );
         assert!(
-            root.join(format!("fuzz/fuzz_targets/{target}.rs")).is_file(),
+            root.join(format!("fuzz/fuzz_targets/{target}.rs"))
+                .is_file(),
             "fuzz target source missing for {target}"
         );
     }
@@ -735,7 +746,10 @@ fn wp28_review_named_parsers_have_fuzz_coverage() {
         "ShellTokens::parse",
         "serde_json::from_slice::<Chart>",
     ] {
-        assert!(parsers.contains(needle), "fuzz target does not call {needle}");
+        assert!(
+            parsers.contains(needle),
+            "fuzz target does not call {needle}"
+        );
     }
     let lua = fs::read_to_string(root.join("fuzz/fuzz_targets/lua_runtime.rs"))
         .expect("read Lua fuzz target");

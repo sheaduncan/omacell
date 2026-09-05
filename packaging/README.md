@@ -12,9 +12,11 @@ that `makepkg` wraps as a real Arch package, not files intended for direct
 GCC `-flto=auto` makes `ring`'s bundled native objects unavailable to rust-lld;
 the workspace's Rust thin-LTO release profile remains enabled. The checked-in
 recipes use an explicit checksum placeholder because `0.0.0` is not a public
-release. The release workflow substitutes the tag archive or bundle SHA-256,
-runs `makepkg --printsrcinfo`, builds both packages in clean Arch containers,
-and publishes the resulting recipes with the release assets.
+release. Pull-request packaging CI builds, installs, and smoke tests both
+recipes in clean Arch containers. The release workflow creates an immutable
+source archive from the tagged commit, substitutes its checksum and both
+release-bundle checksums, and publishes the resulting recipes with those exact
+assets.
 For a local source smoke build, `scripts/arch-package-smoke.sh` creates a source
 archive and supplies its `file://` URL and checksum through the documented
 `PKGBUILD_SOURCE_URL` and `PKGBUILD_SOURCE_SHA256` inputs. These build-only

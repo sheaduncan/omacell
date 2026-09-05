@@ -16,12 +16,14 @@ jobs:
   nightly:
     name: fuzz-and-ignored
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly 2026-08-28
         with:
+          toolchain: nightly-2026-08-28
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -40,27 +42,27 @@ jobs:
         run: cargo deny check
 
       - name: Ignored / large-file tests
-        run: cargo +nightly test --workspace -- --ignored
+        run: cargo +nightly-2026-08-28 test --workspace -- --ignored
 
       - name: GUI software-render performance gate
-        run: cargo +nightly test --release -p omacell-gui --test performance -- --ignored --nocapture
+        run: cargo +nightly-2026-08-28 test --release -p omacell-gui --test performance -- --ignored --nocapture
 
       - name: Conditional-format performance gate
-        run: cargo +nightly test --release -p omacell-core --test data_tools cf_eval_100k_cells_20_rules_is_under_100ms -- --ignored --exact --nocapture
+        run: cargo +nightly-2026-08-28 test --release -p omacell-core --test data_tools cf_eval_100k_cells_20_rules_is_under_100ms -- --ignored --exact --nocapture
 
       - name: Fuzz targets (10 minutes each)
         run: |
-          if [[ -f fuzz/Cargo.toml ]]; then
-            for t in $(cargo +nightly fuzz list); do
-              cargo +nightly fuzz run "$t" -- -max_total_time=600
-            done
-          else
-            echo "No fuzz targets yet; skip."
-          fi
+          mapfile -t fuzz_targets < <(cargo +nightly-2026-08-28 fuzz list)
+          test "${#fuzz_targets[@]}" -gt 0
+          cargo +nightly-2026-08-28 fuzz build
+          for target in "${fuzz_targets[@]}"; do
+            cargo +nightly-2026-08-28 fuzz run "$target" -- -max_total_time=600
+          done
 
   local-model-evals:
     name: local-model-evals
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -74,6 +76,13 @@ jobs:
       - name: Start loopback model
         run: |
           docker run -d --name omacell-ollama -p 11434:11434 ollama/ollama
+          for _ in {1..120}; do
+            if curl --fail --silent --show-error http://127.0.0.1:11434/api/tags >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent --show-error http://127.0.0.1:11434/api/tags >/dev/null
           docker exec omacell-ollama ollama pull qwen2.5:0.5b
 
       - name: Score WP-23 eval suite

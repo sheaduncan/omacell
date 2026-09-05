@@ -16,6 +16,7 @@ jobs:
       matrix:
         channel: [stable, rc, edge]
     runs-on: [self-hosted, linux, x64, "${{ format('omarchy-{0}', matrix.channel) }}"]
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -51,6 +52,7 @@ jobs:
       - name: Setup, font, theme, and agent integration
         shell: bash
         run: |
+          runner_home=$HOME
           integration_home=$(mktemp -d)
           server_pid=
           cleanup() {
@@ -99,4 +101,4 @@ jobs:
           done
           omacell --json ipc ping >/dev/null
           omacell --json ipc theme.reload --all --quiet >/dev/null
-          cargo test -p omacell-conf --test font --test setup --test theme
+          HOME=$runner_home cargo test -p omacell-conf --test font --test setup --test theme

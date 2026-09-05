@@ -16,6 +16,7 @@ jobs:
   check:
     name: check
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -30,7 +31,7 @@ jobs:
       - name: Install just, cargo-audit, and cargo-deny
         uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
-          tool: just,cargo-audit,cargo-deny
+          tool: just,cargo-audit,cargo-deny,cargo-fuzz
 
       - name: Host tools for cross-checks
         run: |
@@ -50,10 +51,19 @@ jobs:
         run: python3 scripts/check-perf-baselines.py
 
       - name: cargo deny
-        run: cargo deny check
+        run: |
+          cargo deny check
+          cargo deny check --manifest-path fuzz/Cargo.toml
+          cargo deny check --manifest-path spikes/grid-egui/Cargo.toml
+          cargo deny check --manifest-path spikes/ironcalc/Cargo.toml
 
       - name: cargo audit
         run: cargo audit
 
       - name: Criterion smoke
         run: cargo test --workspace --benches
+
+      - name: Compile every fuzz target
+        run: |
+          rustup toolchain install nightly-2026-08-28 --profile minimal
+          cargo +nightly-2026-08-28 fuzz build
