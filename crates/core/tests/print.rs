@@ -153,7 +153,7 @@ fn expand_header_consumes_control_codes_and_uses_live_document_fields() {
         paginate(wb.sheet(wb.active_sheet()).unwrap(), &PageSetup::default()).unwrap()
     };
     let text = expand_header(
-        "&L&D &T &C&F &Z &R&P+2/&N-1 &Bbold&B &KFF0000red &G &&",
+        "&L&D &T &C&F &Z &R&P+2/&N-1 &Bbold&B &KFF0000red &123pt &G &&",
         &pages[0],
         "Sheet1",
         "/work/input/book.xlsx",
@@ -167,7 +167,7 @@ fn expand_header_consumes_control_codes_and_uses_live_document_fields() {
     }
     assert!(text.contains("book.xlsx /work/input"), "{text}");
     assert!(text.contains("3/0"), "{text}");
-    assert!(text.contains("bold red"), "{text}");
+    assert!(text.contains("bold red 3pt"), "{text}");
     assert!(text.ends_with('&'), "{text}");
 }
 
