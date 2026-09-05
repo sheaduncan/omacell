@@ -862,6 +862,50 @@ fn duplicate_conditional_format_matches_text_case_insensitively() {
 }
 
 #[test]
+fn conditional_format_defaults_match_their_emitted_ooxml_thresholds() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    for (row, value) in [0.0, 1.0, 100.0].into_iter().enumerate() {
+        wb.set_number(s, u32::try_from(row).unwrap(), 0, value)
+            .unwrap();
+    }
+    let middle = Color::Rgb { argb: 0xFF80_8080 };
+    wb.set_cond_formats(
+        s,
+        vec![
+            CondFormat {
+                range: range(0, 0, 2, 0),
+                priority: 1,
+                stop_if_true: false,
+                kind: CfKind::ColorScale {
+                    colors: vec![
+                        Color::Rgb { argb: 0xFF00_0000 },
+                        middle,
+                        Color::Rgb { argb: 0xFFFF_FFFF },
+                    ],
+                },
+                dxf: CfDxf::default(),
+            },
+            CondFormat {
+                range: range(0, 0, 2, 0),
+                priority: 2,
+                stop_if_true: false,
+                kind: CfKind::IconSet { icons: 3 },
+                dxf: CfDxf::default(),
+            },
+        ],
+    )
+    .unwrap();
+
+    let overlay = overlay_at(&wb, s, 1, 0);
+    assert_eq!(overlay.fill, Some(middle));
+    assert!(matches!(
+        overlay.visual,
+        Some(CfVisual::Icon { icons: 3, index: 0 })
+    ));
+}
+
+#[test]
 fn cf_visuals_are_resolved_and_icon_sort_uses_the_cached_bucket() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
