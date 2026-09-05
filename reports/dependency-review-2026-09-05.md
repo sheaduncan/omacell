@@ -133,8 +133,8 @@ None yet.
   passed afterward. All `omacell-conf` unit, integration, migration, theme,
   setup, watcher, and doc tests passed; `cargo deny check` passed for the root
   graph. The combined config/theme/keymap/trust parser fuzz target completed
-  10,000 cases without a crash, and fuzz-graph `cargo deny` passed. Exact local
-  and hosted gates pending.
+  10,000 cases without a crash, and fuzz-graph `cargo deny` passed. The exact
+  local `just check` gate passed; hosted gates are pending.
 
 ## Open questions
 
