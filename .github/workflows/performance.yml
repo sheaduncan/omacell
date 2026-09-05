@@ -87,3 +87,11 @@ jobs:
             --expect-commit "$GITHUB_SHA" \
             --expect-run-id "$GITHUB_RUN_ID" \
             --max-age-hours 6
+
+      - name: Upload fixed-host evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fixed-host-performance-${{ github.run_id }}
+          path: ${{ runner.temp }}/perf-results.json
+          if-no-files-found: error
+          retention-days: 90
