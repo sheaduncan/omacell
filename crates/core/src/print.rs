@@ -1,11 +1,17 @@
 //! Page setup and pagination (spec F-11.1).
 
+use std::iter::Peekable;
+use std::path::Path;
+use std::str::Chars;
+
 use serde::{Deserialize, Serialize};
 
 use crate::addr::RangeRef;
 use crate::error::CoreError;
 use crate::geometry::{DEFAULT_COL_PX, DEFAULT_ROW_PX};
 use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::locale::LocaleId;
+use crate::numfmt::{self, FormatOptions, FormatValue};
 use crate::sheet::Sheet;
 
 /// 96 CSS px → 72 PDF points.
@@ -704,29 +710,140 @@ fn span_cols_excluding(start: u16, end: u16, exclude: Option<PrintTitleBand<u16>
     total.saturating_sub(excluded)
 }
 
-/// Expand Excel header/footer codes (`&P`, `&N`, `&A`, `&F`, `&D`).
+/// Expand Excel header/footer fields and consume its inline formatting codes.
+///
+/// `SOURCE_DATE_EPOCH` supplies the print clock for reproducible output when it
+/// is a valid Unix timestamp; otherwise the current system clock is used.
 #[must_use]
 pub fn expand_header(template: &str, page: &PageBox, sheet_name: &str, file_name: &str) -> String {
+    let (date, time) = header_clock_fields();
+    let document = Path::new(file_name);
+    let document_name = document
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(file_name);
+    let document_path = document
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .and_then(Path::to_str)
+        .unwrap_or("");
     let mut out = String::new();
     let mut chars = template.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '&' {
             match chars.next() {
-                Some('P') | Some('p') => out.push_str(&page.page.to_string()),
-                Some('N') | Some('n') => out.push_str(&page.pages.to_string()),
-                Some('A') | Some('a') => out.push_str(sheet_name),
-                Some('F') | Some('f') => out.push_str(file_name),
-                Some('D') | Some('d') => out.push_str("1970-01-01"),
-                Some('&') => out.push('&'),
-                Some(other) => {
-                    out.push('&');
-                    out.push(other);
+                Some('P') | Some('p') => {
+                    out.push_str(&field_number(&mut chars, page.page).to_string());
                 }
-                None => out.push('&'),
+                Some('N') | Some('n') => {
+                    out.push_str(&field_number(&mut chars, page.pages).to_string());
+                }
+                Some('A') | Some('a') => out.push_str(sheet_name),
+                Some('F') | Some('f') => out.push_str(document_name),
+                Some('Z') | Some('z') => out.push_str(document_path),
+                Some('D') | Some('d') => out.push_str(&date),
+                Some('T') | Some('t') => out.push_str(&time),
+                Some('&') => out.push('&'),
+                Some('"') => consume_font_name(&mut chars),
+                Some('K') | Some('k') => consume_color(&mut chars),
+                Some(code) if code.is_ascii_digit() => {
+                    consume_font_size(&mut chars);
+                }
+                Some(_) | None => {}
             }
         } else {
             out.push(c);
         }
     }
     out
+}
+
+fn field_number(chars: &mut Peekable<Chars<'_>>, base: u32) -> u32 {
+    let sign = match chars.peek() {
+        Some('+') => 1i8,
+        Some('-') => -1,
+        _ => return base,
+    };
+    let _ = chars.next();
+    let mut offset = 0u32;
+    let mut digits = 0usize;
+    while let Some(digit) = chars.peek().and_then(|value| value.to_digit(10)) {
+        let _ = chars.next();
+        offset = offset.saturating_mul(10).saturating_add(digit);
+        digits += 1;
+    }
+    if digits == 0 {
+        return base;
+    }
+    if sign > 0 {
+        base.saturating_add(offset)
+    } else {
+        base.saturating_sub(offset)
+    }
+}
+
+fn consume_font_name(chars: &mut Peekable<Chars<'_>>) {
+    for value in chars.by_ref() {
+        if value == '"' {
+            break;
+        }
+    }
+}
+
+fn consume_font_size(chars: &mut Peekable<Chars<'_>>) {
+    // The leading digit was already consumed as the control code; Excel's
+    // font-size token contains exactly two digits in total.
+    for _ in 0..1 {
+        if chars.peek().is_some_and(char::is_ascii_digit) {
+            let _ = chars.next();
+        } else {
+            break;
+        }
+    }
+}
+
+fn consume_color(chars: &mut Peekable<Chars<'_>>) {
+    let probe = chars.clone().take(8).collect::<Vec<_>>();
+    let theme = probe.len() == 8
+        && probe[0].is_ascii_digit()
+        && probe[1].is_ascii_digit()
+        && probe[2] == '.'
+        && matches!(probe[3], 'S' | 's')
+        && matches!(probe[4], '+' | '-')
+        && probe[5..].iter().all(char::is_ascii_digit);
+    let rgb = probe.len() >= 6 && probe[..6].iter().all(char::is_ascii_hexdigit);
+    let count = if theme {
+        8
+    } else if rgb {
+        6
+    } else {
+        0
+    };
+    for _ in 0..count {
+        let _ = chars.next();
+    }
+}
+
+fn header_clock_fields() -> (String, String) {
+    const UNIX_EPOCH_SERIAL_1900: f64 = 25_569.0;
+    let unix_seconds = std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .map(|value| value as f64)
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs_f64())
+                .unwrap_or_else(|error| -error.duration().as_secs_f64())
+        });
+    let serial = UNIX_EPOCH_SERIAL_1900 + unix_seconds / 86_400.0;
+    let options = FormatOptions {
+        locale: LocaleId::EN_US,
+        date_system: crate::date_system::DateSystem::Excel1900,
+        width: None,
+    };
+    (
+        numfmt::format_with(FormatValue::Number(serial), "m/d/yyyy", &options).text,
+        numfmt::format_with(FormatValue::Number(serial), "h:mm AM/PM", &options).text,
+    )
 }

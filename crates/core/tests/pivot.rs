@@ -9,7 +9,7 @@ use omacell_core::graph::CellCoord;
 use omacell_core::ops::{Shift, delete_cells, delete_cols, delete_rows, insert_cells, insert_rows};
 use omacell_core::pivot::{
     DateGroup, PivotAgg, PivotCalcField, PivotDataField, PivotGroup, PivotLayout, PivotTable,
-    ShowAs, materialize,
+    PivotValue, ShowAs, materialize,
 };
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::stats::describe_range;
@@ -207,6 +207,27 @@ fn cell_num(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> Option<f64> {
     }
 }
 
+fn rendered_text(cells: &[omacell_core::pivot::PivotCell], row: u32, col: u16) -> Option<&str> {
+    cells
+        .iter()
+        .find(|cell| cell.row == row && cell.col == col)
+        .and_then(|cell| match &cell.value {
+            PivotValue::Text(text) => Some(text.as_str()),
+            PivotValue::Number(_) | PivotValue::Empty => None,
+        })
+}
+
+fn assert_one_rendered_cell(cells: &[omacell_core::pivot::PivotCell], row: u32, col: u16) {
+    assert_eq!(
+        cells
+            .iter()
+            .filter(|cell| cell.row == row && cell.col == col)
+            .count(),
+        1,
+        "rendered coordinate ({row}, {col}) must not contain colliding headers"
+    );
+}
+
 fn assert_expect(wb: &Workbook, dest_row: u32, dest_col: u16, expect: &[ExpectCell], name: &str) {
     let sheet = wb.active_sheet();
     for cell in expect {
@@ -268,6 +289,101 @@ fn pivot_refresh_after_source_change() {
     wb.refresh_pivot(id).unwrap();
     assert_eq!(cell_num(&wb, s, 1, 5), Some(15.0));
     assert_eq!(cell_num(&wb, s, 3, 5), Some(85.0));
+}
+
+#[test]
+fn multiple_value_fields_get_a_dedicated_caption_row_after_all_column_fields() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    for (col, header) in ["Region", "Quarter", "Channel", "Sales", "Units"]
+        .iter()
+        .enumerate()
+    {
+        wb.set_text(sheet, 0, col as u16, header).unwrap();
+    }
+    wb.set_text(sheet, 1, 0, "East").unwrap();
+    wb.set_text(sheet, 1, 1, "Q1").unwrap();
+    wb.set_text(sheet, 1, 2, "Retail").unwrap();
+    wb.set_number(sheet, 1, 3, 10.0).unwrap();
+    wb.set_number(sheet, 1, 4, 2.0).unwrap();
+
+    let mut one_column = PivotTable::new("One", sheet, range(0, 0, 1, 4), sheet, 10, 0);
+    one_column.rows = vec!["Region".into()];
+    one_column.cols = vec!["Quarter".into()];
+    one_column.data = vec![
+        PivotDataField::new("Sales", PivotAgg::Sum),
+        PivotDataField::new("Units", PivotAgg::Sum),
+    ];
+    let cells = materialize(&wb, &one_column).unwrap();
+    assert_eq!(rendered_text(&cells, 0, 1), Some("Q1"));
+    assert_eq!(rendered_text(&cells, 1, 1), Some("Sum of Sales"));
+    assert_eq!(rendered_text(&cells, 1, 2), Some("Sum of Units"));
+    assert_eq!(rendered_text(&cells, 2, 0), Some("East"));
+    assert_eq!(rendered_text(&cells, 0, 3), Some("Grand Total"));
+    assert_eq!(rendered_text(&cells, 1, 3), Some("Sum of Sales"));
+    assert_eq!(rendered_text(&cells, 1, 4), Some("Sum of Units"));
+    assert_one_rendered_cell(&cells, 0, 1);
+
+    let mut two_columns = one_column.clone();
+    two_columns.name = "Two".into();
+    two_columns.cols.push("Channel".into());
+    let cells = materialize(&wb, &two_columns).unwrap();
+    assert_eq!(rendered_text(&cells, 0, 1), Some("Q1"));
+    assert_eq!(rendered_text(&cells, 1, 1), Some("Retail"));
+    assert_eq!(rendered_text(&cells, 2, 1), Some("Sum of Sales"));
+    assert_eq!(rendered_text(&cells, 2, 2), Some("Sum of Units"));
+    assert_eq!(rendered_text(&cells, 3, 0), Some("East"));
+    assert_one_rendered_cell(&cells, 1, 1);
+}
+
+#[test]
+fn pivot_items_use_spreadsheet_display_and_put_blanks_last() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    wb.set_text(sheet, 0, 0, "Key").unwrap();
+    wb.set_text(sheet, 0, 1, "Amount").unwrap();
+    wb.set_number(sheet, 1, 1, 1.0).unwrap();
+    for (row, text) in [(2, "Zulu"), (3, "alpha"), (4, "Beta")] {
+        wb.set_text(sheet, row, 0, text).unwrap();
+        wb.set_number(sheet, row, 1, 1.0).unwrap();
+    }
+    wb.set_number(sheet, 5, 0, 0.30000000000000004).unwrap();
+    wb.set_number(sheet, 5, 1, 1.0).unwrap();
+    let serial = date_to_serial(
+        CivilDate {
+            year: 2026,
+            month: 1,
+            day: 5,
+            lotus_leap: false,
+        },
+        DateSystem::Excel1900,
+    )
+    .unwrap() as f64;
+    wb.set_number(sheet, 6, 0, serial).unwrap();
+    wb.set_number(sheet, 6, 1, 1.0).unwrap();
+    let date_fmt = wb.intern_num_fmt("m/d/yyyy").unwrap();
+    wb.set_cell_style(
+        sheet,
+        6,
+        0,
+        Style {
+            num_fmt: date_fmt,
+            ..Style::default()
+        },
+    )
+    .unwrap();
+
+    let mut table = PivotTable::new("Labels", sheet, range(0, 0, 6, 1), sheet, 10, 0);
+    table.rows = vec!["Key".into()];
+    table.data = vec![PivotDataField::new("Amount", PivotAgg::Sum)];
+    let cells = materialize(&wb, &table).unwrap();
+    let labels = (1..=6)
+        .map(|row| rendered_text(&cells, row, 0).unwrap_or(""))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        ["0.3", "1/5/2026", "alpha", "Beta", "Zulu", "(blank)"]
+    );
 }
 
 #[test]

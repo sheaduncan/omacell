@@ -1545,11 +1545,13 @@ fn pdf_options_for(
     workbook: &Workbook,
     dest: &Path,
 ) -> omacell_io::pdf::PdfOptions {
-    let configured_cell_font = session
-        .lock()
+    let state = session.lock();
+    let configured_cell_font = state
         .config
         .as_ref()
         .map(|cfg| cfg.snapshot().config.appearance.cell_font.clone());
+    let source_path = state.path.clone();
+    drop(state);
     let styles = &workbook.intern().styles;
     let font_path = workbook
         .sheets()
@@ -1564,11 +1566,11 @@ fn pdf_options_for(
         });
     omacell_io::pdf::PdfOptions {
         font_path,
-        file_name: dest
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("workbook.pdf")
-            .to_string(),
+        file_name: source_path
+            .as_deref()
+            .unwrap_or(dest)
+            .to_string_lossy()
+            .into_owned(),
         ..omacell_io::pdf::PdfOptions::default()
     }
 }
@@ -1636,6 +1638,14 @@ mod tests {
         let reopened = FileSession::new();
         reopened.attach_state_dir(temp.path());
         assert_eq!(reopened.last_printer().as_deref(), Some("office-2"));
+    }
+
+    #[test]
+    fn pdf_header_fields_use_the_source_document_path() {
+        let session = FileSession::new();
+        session.lock().path = Some(PathBuf::from("/work/input/book.xlsx"));
+        let options = pdf_options_for(&session, &Workbook::new(), Path::new("/tmp/export.pdf"));
+        assert_eq!(options.file_name, "/work/input/book.xlsx");
     }
 
     #[test]

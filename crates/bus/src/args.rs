@@ -74,7 +74,7 @@ pub struct SheetVisibilityArgs {
     pub visibility: String,
 }
 
-/// `sheet.remove` (internal).
+/// `sheet.remove`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SheetRemoveArgs {

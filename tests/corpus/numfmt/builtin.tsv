@@ -40,10 +40,10 @@
 38	en-US	#,##0 ;[Red](#,##0)	ECMA id 38
 39	en-US	#,##0.00;(#,##0.00)	ECMA id 39
 40	en-US	#,##0.00;[Red](#,##0.00)	ECMA id 40
-41	en-US	_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)	Excel en-US accounting
-42	en-US	_(* #,##0_);_(* (#,##0);_(* "-"_);_(@_)	Excel en-US accounting no currency
-43	en-US	_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)	Excel en-US accounting 2dp
-44	en-US	_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)	Excel en-US accounting 2dp no currency
+41	en-US	_(* #,##0_);_(* (#,##0);_(* "-"_);_(@_)	ECMA-376 built-in 41: accounting, no currency
+42	en-US	_($* #,##0_);_($* (#,##0);_($* "-"_);_(@_)	ECMA-376 built-in 42: accounting with currency
+43	en-US	_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)	ECMA-376 built-in 43: accounting 2dp, no currency
+44	en-US	_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)	ECMA-376 built-in 44: accounting 2dp with currency
 45	en-US	mm:ss	ECMA id 45
 46	en-US	[h]:mm:ss	ECMA id 46
 47	en-US	mmss.0	ECMA id 47 (no colon)
