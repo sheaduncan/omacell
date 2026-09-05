@@ -101,8 +101,8 @@ None yet.
   warnings); all tests and doctests for the direct consumer crates
   `omacell-core`, `omacell-bus`, `omacell-io`, and `omacell-ui` passed. The
   first sandboxed run could not bind Unix sockets; the identical permitted run
-  passed, including all 24 IPC server tests. Exact local and hosted gates
-  pending.
+  passed, including all 24 IPC server tests. The exact local `just check` gate
+  passed; hosted gates are pending.
 
 ## Open questions
 
