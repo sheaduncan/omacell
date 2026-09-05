@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use omacell_conf::schema::{AiFunctions, Config};
@@ -23,13 +23,12 @@ use crate::card::{CardLevel, CardRequest};
 use crate::error::{AiError, codes};
 use crate::functions::{args_json, json_to_runtime, task_prompt};
 use crate::http::SharedTransport;
-use crate::policy::{PolicySnapshot, build_card, fence_data, provider_is_local};
+use crate::policy::{PolicySnapshot, build_card, fence_data, filter_cell_args, provider_is_local};
 use crate::prompts::{PromptSet, PromptTemplate};
 use crate::provider::{
     Cancel, ChatMessage, ChatRequest, ChatResponse, Role, Slot, ToolSpec, provider_from_config,
     provider_timeout, route_slot, validate_chat_request, validate_tool_call,
 };
-use crate::redact::redact_json;
 
 const MAX_MODEL_TEXT_BYTES: usize = 1_048_576;
 const MAX_CUSTOM_TASKS: usize = 128;
@@ -138,7 +137,7 @@ struct FunctionExtension {
 /// Process-wide AI runtime (sync `evaluate`, async `settle`).
 pub struct AiRuntime {
     handle: Handle,
-    config: Config,
+    config: RwLock<Config>,
     transport: SharedTransport,
     prompts: PromptSet,
     cache_dir: PathBuf,
@@ -182,7 +181,7 @@ impl AiRuntime {
     ) -> Arc<Self> {
         Arc::new(Self {
             handle,
-            config: config.clone(),
+            config: RwLock::new(config.clone()),
             transport,
             prompts,
             cache_dir,
@@ -223,12 +222,37 @@ impl AiRuntime {
 
     /// Effective config.
     #[must_use]
-    pub fn config(&self) -> &Config {
-        &self.config
+    pub fn config(&self) -> Config {
+        self.config
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Apply a validated live configuration to subsequent requests.
+    pub fn update_config(&self, config: Config) {
+        {
+            let mut current = self
+                .config
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            current.clone_from(&config);
+        }
+        let mut inner = self.lock();
+        inner
+            .rate
+            .set_max_per_minute(config.ai.functions.max_requests_per_minute);
+        inner.functions = config.ai.functions;
     }
 
     /// Apply live `[ai.functions]` settings to future evaluations and batches.
     pub fn update_function_config(&self, functions: AiFunctions) {
+        self.config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ai
+            .functions
+            .clone_from(&functions);
         let mut inner = self.lock();
         inner
             .rate
@@ -373,8 +397,9 @@ impl AiRuntime {
     /// Status-line segment.
     #[must_use]
     pub fn status_segment(&self, wb: Option<&Workbook>) -> StatusSegment {
-        let (name, _) = route_slot(&self.config, Slot::Default);
-        let policy = self.policy(wb);
+        let config = self.config();
+        let (name, _) = route_slot(&config, Slot::Default);
+        let policy = self.policy_for_config(&config, Slot::Default, wb);
         let stats = self.session_stats();
         StatusSegment::new(name, policy.local, policy.send.as_str(), &stats)
     }
@@ -388,7 +413,8 @@ impl AiRuntime {
     /// Privacy snapshot for the provider selected by `slot`.
     #[must_use]
     pub fn policy_for(&self, slot: Slot, wb: Option<&Workbook>) -> PolicySnapshot {
-        self.policy_for_config(&self.config, slot, wb)
+        let config = self.config();
+        self.policy_for_config(&config, slot, wb)
     }
 
     /// Capture a live policy configuration for the runtime's routed provider.
@@ -399,8 +425,8 @@ impl AiRuntime {
         slot: Slot,
         wb: Option<&Workbook>,
     ) -> PolicySnapshot {
-        let (name, _) = route_slot(&self.config, slot);
-        let local = provider_is_local(&self.config, &name);
+        let (name, _) = route_slot(config, slot);
+        let local = provider_is_local(config, &name);
         PolicySnapshot::capture(config, wb, local)
     }
 
@@ -547,7 +573,8 @@ impl AiRuntime {
         mut tools: Vec<ToolSpec>,
         expected_extension_generation: Option<u64>,
     ) -> Result<RoutedResponse, AiError> {
-        if !self.config.ai.enabled {
+        let config = self.config();
+        if !config.ai.enabled {
             return Err(
                 AiError::new(codes::DISABLED, "AI is disabled").with_hint("run omacell ai setup")
             );
@@ -597,7 +624,7 @@ impl AiRuntime {
                 tool_calls: Vec::new(),
             },
         ];
-        let (provider_name, model) = route_slot(&self.config, slot);
+        let (provider_name, model) = route_slot(&config, slot);
         let configured_provider = provider_name.clone();
         let request = AiHookRequest {
             task: task_name.clone(),
@@ -606,23 +633,26 @@ impl AiRuntime {
             messages,
             schema,
             tools,
-            max_output_tokens: 1024,
+            max_output_tokens: config.ai.functions.max_tokens_per_request,
         };
         let request = match &hooks {
             Some(hooks) => hooks.on_request(request)?,
             None => request,
         };
         validate_hook_request(&task_name, &request)?;
-        let spec = self
-            .config
-            .ai
-            .providers
-            .get(&request.provider)
-            .ok_or_else(|| {
-                AiError::new(codes::KIND, format!("no provider {}", request.provider))
-            })?;
-        if provider_is_local(&self.config, &configured_provider)
-            && !provider_is_local(&self.config, &request.provider)
+        if request.max_output_tokens == 0
+            || request.max_output_tokens > config.ai.functions.max_tokens_per_request
+        {
+            return Err(AiError::new(
+                codes::BUDGET,
+                "AI request exceeds max_tokens_per_request",
+            ));
+        }
+        let spec = config.ai.providers.get(&request.provider).ok_or_else(|| {
+            AiError::new(codes::KIND, format!("no provider {}", request.provider))
+        })?;
+        if provider_is_local(&config, &configured_provider)
+            && !provider_is_local(&config, &request.provider)
         {
             return Err(AiError::new(
                 codes::PAYLOAD,
@@ -654,6 +684,8 @@ impl AiRuntime {
             .map_err(|err| AiError::new(codes::PAYLOAD, err.to_string()))?
             .len() as u64;
         let request_hash = hash_json(&request_record);
+        let log = AuditLog::open(&self.state_dir)?;
+        log.preflight_append()?;
         self.lock().rate.allow()?;
         let started = std::time::Instant::now();
         let raw = self.handle.block_on(provider.chat(req))?;
@@ -687,10 +719,9 @@ impl AiRuntime {
         }
         let bytes = out.text.len() as u64;
         self.lock().session.record(request_bytes);
-        let log = AuditLog::open(&self.state_dir)?;
         let routed_provider = request.provider.clone();
         let routed_model = request.model.clone();
-        log.append(&LogRecord {
+        if let Err(error) = log.append(&LogRecord {
             ts: now_ms(),
             task: task_name,
             provider: request.provider,
@@ -700,13 +731,16 @@ impl AiRuntime {
             request_hash,
             latency_ms: started.elapsed().as_millis() as u64,
             usage: out.usage,
-            content: self
-                .config
+            content: config
                 .ai
                 .privacy
                 .log_content
                 .then(|| json!({"request": request_record, "response": out.text.clone()})),
-        })?;
+        }) {
+            // A successful provider response must not be re-sent merely because
+            // the filesystem changed after the preflight check.
+            tracing::error!(code = %error.code, message = %error.message, "AI audit append failed after provider response");
+        }
         Ok(RoutedResponse {
             response: out,
             provider: routed_provider,
@@ -717,7 +751,38 @@ impl AiRuntime {
     }
 
     /// Drain pending AI cells in batches (default 50).
+    ///
+    /// Policies with workbook redact marks must use
+    /// [`Self::settle_for_workbook`] so marked values cannot be skipped.
     pub fn settle(&self, policy: &PolicySnapshot) -> Result<usize, AiError> {
+        self.settle_inner(policy, None)
+    }
+
+    /// Drain pending AI cells while resolving workbook `ai.redact` marks.
+    pub fn settle_for_workbook(
+        &self,
+        policy: &PolicySnapshot,
+        workbook: &Workbook,
+    ) -> Result<usize, AiError> {
+        self.settle_inner(policy, Some(workbook))
+    }
+
+    fn settle_inner(
+        &self,
+        policy: &PolicySnapshot,
+        workbook: Option<&Workbook>,
+    ) -> Result<usize, AiError> {
+        if !policy.enabled {
+            return Err(
+                AiError::new(codes::DISABLED, "AI is disabled").with_hint("run omacell ai setup")
+            );
+        }
+        if workbook.is_none() && !policy.marks.is_empty() {
+            return Err(AiError::new(
+                codes::PAYLOAD,
+                "workbook context is required to apply AI redact marks",
+            ));
+        }
         let (batch, mut jobs): (usize, Vec<Job>) = {
             let mut g = self.lock();
             g.confirm = None;
@@ -744,15 +809,19 @@ impl AiRuntime {
         let mut done = 0usize;
         for (name, group) in groups {
             for chunk in group.chunks(batch) {
+                let rows = chunk
+                    .iter()
+                    .map(|job| {
+                        let mut args = job.args.clone();
+                        let _ = filter_cell_args(&name, &mut args, policy, workbook);
+                        json!({"hash": cache::AiCache::key(job.hash), "args": args})
+                    })
+                    .collect::<Vec<_>>();
                 let payload = json!({
                     "task": name,
-                    "rows": chunk.iter().map(|j| json!({"hash": cache::AiCache::key(j.hash), "args": j.args})).collect::<Vec<_>>(),
+                    "rows": rows,
                 });
-                let mut data = payload;
-                if policy.suggest_redaction {
-                    let _ = redact_json(&mut data);
-                }
-                let user = fence_data("AI cell batch", &data);
+                let user = fence_data("AI cell batch", &payload);
                 let extension = self.function_extension(&name);
                 let value_schema = extension.value_schema.unwrap_or_else(|| json!({}));
                 let schema = json!({
@@ -948,7 +1017,8 @@ fn validate_hook_response(
 
 impl AsyncNodeProvider for AiRuntime {
     fn evaluate(&self, key: ContentHash, req: &AsyncRequest) -> AsyncState {
-        if !self.config.ai.enabled {
+        let config = self.config();
+        if !config.ai.enabled {
             return AsyncState::Failed {
                 hint: "ai.disabled".into(),
             };
@@ -956,7 +1026,7 @@ impl AsyncNodeProvider for AiRuntime {
         let args = args_json(&req.args);
         let extension = self.function_extension(&req.name);
         let version = extension.template_version;
-        let (provider, model) = route_slot(&self.config, Slot::Default);
+        let (provider, model) = route_slot(&config, Slot::Default);
         let input_hash = hash_json(&args);
         let mut g = self.lock();
         let hooks_route = g.hooks.is_some();

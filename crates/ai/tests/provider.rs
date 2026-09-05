@@ -380,6 +380,24 @@ fn routing_and_loopback() {
     }
 }
 
+#[test]
+fn remote_plaintext_provider_endpoint_is_rejected() {
+    let spec = AiProvider {
+        kind: "openai_compatible".into(),
+        endpoint: "http://models.example.test/v1".into(),
+        local: false,
+        secret_env: None,
+        secret_cmd: None,
+        timeout: 0,
+        headers: Default::default(),
+    };
+    let transport = Arc::new(ReplayTransport::from_dir(fixture_dir()).unwrap());
+    match provider_from_config("cloud", &spec, transport) {
+        Ok(_) => panic!("expected plaintext remote endpoint to fail"),
+        Err(error) => assert_eq!(error.code, "ai.provider"),
+    }
+}
+
 #[tokio::test]
 async fn secret_resolution_is_deferred_until_send() {
     let spec = AiProvider {

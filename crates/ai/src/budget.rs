@@ -19,7 +19,7 @@ impl RateLimit {
     #[must_use]
     pub fn from_config(config: &Config) -> Self {
         Self {
-            max_per_minute: config.ai.functions.max_requests_per_minute,
+            max_per_minute: config.ai.functions.max_requests_per_minute.max(1),
             stamps: VecDeque::new(),
         }
     }

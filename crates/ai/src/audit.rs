@@ -64,6 +64,27 @@ impl AuditLog {
         Ok(Self { path })
     }
 
+    /// Check that the log is writable and has capacity for one maximum-sized
+    /// record before a provider request leaves the process.
+    pub(crate) fn preflight_append(&self) -> Result<(), AiError> {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?;
+        let existing = file
+            .metadata()
+            .map_err(|err| AiError::new(codes::LOG, err.to_string()))?
+            .len();
+        if existing.saturating_add(MAX_LOG_RECORD_BYTES as u64) > MAX_LOG_BYTES {
+            return Err(
+                AiError::new(codes::LOG, "AI audit log has insufficient free capacity")
+                    .with_hint("archive or remove the log before sending another AI request"),
+            );
+        }
+        Ok(())
+    }
+
     /// Append one record.
     pub fn append(&self, record: &LogRecord) -> Result<(), AiError> {
         let mut file = OpenOptions::new()

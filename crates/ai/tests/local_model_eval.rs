@@ -92,7 +92,7 @@ fn runtime() -> Option<(Arc<AiRuntime>, tokio::runtime::Runtime, tempfile::TempD
             local: true,
             secret_env: None,
             secret_cmd: None,
-            timeout: 120,
+            timeout: 120_000,
             headers: BTreeMap::new(),
         },
     );

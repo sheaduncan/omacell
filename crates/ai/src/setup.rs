@@ -1,5 +1,6 @@
 //! `omacell ai setup`: detect loopback servers and sparse-patch user config.
 
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::time::Duration;
@@ -19,7 +20,7 @@ pub struct DetectedProvider {
     pub kind: String,
     /// Endpoint that will be used.
     pub endpoint: String,
-    /// TCP probe succeeded.
+    /// HTTP protocol probe succeeded.
     pub reachable: bool,
 }
 
@@ -27,11 +28,12 @@ pub struct DetectedProvider {
 #[must_use]
 pub fn detect_local(config: &Config) -> Vec<DetectedProvider> {
     let mut found = Vec::new();
-    for (name, host, port, kind, endpoint) in [
+    for (name, host, port, probe_path, kind, endpoint) in [
         (
             "ollama",
             "127.0.0.1",
             11434,
+            "/api/tags",
             "openai_compatible",
             "http://127.0.0.1:11434/v1",
         ),
@@ -39,6 +41,7 @@ pub fn detect_local(config: &Config) -> Vec<DetectedProvider> {
             "lmstudio",
             "127.0.0.1",
             1234,
+            "/v1/models",
             "openai_compatible",
             "http://127.0.0.1:1234/v1",
         ),
@@ -46,6 +49,7 @@ pub fn detect_local(config: &Config) -> Vec<DetectedProvider> {
             "llamacpp",
             "127.0.0.1",
             8080,
+            "/v1/models",
             "openai_compatible",
             "http://127.0.0.1:8080/v1",
         ),
@@ -53,11 +57,12 @@ pub fn detect_local(config: &Config) -> Vec<DetectedProvider> {
             "vllm",
             "127.0.0.1",
             8000,
+            "/v1/models",
             "openai_compatible",
             "http://127.0.0.1:8000/v1",
         ),
     ] {
-        let reachable = probe(host, port);
+        let reachable = probe_http(host, port, probe_path, true);
         if reachable {
             found.push(DetectedProvider {
                 name: name.into(),
@@ -87,15 +92,6 @@ pub fn detect_local(config: &Config) -> Vec<DetectedProvider> {
     found
 }
 
-fn probe(host: &str, port: u16) -> bool {
-    let addr = SocketAddr::new(
-        host.parse()
-            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
-        port,
-    );
-    TcpStream::connect_timeout(&addr, Duration::from_millis(80)).is_ok()
-}
-
 fn endpoint_reachable(endpoint: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(endpoint) else {
         return false;
@@ -117,7 +113,59 @@ fn endpoint_reachable(endpoint: &str) -> bool {
     let Some(port) = url.port_or_known_default() else {
         return false;
     };
-    TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_millis(80)).is_ok()
+    let path = if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    };
+    probe_http(&ip.to_string(), port, path, false)
+}
+
+fn probe_http(host: &str, port: u16, path: &str, require_success: bool) -> bool {
+    let Ok(ip) = host.parse() else {
+        return false;
+    };
+    let Ok(mut stream) =
+        TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_millis(80))
+    else {
+        return false;
+    };
+    let timeout = Some(Duration::from_millis(100));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return false;
+    }
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = [0u8; 64];
+    let Ok(read) = stream.read(&mut response) else {
+        return false;
+    };
+    let line_end = response[..read]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(read);
+    let Some(line) = std::str::from_utf8(&response[..line_end])
+        .ok()
+        .map(str::trim_end)
+    else {
+        return false;
+    };
+    let mut fields = line.split_ascii_whitespace();
+    let Some(version) = fields.next() else {
+        return false;
+    };
+    let Some(status) = fields.next().and_then(|value| value.parse::<u16>().ok()) else {
+        return false;
+    };
+    version.starts_with("HTTP/1.")
+        && if require_success {
+            (200..300).contains(&status)
+        } else {
+            (100..600).contains(&status)
+        }
 }
 
 /// Keys written by setup (never secrets).

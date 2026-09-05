@@ -175,7 +175,7 @@ impl InteractiveRuntime {
             .name("omacell-ai-settle".into())
             .spawn(move || {
                 let result = ai
-                    .settle(&policy)
+                    .settle_for_workbook(&policy, &snapshot.workbook)
                     .map_err(CoreError::from)
                     .and_then(|done| {
                         if done > 0 {
@@ -280,7 +280,7 @@ impl InteractiveRuntime {
     pub fn tighten(&mut self, loaded: &LoadedConfig) -> Result<(), CoreError> {
         self.ai_config = loaded.config.clone();
         if let Some(ai) = &self.ai {
-            ai.update_function_config(loaded.config.ai.functions.clone());
+            ai.update_config(loaded.config.clone());
         }
         self.policy.tighten(&ScriptPolicy::from_loaded(loaded));
         if !self.policy.enabled || !trusted_config_dir(&self.config_dir, &self.policy) {

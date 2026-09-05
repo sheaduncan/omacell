@@ -6,7 +6,7 @@ use omacell_core::addr::{ParsedRef, RefKind, col_from_letters, parse_a1};
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::card::{self, CardLevel, CardRequest};
 use crate::error::{AiError, codes};
@@ -167,11 +167,166 @@ pub fn build_card(
     let mut suggestions = Vec::new();
     if policy.suggest_redaction {
         suggestions.extend(redact::redact_json(&mut card));
+        remove_detected_column_stats(&mut card);
     }
     apply_marks(&mut card, &policy.marks);
     filter_level(&mut card, policy.send, request.level);
     card::enforce_budget(&mut card, request.token_budget)?;
     Ok((card, suggestions))
+}
+
+/// Apply the effective privacy level and pattern detectors to evaluated AI-cell
+/// arguments before they are fenced into a provider request.
+pub(crate) fn filter_cell_args(
+    function: &str,
+    args: &mut Value,
+    policy: &PolicySnapshot,
+    workbook: Option<&Workbook>,
+) -> Vec<Suggestion> {
+    if policy.send == SendLevel::Schema
+        && let Some(items) = args.as_array_mut()
+    {
+        for (index, item) in items.iter_mut().enumerate() {
+            if !schema_argument_is_instruction(function, index) {
+                *item = schema_shape(item);
+            }
+        }
+    }
+    if policy.suggest_redaction {
+        let suggestions = redact::redact_json(args);
+        apply_marked_values(args, policy, workbook);
+        suggestions
+    } else {
+        apply_marked_values(args, policy, workbook);
+        Vec::new()
+    }
+}
+
+fn apply_marked_values(args: &mut Value, policy: &PolicySnapshot, workbook: Option<&Workbook>) {
+    let Some(workbook) = workbook else {
+        return;
+    };
+    let parsed = policy
+        .marks
+        .iter()
+        .filter_map(|mark| parse_a1(mark).ok())
+        .collect::<Vec<_>>();
+    if parsed.is_empty() {
+        return;
+    }
+    let mut marked = Vec::new();
+    for sheet in workbook.sheets() {
+        for (row, col, slot) in sheet.store.iter() {
+            if mark_covers_any(&parsed, Some(&sheet.name), row, col)
+                && let Some(value) = marked_value(workbook, &slot.value)
+            {
+                marked.push(value);
+            }
+        }
+    }
+    redact_matching_values(args, &marked);
+}
+
+fn marked_value(workbook: &Workbook, value: &omacell_core::value::Value) -> Option<Value> {
+    match value {
+        omacell_core::value::Value::Empty | omacell_core::value::Value::Array(_) => None,
+        omacell_core::value::Value::Number(number) => {
+            serde_json::Number::from_f64(*number).map(Value::Number)
+        }
+        omacell_core::value::Value::Bool(value) => Some(Value::Bool(*value)),
+        omacell_core::value::Value::Text(id) => workbook
+            .intern()
+            .strings
+            .get(*id)
+            .map(|text| Value::String(text.to_string())),
+        omacell_core::value::Value::Error(error) => Some(Value::String(error.as_str().to_string())),
+    }
+}
+
+fn redact_matching_values(value: &mut Value, marked: &[Value]) {
+    match value {
+        Value::String(text) => {
+            for secret in marked.iter().filter_map(Value::as_str) {
+                if !secret.is_empty() && text.contains(secret) {
+                    *text = text.replace(secret, "[REDACTED:mark]");
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_matching_values(item, marked);
+            }
+        }
+        Value::Object(object) => {
+            for item in object.values_mut() {
+                redact_matching_values(item, marked);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {
+            if marked.iter().any(|secret| secret == value) {
+                *value = Value::String("[REDACTED:mark]".into());
+            }
+        }
+    }
+}
+
+fn schema_argument_is_instruction(function: &str, index: usize) -> bool {
+    match function.to_ascii_uppercase().as_str() {
+        "AI" => matches!(index, 0 | 2),
+        "AI.EXTRACT" | "AI.CLASSIFY" | "AI.TRANSLATE" => index == 1,
+        "AI.TABLE" => matches!(index, 0 | 1),
+        // AI.FILL and custom functions have no reviewed instruction-only slot.
+        _ => false,
+    }
+}
+
+fn schema_shape(value: &Value) -> Value {
+    match value {
+        Value::Null => json!({"redacted": true, "type": "empty"}),
+        Value::Bool(_) => json!({"redacted": true, "type": "boolean"}),
+        Value::Number(_) => json!({"redacted": true, "type": "number"}),
+        Value::String(_) => json!({"redacted": true, "type": "text"}),
+        Value::Array(items) => {
+            let nested = items.first().and_then(Value::as_array);
+            json!({
+                "redacted": true,
+                "type": "array",
+                "rows": nested.map_or(1, |_| items.len()),
+                "columns": nested.map_or(items.len(), Vec::len),
+            })
+        }
+        Value::Object(_) => json!({"redacted": true, "type": "object"}),
+    }
+}
+
+fn remove_detected_column_stats(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            let detected = object
+                .get("samples")
+                .and_then(Value::as_array)
+                .is_some_and(|samples| {
+                    samples.iter().any(|sample| {
+                        sample
+                            .as_str()
+                            .is_some_and(|text| text.starts_with("[REDACTED:"))
+                    })
+                });
+            if detected {
+                object.remove("min");
+                object.remove("max");
+            }
+            for child in object.values_mut() {
+                remove_detected_column_stats(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                remove_detected_column_stats(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn apply_marks(card: &mut Value, marks: &[String]) {

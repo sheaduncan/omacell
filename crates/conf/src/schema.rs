@@ -442,6 +442,10 @@ pub struct AiFunctions {
     /// Rate limit.
     #[schemars(range(min = 1))]
     pub max_requests_per_minute: u32,
+    /// Maximum generated tokens in one provider request.
+    #[serde(default = "default_ai_max_tokens_per_request")]
+    #[schemars(range(min = 1, max = 1048576))]
+    pub max_tokens_per_request: u32,
     /// Keep stale values.
     pub keep_stale: bool,
     /// Refresh on full recalc.
@@ -449,6 +453,10 @@ pub struct AiFunctions {
     /// `formulas` / `values`.
     #[schemars(extend("enum" = ["formulas", "values"]))]
     pub xlsx_export: String,
+}
+
+fn default_ai_max_tokens_per_request() -> u32 {
+    4_096
 }
 
 /// `[ai.completion]`.

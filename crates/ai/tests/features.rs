@@ -15,7 +15,8 @@ use omacell_ai::plan::{forbidden, parse_plan, to_calls};
 use omacell_ai::prompts::PromptSet;
 use omacell_ai::runtime::AiRuntime;
 use omacell_ai::{
-    AiHookRequest, AiHookResponse, AiHooks, AiTaskSpec, PolicySnapshot, SendLevel, Slot, ToolSpec,
+    AI_PART, AiHookRequest, AiHookResponse, AiHooks, AiTaskSpec, PolicySnapshot, SendLevel, Slot,
+    ToolSpec, WorkbookAi,
 };
 use omacell_conf::schema::package_defaults;
 use omacell_core::error::ErrorKind;
@@ -182,6 +183,7 @@ impl AiHooks for RewritingHooks {
 #[test]
 fn custom_tasks_and_hooks_are_applied_inside_the_ai_runtime() {
     let mut config = enabled_config();
+    config.ai.functions.max_tokens_per_request = 2_048;
     config.ai.providers.insert(
         "gateway".into(),
         omacell_conf::schema::AiProvider {
@@ -218,6 +220,7 @@ fn custom_tasks_and_hooks_are_applied_inside_the_ai_runtime() {
     let body = &requests[0].body;
     assert!(requests[0].url.starts_with("http://127.0.0.1:8/"));
     assert_eq!(body["model"], "corporate-model");
+    assert_eq!(body["max_tokens"], 2_048);
     assert!(body.to_string().contains("CUSTOM TASK PROMPT"));
     assert!(body.to_string().contains("hooked request"));
     assert!(body.to_string().contains("lookup"));
@@ -479,6 +482,150 @@ fn async_cells_batch_and_cache_skips_http() {
 }
 
 #[test]
+fn schema_policy_filters_ai_cell_arguments_before_transport() {
+    let mut config = enabled_config();
+    config.ai.privacy.send = "schema".into();
+    config.ai.privacy.local_full = false;
+    config.ai.privacy.suggest_redaction = false;
+    let (ai, transport, _rt, _tmp) = runtime(
+        config.clone(),
+        json!({"results":[{"i":0,"value":"classified"}]}),
+    );
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .set_cell_contents(sheet, 0, 0, "private-cell-value")
+        .unwrap();
+    workbook
+        .set_cell_contents(sheet, 0, 1, "=AI.CLASSIFY(A1,\"category\")")
+        .unwrap();
+    let _ = engine.recalc_rebuild(&mut workbook);
+    let policy = PolicySnapshot::capture(&config, Some(&workbook), false);
+    assert_eq!(ai.settle(&policy).unwrap(), 1);
+    let requests = transport.requests.lock().unwrap();
+    let payload = requests[0].body.to_string();
+    assert!(!payload.contains("private-cell-value"), "{payload}");
+    assert!(payload.contains("category"), "{payload}");
+}
+
+#[test]
+fn workbook_marks_filter_ai_cell_arguments_before_transport() {
+    let mut config = enabled_config();
+    config.ai.privacy.send = "full".into();
+    config.ai.privacy.suggest_redaction = false;
+    let (ai, transport, _rt, _tmp) =
+        runtime(config.clone(), json!({"results":[{"i":0,"value":"done"}]}));
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .set_cell_contents(sheet, 0, 0, "marked-private-value")
+        .unwrap();
+    workbook.set_cell_contents(sheet, 0, 1, "=AI(A1)").unwrap();
+    workbook.custom_parts.insert(
+        AI_PART.into(),
+        serde_json::to_vec(&WorkbookAi {
+            privacy_send: Some("full".into()),
+            redact: vec!["Sheet1!A1".into()],
+        })
+        .unwrap(),
+    );
+    let _ = engine.recalc_rebuild(&mut workbook);
+    let policy = PolicySnapshot::capture(&config, Some(&workbook), true);
+    assert_eq!(ai.settle_for_workbook(&policy, &workbook).unwrap(), 1);
+    let requests = transport.requests.lock().unwrap();
+    let payload = requests[0].body.to_string();
+    assert!(!payload.contains("marked-private-value"), "{payload}");
+    assert!(payload.contains("[REDACTED:mark]"), "{payload}");
+}
+
+#[test]
+fn workbook_marks_fail_closed_without_workbook_context() {
+    let config = enabled_config();
+    let (ai, transport, _rt, _tmp) = runtime(
+        config.clone(),
+        json!({"results":[{"i":0,"value":"unused"}]}),
+    );
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .set_cell_contents(sheet, 0, 0, "=AI(\"queued\")")
+        .unwrap();
+    let _ = engine.recalc_rebuild(&mut workbook);
+    let mut policy = PolicySnapshot::capture(&config, Some(&workbook), true);
+    policy.marks.push("A1".into());
+    assert_eq!(ai.settle(&policy).unwrap_err().code, "ai.payload");
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn disabled_live_policy_blocks_a_queued_ai_cell_before_transport() {
+    let config = enabled_config();
+    let (ai, transport, _rt, _tmp) = runtime(
+        config.clone(),
+        json!({"results":[{"i":0,"value":"unused"}]}),
+    );
+    let mut registry = FnRegistry::new();
+    register_ai_functions(&mut registry);
+    let mut engine = RecalcEngine::new(registry);
+    engine.set_async_provider(ai.clone());
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook
+        .set_cell_contents(sheet, 0, 0, "=AI(\"queued\")")
+        .unwrap();
+    let _ = engine.recalc_rebuild(&mut workbook);
+    let mut disabled = config;
+    disabled.ai.enabled = false;
+    let policy = ai.policy_for_config(&disabled, Slot::Default, Some(&workbook));
+    assert_eq!(ai.settle(&policy).unwrap_err().code, "ai.disabled");
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn audit_log_is_preflighted_before_provider_transport() {
+    let config = enabled_config();
+    let transport = Arc::new(CountingTransport {
+        hits: AtomicU32::new(0),
+        body: json!({"ok": true}),
+        requests: Mutex::new(Vec::new()),
+    });
+    let shared: SharedTransport = transport.clone();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let state_file = tmp.path().join("not-a-directory");
+    std::fs::write(&state_file, b"occupied").unwrap();
+    let ai = AiRuntime::new(
+        rt.handle().clone(),
+        config,
+        shared,
+        PromptSet::builtin(),
+        tmp.path().join("cache"),
+        state_file,
+        Default::default(),
+    );
+    let error = ai
+        .chat_task(Slot::Default, "plan", "payload".into(), None, vec![])
+        .unwrap_err();
+    assert_eq!(error.code, "ai.log");
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn auto_false_waits_for_refresh_and_keeps_the_prior_value_stale() {
     let mut config = enabled_config();
     config.ai.functions.auto = false;
@@ -692,6 +839,70 @@ fn privacy_policy_follows_the_routed_provider_slot() {
         .unwrap_err();
     assert_eq!(error.code, "ai.payload");
     assert!(error.message.contains("local-provider payload"));
+}
+
+#[test]
+fn policy_snapshot_uses_the_live_config_route() {
+    let config = enabled_config();
+    let (ai, _transport, _rt, _tmp) = runtime(config.clone(), json!({}));
+    let mut reloaded = config;
+    reloaded.ai.privacy.send = "schema".into();
+    reloaded.ai.privacy.local_full = true;
+    reloaded.ai.providers.insert(
+        "gateway".into(),
+        omacell_conf::schema::AiProvider {
+            kind: "openai_compatible".into(),
+            endpoint: "https://models.example.test/v1".into(),
+            local: false,
+            secret_env: None,
+            secret_cmd: None,
+            timeout: 0,
+            headers: Default::default(),
+        },
+    );
+    reloaded.ai.models.fast = "gateway:fast".into();
+    assert_eq!(
+        ai.policy_for_config(&reloaded, Slot::Fast, None).send,
+        SendLevel::Schema
+    );
+}
+
+#[test]
+fn live_config_update_changes_next_request_and_can_disable_ai() {
+    let config = enabled_config();
+    let (ai, transport, _rt, _tmp) = runtime(config.clone(), json!({"ok": true}));
+    let mut reloaded = config;
+    reloaded.ai.providers.insert(
+        "gateway".into(),
+        omacell_conf::schema::AiProvider {
+            kind: "openai_compatible".into(),
+            endpoint: "https://models.example.test/v1".into(),
+            local: false,
+            secret_env: None,
+            secret_cmd: None,
+            timeout: 0,
+            headers: Default::default(),
+        },
+    );
+    reloaded.ai.models.default = "gateway:next-model".into();
+    ai.update_config(reloaded.clone());
+    ai.chat_task(Slot::Default, "plan", "payload".into(), None, vec![])
+        .unwrap();
+    {
+        let requests = transport.requests.lock().unwrap();
+        assert!(requests[0].url.starts_with("https://models.example.test/"));
+        assert_eq!(requests[0].body["model"], "next-model");
+    }
+
+    reloaded.ai.enabled = false;
+    ai.update_config(reloaded);
+    assert_eq!(
+        ai.chat_task(Slot::Default, "plan", "payload".into(), None, vec![])
+            .unwrap_err()
+            .code,
+        "ai.disabled"
+    );
+    assert_eq!(transport.hits.load(Ordering::SeqCst), 1);
 }
 
 #[test]

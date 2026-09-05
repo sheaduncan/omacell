@@ -14,7 +14,7 @@
         "json_schema": {
           "name": "omacell",
           "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } },
-          "strict": true
+          "strict": false
         }
       }
     }

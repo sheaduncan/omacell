@@ -459,7 +459,7 @@ fn run_complete(
         return Ok(ai_preflight(ctx));
     }
     let cfg = session.runtime.config();
-    if !completion_enabled(cfg, fast_is_local(cfg)) {
+    if !completion_enabled(&cfg, fast_is_local(&cfg)) {
         return Ok(Effect::query(json!({"prefix": args.prefix, "text": ""})));
     }
     let card = session

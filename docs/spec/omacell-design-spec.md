@@ -993,6 +993,7 @@ auto                    = true   # re-query when inputs change; false = only on 
 batch_size              = 50
 max_cells_per_recalc    = 500    # above this, confirm with an estimate first
 max_requests_per_minute = 60
+max_tokens_per_request  = 4096
 keep_stale              = true
 refresh_on_full_recalc  = false
 xlsx_export             = "formulas"   # formulas | values

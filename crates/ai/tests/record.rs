@@ -25,7 +25,7 @@ async fn recording_transport_omits_headers_and_writes_replay_shape() {
                     "json_schema": {
                         "name": "omacell",
                         "schema": {"type":"object","properties":{"ok":{"type":"boolean"}}},
-                        "strict": true
+                        "strict": false
                     }
                 }
             }),

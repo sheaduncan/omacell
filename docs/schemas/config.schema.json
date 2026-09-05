@@ -260,6 +260,14 @@
           "format": "uint32",
           "minimum": 1
         },
+        "max_tokens_per_request": {
+          "description": "Maximum generated tokens in one provider request.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 4096,
+          "maximum": 1048576,
+          "minimum": 1
+        },
         "refresh_on_full_recalc": {
           "description": "Refresh on full recalc.",
           "type": "boolean"

@@ -15,6 +15,15 @@ fn rate_limit_trips() {
 }
 
 #[test]
+fn programmatic_zero_rate_limit_is_clamped() {
+    let mut config = package_defaults().unwrap();
+    config.ai.functions.max_requests_per_minute = 0;
+    let mut limit = RateLimit::from_config(&config);
+    limit.allow().unwrap();
+    assert_eq!(limit.allow().unwrap_err().code, "ai.budget");
+}
+
+#[test]
 fn cell_budget_trips() {
     let mut config = package_defaults().unwrap();
     config.ai.functions.max_cells_per_recalc = 3;
