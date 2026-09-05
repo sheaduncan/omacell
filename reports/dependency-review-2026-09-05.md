@@ -89,12 +89,14 @@ None yet.
 ## Measurements
 
 - #132: clean current-`main` merge; `git diff --check`; exact `just check`
-  passed. Hosted checks pending.
+  passed. Hosted `check`, CodeQL, action analysis, Rust/Python analysis, and
+  clean Arch binary/source package jobs all passed; the PR was merged.
 - #133: `release_artifact_handoff_is_explicitly_fail_closed` failed before the
   workflow hardening (zero of two uploads rejected missing files), then passed
-  after the implementation. Exact local and hosted gates pending.
-- #134: signed-tag/SHA verification and `git diff --check` passed. Exact local
-  and hosted gates pending.
+  after the implementation. The exact local `just check` gate passed; hosted
+  gates are pending.
+- #134: signed-tag/SHA verification, `git diff --check`, and the exact local
+  `just check` gate passed. Hosted gates are pending.
 - #135: `cargo deny check` passed (only the already-allowed duplicate/license
   warnings); all tests and doctests for the direct consumer crates
   `omacell-core`, `omacell-bus`, `omacell-io`, and `omacell-ui` passed. The
@@ -113,8 +115,12 @@ None. No frozen contract change is authorized by these dependency updates.
 
 ## Checklist
 
-- [ ] PRs #132–#134 reviewed and merged
-- [ ] PRs #135–#137 reviewed and merged
+- [x] PR #132 reviewed and merged
+- [ ] PR #133 reviewed and merged
+- [ ] PR #134 reviewed and merged
+- [ ] PR #135 reviewed and merged
+- [ ] PR #136 reviewed and merged
+- [ ] PR #137 reviewed and merged
 - [ ] PR #138 migrated, reviewed, and merged
 - [ ] PR #139 migrated as one compatible GUI stack, reviewed, and merged
 - [ ] `cargo deny check` green for each changed Rust graph
