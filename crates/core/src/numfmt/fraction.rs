@@ -65,7 +65,7 @@ pub fn render_fraction(
         best_rational(frac, max_den)
     };
     if den > 0 && num >= den {
-        whole += u64::from(num / den);
+        whole = whole.saturating_add(u64::from(num / den));
         num %= den;
     }
     let mut body = String::new();
@@ -79,18 +79,18 @@ pub fn render_fraction(
             body.push('0');
         }
         if num > 0 {
-            body.push_str(&pad_num(num, num_placeholders));
+            body.push_str(&pad_num(u128::from(num), num_placeholders));
             body.push('/');
-            body.push_str(&pad_num(den, den_placeholders));
+            body.push_str(&pad_num(u128::from(den), den_placeholders));
         }
     } else {
-        let improper = whole * u64::from(den) + u64::from(num);
+        let improper = u128::from(whole) * u128::from(den) + u128::from(num);
         if improper == 0 {
             body.push('0');
         } else {
-            body.push_str(&pad_num(improper as u32, num_placeholders.max(1)));
+            body.push_str(&pad_num(improper, num_placeholders.max(1)));
             body.push('/');
-            body.push_str(&pad_num(den, den_placeholders.max(1)));
+            body.push_str(&pad_num(u128::from(den), den_placeholders.max(1)));
         }
     }
     if neg && body != "0" {
@@ -100,7 +100,7 @@ pub fn render_fraction(
     }
 }
 
-fn pad_num(n: u32, _width: usize) -> String {
+fn pad_num(n: u128, _width: usize) -> String {
     n.to_string()
 }
 

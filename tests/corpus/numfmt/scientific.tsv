@@ -19,3 +19,4 @@
 2.5e-6	0.00E+00	en-US	1900	2.50E-06	2.5 microseconds
 -0.012	0.00E+00	en-US	1900	-1.20E-02	neg small
 1234567	0.00E+00	en-US	1900	1.23E+06	1.23 million
+1005	0.00E+00	en-US	1900	1.01E+03	round the 15-significant-digit decimal coefficient, not the binary product
