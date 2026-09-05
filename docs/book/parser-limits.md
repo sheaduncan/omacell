@@ -17,7 +17,7 @@ Important public limits include:
 | MCP range rows per page | 1,024 |
 | Command/Lua resolved range | 100,000 cells |
 | User Lua source | 1 MiB |
-| Embedded Lua | 32 MiB memory and 10,000,000 VM instructions |
+| Embedded Lua | 8 MiB memory and 1,000,000 VM instructions |
 | Lua macro recording | 10,000 steps or 16 MiB |
 | Trust store | 1 MiB |
 | Legacy `.xls` input / worker output | 256 MiB each |

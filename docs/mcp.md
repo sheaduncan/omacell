@@ -12,7 +12,7 @@ Run the deterministic workbook audit (`omacell audit --json`).
 
 ## `card`
 
-Workbook card. WP-21 returns summary level; WP-22 replaces the payload.
+Privacy-filtered summary-level workbook card.
 
 ## `changeset_apply`
 
@@ -56,7 +56,7 @@ Write formula-bar values into an A1 range. Defaults to proposing a changeset.
 
 ## `recalc`
 
-Recalculate the live workbook. Denied while a changeset is still proposed. `wait` is reserved for async AI cells (WP-22).
+Recalculate the live workbook. Denied while a changeset is still proposed. `wait=true` waits for asynchronous AI cells to settle.
 
 ## `render`
 
@@ -88,5 +88,5 @@ Save is a user action; MCP is denied. Use the CLI/GUI.
 
 ## Resources
 
-- `omacell://<file>/card` — workbook card (summary until WP-22)
+- `omacell://<file>/card` — privacy-filtered summary-level workbook card
 - `omacell://<file>/<sheet>` — sheet summary

@@ -132,7 +132,7 @@ pub struct CommandRunArgs {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RecalcArgs {
-    /// Wait for async AI cells to settle (no-op until WP-22).
+    /// Wait for async AI cells to settle before returning.
     #[serde(default)]
     pub wait: bool,
 }
@@ -200,7 +200,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "card",
-        doc: "Workbook card. WP-21 returns summary level; WP-22 replaces the payload.",
+        doc: "Privacy-filtered summary-level workbook card.",
         schema: schema_of::<CardArgs>,
     },
     ToolSpec {
@@ -255,7 +255,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "recalc",
-        doc: "Recalculate the live workbook. Denied while a changeset is still proposed. `wait` is reserved for async AI cells (WP-22).",
+        doc: "Recalculate the live workbook. Denied while a changeset is still proposed. `wait=true` waits for asynchronous AI cells to settle.",
         schema: schema_of::<RecalcArgs>,
     },
     ToolSpec {
@@ -338,7 +338,7 @@ pub fn render_markdown() -> String {
         out.push_str(&format!("## `{}`\n\n{}\n\n", tool.name, tool.doc));
     }
     out.push_str("## Resources\n\n");
-    out.push_str("- `omacell://<file>/card` — workbook card (summary until WP-22)\n");
+    out.push_str("- `omacell://<file>/card` — privacy-filtered summary-level workbook card\n");
     out.push_str("- `omacell://<file>/<sheet>` — sheet summary\n");
     out
 }

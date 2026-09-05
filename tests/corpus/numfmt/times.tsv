@@ -30,7 +30,7 @@
 0.5	[h]:mm:ss	en-US	1900	12:00:00	builtin 46 elapsed
 0.5023	mm:ss.0	en-US	1900	03:18.7	builtin 47 style tenths: 0.0023*86400=198.72s → 3:18.7
 1.006944444	[h]:mm	en-US	1900	24:10	1 day + 10 minutes
-0.99999999	h:mm:ss	en-US	1900	23:59:59	just under 1; rounding must not jump to 24:00:00 unless ≥ 0.5s past
+0.99999999	h:mm:ss	en-US	1900	0:00:00	less than one millisecond before midnight rounds into the next day
 0.5	h	en-US	1900	12	hours only
 0.5	hh	en-US	1900	12	padded hours
 0	ss	en-US	1900	00	seconds only
@@ -47,3 +47,10 @@
 0.5	h:mm AM/PM	en-US	1904	12:00 PM	1904 noon is the same fraction
 1.0	h:mm:ss	en-US	1900	0:00:00	integer serial, time 00:00:00
 0.0416666666667	h AM/PM	en-US	1900	1 AM	hour + AM
+0.99999999	[h]:mm:ss	en-US	1900	24:00:00	elapsed hours and minute/second components use the same rounded total
+0.5	h.mm	en-US	1900	12.00	mm after an hour is minutes even when separated by a dot
+46027	yyyy-mm-ddThh:mm:ss	en-US	1900	2026-01-05T00:00:00	ISO-like unquoted T separates date and time tokens
+1.5	[>=1][h]:mm;h:mm	en-US	1900	36:00	conditional elapsed tokens remain date/time tokens
+0.5	[>=1][h]:mm;h:mm	en-US	1900	12:00	unconditional time fallback remains date/time tokens
+-0.25	h:mm	en-US	1900	##########	negative time-only serials overflow in the 1900 date system
+0.00001	h:mm:ss.0000000000	en-US	1900	0:00:00.8640000000	long fractional-second formats are bounded and never overflow integer scaling

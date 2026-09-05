@@ -56,7 +56,7 @@ JSON of `Value::Number` is a JSON number. That is not bit-exact for every IEEE v
 |---|---|
 | `ErrorKind` (Excel cell errors, exact display strings, `error_type()`) | [`error.rs`](../crates/core/src/error.rs) |
 | `CoreError` `{code, message, hint}` | same |
-| `codes::*` (`addr.*`, `command.id`, `changeset.*`, `value.array_shape`, `sheet.*`, `name.defined`, `table.name`, `undo.empty`, `formula.len`, `numfmt.parse`) | same |
+| `codes::*` (`addr.ref`, `addr.parse`, `command.id`, `changeset.id`, `changeset.inverse`, `value.array_shape`, `sheet.name`, `sheet.id`, `name.defined`, `table.name`, `undo.empty`, `formula.len`, `numfmt.parse`) | same |
 
 `ERROR.TYPE` follows the Excel 365 extended table: classic errors and
 `#GETTING_DATA` use 1–8, then `#SPILL!` 9, `#CONNECT!` 10, `#BLOCKED!` 11,
@@ -99,7 +99,7 @@ No commands are registered here. WP-07a creates the first versioned command cata
 
 ## Command catalog — `docs/schemas/commands.schema.json` (WP-07a)
 
-Envelope `{schema: 1, commands[]}` from `omacell_bus::commands_json`. Command ids and public argument schemas freeze when WP-07a merges. Internal restore handlers, including `cell.restore`, `style.restore`, `edit.restore`, and `name.restore`, are excluded from the catalog. Frozen WP-01 `CommandDescriptor` is unchanged.
+Envelope `{schema: 1, commands[]}` from `omacell_bus::commands_json`. Command ids and public argument schemas freeze when WP-07a merges. The internal handlers `cell.restore`, `style.restore`, `edit.restore`, `name.restore`, `pivot.restore`, `chart.remove`, and `sparkline.remove` are excluded from the catalog. Frozen WP-01 `CommandDescriptor` is unchanged.
 
 The WP-19 UI integration adds public `edit.searchnext`, `edit.searchprev`, and
 `edit.explainerror` commands. Each uses the shared optional `{count: u32}` UI
@@ -221,7 +221,7 @@ startup, and shutdown, and symlinks or malformed markers are ignored/refused.
 | `ChangeSummary` | same |
 | `Changeset` | same |
 
-Proposed changesets carry no inverse commands. WP-07a computes inverses from trusted workbook state before moving a changeset to `Applied`; applied and reverted non-empty changesets must carry those inverses. Agent-supplied inverses are not trusted.
+Proposed changesets carry no inverse commands. WP-07a computes inverses from trusted workbook state before moving a changeset to `Applied`; applied and reverted non-empty changesets must carry those inverses. Handlers use compact logical inverses where available; the bounded generic fallback stores a private `edit.restore` logical patch. Agent-supplied inverses are not trusted.
 
 `ChangesetId` remains an opaque non-empty string. The bus assigns collision-resistant ids (`cs-{session}-{seq}`) from a process-wide counter so reconstructing the in-memory store cannot reissue `cs-1`. Apply records a private live-generation at propose time and rejects a proposal whose generation no longer matches (`changeset.base`) without adding fields to the frozen `Changeset` type or IPC v1 envelopes.
 

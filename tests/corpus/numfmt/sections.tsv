@@ -53,3 +53,7 @@ hello	"x"	en-US	1900	hello	numeric-only format still displays text as-is when no
 1	[<>1]"yes";"no"	en-US	1900	no	not-equal miss
 -1000	[<=-1000]"lo";"hi"	en-US	1900	lo	<= condition
 1.5	[>1.5]"a";[>=1.5]"b";"c"	en-US	1900	b	first miss, second hit; order matters
+1234.5	#,##0.00 [$€-407]	en-US	1900	1,234.50 €	currency locale brackets render where they occur, not at the section front
+46027	[$-x-sysdate]dddd, mmmm d, yyyy	en-US	1900	Monday, January 5, 2026	Excel system-date modifier is metadata, not a literal -x prefix
+-5	[>0]0;0	en-US	1900	-5	negative value falling through to an unconditional section retains its sign
+-5	"x"0	en-US	1900	-x5	automatic single-section sign precedes literal prefixes
