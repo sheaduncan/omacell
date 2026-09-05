@@ -4088,6 +4088,7 @@ dependencies = [
  "omacell-conf",
  "omacell-core",
  "omacell-fn",
+ "omacell-io",
  "omacell-lua",
  "omacell-ui",
  "pollster",
@@ -4095,6 +4096,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "wgpu",
 ]
 
 [[package]]
@@ -4117,6 +4119,7 @@ dependencies = [
  "rustix 1.1.4",
  "serde",
  "serde_json",
+ "tempfile",
  "tiny-skia",
  "ttf-parser",
  "usvg",

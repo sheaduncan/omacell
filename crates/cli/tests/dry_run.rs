@@ -9,6 +9,8 @@ use omacell_core::command::Origin;
 use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
+use omacell_io::omc::{self, OmcDocument};
+use omacell_io::xlsx::lock_path;
 use tempfile::TempDir;
 
 fn corpus_xlsx() -> PathBuf {
@@ -122,6 +124,59 @@ fn configured_backup_is_the_original_not_a_second_preflight_save() {
         std::fs::read(book.with_extension("xlsx.bak.1")).unwrap(),
         original
     );
+}
+
+#[test]
+fn csv_and_omc_saves_honor_peer_locks_and_configured_backups() {
+    let dir = TempDir::new().unwrap();
+    let csv = dir.path().join("book.csv");
+    std::fs::write(&csv, "value\nold\n").unwrap();
+    let omc = dir.path().join("book.omc");
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    workbook.set_text(sheet, 0, 0, "old").unwrap();
+    let text = omc::to_string(&OmcDocument {
+        workbook,
+        extras: Default::default(),
+        changeset: None,
+    })
+    .unwrap();
+    std::fs::write(&omc, text).unwrap();
+
+    for path in [&csv, &omc] {
+        let lock = lock_path(path);
+        std::fs::write(&lock, "foreign lock").unwrap();
+        Command::cargo_bin("omacell")
+            .unwrap()
+            .env("HOME", dir.path())
+            .args(["set", path.to_str().unwrap(), "A1", "blocked"])
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("locked"));
+        std::fs::remove_file(lock).unwrap();
+
+        let original = std::fs::read(path).unwrap();
+        Command::cargo_bin("omacell")
+            .unwrap()
+            .env("HOME", dir.path())
+            .args([
+                "--set",
+                "files.keep_backups=1",
+                "set",
+                path.to_str().unwrap(),
+                "A1",
+                "saved",
+            ])
+            .assert()
+            .success();
+
+        let mut backup_name = path.file_name().unwrap().to_os_string();
+        backup_name.push(".bak.1");
+        assert_eq!(
+            std::fs::read(path.with_file_name(backup_name)).unwrap(),
+            original
+        );
+    }
 }
 
 #[test]

@@ -20,6 +20,7 @@ pub use deps::{DYNAMIC_FUNCS, Deps, VOLATILE_FUNCS, collect_deps};
 pub use error::{ParseError, codes};
 pub use parser::{parse, parse_editor, parse_editor_with, parse_with};
 pub use printer::{print, print_expr, print_with};
+pub(crate) use rewrite::invalidate_deleted_references;
 pub use rewrite::{
     RewriteOp, adjust_cols, adjust_rows, apply, copy_delta, move_range, rename_sheet, rename_table,
     rewrite_print,

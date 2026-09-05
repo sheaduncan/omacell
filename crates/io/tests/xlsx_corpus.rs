@@ -7,7 +7,7 @@ use omacell_core::error::ErrorKind;
 use omacell_core::names::NameScope;
 use omacell_core::sheet::SheetVisibility;
 use omacell_core::value::Value;
-use omacell_io::xlsx::open;
+use omacell_io::xlsx::{open, open_bytes, save_bytes};
 use serde_json::Value as Json;
 
 fn corpus(name: &str) -> PathBuf {
@@ -219,6 +219,18 @@ fn l2_inline_fragments_are_preserved_byte_for_byte() {
     assert!(extra.data_validations_xml[0].starts_with(b"<dataValidations "));
     assert_eq!(extra.sparkline_xml.len(), 1);
     assert!(extra.sparkline_xml[0].starts_with(b"<x14:sparklineGroups "));
+}
+
+#[test]
+fn worksheet_extras_follow_a_sheet_rename() {
+    let mut doc = open(&corpus("l2_print.xlsx")).unwrap();
+    let sheet = doc.workbook.active_sheet();
+    doc.workbook.rename_sheet(sheet, "Renamed").unwrap();
+
+    let bytes = save_bytes(&doc).unwrap();
+    let reopened = open_bytes(&bytes).unwrap();
+    let extra = reopened.extras.get("Renamed").expect("renamed extras");
+    assert_eq!(extra.sparkline_xml.len(), 1);
 }
 
 #[test]

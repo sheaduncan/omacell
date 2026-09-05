@@ -20,6 +20,7 @@ use omacell_core::error::CoreError;
 use omacell_core::limits::{MAX_COLS, MAX_ROWS};
 use omacell_core::print::paginate;
 use omacell_core::{PRODUCT_DISPLAY_NAME, PRODUCT_NAME};
+use omacell_io::autosave::{AutosaveSession, RecoveryCandidate};
 use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
     AgentRole, Area, ChangesetReview, ClipboardPayload, EditSurface, FormulaAssist,
@@ -54,6 +55,8 @@ pub struct Launch {
     pub ai: Option<Arc<AiRuntime>>,
     /// Workbook path from `omacell [file]`, if any.
     pub file: Option<PathBuf>,
+    /// Snapshot restored before the GUI started, if any.
+    pub recovery: Option<RecoveryCandidate>,
     /// Load `LoadedConfig.shell.ui_font_path` into egui. Tests keep bundled fonts.
     pub use_shell_font: bool,
 }
@@ -119,12 +122,24 @@ pub struct Gui {
     print_index: usize,
     window_focused: Option<bool>,
     ipc: Option<IpcHandle>,
+    autosave: AutosaveSession,
 }
 
 impl Gui {
     /// Wrap a launch. `ipc` starts the in-process socket used by the theme hook.
     pub fn new(launch: Launch, ipc: bool, ctx: &egui::Context) -> Result<Self, CoreError> {
         let requested_file = launch.file.clone();
+        let recovered_file = launch
+            .recovery
+            .as_ref()
+            .and_then(|candidate| candidate.source.clone());
+        let recovered = launch.recovery.is_some();
+        let autosave = launch.recovery.as_ref().map_or_else(
+            || AutosaveSession::new(&launch.paths.state_dir),
+            |candidate| {
+                AutosaveSession::with_id(&launch.paths.state_dir, candidate.session.clone())
+            },
+        );
         let loaded = launch.store.snapshot();
         let catalog = catalog_from_bus(&launch.bus)?;
         let runner = TaskRunner::spawn(launch.bus, launch.long_ops)?;
@@ -149,7 +164,7 @@ impl Gui {
         )?;
         let startup_message = scripts.take_messages().into_iter().last();
         let script_status = startup_message.clone();
-        let (message, focused_cancel) = if let Some(path) = requested_file {
+        let (mut message, focused_cancel) = if let Some(path) = requested_file {
             let (_, cancel) = runner.handle().submit(
                 Origin::User,
                 "file.open",
@@ -162,6 +177,9 @@ impl Gui {
         } else {
             (startup_message, None)
         };
+        if recovered {
+            message = Some("Recovered an autosave snapshot; save the workbook to keep it.".into());
+        }
         let ipc_handle = if ipc {
             let limits = IpcLimits::new(loaded.config.ipc.max_frame_bytes as usize)?;
             Some(serve_runner_with_limits(
@@ -205,7 +223,7 @@ impl Gui {
             catalog,
             message,
             script_status,
-            dirty: false,
+            dirty: recovered,
             discard_armed: None,
             close_requested: false,
             close_after_save: false,
@@ -221,7 +239,7 @@ impl Gui {
             completion: InlineCompletion::default(),
             clipboard_export: None,
             context_menu: None,
-            file: None,
+            file: recovered_file,
             use_shell_font: launch.use_shell_font,
             drag: None,
             focused_cancel,
@@ -231,6 +249,7 @@ impl Gui {
             print_index: 0,
             window_focused: None,
             ipc: ipc_handle,
+            autosave,
         })
     }
 
@@ -301,6 +320,7 @@ impl Gui {
     /// Apply pending config/task events without resetting the session.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.poll_tasks();
+        self.poll_autosave();
         if let Some(text) = self.clipboard_export.take() {
             ctx.copy_text(text);
         }
@@ -335,6 +355,19 @@ impl Gui {
                     }
                 }
             }
+        }
+    }
+
+    fn poll_autosave(&mut self) {
+        let interval = self.store.snapshot().config.files.autosave_interval;
+        let snapshot = self.runner.handle().snapshot();
+        if let Err(error) = self.autosave.snapshot_if_due(
+            &snapshot.workbook,
+            self.file.as_deref(),
+            interval,
+            self.dirty && !self.runner.handle().is_busy(),
+        ) {
+            self.message = Some(format!("{}: {}", error.code, error.message));
         }
     }
 
@@ -457,6 +490,9 @@ impl Gui {
                         state.command.as_str(),
                         "file.open" | "file.save" | "file.saveas" | "file.new"
                     ) {
+                        if let Err(error) = self.autosave.clear() {
+                            self.message = Some(format!("{}: {}", error.code, error.message));
+                        }
                         self.dirty = false;
                         self.file = outcome
                             .result
@@ -1681,7 +1717,12 @@ impl Gui {
     }
 
     fn confirm_discard(&mut self, command: &str) -> bool {
-        if !self.dirty || self.discard_armed.as_deref() == Some(command) {
+        if !self.dirty {
+            self.discard_armed = None;
+            return true;
+        }
+        if self.discard_armed.as_deref() == Some(command) {
+            let _ = self.autosave.clear();
             self.discard_armed = None;
             return true;
         }
@@ -1848,8 +1889,23 @@ impl Gui {
             }
             let _ = self.step_key(key);
         }
-        if edit.surface == EditSurface::InCell || text_overlay_open {
-            for text in input::text_events(&input.events) {
+        let typed_text: Vec<&str> = input::text_events(&input.events)
+            .filter(|text| !text.is_empty())
+            .collect();
+        if !typed_text.is_empty()
+            && self.ui.edit().is_idle()
+            && self.ui.mode() == omacell_ui::Mode::Classic
+            && !self.ui.palette().open
+            && self.ui.panel().visible.is_none()
+            && self.context_menu.is_none()
+            && !input.modifiers.ctrl
+            && !input.modifiers.command
+            && !input.modifiers.alt
+        {
+            self.ui.begin_edit(EditSurface::InCell, "");
+        }
+        if self.ui.edit().surface == EditSurface::InCell || text_overlay_open {
+            for text in typed_text {
                 let _ = self.insert_composed_text(text);
             }
         }
@@ -2195,6 +2251,16 @@ impl Gui {
             return;
         };
         let sel = self.ui.selection();
+        if double && !ctrl && !shift {
+            let mut sel = sel;
+            sel.cursor.row = row;
+            sel.cursor.col = col;
+            sel.replace(Area::cell(sel.cursor));
+            self.ui.set_selection(sel);
+            self.drag = None;
+            let _ = self.execute_cmd("edit.cell", json!({}));
+            return;
+        }
         let (r0, c0, r1, c1) = sel.active().normalized();
         let inside = row >= r0 && row <= r1 && col >= c0 && col <= c1 && (r1 > r0 || c1 > c0);
         if inside && !shift {

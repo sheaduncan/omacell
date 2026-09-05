@@ -1952,8 +1952,19 @@ fn sheet_protect(
         .sheet(id)
         .map(|sheet| sheet.protection.clone())
         .ok_or_else(|| CoreError::sheet_id("unknown sheet"))?;
+    if protection.enabled
+        && !protection_password_matches(&protection.password, args.password.as_deref())
+    {
+        return Err(crate::protection::sheet_protected(
+            "the current sheet-protection password is required",
+        ));
+    }
     protection.enabled = args.enable;
-    protection.password = hash.map(|value| format!("{value:04X}").into_bytes());
+    protection.password = if args.enable {
+        hash.map(|value| format!("{value:04X}").into_bytes())
+    } else {
+        None
+    };
     if let Some(allow) = args.allow {
         protection.allow = ProtectionAllow {
             select_locked: allow.select_locked,
@@ -1980,12 +1991,23 @@ fn workbook_protect(
     args: WorkbookProtectArgs,
 ) -> Result<Effect, CoreError> {
     let hash = args.password.as_deref().map(excel_xor_hash);
+    let current = ctx.workbook_ref().protection();
+    if current.enabled && !protection_password_matches(&current.password, args.password.as_deref())
+    {
+        return Err(crate::protection::workbook_protected(
+            "the current workbook-protection password is required",
+        ));
+    }
     ctx.workbook()
         .set_workbook_protection(omacell_core::workbook::WorkbookProtectionState {
             enabled: args.enable,
             lock_structure: args.enable && args.lock_structure,
             lock_windows: args.enable && args.lock_windows,
-            password: hash.map(|value| format!("{value:04X}").into_bytes()),
+            password: if args.enable {
+                hash.map(|value| format!("{value:04X}").into_bytes())
+            } else {
+                None
+            },
         })?;
     Ok(Effect {
         result: serde_json::json!({
@@ -1994,6 +2016,19 @@ fn workbook_protect(
         }),
         ..changed("workbook protection")
     })
+}
+
+fn protection_password_matches(stored: &Option<Vec<u8>>, supplied: Option<&str>) -> bool {
+    let Some(stored) = stored else {
+        return true;
+    };
+    let Some(supplied) = supplied else {
+        return false;
+    };
+    let hash = excel_xor_hash(supplied);
+    stored.as_slice() == format!("{hash:04X}").as_bytes()
+        || stored.as_slice() == hash.to_be_bytes()
+        || stored.as_slice() == hash.to_le_bytes()
 }
 
 fn sheet_protected_range(

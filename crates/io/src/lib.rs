@@ -6,6 +6,7 @@
 #![deny(missing_docs)]
 #![warn(rustdoc::broken_intra_doc_links)]
 
+pub mod autosave;
 pub mod bridge;
 pub mod chart_export;
 pub mod csv;

@@ -18,9 +18,11 @@ omacell-ai = { path = "../ai", version = "0.0.0" }
 omacell-bus = { path = "../bus", version = "0.0.0" }
 omacell-conf = { path = "../conf", version = "0.0.0" }
 omacell-core = { path = "../core", version = "0.0.0" }
+omacell-io = { path = "../io", version = "0.0.0" }
 omacell-lua = { path = "../lua", version = "0.0.0" }
 omacell-ui = { path = "../ui", version = "0.0.0" }
 serde_json = { workspace = true }
+wgpu = { version = "30", default-features = false, features = ["gles", "vulkan"] }
 
 [dev-dependencies]
 egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }

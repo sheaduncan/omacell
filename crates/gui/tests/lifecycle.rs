@@ -194,16 +194,12 @@ fn retained_lua_runtime_loads_hooks_keymaps_and_source() {
 }
 
 #[test]
-fn key_and_text_events_insert_one_character_in_cell() {
+fn typing_on_a_selected_cell_starts_one_in_cell_edit() {
     let parts = launch_theme(None);
     let mut harness = Harness::builder()
         .with_size(egui::vec2(640.0, 400.0))
         .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
     harness.run();
-    harness
-        .state()
-        .ui_session()
-        .begin_edit(EditSurface::InCell, "");
     harness.input_mut().events.extend([
         Event::Key {
             key: Key::A,
@@ -217,7 +213,67 @@ fn key_and_text_events_insert_one_character_in_cell() {
 
     harness.step();
 
-    assert_eq!(harness.state().ui_session().edit().buffer, "a");
+    let edit = harness.state().ui_session().edit();
+    assert_eq!(edit.surface, EditSurface::InCell);
+    assert_eq!(edit.buffer, "a");
+}
+
+#[test]
+fn duplicate_plain_and_ime_text_commits_insert_slash_once() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness.input_mut().events.extend([
+        Event::Key {
+            key: Key::Slash,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        },
+        Event::Text("/".into()),
+        Event::Ime(egui::ImeEvent::Commit("/".into())),
+    ]);
+
+    harness.step();
+
+    let edit = harness.state().ui_session().edit();
+    assert_eq!(edit.surface, EditSurface::InCell);
+    assert_eq!(edit.buffer, "/");
+}
+
+#[test]
+fn double_clicking_a_cell_starts_editing_its_existing_input() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    let pos = harness.get_by_label_contains("cell A1").rect().center();
+
+    for _ in 0..2 {
+        harness.input_mut().events.extend([
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        harness.step();
+    }
+
+    let edit = harness.state().ui_session().edit();
+    assert_eq!(edit.surface, EditSurface::InCell);
+    assert_eq!(edit.buffer, "Hello");
 }
 
 #[test]

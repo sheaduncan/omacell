@@ -113,6 +113,13 @@ fn sheet_rename_rewrites_formula_qualifiers_as_one_undo_unit() {
     wb.set_formula_text(calc, 2, 0, "=[Book.xlsx]Sheet1!A1")
         .unwrap();
     wb.set_formula_text(calc, 3, 0, "=sum(A1)").unwrap();
+    wb.define_name(DefinedName {
+        name: "Amount".into(),
+        scope: NameScope::Workbook,
+        referent: NameReferent::Formula("=Sheet1!$A$1".into()),
+        comment: None,
+    })
+    .unwrap();
     wb.undo_log_mut().set_enabled(true);
 
     wb.rename_sheet(source, "Input Data").unwrap();
@@ -129,6 +136,12 @@ fn sheet_rename_rewrites_formula_qualifiers_as_one_undo_unit() {
         Some("=[Book.xlsx]Sheet1!A1")
     );
     assert_eq!(wb.formula_text_at(calc, 3, 0).as_deref(), Some("=sum(A1)"));
+    assert_eq!(
+        wb.names()
+            .get(NameScope::Workbook, "Amount")
+            .map(|name| &name.referent),
+        Some(&NameReferent::Formula("='Input Data'!$A$1".into()))
+    );
 
     wb.undo().unwrap();
     assert_eq!(
@@ -144,6 +157,12 @@ fn sheet_rename_rewrites_formula_qualifiers_as_one_undo_unit() {
         Some("{=Sheet1!A1:A2}")
     );
     assert_eq!(wb.formula_text_at(calc, 3, 0).as_deref(), Some("=sum(A1)"));
+    assert_eq!(
+        wb.names()
+            .get(NameScope::Workbook, "Amount")
+            .map(|name| &name.referent),
+        Some(&NameReferent::Formula("=Sheet1!$A$1".into()))
+    );
     assert!(!wb.undo_log().can_undo());
 
     wb.redo().unwrap();
@@ -160,6 +179,72 @@ fn sheet_rename_rewrites_formula_qualifiers_as_one_undo_unit() {
         Some("{='Input Data'!A1:A2}")
     );
     assert_eq!(wb.formula_text_at(calc, 3, 0).as_deref(), Some("=sum(A1)"));
+    assert_eq!(
+        wb.names()
+            .get(NameScope::Workbook, "Amount")
+            .map(|name| &name.referent),
+        Some(&NameReferent::Formula("='Input Data'!$A$1".into()))
+    );
+}
+
+#[test]
+fn sheet_delete_invalidates_references_and_cleans_owned_objects() {
+    let mut wb = Workbook::new();
+    wb.undo_log_mut().set_enabled(false);
+    let calc = wb.active_sheet();
+    let data = wb.add_sheet("Data").unwrap();
+    wb.set_text(data, 0, 0, "Amount").unwrap();
+    wb.set_number(data, 1, 0, 7.0).unwrap();
+    let data_range = RangeRef::from_corners(
+        CellRef::new(0, 0).unwrap().on_sheet(data),
+        CellRef::new(1, 0).unwrap().on_sheet(data),
+    );
+    wb.create_table(data, data_range, "Sales").unwrap();
+    wb.define_name(DefinedName {
+        name: "LocalAmount".into(),
+        scope: NameScope::Sheet(data),
+        referent: NameReferent::Range(data_range),
+        comment: None,
+    })
+    .unwrap();
+    wb.define_name(DefinedName {
+        name: "RemoteAmount".into(),
+        scope: NameScope::Workbook,
+        referent: NameReferent::Formula("=Data!$A$2".into()),
+        comment: None,
+    })
+    .unwrap();
+    wb.set_formula_text(calc, 0, 0, "=Data!A2").unwrap();
+    wb.undo_log_mut().set_enabled(true);
+
+    wb.remove_sheet(data).unwrap();
+    assert_eq!(wb.formula_text_at(calc, 0, 0).as_deref(), Some("=#REF!"));
+    assert!(wb.tables().is_empty());
+    assert!(
+        wb.names()
+            .get(NameScope::Sheet(data), "LocalAmount")
+            .is_none()
+    );
+    assert_eq!(
+        wb.names()
+            .get(NameScope::Workbook, "RemoteAmount")
+            .map(|name| &name.referent),
+        Some(&NameReferent::Formula("=#REF!".into()))
+    );
+
+    wb.undo().unwrap();
+    assert_eq!(wb.formula_text_at(calc, 0, 0).as_deref(), Some("=Data!A2"));
+    assert_eq!(wb.tables().len(), 1);
+    assert!(
+        wb.names()
+            .get(NameScope::Sheet(data), "LocalAmount")
+            .is_some()
+    );
+
+    wb.redo().unwrap();
+    let replacement = wb.add_sheet("Data").unwrap();
+    wb.set_number(replacement, 1, 0, 99.0).unwrap();
+    assert_eq!(wb.formula_text_at(calc, 0, 0).as_deref(), Some("=#REF!"));
 }
 
 #[test]

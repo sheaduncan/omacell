@@ -2,6 +2,7 @@
 
 use assert_cmd::Command;
 use std::os::unix::fs::PermissionsExt;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn write_fake_omarchy(bin: &std::path::Path, log: &std::path::Path) {
@@ -11,6 +12,32 @@ fn write_fake_omarchy(bin: &std::path::Path, log: &std::path::Path) {
     );
     std::fs::write(bin, script).unwrap();
     std::fs::set_permissions(bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn write_slow_fake_omarchy(bin: &std::path::Path) {
+    let script = "#!/bin/sh\n\
+if [ \"$1\" = default ] && [ \"$2\" = agent ]; then\n\
+  printf '%s\\n' grok\n\
+  exit 0\n\
+fi\n\
+if [ \"$1\" = agent ] && [ \"$2\" = prompt ]; then\n\
+  sleep 2\n\
+  exit 0\n\
+fi\n\
+exit 64\n";
+    std::fs::write(bin, script).unwrap();
+    std::fs::set_permissions(bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn read_log_after(log: &std::path::Path, expected: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        if text.contains(expected) || Instant::now() >= deadline {
+            return text;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -69,7 +96,7 @@ fn handoff_records_args_and_cwd_when_default_agent_set() {
     assert!(prompt.contains(&book.display().to_string()));
     assert!(prompt.contains("Current selection: Sheet1!A1"));
     assert!(prompt.contains("Reconcile Inputs"));
-    let log_text = std::fs::read_to_string(&log).unwrap();
+    let log_text = read_log_after(&log, "prompt");
     assert!(log_text.contains("agent"));
     assert!(log_text.contains("prompt"));
     assert!(!log_text.contains("--workbook"));
@@ -79,6 +106,36 @@ fn handoff_records_args_and_cwd_when_default_agent_set() {
     assert!(
         log_text.contains(&book_dir.display().to_string())
             || log_text.lines().next() == Some(book_dir.to_str().unwrap())
+    );
+}
+
+#[test]
+fn handoff_returns_without_waiting_for_the_agent_window() {
+    let home = TempDir::new().unwrap();
+    let path_dir = home.path().join("bin");
+    std::fs::create_dir_all(&path_dir).unwrap();
+    write_slow_fake_omarchy(&path_dir.join("omarchy"));
+
+    let started = Instant::now();
+    let output = Command::cargo_bin("omacell")
+        .unwrap()
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path().join("state"))
+        .env("XDG_RUNTIME_DIR", home.path().join("run"))
+        .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
+        .args(["--json", "agent", "help with this workbook"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "agent hand-off blocked for {:?}",
+        started.elapsed()
     );
 }
 
