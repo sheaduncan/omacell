@@ -48,7 +48,14 @@ Primary upstream references used during review:
 
 ## What was reviewed and changed
 
-Pending.
+- **#132 — `actions/upload-artifact` 7.0.1:** verified that the pinned
+  `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` commit is the signed v7.0.1
+  release, that all configured inputs remain part of the action contract, and
+  that the source, architecture, and fixed-host artifact names are unique.
+  The action now declares the Node 24 runtime (Actions Runner 2.327.1 or
+  newer). Release uploads run on GitHub-hosted images; the fixed-host lane
+  already starts with the Node-24-based `actions/checkout` v7, so this update
+  does not introduce a new runner-runtime requirement for that machine.
 
 ## Interfaces exposed
 
@@ -61,7 +68,8 @@ None yet.
 
 ## Measurements
 
-Pending per-PR gate evidence.
+- #132: clean current-`main` merge and `git diff --check`; exact local gate and
+  hosted checks pending below.
 
 ## Open questions
 
