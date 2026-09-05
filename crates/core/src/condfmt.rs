@@ -223,7 +223,7 @@ pub enum CfKind {
         /// Gradient fill.
         gradient: bool,
     },
-    /// Icon set (thresholds as percentiles 0–100).
+    /// Icon set (thresholds as percentages of the value range, 0–100).
     IconSet {
         /// Number of icons (3–5).
         icons: u8,
@@ -527,7 +527,11 @@ fn rule_fill(val: Value, rule: &CondFormat, cache: &RuleCache<'_>) -> Option<Col
             let nums = cache.nums(rule.priority);
             let min = nums.iter().copied().fold(f64::INFINITY, f64::min);
             let max = nums.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            color_scale_at(n, min, max, colors)
+            if colors.len() >= 3 {
+                color_scale_at_midpoint(n, min, median(nums)?, max, colors)
+            } else {
+                color_scale_at(n, min, max, colors)
+            }
         }
         CfKind::DataBar { .. } => None,
         _ => None,
@@ -566,19 +570,16 @@ fn rule_visual(val: Value, rule: &CondFormat, cache: &RuleCache<'_>) -> Option<C
         }
         CfKind::IconSet { icons } => {
             let icons = (*icons).clamp(3, 5);
-            let mut sorted = nums.to_vec();
-            sorted.sort_by(|a, b| a.total_cmp(b));
-            if sorted.is_empty() {
+            let min = nums.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = nums.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            if !min.is_finite() || !max.is_finite() {
                 return None;
             }
-            let lower_rank = sorted.partition_point(|candidate| *candidate < value);
-            let index = u8::try_from(
-                lower_rank
-                    .saturating_mul(usize::from(icons))
-                    .checked_div(sorted.len())
-                    .unwrap_or(0),
-            )
-            .unwrap_or(icons - 1);
+            let index = if (max - min).abs() < 1e-12 {
+                icons - 1
+            } else {
+                (((value - min) / (max - min)).clamp(0.0, 1.0) * f64::from(icons)).floor() as u8
+            };
             Some(CfVisual::Icon {
                 icons,
                 index: index.min(icons - 1),
@@ -966,10 +967,47 @@ pub fn color_scale_at(n: f64, min: f64, max: f64, colors: &[Color]) -> Option<Co
     if colors.len() == 2 {
         return Some(lerp(colors[0], colors[1], t));
     }
-    if t <= 0.5 {
-        Some(lerp(colors[0], colors[1], t * 2.0))
+    color_scale_at_midpoint(n, min, min + (max - min) / 2.0, max, colors)
+}
+
+fn color_scale_at_midpoint(
+    n: f64,
+    min: f64,
+    midpoint: f64,
+    max: f64,
+    colors: &[Color],
+) -> Option<Color> {
+    if colors.len() < 3 {
+        return color_scale_at(n, min, max, colors);
+    }
+    if n <= midpoint {
+        let span = midpoint - min;
+        let t = if span.abs() < 1e-12 {
+            1.0
+        } else {
+            ((n - min) / span).clamp(0.0, 1.0)
+        };
+        Some(lerp(colors[0], colors[1], t))
     } else {
-        Some(lerp(colors[1], colors[2], (t - 0.5) * 2.0))
+        let span = max - midpoint;
+        let t = if span.abs() < 1e-12 {
+            1.0
+        } else {
+            ((n - midpoint) / span).clamp(0.0, 1.0)
+        };
+        Some(lerp(colors[1], colors[2], t))
+    }
+}
+
+fn median(values: &[f64]) -> Option<f64> {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let upper = *sorted.get(sorted.len() / 2)?;
+    if sorted.len().is_multiple_of(2) {
+        let lower = *sorted.get(sorted.len() / 2 - 1)?;
+        Some(lower / 2.0 + upper / 2.0)
+    } else {
+        Some(upper)
     }
 }
 
