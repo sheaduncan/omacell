@@ -559,3 +559,186 @@ fn wp28_release_handoffs_are_implemented_and_reconciled() {
         );
     }
 }
+
+fn workflow_job_count(workflow: &str) -> usize {
+    let mut in_jobs = false;
+    let mut count = 0;
+    for line in workflow.lines() {
+        if line == "jobs:" {
+            in_jobs = true;
+            continue;
+        }
+        if in_jobs && !line.is_empty() && !line.starts_with(' ') {
+            break;
+        }
+        let Some(rest) = line.strip_prefix("  ") else {
+            continue;
+        };
+        if in_jobs && !rest.starts_with(' ') && rest.ends_with(':') {
+            count += 1;
+        }
+    }
+    count
+}
+
+#[test]
+fn wp28_workflows_are_bounded_and_fail_closed() {
+    let root = workspace_root();
+    let workflows = root.join(".github/workflows");
+    for name in [
+        "ci.yml",
+        "nightly.yml",
+        "omarchy.yml",
+        "packaging.yml",
+        "performance.yml",
+        "release.yml",
+    ] {
+        let text = fs::read_to_string(workflows.join(name)).expect("read workflow");
+        let jobs = workflow_job_count(&text);
+        assert!(jobs > 0, "{name} declares no jobs");
+        assert_eq!(
+            text.matches("timeout-minutes:").count(),
+            jobs,
+            "every {name} job needs an explicit timeout"
+        );
+    }
+
+    let justfile = fs::read_to_string(root.join("justfile")).expect("read justfile");
+    assert!(
+        justfile.contains("RUSTDOCFLAGS=\"-D warnings\" cargo doc --workspace --no-deps"),
+        "the canonical gate must reject rustdoc warnings"
+    );
+
+    let ci = fs::read_to_string(workflows.join("ci.yml")).expect("read CI workflow");
+    for needle in [
+        "nightly-2026-08-28",
+        "cargo +nightly-2026-08-28 fuzz build",
+        "cargo deny check --manifest-path fuzz/Cargo.toml",
+        "cargo deny check --manifest-path spikes/grid-egui/Cargo.toml",
+        "cargo deny check --manifest-path spikes/ironcalc/Cargo.toml",
+    ] {
+        assert!(ci.contains(needle), "CI workflow missing {needle}");
+    }
+
+    let nightly = fs::read_to_string(workflows.join("nightly.yml")).expect("read nightly");
+    for needle in [
+        "toolchain: nightly-2026-08-28",
+        "cargo +nightly-2026-08-28 fuzz list",
+        "cargo +nightly-2026-08-28 fuzz build",
+        "test \"${#fuzz_targets[@]}\" -gt 0",
+        "curl --fail --silent --show-error http://127.0.0.1:11434/api/tags",
+    ] {
+        assert!(nightly.contains(needle), "nightly workflow missing {needle}");
+    }
+    assert!(
+        !nightly.contains("cargo +nightly "),
+        "nightly commands must use the pinned dated toolchain"
+    );
+    let ready = nightly.find("/api/tags").expect("Ollama readiness probe");
+    let pull = nightly.find("ollama pull").expect("Ollama model pull");
+    assert!(ready < pull, "Ollama must be ready before pulling the model");
+
+    let packaging =
+        fs::read_to_string(workflows.join("packaging.yml")).expect("read packaging workflow");
+    assert!(
+        !packaging.contains("paths:"),
+        "clean package validation must run for every pull request"
+    );
+    assert!(
+        packaging.contains("scripts/arch-binary-package-smoke.sh"),
+        "CI must build and install the binary PKGBUILD too"
+    );
+
+    let release = fs::read_to_string(workflows.join("release.yml")).expect("read release");
+    let toolchain = release.find("Install Rust toolchain").expect("toolchain step");
+    let metadata = release.find("cargo metadata").expect("metadata check");
+    assert!(toolchain < metadata, "cargo metadata ran before toolchain setup");
+    assert!(release.contains("mesa-vulkan-drivers"));
+    assert!(release.contains("omacell-${version}.tar.gz"));
+    assert!(
+        !release.contains("/archive/refs/tags/"),
+        "release recipes must not pin GitHub auto-generated archives"
+    );
+    assert!(release.contains("--notes-file release-notes.md"));
+    assert!(!release.contains("--notes-file CHANGELOG.md"));
+}
+
+#[test]
+fn wp28_packaging_and_rename_paths_are_reproducible() {
+    let root = workspace_root();
+    let source = fs::read_to_string(root.join("packaging/PKGBUILD")).expect("read PKGBUILD");
+    let make_start = source.find("makedepends=(").expect("makedepends");
+    let check_start = source.find("checkdepends=(").expect("checkdepends");
+    assert!(
+        source[make_start..check_start].contains("'python'"),
+        "Python is used during build(), so it belongs in makedepends"
+    );
+
+    let binary =
+        fs::read_to_string(root.join("packaging/PKGBUILD-bin")).expect("read binary PKGBUILD");
+    assert!(!binary.contains("OMACELL_BIN_"));
+    for needle in [
+        "PKGBUILD_BIN_X86_64_URL",
+        "PKGBUILD_BIN_AARCH64_URL",
+        "PKGBUILD_BIN_X86_64_SHA256",
+        "PKGBUILD_BIN_AARCH64_SHA256",
+    ] {
+        assert!(binary.contains(needle), "binary PKGBUILD missing {needle}");
+    }
+
+    let smoke =
+        fs::read_to_string(root.join("scripts/arch-package-smoke.sh")).expect("read smoke");
+    assert!(
+        !smoke.contains("bsdtar -tf \"$package_file\" |"),
+        "archive membership must not rely on a pipefail/SIGPIPE-sensitive pipeline"
+    );
+
+    let rename = fs::read_to_string(root.join("scripts/rename.sh")).expect("read rename");
+    assert!(rename.contains("source packaging/name.env"));
+    assert!(rename.contains("sha256sum \"packaging/${new_slug}.install\""));
+    assert!(
+        !rename.contains("s/Omacell/${new_display}/g"),
+        "display-name replacement must not rewrite Rust identifiers"
+    );
+
+    let ignore = fs::read_to_string(root.join(".gitignore")).expect("read .gitignore");
+    assert!(ignore.lines().any(|line| line == "**/*.snap.new"));
+}
+
+#[test]
+fn wp28_review_named_parsers_have_fuzz_coverage() {
+    let root = workspace_root();
+    let manifest = fs::read_to_string(root.join("fuzz/Cargo.toml")).expect("read fuzz manifest");
+    for target in ["application_parsers", "lua_runtime"] {
+        assert!(
+            manifest.contains(&format!("name = \"{target}\"")),
+            "fuzz manifest missing {target}"
+        );
+        assert!(
+            root.join(format!("fuzz/fuzz_targets/{target}.rs")).is_file(),
+            "fuzz target source missing for {target}"
+        );
+    }
+    let parsers = fs::read_to_string(root.join("fuzz/fuzz_targets/application_parsers.rs"))
+        .expect("read application parser target");
+    for needle in [
+        "parse_plan",
+        "parse_findings",
+        "parse_plan_overlay",
+        "parse_completion",
+        "parse_and_eval",
+        "parse_resource_uri",
+        "parse_criteria",
+        "parse_address",
+        "parse_numeric_text",
+        "parse_hypr_chords",
+        "ShellTokens::parse",
+        "serde_json::from_slice::<Chart>",
+    ] {
+        assert!(parsers.contains(needle), "fuzz target does not call {needle}");
+    }
+    let lua = fs::read_to_string(root.join("fuzz/fuzz_targets/lua_runtime.rs"))
+        .expect("read Lua fuzz target");
+    assert!(lua.contains("Runtime::new(Profile::Embedded"));
+    assert!(lua.contains("runtime.exec("));
+}
