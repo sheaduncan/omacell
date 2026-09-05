@@ -80,7 +80,8 @@ None yet.
   clean Arch binary/source package jobs all passed; the PR was merged.
 - #133: `release_artifact_handoff_is_explicitly_fail_closed` failed before the
   workflow hardening (zero of two uploads rejected missing files), then passed
-  after the implementation. Exact local and hosted gates pending.
+  after the implementation. The exact local `just check` gate passed; hosted
+  gates are pending.
 
 ## Open questions
 
