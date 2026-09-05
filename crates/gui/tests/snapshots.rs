@@ -3,7 +3,7 @@
 mod common;
 
 use common::{graphics_adapter_available, launch_theme};
-use egui_kittest::{Harness, SnapshotOptions};
+use egui_kittest::{Harness, SnapshotOptions, SnapshotResults};
 use omacell_gui::Gui;
 
 const THEMES: [&str; 3] = ["tokyo-night", "catppuccin-latte", "nord"];
@@ -14,6 +14,7 @@ fn grid_snapshots_across_scales_and_themes() {
     if !graphics_adapter_available() {
         return;
     }
+    let mut results = SnapshotResults::new();
     for theme in THEMES {
         for scale in SCALES {
             let parts = launch_theme(Some(theme));
@@ -30,7 +31,7 @@ fn grid_snapshots_across_scales_and_themes() {
             let raster_tolerance = (640.0 * 400.0 * scale * scale * 0.012).ceil() as usize;
             harness.snapshot_options(
                 &name,
-                &SnapshotOptions::new().failed_pixel_count_threshold(raster_tolerance),
+                &SnapshotOptions::new().max_failed_pixels(raster_tolerance),
             );
             if (scale - 1.0).abs() < f32::EPSILON {
                 let image = harness.render().expect("render snapshot");
@@ -41,6 +42,7 @@ fn grid_snapshots_across_scales_and_themes() {
                     theme,
                 );
             }
+            results.extend_harness(&mut harness);
         }
     }
 }

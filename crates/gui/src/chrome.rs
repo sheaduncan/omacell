@@ -214,7 +214,7 @@ pub fn palette(
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_TOP, [0.0, 48.0])
-        .frame(egui::Frame::popup(&ctx.style()).fill(theme.popup_background))
+        .frame(egui::Frame::popup(&ctx.global_style()).fill(theme.popup_background))
         .show(ctx, |ui| {
             ui.label(palette.prompt.as_deref().unwrap_or(tr("palette-prompt")));
             ui.label(&palette.query);
@@ -292,29 +292,29 @@ pub fn panel(ui: &mut Ui, panel: &PanelState, session: &UiSession, theme: &GuiTh
     let width = panel_width_points(panel.width);
     match panel.side.as_str() {
         "left" => {
-            egui::SidePanel::left("omacell-panel")
+            egui::Panel::left("omacell-panel")
                 .resizable(true)
-                .default_width(width)
-                .min_width(180.0)
-                .show_inside(ui, |ui| {
+                .default_size(width)
+                .min_size(180.0)
+                .show(ui, |ui| {
                     ui.heading(title);
                     ui.label(RichText::new(body).color(theme.foreground));
                 });
         }
         "bottom" => {
-            egui::TopBottomPanel::bottom("omacell-panel")
+            egui::Panel::bottom("omacell-panel")
                 .resizable(true)
-                .show_inside(ui, |ui| {
+                .show(ui, |ui| {
                     ui.heading(title);
                     ui.label(body);
                 });
         }
         _ => {
-            egui::SidePanel::right("omacell-panel")
+            egui::Panel::right("omacell-panel")
                 .resizable(true)
-                .default_width(width)
-                .min_width(180.0)
-                .show_inside(ui, |ui| {
+                .default_size(width)
+                .min_size(180.0)
+                .show(ui, |ui| {
                     ui.heading(title);
                     ui.label(body);
                 });
