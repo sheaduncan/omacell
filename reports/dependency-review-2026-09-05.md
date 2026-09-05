@@ -93,8 +93,9 @@ None yet.
   clean Arch binary/source package jobs all passed; the PR was merged.
 - #133: `release_artifact_handoff_is_explicitly_fail_closed` failed before the
   workflow hardening (zero of two uploads rejected missing files), then passed
-  after the implementation. The exact local `just check` gate passed; hosted
-  gates are pending.
+  after the implementation. The exact local `just check` gate and hosted
+  `check`, CodeQL, all analysis, and both clean Arch package jobs passed; the
+  PR was merged.
 - #134: signed-tag/SHA verification, `git diff --check`, and the exact local
   `just check` gate passed. Hosted `check`, CodeQL, all analysis, and both clean
   Arch package jobs passed; the PR was merged.
@@ -117,7 +118,7 @@ None. No frozen contract change is authorized by these dependency updates.
 ## Checklist
 
 - [x] PR #132 reviewed and merged
-- [ ] PR #133 reviewed and merged
+- [x] PR #133 reviewed and merged
 - [x] PR #134 reviewed and merged
 - [ ] PR #135 reviewed and merged
 - [ ] PR #136 reviewed and merged
