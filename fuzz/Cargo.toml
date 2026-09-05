@@ -15,6 +15,10 @@ path = "../crates/core"
 
 [dependencies.omacell-fn]
 path = "../crates/fn"
+features = ["fuzzing"]
+
+[dependencies.omacell-ai]
+path = "../crates/ai"
 
 [dependencies.omacell-bus]
 path = "../crates/bus"
@@ -142,6 +146,20 @@ bench = false
 [[bin]]
 name = "other_formats"
 path = "fuzz_targets/other_formats.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "application_parsers"
+path = "fuzz_targets/application_parsers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lua_runtime"
+path = "fuzz_targets/lua_runtime.rs"
 test = false
 doc = false
 bench = false

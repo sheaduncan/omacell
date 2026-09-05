@@ -45,6 +45,11 @@ pub use probes::{PROBE_SPECS, register_probes};
 pub use stat::register_stat;
 pub use text::{TEXT_SPECS, register_text};
 
+#[cfg(feature = "fuzzing")]
+pub use args::parse_address;
+#[cfg(feature = "fuzzing")]
+pub use common::parse_criteria;
+
 use omacell_core::eval::FnRegistry;
 
 /// Register every currently shipped function.

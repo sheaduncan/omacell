@@ -8,6 +8,9 @@ authors.workspace = true
 publish.workspace = true
 description = "Excel-compatible function library and registry for Omacell."
 
+[features]
+fuzzing = []
+
 [lints]
 workspace = true
 
