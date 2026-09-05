@@ -1,6 +1,7 @@
 //! Structural-edit, fill, paste-special, and protection corpora (WP-17).
 
 use omacell_core::addr::{CellRef, RangeRef, RefKind, parse_a1, parse_a1_cell};
+use omacell_core::eval::FnRegistry;
 use omacell_core::intern::RichTextRun;
 use omacell_core::ops::{
     FillMode, PasteOp, PasteSpecial, Shift, TextColumnType, TextToColumnsMode, TextToColumnsPlan,
@@ -11,8 +12,9 @@ use omacell_core::ops::{
 };
 use omacell_core::sheet::Note;
 use omacell_core::style::Font;
+use omacell_core::recalc::RecalcEngine;
 use omacell_core::value::Value;
-use omacell_core::workbook::Workbook;
+use omacell_core::workbook::{DateSystem, Workbook};
 
 fn range(r0: u32, c0: u16, r1: u32, c1: u16) -> RangeRef {
     RangeRef::from_corners(CellRef::new(r0, c0).unwrap(), CellRef::new(r1, c1).unwrap())
@@ -29,6 +31,15 @@ fn text(wb: &Workbook, row: u32, col: u16) -> String {
         panic!("expected text cell");
     };
     wb.intern().strings.get(id).unwrap_or_default().to_string()
+}
+
+fn number(wb: &Workbook, row: u32, col: u16) -> f64 {
+    let sheet = wb.active_sheet();
+    let slot = wb.get(sheet, row, col).unwrap().unwrap();
+    let Value::Number(value) = slot.value else {
+        panic!("expected number cell");
+    };
+    value
 }
 
 fn a1_range(value: &str) -> RangeRef {
@@ -352,6 +363,75 @@ fn fill_linear_series_down() {
 }
 
 #[test]
+fn series_fill_extends_each_vertical_lane_independently() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    for (row, left, right) in [(0, 1.0, 10.0), (1, 3.0, 30.0)] {
+        wb.set_number(s, row, 0, left).unwrap();
+        wb.set_number(s, row, 1, right).unwrap();
+    }
+
+    fill_range(
+        &mut wb,
+        s,
+        range(0, 0, 1, 1),
+        range(0, 0, 3, 1),
+        FillMode::Linear,
+    )
+    .unwrap();
+
+    assert_eq!((number(&wb, 2, 0), number(&wb, 3, 0)), (5.0, 7.0));
+    assert_eq!(
+        (number(&wb, 2, 1), number(&wb, 3, 1)),
+        (50.0, 70.0)
+    );
+}
+
+#[test]
+fn reverse_series_fill_extends_each_horizontal_lane_independently() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    for (row, left, right) in [(0, 3.0, 5.0), (1, 30.0, 50.0)] {
+        wb.set_number(s, row, 2, left).unwrap();
+        wb.set_number(s, row, 3, right).unwrap();
+    }
+
+    fill_range(
+        &mut wb,
+        s,
+        range(0, 2, 1, 3),
+        range(0, 0, 1, 3),
+        FillMode::Linear,
+    )
+    .unwrap();
+
+    assert_eq!((number(&wb, 0, 0), number(&wb, 0, 1)), (-1.0, 1.0));
+    assert_eq!(
+        (number(&wb, 1, 0), number(&wb, 1, 1)),
+        (-10.0, 10.0)
+    );
+}
+
+#[test]
+fn series_fill_uses_the_workbook_date_system() {
+    let mut wb = Workbook::new();
+    wb.settings_mut().date_system = DateSystem::Excel1904;
+    let s = wb.active_sheet();
+    wb.set_number(s, 0, 0, 1.0).unwrap(); // Saturday, 2 Jan 1904.
+
+    fill_range(
+        &mut wb,
+        s,
+        range(0, 0, 0, 0),
+        range(0, 0, 1, 0),
+        FillMode::Weekday,
+    )
+    .unwrap();
+
+    assert_eq!(number(&wb, 1, 0), 3.0); // Monday, 4 Jan 1904.
+}
+
+#[test]
 fn fill_copy_works_up_and_left_with_formula_deltas() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
@@ -600,6 +680,39 @@ fn remove_duplicates_keeps_first() {
     wb.set_number(s, 2, 0, 2.0).unwrap();
     let n = remove_duplicates(&mut wb, s, range(0, 0, 2, 0), &[]).unwrap();
     assert_eq!(n, 1);
+}
+
+#[test]
+fn remove_duplicates_compares_text_without_case() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Alpha").unwrap();
+    wb.set_number(s, 0, 1, 1.0).unwrap();
+    wb.set_text(s, 1, 0, "alpha").unwrap();
+    wb.set_number(s, 1, 1, 2.0).unwrap();
+
+    let removed = remove_duplicates(&mut wb, s, range(0, 0, 1, 1), &[0]).unwrap();
+
+    assert_eq!(removed, 1);
+    assert_eq!(text(&wb, 0, 0), "Alpha");
+    assert!(wb.get(s, 1, 0).unwrap().is_none());
+}
+
+#[test]
+fn remove_duplicates_compares_formula_results_not_formula_text() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_cell_contents(s, 0, 0, "=1").unwrap();
+    wb.set_cell_contents(s, 1, 0, "=1+0").unwrap();
+    wb.set_cell_contents(s, 2, 0, "=2").unwrap();
+    RecalcEngine::new(FnRegistry::new()).recalc_full(&mut wb);
+
+    let removed = remove_duplicates(&mut wb, s, range(0, 0, 2, 0), &[]).unwrap();
+
+    assert_eq!(removed, 1);
+    assert_eq!(formula_src(&wb, s, 0, 0), "=1");
+    assert_eq!(formula_src(&wb, s, 1, 0), "=2");
+    assert!(wb.get(s, 2, 0).unwrap().is_none());
 }
 
 #[test]
