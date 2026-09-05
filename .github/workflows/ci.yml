@@ -52,10 +52,10 @@ jobs:
 
       - name: cargo deny
         run: |
-          cargo deny check
-          cargo deny check --manifest-path fuzz/Cargo.toml
-          cargo deny check --manifest-path spikes/grid-egui/Cargo.toml
-          cargo deny check --manifest-path spikes/ironcalc/Cargo.toml
+          cargo deny check --hide-inclusion-graph
+          cargo deny --manifest-path fuzz/Cargo.toml check --hide-inclusion-graph
+          cargo deny --manifest-path spikes/grid-egui/Cargo.toml check --hide-inclusion-graph
+          cargo deny --manifest-path spikes/ironcalc/Cargo.toml check --hide-inclusion-graph
 
       - name: cargo audit
         run: cargo audit

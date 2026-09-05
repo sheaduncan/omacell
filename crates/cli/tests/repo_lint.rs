@@ -613,9 +613,9 @@ fn wp28_workflows_are_bounded_and_fail_closed() {
     for needle in [
         "nightly-2026-08-28",
         "cargo +nightly-2026-08-28 fuzz build",
-        "cargo deny check --manifest-path fuzz/Cargo.toml",
-        "cargo deny check --manifest-path spikes/grid-egui/Cargo.toml",
-        "cargo deny check --manifest-path spikes/ironcalc/Cargo.toml",
+        "cargo deny --manifest-path fuzz/Cargo.toml check",
+        "cargo deny --manifest-path spikes/grid-egui/Cargo.toml check",
+        "cargo deny --manifest-path spikes/ironcalc/Cargo.toml check",
     ] {
         assert!(ci.contains(needle), "CI workflow missing {needle}");
     }
