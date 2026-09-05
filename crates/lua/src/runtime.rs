@@ -291,7 +291,8 @@ pub(crate) fn embedded_lua() -> Result<(Lua, Arc<AtomicU32>), CoreError> {
             }
             Ok(VmState::Continue)
         },
-    );
+    )
+    .map_err(|e| CoreError::new("lua.sandbox", e.to_string()))?;
     strip_embedded(&lua)?;
     Ok((lua, counter))
 }
@@ -1642,7 +1643,7 @@ pub(crate) fn json_to_lua(lua: &Lua, value: &Json) -> mlua::Result<LuaValue> {
             let metatable = lua.create_table_with_capacity(0, 2)?;
             metatable.raw_set(JSON_ARRAY_MARKER, true)?;
             metatable.raw_set("__metatable", false)?;
-            table.set_metatable(Some(metatable));
+            table.set_metatable(Some(metatable))?;
             for (index, value) in values.iter().enumerate() {
                 table.set(index + 1, json_to_lua(lua, value)?)?;
             }

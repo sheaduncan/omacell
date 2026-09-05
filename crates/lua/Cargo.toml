@@ -12,7 +12,7 @@ description = "Sandboxed Lua 5.4 scripting surface for Omacell."
 workspace = true
 
 [dependencies]
-mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
+mlua = { version = "0.12", features = ["lua54", "vendored", "send"] }
 omacell-ai = { path = "../ai", version = "0.0.0" }
 omacell-bus = { path = "../bus", version = "0.0.0" }
 schemars = { workspace = true }

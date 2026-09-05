@@ -94,6 +94,13 @@ Primary upstream references used during review:
   loader grammar before the format-preserving parse and leaves rejected files
   byte-identical. The fuzz-workspace lock now records the new `toml_writer`
   graph instead of rewriting itself in CI.
+- **#138 — `mlua` 0.12.1:** reviewed the complete 0.11–0.12 migration notes,
+  including the Lua 5.4.8 update, hook changes, userdata/thread changes, and
+  newly fallible metatable operations. Omacell's public Lua API and sandbox
+  profiles remain unchanged. The runtime now propagates failures while
+  installing the embedded instruction hook and JSON-array metatable instead
+  of silently discarding them. The independently committed fuzz lock is also
+  synchronized to `mlua` 0.12.1 and its updated vendored Lua/tool graph.
 
 ## Interfaces exposed
 
@@ -137,7 +144,16 @@ None yet.
   setup, watcher, and doc tests passed; `cargo deny check` passed for the root
   graph. The combined config/theme/keymap/trust parser fuzz target completed
   10,000 cases without a crash, and fuzz-graph `cargo deny` passed. The exact
-  local `just check` gate passed; hosted gates are pending.
+  local `just check` gate passed. Hosted `check`, CodeQL and all analyses, and
+  both clean Arch package jobs passed; the PR was merged.
+- #138: all 39 `omacell-lua` API, interactive-runtime, recorder, sandbox, and
+  trust tests passed. Root and fuzz-graph `cargo deny` checks passed with only
+  the repository's already-allowed duplicate/license warnings. The Lua runtime
+  fuzz target completed 10,000 cases without a crash; LeakSanitizer was
+  disabled for that local run because this container's ptrace policy prevents
+  LeakSanitizer startup, while the target's AddressSanitizer instrumentation
+  remained enabled. The exact local `just check` gate passed; hosted gates are
+  pending.
 
 ## Open questions
 
@@ -155,7 +171,7 @@ None. No frozen contract change is authorized by these dependency updates.
 - [x] PR #134 reviewed and merged
 - [x] PR #135 reviewed and merged
 - [x] PR #136 reviewed and merged
-- [ ] PR #137 reviewed and merged
+- [x] PR #137 reviewed and merged
 - [ ] PR #138 migrated, reviewed, and merged
 - [ ] PR #139 migrated as one compatible GUI stack, reviewed, and merged
 - [ ] `cargo deny check` green for each changed Rust graph
