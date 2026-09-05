@@ -311,6 +311,12 @@ fn columns(wb: &Workbook) -> Value {
                 "sheet": sheet.name,
                 "column": col_to_letters(col).unwrap_or_else(|_| "?".into()),
                 "name": header,
+                "_name_ref": format!(
+                    "{}!{}{}",
+                    quote_sheet_name(&sheet.name),
+                    col_to_letters(col).unwrap_or_else(|_| "?".into()),
+                    used.min_row + 1
+                ),
                 "type": inferred,
                 "null_share": if rows == 0 { 0.0 } else { nulls as f64 / rows as f64 },
                 "distinct": stat.distinct.len(),

@@ -114,14 +114,22 @@ pub fn hand_off(req: HandOffRequest) -> Result<HandOff, CoreError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let status = child
-        .status()
+    let mut child = child
+        .spawn()
         .map_err(|err| CoreError::new("agent.spawn", err.to_string()))?;
-    if !status.success() {
-        return Err(CoreError::new(
-            "agent.spawn",
-            format!("omarchy agent prompt exited {status}"),
-        ));
+    if let Err(error) = std::thread::Builder::new()
+        .name("omacell-agent-handoff".into())
+        .spawn(move || match child.wait() {
+            Ok(status) if !status.success() => {
+                tracing::warn!(%status, "omarchy agent hand-off exited unsuccessfully");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "could not reap omarchy agent hand-off");
+            }
+            Ok(_) => {}
+        })
+    {
+        tracing::warn!(%error, "could not start omarchy agent hand-off reaper");
     }
     Ok(HandOff {
         hidden: false,

@@ -296,6 +296,44 @@ pub fn rename_table(expr: &Expr, old: &str, new: &str) -> Expr {
     })
 }
 
+pub(crate) fn invalidate_deleted_references(expr: &Expr, sheet: &str, tables: &[String]) -> Expr {
+    expr.clone().map_local(&mut |node| {
+        let invalidate = match &node.kind {
+            ExprKind::Cell {
+                sheet: Some(spec), ..
+            }
+            | ExprKind::Range {
+                sheet: Some(spec), ..
+            }
+            | ExprKind::Name {
+                sheet: Some(spec), ..
+            } => sheet_spec_contains(spec, sheet),
+            ExprKind::ThreeD { sheets, .. } => sheet_spec_contains(sheets, sheet),
+            ExprKind::Structured(reference) => reference
+                .table
+                .as_ref()
+                .is_some_and(|name| tables.iter().any(|table| table.eq_ignore_ascii_case(name))),
+            _ => false,
+        };
+        if invalidate {
+            Expr {
+                kind: ExprKind::Error(ErrorKind::Ref),
+                span: node.span,
+            }
+        } else {
+            node
+        }
+    })
+}
+
+fn sheet_spec_contains(spec: &SheetSpec, sheet: &str) -> bool {
+    spec.start.eq_ignore_ascii_case(sheet)
+        || spec
+            .end
+            .as_ref()
+            .is_some_and(|end| end.eq_ignore_ascii_case(sheet))
+}
+
 fn rename_spec(mut spec: SheetSpec, old: &str, new: &str) -> SheetSpec {
     if spec.start.eq_ignore_ascii_case(old) {
         spec.start = new.to_string();

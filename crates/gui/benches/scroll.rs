@@ -48,6 +48,7 @@ fn setup() -> Harness<'static, Gui> {
         long_ops: LongOps::production(),
         ai: None,
         file: None,
+        recovery: None,
         use_shell_font: false,
     };
     let mut harness = Harness::builder()

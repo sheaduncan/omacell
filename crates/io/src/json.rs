@@ -33,7 +33,7 @@ pub fn open_with_pointer(path: &Path, pointer: Option<&str>) -> Result<Workbook,
         .map_err(|e| error::json_format(e.to_string()))?
         .len();
     if len > MAX_JSON_BYTES as u64 {
-        return Err(error::xlsx_limit(format!(
+        return Err(error::json_limit(format!(
             "JSON is {len} bytes; maximum is {MAX_JSON_BYTES}"
         )));
     }
@@ -44,7 +44,7 @@ pub fn open_with_pointer(path: &Path, pointer: Option<&str>) -> Result<Workbook,
 /// Open JSON bytes with an optional dotted pointer.
 pub fn open_bytes_with_pointer(bytes: &[u8], pointer: Option<&str>) -> Result<Workbook, CoreError> {
     if bytes.len() > MAX_JSON_BYTES {
-        return Err(error::xlsx_limit(format!(
+        return Err(error::json_limit(format!(
             "JSON is {} bytes; maximum is {MAX_JSON_BYTES}",
             bytes.len()
         )));
@@ -67,7 +67,7 @@ pub fn export(wb: &Workbook) -> Result<Vec<u8>, CoreError> {
     let col_count = u64::from(used.max_col - used.min_col + 1);
     let cells = row_count.saturating_mul(col_count);
     if cells > MAX_JSON_TABLE_CELLS {
-        return Err(error::xlsx_limit(format!(
+        return Err(error::json_limit(format!(
             "JSON export would visit {cells} cells; maximum is {MAX_JSON_TABLE_CELLS}"
         )));
     }
@@ -101,7 +101,7 @@ pub fn export(wb: &Workbook) -> Result<Vec<u8>, CoreError> {
     let bytes =
         serde_json::to_vec_pretty(&objects).map_err(|e| error::json_format(e.to_string()))?;
     if bytes.len() > MAX_JSON_BYTES {
-        return Err(error::xlsx_limit(format!(
+        return Err(error::json_limit(format!(
             "JSON export is {} bytes; maximum is {MAX_JSON_BYTES}",
             bytes.len()
         )));
@@ -134,7 +134,7 @@ fn objects(value: &Value) -> Result<Vec<Map<String, Value>>, CoreError> {
     };
     let mut rows = Vec::new();
     if items.len() >= MAX_ROWS as usize {
-        return Err(error::xlsx_limit(
+        return Err(error::json_limit(
             "JSON array plus its header exceeds the row grid",
         ));
     }
@@ -162,7 +162,7 @@ fn flatten_object(
     out: &mut Map<String, Value>,
 ) -> Result<(), CoreError> {
     if depth >= MAX_JSON_DEPTH {
-        return Err(error::xlsx_limit(format!(
+        return Err(error::json_limit(format!(
             "JSON nesting exceeds {MAX_JSON_DEPTH}"
         )));
     }
@@ -184,7 +184,7 @@ fn flatten_value(
     out: &mut Map<String, Value>,
 ) -> Result<(), CoreError> {
     if depth >= MAX_JSON_DEPTH {
-        return Err(error::xlsx_limit(format!(
+        return Err(error::json_limit(format!(
             "JSON nesting exceeds {MAX_JSON_DEPTH}"
         )));
     }
@@ -203,7 +203,7 @@ fn flatten_value(
                 )));
             }
             if out.len() > usize::from(MAX_COLS) {
-                return Err(error::xlsx_limit(
+                return Err(error::json_limit(
                     "JSON object has more columns than the grid",
                 ));
             }
@@ -218,11 +218,17 @@ fn table_to_workbook(rows: &[Map<String, Value>]) -> Result<Workbook, CoreError>
         keys.extend(row.keys().cloned());
     }
     if keys.len() > usize::from(MAX_COLS) {
-        return Err(error::xlsx_limit(
+        return Err(error::json_limit(
             "JSON object has more columns than the grid",
         ));
     }
     let keys: Vec<String> = keys.into_iter().collect();
+    let implied_cells = (rows.len() as u64 + 1).saturating_mul(keys.len() as u64);
+    if implied_cells > MAX_JSON_TABLE_CELLS {
+        return Err(error::json_limit(format!(
+            "JSON implied table has {implied_cells} cells; maximum is {MAX_JSON_TABLE_CELLS}"
+        )));
+    }
     let mut wb = Workbook::new();
     let sheet = wb.active_sheet();
     let undo = wb.undo_log().is_enabled();

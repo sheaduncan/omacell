@@ -13,8 +13,8 @@ use omacell_bus::ipc::{
 };
 use omacell_conf::schema::package_defaults;
 use omacell_conf::{
-    HYPRLAND_SNIPPET, Layer, LoadOptions, LoadedConfig, Paths, SetupOptions, keys,
-    load_with_options, reset_user_file, reset_user_rel, setup_omarchy, show_all_json,
+    HYPRLAND_SNIPPET, Layer, LoadOptions, LoadedConfig, NotifyKind, Paths, SetupOptions, keys,
+    load_with_options, notify_send, reset_user_file, reset_user_rel, setup_omarchy, show_all_json,
     uninstall_omarchy, validate_user_rel,
 };
 use omacell_core::addr::{RefKind, parse_a1};
@@ -226,6 +226,16 @@ fn cmd_gui(cli: &Cli) -> Result<(), CliError> {
     // cancellation remain available for large workbooks.
     let mut app = App::bootstrap_live(cli, None)?;
     log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
+    let recovery = app.recover_live(book)?;
+    if let Some(candidate) = &recovery {
+        notify_send(
+            &app.store.snapshot().config,
+            NotifyKind::Recovery,
+            "Omacell recovery",
+            "Recovered an autosave snapshot; save the workbook to keep it.",
+        );
+        tracing::info!(snapshot = %candidate.snapshot.display(), "recovered autosave snapshot");
+    }
     let _sig = crate::reload::spawn_sigusr1_reloader(app.reload_handle())?;
     let (ui, roots) = app.attach_session(cli.config.as_deref())?;
     app.files.attach_ui(ui.clone());
@@ -237,7 +247,11 @@ fn cmd_gui(cli: &Cli) -> Result<(), CliError> {
         roots,
         long_ops: omacell_bus::LongOps::production(),
         ai: app.ai.clone(),
-        file: book.map(Path::to_path_buf),
+        file: recovery
+            .is_none()
+            .then(|| book.map(Path::to_path_buf))
+            .flatten(),
+        recovery,
         use_shell_font: true,
     };
     omacell_gui::run(launch)?;
@@ -277,6 +291,16 @@ fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
     // retained CSV import preview instead of blocking before first paint.
     let mut app = App::bootstrap_live(cli, None)?;
     log::init(&app.paths, cli.verbose, cli.quiet, !cli.dry_run);
+    let recovery = app.recover_live(book)?;
+    if let Some(candidate) = &recovery {
+        notify_send(
+            &app.store.snapshot().config,
+            NotifyKind::Recovery,
+            "Omacell recovery",
+            "Recovered an autosave snapshot; save the workbook to keep it.",
+        );
+        tracing::info!(snapshot = %candidate.snapshot.display(), "recovered autosave snapshot");
+    }
     let _sig = crate::reload::spawn_sigusr1_reloader(app.reload_handle())?;
     let (ui, roots) = app.attach_session(cli.config.as_deref())?;
     app.files.attach_ui(ui.clone());
@@ -288,7 +312,11 @@ fn cmd_tui(cli: &Cli) -> Result<(), CliError> {
         roots,
         long_ops: omacell_bus::LongOps::production(),
         ai: app.ai.clone(),
-        file: book.map(Path::to_path_buf),
+        file: recovery
+            .is_none()
+            .then(|| book.map(Path::to_path_buf))
+            .flatten(),
+        recovery,
     };
     omacell_tui::run(launch)?;
     Ok(())

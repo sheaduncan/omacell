@@ -1,5 +1,6 @@
 //! Range sort with Excel type ordering (F-6.1).
 
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::addr::{RangeRef, SheetId};
@@ -216,6 +217,12 @@ fn sort_rows(
                 ord
             }
         });
+        let row_map: FxHashMap<u32, u32> = rows
+            .iter()
+            .zip(&decorated)
+            .map(|(destination, (source, _, _, _))| (*source, *destination))
+            .collect();
+        remap_row_side_records(wb, sheet, &row_map, c0, c1)?;
         let mut moved = 0u32;
         for (dest_row, (src_row, _, slots, _)) in rows.iter().zip(decorated) {
             let drow = *dest_row as i32 - src_row as i32;
@@ -227,6 +234,7 @@ fn sort_rows(
                 write_moved(wb, sheet, *dest_row, col, slot, drow, 0)?;
             }
         }
+        crate::ops::rewrite_ai_redact_marks_sort_rows(wb, sheet, &row_map, c0, c1);
         Ok(moved)
     })
 }
@@ -293,6 +301,12 @@ fn sort_columns(
                 ord
             }
         });
+        let col_map: FxHashMap<u16, u16> = cols
+            .iter()
+            .zip(&decorated)
+            .map(|(destination, (source, _, _, _))| (*source, *destination))
+            .collect();
+        remap_col_side_records(wb, sheet, &col_map, r0, r1)?;
         let mut moved = 0u32;
         for (dest_col, (src_col, _, slots, _)) in cols.iter().zip(decorated) {
             let dcol = i32::from(*dest_col) - i32::from(src_col);
@@ -304,8 +318,77 @@ fn sort_columns(
                 write_moved(wb, sheet, row, *dest_col, slot, 0, dcol)?;
             }
         }
+        crate::ops::rewrite_ai_redact_marks_sort_cols(wb, sheet, &col_map, r0, r1);
         Ok(moved)
     })
+}
+
+fn remap_row_side_records(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    rows: &FxHashMap<u32, u32>,
+    c0: u16,
+    c1: u16,
+) -> Result<(), CoreError> {
+    wb.mutate_sheet_edit(sheet, |sheet| {
+        sheet.notes = remap_map_rows(&sheet.notes, rows, c0, c1);
+        sheet.comments = remap_map_rows(&sheet.comments, rows, c0, c1);
+        sheet.hyperlinks = remap_map_rows(&sheet.hyperlinks, rows, c0, c1);
+        Ok(())
+    })
+}
+
+fn remap_col_side_records(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    cols: &FxHashMap<u16, u16>,
+    r0: u32,
+    r1: u32,
+) -> Result<(), CoreError> {
+    wb.mutate_sheet_edit(sheet, |sheet| {
+        sheet.notes = remap_map_cols(&sheet.notes, cols, r0, r1);
+        sheet.comments = remap_map_cols(&sheet.comments, cols, r0, r1);
+        sheet.hyperlinks = remap_map_cols(&sheet.hyperlinks, cols, r0, r1);
+        Ok(())
+    })
+}
+
+fn remap_map_rows<T: Clone>(
+    records: &FxHashMap<(u32, u16), T>,
+    rows: &FxHashMap<u32, u32>,
+    c0: u16,
+    c1: u16,
+) -> FxHashMap<(u32, u16), T> {
+    records
+        .iter()
+        .map(|(&(row, col), value)| {
+            let row = if col >= c0 && col <= c1 {
+                rows.get(&row).copied().unwrap_or(row)
+            } else {
+                row
+            };
+            ((row, col), value.clone())
+        })
+        .collect()
+}
+
+fn remap_map_cols<T: Clone>(
+    records: &FxHashMap<(u32, u16), T>,
+    cols: &FxHashMap<u16, u16>,
+    r0: u32,
+    r1: u32,
+) -> FxHashMap<(u32, u16), T> {
+    records
+        .iter()
+        .map(|(&(row, col), value)| {
+            let col = if row >= r0 && row <= r1 {
+                cols.get(&col).copied().unwrap_or(col)
+            } else {
+                col
+            };
+            ((row, col), value.clone())
+        })
+        .collect()
 }
 
 fn write_moved(

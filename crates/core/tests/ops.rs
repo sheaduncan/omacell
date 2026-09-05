@@ -3,6 +3,7 @@
 use omacell_core::addr::{CellRef, RangeRef, RefKind, parse_a1, parse_a1_cell};
 use omacell_core::eval::FnRegistry;
 use omacell_core::intern::RichTextRun;
+use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::ops::{
     FillMode, PasteOp, PasteSpecial, Shift, TextColumnType, TextToColumnsMode, TextToColumnsPlan,
     copy_range, delete_cells, delete_cols, delete_rows, detect_fill, excel_xor_hash, extend_fill,
@@ -295,6 +296,60 @@ fn insert_row_rewrites_relative_refs() {
     wb.set_cell_contents(s, 0, 0, "=A3").unwrap();
     insert_rows(&mut wb, s, 1, 1).unwrap();
     assert_eq!(formula_src(&wb, s, 0, 0), "=A4");
+}
+
+#[test]
+fn whole_row_insert_rewrites_defined_ranges_and_table_bounds() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let named = RangeRef::from_corners(
+        CellRef::new(1, 0).unwrap().on_sheet(sheet),
+        CellRef::new(1, 0).unwrap().on_sheet(sheet),
+    );
+    wb.define_name(DefinedName {
+        name: "Amount".into(),
+        scope: NameScope::Workbook,
+        referent: NameReferent::Range(named),
+        comment: None,
+    })
+    .unwrap();
+    wb.set_text(sheet, 0, 0, "Amount").unwrap();
+    wb.set_number(sheet, 1, 0, 10.0).unwrap();
+    wb.set_number(sheet, 2, 0, 20.0).unwrap();
+    let table = wb.create_table(sheet, range(0, 0, 2, 0), "Sales").unwrap();
+    wb.undo_log_mut().set_enabled(true);
+
+    wb.transact_try(|workbook| insert_rows(workbook, sheet, 0, 1))
+        .unwrap();
+
+    let NameReferent::Range(amount) = &wb
+        .names()
+        .get(NameScope::Workbook, "Amount")
+        .unwrap()
+        .referent
+    else {
+        panic!("expected range name");
+    };
+    assert_eq!((amount.start.row, amount.end.row), (2, 2));
+    let sales = wb.tables().get(table).unwrap();
+    assert_eq!((sales.start_row, sales.end_row), (1, 3));
+
+    wb.undo().unwrap();
+    let NameReferent::Range(amount) = &wb
+        .names()
+        .get(NameScope::Workbook, "Amount")
+        .unwrap()
+        .referent
+    else {
+        panic!("expected range name");
+    };
+    assert_eq!((amount.start.row, amount.end.row), (1, 1));
+    let sales = wb.tables().get(table).unwrap();
+    assert_eq!((sales.start_row, sales.end_row), (0, 2));
+
+    wb.redo().unwrap();
+    let sales = wb.tables().get(table).unwrap();
+    assert_eq!((sales.start_row, sales.end_row), (1, 3));
 }
 
 #[test]

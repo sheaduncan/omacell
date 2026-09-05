@@ -11,6 +11,7 @@ use omacell_core::filter::{
     AutoFilter, FilterColumn, FilterCriteria, NumOp, apply_filter, clear_filter, restore_filter,
 };
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
+use omacell_core::sheet::{Comment, Hyperlink, Note};
 use omacell_core::sort::{SortBy, SortKey, SortSpec, sort_range};
 use omacell_core::style::Color;
 use omacell_core::validation::{
@@ -251,6 +252,61 @@ fn sort_retains_unique_text_when_undo_is_disabled() {
 
     assert_eq!(cell_display(&wb, 0, 0), "alpha");
     assert_eq!(cell_display(&wb, 1, 0), "bravo");
+}
+
+#[test]
+fn sort_moves_annotations_and_hyperlinks_with_their_record() {
+    let mut wb = Workbook::new();
+    let sheet = wb.active_sheet();
+    let note = Note {
+        author: Some("Ada".into()),
+        text: "record two".into(),
+    };
+    let comment = Comment {
+        author: "Ada".into(),
+        text: "review two".into(),
+        replies: Vec::new(),
+        resolved: false,
+    };
+    let hyperlink = Hyperlink {
+        target: "https://example.com/two".into(),
+        tooltip: None,
+        display: None,
+    };
+    wb.set_number(sheet, 0, 0, 2.0).unwrap();
+    wb.set_number(sheet, 1, 0, 1.0).unwrap();
+    wb.set_note(sheet, 0, 0, Some(note.clone())).unwrap();
+    wb.set_comment(sheet, 0, 0, Some(comment.clone())).unwrap();
+    wb.set_hyperlink(sheet, 0, 0, Some(hyperlink.clone()))
+        .unwrap();
+
+    sort_range(
+        &mut wb,
+        sheet,
+        range(0, 0, 1, 0),
+        &SortSpec {
+            keys: vec![SortKey {
+                offset: 0,
+                descending: false,
+                by: SortBy::Value,
+                custom_list: Vec::new(),
+            }],
+            ..SortSpec::default()
+        },
+    )
+    .unwrap();
+
+    let sorted = wb.sheet(sheet).unwrap();
+    assert_eq!(sorted.notes.get(&(1, 0)), Some(&note));
+    assert_eq!(sorted.comments.get(&(1, 0)), Some(&comment));
+    assert_eq!(sorted.hyperlinks.get(&(1, 0)), Some(&hyperlink));
+    assert!(!sorted.hyperlinks.contains_key(&(0, 0)));
+
+    wb.undo().unwrap();
+    let restored = wb.sheet(sheet).unwrap();
+    assert_eq!(restored.notes.get(&(0, 0)), Some(&note));
+    assert_eq!(restored.comments.get(&(0, 0)), Some(&comment));
+    assert_eq!(restored.hyperlinks.get(&(0, 0)), Some(&hyperlink));
 }
 
 #[test]

@@ -148,6 +148,21 @@ impl FileSession {
             runtime.replace_workbook_cache(omacell_ai::cache::AiCache::default());
         }
     }
+
+    pub(crate) fn attach_recovered_source(&self, source: Option<(&Path, &Opened)>) {
+        let mut state = self.lock();
+        if let Some((path, opened)) = source {
+            state.path = Some(path.to_path_buf());
+            state.kind = Some(opened.kind);
+            state.package = opened.package.clone();
+            state.extras = opened.extras.clone();
+        } else {
+            state.path = None;
+            state.kind = None;
+            state.package = None;
+            state.extras.clear();
+        }
+    }
 }
 
 /// `file.new` / `file.close`

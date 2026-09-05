@@ -18,6 +18,7 @@ use omacell_core::eval::FnRegistry;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
+use omacell_io::autosave::{AutosaveStore, RecoveryCandidate};
 use omacell_io::csv::ImportPlan;
 use omacell_ui::{KeymapRoots, UiSession, register_ui_commands};
 use toml::Value as TomlValue;
@@ -152,6 +153,31 @@ impl App {
         ui.set_agent_visible(omacell_conf::detect_default_agent().is_some());
         register_ui_commands(self.bus.registry_mut(), &ui)?;
         Ok((ui, roots))
+    }
+
+    /// Restore the newest snapshot for `source` before a retained frontend starts.
+    pub(crate) fn recover_live(
+        &mut self,
+        source: Option<&Path>,
+    ) -> Result<Option<RecoveryCandidate>, CoreError> {
+        let store = AutosaveStore::new(&self.paths.state_dir);
+        let Some(candidate) = store.discover(source)?.into_iter().next() else {
+            return Ok(None);
+        };
+        let opened_source = source.map(files::open_any).transpose()?;
+        let outcome = self.bus.execute(
+            Origin::User,
+            "file.open",
+            serde_json::json!({"path": candidate.snapshot.display().to_string()}),
+        );
+        if !outcome.ok {
+            return Err(outcome.error.unwrap_or_else(|| {
+                CoreError::new("autosave.recover", "recovery open failed without an error")
+            }));
+        }
+        self.files
+            .attach_recovered_source(source.zip(opened_source.as_ref()));
+        Ok(Some(candidate))
     }
 
     fn from_parts(
@@ -335,5 +361,62 @@ fn workbook_ai_overlay(base: TomlValue, workbook: &Workbook) -> TomlValue {
     match omacell_ai::workbook_config_overlay(workbook) {
         Some(extra) => merge_overlays(base, extra),
         None => base,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omacell_core::value::Value;
+    use omacell_io::autosave::AutosaveStore;
+    use omacell_io::xlsx::{SaveOptions, save_workbook};
+
+    #[test]
+    fn live_recovery_installs_snapshot_but_keeps_the_original_save_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = Paths::from_home(temp.path());
+        let source = temp.path().join("budget.xlsx");
+        save_workbook(
+            &Workbook::new(),
+            &source,
+            SaveOptions {
+                lock: false,
+                ..SaveOptions::default()
+            },
+        )
+        .unwrap();
+        let mut recovered = Workbook::new();
+        let sheet = recovered.active_sheet();
+        recovered.set_text(sheet, 0, 0, "recovered edit").unwrap();
+        AutosaveStore::new(&paths.state_dir)
+            .write_snapshot("crashed-session", &recovered, Some(&source))
+            .unwrap();
+        let files = FileSession::new();
+        let mut app = App::from_parts(
+            paths,
+            LoadOptions::default(),
+            Workbook::new(),
+            files.clone(),
+            false,
+        )
+        .unwrap();
+
+        let candidate = app.recover_live(Some(&source)).unwrap().unwrap();
+
+        assert_eq!(candidate.session, "crashed-session");
+        assert_eq!(files.current_path().as_deref(), Some(source.as_path()));
+        let slot = app
+            .bus
+            .workbook()
+            .get(app.bus.workbook().active_sheet(), 0, 0)
+            .unwrap()
+            .unwrap();
+        let Value::Text(text) = slot.value else {
+            panic!("expected recovered text")
+        };
+        assert_eq!(
+            app.bus.workbook().intern().strings.get(text),
+            Some("recovered edit")
+        );
     }
 }

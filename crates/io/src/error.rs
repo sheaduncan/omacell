@@ -44,6 +44,8 @@ pub mod codes {
     pub const ODS_FORMAT: &str = "ods.format";
     /// JSON import/export failed.
     pub const JSON_FORMAT: &str = "json.format";
+    /// A JSON byte, depth, row, column, or expanded-table limit was exceeded.
+    pub const JSON_LIMIT: &str = "json.limit";
     /// Parquet/Arrow read failed.
     pub const PARQUET_FORMAT: &str = "parquet.format";
     /// HTML/Markdown table import failed.
@@ -188,6 +190,13 @@ pub fn ods_format(message: impl Into<String>) -> CoreError {
 pub fn json_format(message: impl Into<String>) -> CoreError {
     CoreError::new(codes::JSON_FORMAT, message)
         .with_hint("JSON import expects an array of objects (use --jq to select a path)")
+}
+
+/// JSON size or expansion limit error.
+#[must_use]
+pub fn json_limit(message: impl Into<String>) -> CoreError {
+    CoreError::new(codes::JSON_LIMIT, message)
+        .with_hint("reduce the JSON rows, flattened keys, nesting, or input size")
 }
 
 /// Parquet format error.

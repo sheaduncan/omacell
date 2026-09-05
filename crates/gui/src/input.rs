@@ -102,10 +102,27 @@ pub fn pressed_keys(events: &[Event]) -> impl Iterator<Item = KeyEvent> + '_ {
 
 /// IME / composed text this frame.
 pub fn text_events(events: &[Event]) -> impl Iterator<Item = &str> + '_ {
-    events.iter().filter_map(|event| match event {
-        Event::Text(text) => Some(text.as_str()),
-        Event::Ime(egui::ImeEvent::Commit(text)) => Some(text.as_str()),
-        _ => None,
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Source {
+        Text,
+        Ime,
+    }
+
+    let mut unpaired: Option<(Source, &str)> = None;
+    events.iter().filter_map(move |event| {
+        let (source, text) = match event {
+            Event::Text(text) => (Source::Text, text.as_str()),
+            Event::Ime(egui::ImeEvent::Commit(text)) => (Source::Ime, text.as_str()),
+            _ => return None,
+        };
+        if unpaired.is_some_and(|(previous_source, previous_text)| {
+            previous_source != source && previous_text == text
+        }) {
+            unpaired = None;
+            return None;
+        }
+        unpaired = Some((source, text));
+        Some(text)
     })
 }
 
@@ -183,7 +200,7 @@ pub fn pointer_release(events: &[Event]) -> Option<(egui::Pos2, bool)> {
 
 #[cfg(test)]
 mod tests {
-    use super::map_key;
+    use super::{map_key, text_events};
     use egui::{Key, Modifiers};
     use omacell_ui::KeyCode;
 
@@ -210,5 +227,17 @@ mod tests {
         assert_eq!(insert.code, KeyCode::Char('='));
         let time = map_key(Key::Colon, Modifiers::CTRL | Modifiers::SHIFT).unwrap();
         assert_eq!(time.code, KeyCode::Char(';'));
+    }
+
+    #[test]
+    fn coalesces_each_plain_and_ime_commit_pair_without_losing_repeats() {
+        let events = vec![
+            egui::Event::Text("/".into()),
+            egui::Event::Ime(egui::ImeEvent::Commit("/".into())),
+            egui::Event::Text("/".into()),
+            egui::Event::Ime(egui::ImeEvent::Commit("/".into())),
+        ];
+
+        assert_eq!(text_events(&events).collect::<Vec<_>>(), vec!["/", "/"]);
     }
 }

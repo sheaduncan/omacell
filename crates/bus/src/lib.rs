@@ -27,6 +27,7 @@ mod logical;
 pub mod mcp;
 mod policy;
 mod preview;
+mod protection;
 mod registry;
 mod resolve;
 mod restore;

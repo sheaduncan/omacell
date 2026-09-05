@@ -30,6 +30,7 @@ use omacell_core::changeset::{ChangesetId, ChangesetStatus};
 use omacell_core::command::{Origin, Outcome};
 use omacell_core::error::CoreError;
 use omacell_core::workbook::Workbook;
+use omacell_io::autosave::{AutosaveSession, RecoveryCandidate};
 use omacell_lua::{InteractiveRuntime, InteractiveUi};
 use omacell_ui::{
     AgentRole, Area, ChangesetReview, ClipboardPayload, ExtendMode, FormulaAssist,
@@ -64,6 +65,8 @@ pub struct Launch {
     pub ai: Option<Arc<AiRuntime>>,
     /// Workbook path from `omacell --tui [file]`, if any.
     pub file: Option<PathBuf>,
+    /// Snapshot restored before the TUI started, if any.
+    pub recovery: Option<RecoveryCandidate>,
 }
 
 #[derive(Clone, Debug)]
@@ -115,12 +118,24 @@ pub struct Tui {
     window_focused: Option<bool>,
     terminal_clipboard: Option<String>,
     ipc: Option<IpcHandle>,
+    autosave: AutosaveSession,
 }
 
 impl Tui {
     /// Wrap a launch. `ipc` starts the in-process socket used by the theme hook.
     pub fn new(launch: Launch, ipc: bool) -> Result<Self, CoreError> {
         let requested_file = launch.file.clone();
+        let recovered_file = launch
+            .recovery
+            .as_ref()
+            .and_then(|candidate| candidate.source.clone());
+        let recovered = launch.recovery.is_some();
+        let autosave = launch.recovery.as_ref().map_or_else(
+            || AutosaveSession::new(&launch.paths.state_dir),
+            |candidate| {
+                AutosaveSession::with_id(&launch.paths.state_dir, candidate.session.clone())
+            },
+        );
         let loaded = launch.store.snapshot();
         let truecolor = truecolor_enabled(&loaded.config.tui.truecolor);
         let graphics_setting = loaded.config.tui.graphics.clone();
@@ -147,7 +162,7 @@ impl Tui {
         )?;
         let startup_message = scripts.take_messages().into_iter().last();
         let script_status = startup_message.clone();
-        let (message, focused_cancel) = if let Some(path) = requested_file {
+        let (mut message, focused_cancel) = if let Some(path) = requested_file {
             let (_, cancel) = runner.handle().submit(
                 Origin::User,
                 "file.open",
@@ -160,6 +175,9 @@ impl Tui {
         } else {
             (startup_message, None)
         };
+        if recovered {
+            message = Some("Recovered an autosave snapshot; save the workbook to keep it.".into());
+        }
         let ipc_handle = if ipc {
             let limits = IpcLimits::new(loaded.config.ipc.max_frame_bytes as usize)?;
             Some(serve_runner_with_limits(
@@ -196,17 +214,18 @@ impl Tui {
             graphics_setting,
             catalog,
             active_sheet,
-            dirty: false,
+            dirty: recovered,
             discard_armed: None,
             quit_armed: false,
             quit_requested: false,
             last_queued: None,
             focused_cancel,
             quit_after: None,
-            file: None,
+            file: recovered_file,
             window_focused: None,
             terminal_clipboard: None,
             ipc: ipc_handle,
+            autosave,
         })
     }
 
@@ -266,6 +285,7 @@ impl Tui {
     /// Apply pending filesystem/theme reloads without resetting the session.
     pub fn poll_reload(&mut self) -> Result<(), CoreError> {
         self.poll_tasks();
+        self.poll_autosave();
         self.sync_inline_completion();
         let events = self.store.drain_events();
         if events.is_empty() {
@@ -305,6 +325,19 @@ impl Tui {
         }
         self.sync_active_sheet();
         Ok(())
+    }
+
+    fn poll_autosave(&mut self) {
+        let interval = self.store.snapshot().config.files.autosave_interval;
+        let snapshot = self.runner.handle().snapshot();
+        if let Err(error) = self.autosave.snapshot_if_due(
+            &snapshot.workbook,
+            self.file.as_deref(),
+            interval,
+            self.dirty && !self.runner.handle().is_busy(),
+        ) {
+            self.message = Some(format!("{}: {}", error.code, error.message));
+        }
     }
 
     fn configure_graphics(&mut self, setting: &str) {
@@ -694,6 +727,9 @@ impl Tui {
                         state.command.as_str(),
                         "file.open" | "file.save" | "file.saveas" | "file.new"
                     ) {
+                        if let Err(error) = self.autosave.clear() {
+                            self.message = Some(format!("{}: {}", error.code, error.message));
+                        }
                         self.dirty = false;
                         self.file = outcome
                             .result
@@ -981,7 +1017,12 @@ impl Tui {
     }
 
     fn confirm_discard(&mut self, command: &str) -> bool {
-        if !self.dirty || self.discard_armed.as_deref() == Some(command) {
+        if !self.dirty {
+            self.discard_armed = None;
+            return true;
+        }
+        if self.discard_armed.as_deref() == Some(command) {
+            let _ = self.autosave.clear();
             self.discard_armed = None;
             return true;
         }
