@@ -129,20 +129,23 @@ None yet.
   `omacell-core`, `omacell-bus`, `omacell-io`, and `omacell-ui` passed. The
   first sandboxed run could not bind Unix sockets; the identical permitted run
   passed, including all 24 IPC server tests. The exact local `just check` gate
-  passed; hosted gates are pending.
+  passed. Hosted `check`, CodeQL and all analyses, and both clean Arch package
+  jobs passed; the PR was merged.
 - #136: the focused distribution test passed, generated all Bash, Fish, Zsh,
   and man release files, and produced a byte-identical man page; its digest is
   recorded above.
   The separately committed fuzz-workspace lockfile was synchronized to 0.3.3.
   `cargo deny check` passed for both the root and fuzz graphs with only the
   repository's already-allowed duplicate/license warnings. The exact local
-  `just check` gate passed; hosted gates are pending.
+  `just check` gate passed. Hosted `check`, CodeQL and all analyses, and both
+  clean Arch package jobs passed; the PR was merged.
 - #137: the TOML 1.1 mismatch regression failed before the grammar guard and
   passed afterward. All `omacell-conf` unit, integration, migration, theme,
   setup, watcher, and doc tests passed; `cargo deny check` passed for the root
   graph. The combined config/theme/keymap/trust parser fuzz target completed
   10,000 cases without a crash, and fuzz-graph `cargo deny` passed. The exact
-  local `just check` gate passed; hosted gates are pending.
+  local `just check` gate passed. Hosted `check`, CodeQL and all analyses, and
+  both clean Arch package jobs passed; the PR was merged.
 - #138: all 39 `omacell-lua` API, interactive-runtime, recorder, sandbox, and
   trust tests passed. Root and fuzz-graph `cargo deny` checks passed with only
   the repository's already-allowed duplicate/license warnings. The Lua runtime
@@ -166,9 +169,9 @@ None. No frozen contract change is authorized by these dependency updates.
 - [x] PR #132 reviewed and merged
 - [x] PR #133 reviewed and merged
 - [x] PR #134 reviewed and merged
-- [ ] PR #135 reviewed and merged
-- [ ] PR #136 reviewed and merged
-- [ ] PR #137 reviewed and merged
+- [x] PR #135 reviewed and merged
+- [x] PR #136 reviewed and merged
+- [x] PR #137 reviewed and merged
 - [ ] PR #138 migrated, reviewed, and merged
 - [ ] PR #139 migrated as one compatible GUI stack, reviewed, and merged
 - [ ] `cargo deny check` green for each changed Rust graph
