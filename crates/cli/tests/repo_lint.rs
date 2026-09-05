@@ -1,6 +1,7 @@
 //! Fails if a work-package TODO marker lacks a `WP-` reference.
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -809,4 +810,32 @@ fn wp28_fixed_host_produces_fresh_complete_results() {
     ] {
         assert!(checker.contains(needle), "freshness gate missing {needle}");
     }
+
+    let status = Command::new("python3")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .arg(root.join("scripts/test-perf-results.py"))
+        .status()
+        .expect("run performance result regressions");
+    assert!(status.success(), "performance result regressions failed");
+}
+
+#[test]
+fn wp28_g1_tracks_the_worst_case_recalc_regression_budget() {
+    let root = workspace_root();
+    let baselines: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("benchmarks/g1-baselines.json"))
+            .expect("read G1 baselines"),
+    )
+    .expect("parse G1 baselines");
+    let star = baselines["criterion"]
+        .as_array()
+        .expect("criterion baselines")
+        .iter()
+        .find(|entry| entry["id"] == "recalc/incremental_100k_one_edit_star_fanout")
+        .expect("star-fanout baseline");
+    assert_eq!(
+        star["maximum_ns"],
+        serde_json::json!(250_000_000),
+        "the documented worst-case 250 ms decision needs a regression ceiling"
+    );
 }
