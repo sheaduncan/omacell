@@ -31,7 +31,10 @@ fn scrolling_the_million_row_space_stays_within_the_regression_budget() {
         harness.step();
         let _ = harness.render().expect("warm software render");
     }
-    let release_budget = Duration::from_nanos(18_333_370); // 60 fps + 10%.
+    // This ignored test also runs as a non-required smoke on a shared nightly
+    // runner. The fixed-host collector applies the actual 18.33337 ms budget
+    // to the emitted p95 below.
+    let release_budget = Duration::from_micros(36_300);
     // Unoptimized wgpu plus synchronous screenshot readback is not a product
     // frame measurement. Keep it bounded in `just check`; release owns the
     // actual software-render target.
@@ -65,7 +68,7 @@ fn scrolling_the_million_row_space_stays_within_the_regression_budget() {
         "OMACELL_PERF_RESULT {}",
         serde_json::json!({
             "id": "scroll_frame_ms",
-            "value": mean.as_secs_f64() * 1_000.0
+            "value": p95.as_secs_f64() * 1_000.0
         })
     );
     assert!(
