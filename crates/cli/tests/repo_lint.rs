@@ -756,3 +756,57 @@ fn wp28_review_named_parsers_have_fuzz_coverage() {
     assert!(lua.contains("Runtime::new(Profile::Embedded"));
     assert!(lua.contains("runtime.exec("));
 }
+
+#[test]
+fn wp28_fixed_host_produces_fresh_complete_results() {
+    let root = workspace_root();
+    let workflow = fs::read_to_string(root.join(".github/workflows/performance.yml"))
+        .expect("read performance workflow");
+    assert!(
+        !workflow.contains("OMACELL_PERF_RESULTS"),
+        "the workflow must create its result artifact instead of inheriting a host file"
+    );
+    for needle in [
+        "scripts/collect-perf-results.py",
+        "perf-measurements.log",
+        "perf-results.json",
+        "--commit \"$GITHUB_SHA\"",
+        "--run-id \"$GITHUB_RUN_ID\"",
+        "--expect-commit \"$GITHUB_SHA\"",
+        "--expect-run-id \"$GITHUB_RUN_ID\"",
+    ] {
+        assert!(
+            workflow.contains(needle),
+            "fixed-host workflow is missing {needle}"
+        );
+    }
+
+    let collector = fs::read_to_string(root.join("scripts/collect-perf-results.py"))
+        .expect("read fixed-host result producer");
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("benchmarks/release-budgets.json"))
+            .expect("read release budgets"),
+    )
+    .expect("parse release budgets");
+    for metric in manifest["metrics"].as_array().expect("metrics array") {
+        let id = metric["id"].as_str().expect("metric id");
+        assert!(
+            collector.contains(id),
+            "fixed-host result producer does not own {id}"
+        );
+    }
+
+    let checker = fs::read_to_string(root.join("scripts/check-perf-baselines.py"))
+        .expect("read fixed-host result validator");
+    for needle in [
+        "recorded_at",
+        "commit",
+        "run_id",
+        "duplicate metric",
+        "--expect-commit",
+        "--expect-run-id",
+        "--max-age-hours",
+    ] {
+        assert!(checker.contains(needle), "freshness gate missing {needle}");
+    }
+}
