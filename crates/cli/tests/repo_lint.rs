@@ -775,6 +775,8 @@ fn wp28_fixed_host_produces_fresh_complete_results() {
         "--run-id \"$GITHUB_RUN_ID\"",
         "--expect-commit \"$GITHUB_SHA\"",
         "--expect-run-id \"$GITHUB_RUN_ID\"",
+        "actions/upload-artifact@",
+        "if-no-files-found: error",
     ] {
         assert!(
             workflow.contains(needle),
