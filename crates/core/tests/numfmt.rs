@@ -211,3 +211,20 @@ fn general_for_width_never_exceeds_the_budget() {
     assert_eq!(general_for_width(1.0e100, 3), "###");
     assert!(general_for_width(12.345, 5).chars().count() <= 5);
 }
+
+#[test]
+fn fill_expands_only_to_the_remaining_width() {
+    let opts = FormatOptions {
+        locale: LocaleId::EN_US,
+        date_system: DateSystem::Excel1900,
+        width: Some(8),
+    };
+    assert_eq!(
+        format_with(FormatValue::Number(1234.0), "* 0", &opts).text,
+        "    1234"
+    );
+    assert_eq!(
+        format_with(FormatValue::Number(1234.0), "0* ", &opts).text,
+        "1234    "
+    );
+}

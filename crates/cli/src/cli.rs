@@ -108,7 +108,7 @@ pub enum Commands {
         /// Write the recalculated workbook back.
         #[arg(long)]
         write: bool,
-        /// Wait for async AI cells to settle (no-op extra until WP-22).
+        /// Wait for async AI cells to settle before returning.
         #[arg(long)]
         wait: bool,
     },

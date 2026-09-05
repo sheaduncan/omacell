@@ -40,6 +40,39 @@ fn pdf_extracted_text_includes_a1_value() {
 }
 
 #[test]
+fn pdf_header_expands_dynamic_fields_without_printing_control_tokens() {
+    let mut wb = seed();
+    let sheet = wb.active_sheet();
+    wb.set_page_setup(
+        sheet,
+        PageSetup {
+            header: Some("&C&A &D &T &B&F&B &Z".into()),
+            ..PageSetup::default()
+        },
+    )
+    .unwrap();
+    let bytes = write_pdf(
+        &wb,
+        &PdfOptions {
+            file_name: "/work/input/book.xlsx".into(),
+            ..PdfOptions::default()
+        },
+    )
+    .unwrap();
+    let text = pdf_extract_text(&bytes);
+    assert!(text.contains("Sheet1"), "{text:?}");
+    assert!(text.contains("book.xlsx"), "{text:?}");
+    assert!(text.contains("/work/input"), "{text:?}");
+    assert!(!text.contains("1970-01-01"), "{text:?}");
+    for control in ["&C", "&D", "&T", "&B", "&Z"] {
+        assert!(
+            !text.contains(control),
+            "control {control} leaked in {text:?}"
+        );
+    }
+}
+
+#[test]
 fn pdf_media_box_is_letter_portrait() {
     let wb = seed();
     let bytes = write_pdf(&wb, &PdfOptions::default()).unwrap();
