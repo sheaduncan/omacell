@@ -105,7 +105,8 @@ None yet.
   `check`, CodeQL, all analysis, and both clean Arch package jobs passed; the
   PR was merged.
 - #134: signed-tag/SHA verification, `git diff --check`, and the exact local
-  `just check` gate passed. Hosted gates are pending.
+  `just check` gate passed. Hosted `check`, CodeQL, all analysis, and both clean
+  Arch package jobs passed; the PR was merged.
 - #135: `cargo deny check` passed (only the already-allowed duplicate/license
   warnings); all tests and doctests for the direct consumer crates
   `omacell-core`, `omacell-bus`, `omacell-io`, and `omacell-ui` passed. The
@@ -133,7 +134,7 @@ None. No frozen contract change is authorized by these dependency updates.
 
 - [x] PR #132 reviewed and merged
 - [x] PR #133 reviewed and merged
-- [ ] PR #134 reviewed and merged
+- [x] PR #134 reviewed and merged
 - [ ] PR #135 reviewed and merged
 - [ ] PR #136 reviewed and merged
 - [ ] PR #137 reviewed and merged
