@@ -7,6 +7,7 @@ use crate::addr::{RangeRef, SheetId};
 use crate::error::CoreError;
 use crate::eval::FnRegistry;
 use crate::graph::CellCoord;
+use crate::names::{MAX_DEFINED_NAME_DEPTH, NameReferent, NameScope};
 use crate::value::Value;
 use crate::workbook::Workbook;
 
@@ -383,6 +384,15 @@ fn resolve_list_source(
     default_sheet: SheetId,
     source: &str,
 ) -> Result<Vec<String>, CoreError> {
+    resolve_list_source_inner(wb, default_sheet, source, &mut Vec::new())
+}
+
+fn resolve_list_source_inner(
+    wb: &Workbook,
+    default_sheet: SheetId,
+    source: &str,
+    resolving_names: &mut Vec<(NameScope, String)>,
+) -> Result<Vec<String>, CoreError> {
     let source = source.trim().trim_start_matches('=');
     if source.starts_with('"') && source.ends_with('"') && source.len() >= 2 {
         return Ok(source[1..source.len() - 1]
@@ -391,22 +401,60 @@ fn resolve_list_source(
             .take(MAX_VALIDATION_LIST_ITEMS)
             .collect());
     }
-    let Ok(parsed) = crate::addr::parse_a1(source) else {
+    if let Ok(parsed) = crate::addr::parse_a1(source) {
+        let range = match parsed.kind {
+            crate::addr::RefKind::Range(range) => range,
+            crate::addr::RefKind::Cell(cell) => crate::addr::RangeRef::from_corners(cell, cell),
+        };
+        let sheet = if let Some(spec) = parsed.sheet {
+            wb.sheet_by_name(&spec.start)
+                .map(|sheet| sheet.id)
+                .ok_or_else(|| {
+                    CoreError::sheet_name(format!("unknown list source sheet {:?}", spec.start))
+                })?
+        } else {
+            default_sheet
+        };
+        return list_values_from_range(wb, sheet, range);
+    }
+
+    let Some(defined) = wb.names().resolve(default_sheet, source) else {
         return Ok(vec![source.to_string()]);
     };
-    let range = match parsed.kind {
-        crate::addr::RefKind::Range(range) => range,
-        crate::addr::RefKind::Cell(cell) => crate::addr::RangeRef::from_corners(cell, cell),
+    let key = (defined.scope, defined.name.to_lowercase());
+    if resolving_names.len() >= MAX_DEFINED_NAME_DEPTH || resolving_names.contains(&key) {
+        return Err(CoreError::new(
+            "validation.list",
+            format!("defined-name cycle in validation list source {source:?}"),
+        ));
+    }
+    let scope_sheet = match defined.scope {
+        NameScope::Workbook => default_sheet,
+        NameScope::Sheet(sheet) => sheet,
     };
-    let sheet = if let Some(spec) = parsed.sheet {
-        wb.sheet_by_name(&spec.start)
-            .map(|sheet| sheet.id)
-            .ok_or_else(|| {
-                CoreError::sheet_name(format!("unknown list source sheet {:?}", spec.start))
-            })?
-    } else {
-        default_sheet
+    let referent = defined.referent.clone();
+    resolving_names.push(key);
+    let result = match referent {
+        NameReferent::Range(range) => {
+            list_values_from_range(wb, range.start.sheet.unwrap_or(scope_sheet), range)
+        }
+        NameReferent::Formula(formula) => {
+            resolve_list_source_inner(wb, scope_sheet, &formula, resolving_names)
+        }
+        NameReferent::Constant(value) => {
+            let value = display(wb, value);
+            Ok((!value.is_empty()).then_some(value).into_iter().collect())
+        }
     };
+    resolving_names.pop();
+    result
+}
+
+fn list_values_from_range(
+    wb: &Workbook,
+    sheet: SheetId,
+    range: RangeRef,
+) -> Result<Vec<String>, CoreError> {
     let (r0, c0, r1, c1) = norm(range);
     let sheet = wb
         .sheet(sheet)
