@@ -148,7 +148,8 @@ None yet.
   fuzz target completed 10,000 cases without a crash; LeakSanitizer was
   disabled for that local run because this container's ptrace policy prevents
   LeakSanitizer startup, while the target's AddressSanitizer instrumentation
-  remained enabled. Exact local and hosted gates pending.
+  remained enabled. The exact local `just check` gate passed; hosted gates are
+  pending.
 
 ## Open questions
 
