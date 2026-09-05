@@ -38,6 +38,7 @@ jobs:
         with:
           name: omacell-source
           path: omacell-*.tar.gz
+          if-no-files-found: error
 
   build:
     needs: identity-gate
@@ -104,6 +105,7 @@ jobs:
         with:
           name: omacell-${{ matrix.arch }}
           path: omacell-*.tar.zst
+          if-no-files-found: error
 
   publish:
     needs: [source, build]
@@ -117,6 +119,7 @@ jobs:
         with:
           pattern: omacell-*
           merge-multiple: true
+          digest-mismatch: error
 
       - name: Produce checksummed AUR recipes
         shell: bash

@@ -56,6 +56,13 @@ Primary upstream references used during review:
   newer). Release uploads run on GitHub-hosted images; the fixed-host lane
   already starts with the Node-24-based `actions/checkout` v7, so this update
   does not introduce a new runner-runtime requirement for that machine.
+- **#133 — `actions/download-artifact` 8.0.1:** verified that the pinned
+  `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` commit is the signed v8.0.1
+  release and that `pattern` and `merge-multiple` retain their prior meaning.
+  V8 changes digest mismatches from a warning to an error by default. The
+  release workflow now requests that behavior explicitly, and every release
+  upload explicitly rejects a missing artifact path. A repository-lint
+  regression locks those fail-closed handoff settings in place.
 
 ## Interfaces exposed
 
@@ -68,8 +75,11 @@ None yet.
 
 ## Measurements
 
-- #132: clean current-`main` merge and `git diff --check`; exact local gate and
-  hosted checks pending below.
+- #132: clean current-`main` merge; `git diff --check`; exact `just check`
+  passed. Hosted checks pending.
+- #133: `release_artifact_handoff_is_explicitly_fail_closed` failed before the
+  workflow hardening (zero of two uploads rejected missing files), then passed
+  after the implementation. Exact local and hosted gates pending.
 
 ## Open questions
 
