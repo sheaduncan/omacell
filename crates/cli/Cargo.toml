@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
-clap_mangen = "0.2"
+clap_mangen = "0.3"
 omacell-ai = { path = "../ai", version = "0.0.0" }
 omacell-bus = { path = "../bus", version = "0.0.0" }
 omacell-conf = { path = "../conf", version = "0.0.0" }
