@@ -207,7 +207,7 @@ These are deliberate product-scope decisions, not unexplained deferrals:
 | `WP-24` / `WP-24a` | Pivot fidelity follow-up is complete; package-excluded Data Tables/Scenario Manager remain explicit post-1.0 scope. |
 | `WP-25` | Chart export, terminal graphics, and minimal release editing are integrated; exotic modeling and a full property inspector are post-1.0. |
 | `WP-26` | Explicit print-title bands, accessible printer selection, embedded system fonts, and the documented Helvetica fallback are complete. |
-| `WP-27` | In-process XLS is complete; listed ODS/Parquet enhancements are explicit post-1.0 scope. |
+| `WP-27` | Native XLS is complete through the bundled private, resource-limited worker; listed ODS/Parquet enhancements are explicit post-1.0 scope. |
 | `WP-28` | Agent-verifiable packaging, docs, workflow, hardening, a11y, i18n, GUI, print, chart, and release work is complete; named live runners, hardware walkthroughs, and public-name clearance remain HUMAN gates. |
 | `WP-29` | Parser/security hardening is complete; repository-policy work is WP-30. |
 | `WP-S1` | ADR-002 is decided. |

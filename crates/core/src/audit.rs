@@ -147,7 +147,7 @@ pub fn audit_workbook(wb: &Workbook, engine: &RecalcEngine) -> AuditReport {
     }
 }
 
-/// Direct or transitive formula precedents as `Sheet!A1`.
+/// Direct or transitive formula precedents as `Sheet!A1`, capped at 100,000 results.
 #[must_use]
 pub fn precedents_of(
     wb: &Workbook,

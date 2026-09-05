@@ -120,11 +120,11 @@ pub enum ShowAs {
     /// Raw aggregate.
     #[default]
     Normal,
-    /// Percent of grand total (0–100).
+    /// Fraction of the grand total (0–1).
     PctOfTotal,
-    /// Percent of row total (0–100).
+    /// Fraction of the row total (0–1).
     PctOfRow,
-    /// Percent of column total (0–100).
+    /// Fraction of the column total (0–1).
     PctOfCol,
     /// Running total down the rows.
     RunningTotal,
