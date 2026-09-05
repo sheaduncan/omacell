@@ -112,8 +112,10 @@ None yet.
 - #136: the focused distribution test passed, generated all Bash, Fish, Zsh,
   and man release files, and produced a byte-identical man page; its digest is
   recorded above.
-  `cargo deny check` passed with only the repository's already-allowed
-  duplicate/license warnings. Exact local and hosted gates pending.
+  The separately committed fuzz-workspace lockfile was synchronized to 0.3.3.
+  `cargo deny check` passed for both the root and fuzz graphs with only the
+  repository's already-allowed duplicate/license warnings. Exact local and
+  hosted gates pending.
 
 ## Open questions
 
