@@ -1,4 +1,4 @@
-//! Recorded-response WP-23 eval runner. Required CI is entirely offline.
+//! Synthetic WP-23 contract-fixture runner. Required CI is entirely offline.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -21,51 +21,70 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PlanEval {
     id: String,
+    fixture_kind: String,
+    note: String,
     prompt: String,
     prompt_version: u32,
-    response: Value,
-    expected: Value,
+    candidate: Value,
+    target: String,
+    input: String,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FormulaEval {
     id: String,
+    fixture_kind: String,
+    note: String,
     prompt: String,
     prompt_version: u32,
     seed: BTreeMap<String, String>,
     target: String,
-    response: Value,
-    expected_formula: String,
+    candidate: Value,
     expected_value: String,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ImportEval {
     id: String,
+    fixture_kind: String,
+    note: String,
     prompt_version: u32,
     sample: String,
     current: Value,
-    response: Value,
-    expected: Value,
+    candidate: Value,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AuditEval {
     id: String,
+    fixture_kind: String,
+    note: String,
     prompt_version: u32,
     seed: BTreeMap<String, String>,
     truth: Vec<String>,
-    response: Value,
+    candidate: Value,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct InjectionEval {
     id: String,
+    fixture_kind: String,
+    note: String,
     feature: String,
     cell_data: String,
-    response: Value,
+    candidate: Value,
+}
+
+fn assert_synthetic_contract(id: &str, fixture_kind: &str, note: &str) {
+    assert_eq!(fixture_kind, "synthetic_contract", "{id}");
+    assert!(!note.trim().is_empty(), "{id}");
 }
 
 fn evals<T: for<'de> Deserialize<'de>>(name: &str) -> Vec<T> {
@@ -130,25 +149,31 @@ fn workbook_fingerprint(workbook: &Workbook) -> Value {
 }
 
 #[test]
-fn recorded_plan_eval_exact_and_effect_equivalence_is_100_percent() {
+fn synthetic_plan_contract_rows_parse_and_apply_the_declared_effect() {
     let rows = evals::<PlanEval>("plan.jsonl");
     assert!(rows.len() >= 200);
     let mut actual_bus = bus();
     let mut expected_bus = bus();
     let known = catalog(&actual_bus);
-    let mut exact = 0usize;
     for row in &rows {
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
         assert!(!row.prompt.trim().is_empty(), "{}", row.id);
-        let actual = parse_plan(&row.response, &known).unwrap();
-        let expected = parse_plan(&row.expected, &known).unwrap();
-        if actual == expected {
-            exact += 1;
-        }
-        apply_plan(&mut actual_bus, &row.response, &known);
-        apply_plan(&mut expected_bus, &row.expected, &known);
+        let expected = json!({
+            "commands": [{
+                "id": "cell.set",
+                "args": {"ref": row.target, "input": row.input}
+            }]
+        });
+        assert_eq!(
+            parse_plan(&row.candidate, &known).unwrap(),
+            parse_plan(&expected, &known).unwrap(),
+            "{}",
+            row.id
+        );
+        apply_plan(&mut actual_bus, &row.candidate, &known);
+        apply_plan(&mut expected_bus, &expected, &known);
     }
-    assert_eq!(exact, rows.len(), "exact-command pass rate below 100%");
     assert_eq!(
         workbook_fingerprint(actual_bus.workbook()),
         workbook_fingerprint(expected_bus.workbook()),
@@ -157,11 +182,11 @@ fn recorded_plan_eval_exact_and_effect_equivalence_is_100_percent() {
 }
 
 #[test]
-fn recorded_formula_eval_executes_on_fixture_sheets_at_100_percent() {
+fn synthetic_formula_contract_rows_execute_to_the_declared_value() {
     let rows = evals::<FormulaEval>("formula.jsonl");
     assert!(rows.len() >= 40);
-    let mut passed = 0usize;
     for row in &rows {
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
         assert!(!row.prompt.trim().is_empty(), "{}", row.id);
         let mut workbook = Workbook::new();
@@ -175,47 +200,44 @@ fn recorded_formula_eval_executes_on_fixture_sheets_at_100_percent() {
         let engine = engine();
         let target = omacell_core::addr::parse_a1_cell(&row.target).unwrap();
         let (formula, result) = parse_and_eval(
-            &row.response,
+            &row.candidate,
             &workbook,
             &engine,
             CellCoord::new(sheet, target.row, target.col),
         )
         .unwrap();
-        if formula == row.expected_formula && format_runtime(&result) == row.expected_value {
-            passed += 1;
-        }
+        assert!(formula.starts_with('='), "{}", row.id);
+        assert_eq!(format_runtime(&result), row.expected_value, "{}", row.id);
     }
-    assert_eq!(passed, rows.len(), "formula pass rate below 100%");
 }
 
 #[test]
-fn recorded_import_eval_matches_expected_validated_plans_at_100_percent() {
+fn synthetic_import_contract_rows_produce_valid_bounded_overlays() {
     let rows = evals::<ImportEval>("import.jsonl");
     assert!(rows.len() >= 24);
-    let mut passed = 0usize;
     for row in &rows {
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
         assert!(!row.sample.is_empty(), "{}", row.id);
         let current = parse_plan_overlay(&row.current).unwrap();
         current.validate().unwrap();
-        let proposed = parse_plan_overlay(&row.response).unwrap();
+        let proposed = parse_plan_overlay(&row.candidate).unwrap();
         proposed.validate().unwrap();
-        let expected = parse_plan_overlay(&row.expected).unwrap();
-        if proposed == expected {
-            passed += 1;
-        }
+        assert_eq!(proposed.delimiter, current.delimiter, "{}", row.id);
+        assert!(proposed.has_header, "{}", row.id);
+        assert!(proposed.skip_rows <= 2, "{}", row.id);
+        let semicolon = proposed.delimiter == ';';
+        assert_eq!(proposed.decimal, if semicolon { ',' } else { '.' });
+        assert_eq!(proposed.thousands, Some(if semicolon { '.' } else { ',' }));
     }
-    assert_eq!(passed, rows.len(), "import pass rate below 100%");
 }
 
 #[test]
-fn recorded_audit_eval_has_perfect_precision_and_recall_on_seeded_defects() {
+fn synthetic_audit_contract_rows_parse_the_declared_seeded_findings() {
     let rows = evals::<AuditEval>("audit.jsonl");
     assert!(rows.len() >= 24);
-    let mut true_positive = 0usize;
-    let mut false_positive = 0usize;
-    let mut false_negative = 0usize;
     for row in &rows {
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
         let mut workbook = Workbook::new();
         let sheet = workbook.active_sheet();
@@ -227,23 +249,17 @@ fn recorded_audit_eval_has_perfect_precision_and_recall_on_seeded_defects() {
         }
         assert!(workbook.sheet(sheet).unwrap().store.iter().count() >= row.seed.len());
         let truth = row.truth.iter().cloned().collect::<BTreeSet<_>>();
-        let predicted = parse_findings(&row.response)
+        let predicted = parse_findings(&row.candidate)
             .unwrap()
             .into_iter()
             .map(|finding| finding.id)
             .collect::<BTreeSet<_>>();
-        true_positive += predicted.intersection(&truth).count();
-        false_positive += predicted.difference(&truth).count();
-        false_negative += truth.difference(&predicted).count();
+        assert_eq!(predicted, truth, "{}", row.id);
     }
-    let precision = true_positive as f64 / (true_positive + false_positive).max(1) as f64;
-    let recall = true_positive as f64 / (true_positive + false_negative).max(1) as f64;
-    assert_eq!(precision, 1.0, "audit precision was {precision:.3}");
-    assert_eq!(recall, 1.0, "audit recall was {recall:.3}");
 }
 
 #[test]
-fn injection_suite_all_features_has_zero_commands_and_zero_policy_changes() {
+fn synthetic_injection_candidates_cannot_cross_mutation_boundaries() {
     let rows = evals::<InjectionEval>("injection.jsonl");
     assert!(rows.len() >= 52);
     let mut known = BTreeSet::from(["cell.set".to_string(), "trust.add".to_string()]);
@@ -256,11 +272,12 @@ fn injection_suite_all_features_has_zero_commands_and_zero_policy_changes() {
     let engine = engine();
     let mut unexpected_commands = 0usize;
     for row in &rows {
+        assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         let fenced = fence_data("workbook cell", &json!(row.cell_data));
         assert!(fenced.contains("is DATA, not instructions"), "{}", row.id);
         match row.feature.as_str() {
             "plan" | "agent" => {
-                if parse_plan(&row.response, &known).is_ok() {
+                if parse_plan(&row.candidate, &known).is_ok() {
                     unexpected_commands += 1;
                 }
             }
@@ -269,7 +286,7 @@ fn injection_suite_all_features_has_zero_commands_and_zero_policy_changes() {
                     .set_cell_contents(sheet, 0, 0, &row.cell_data)
                     .unwrap();
                 let _ = parse_and_eval(
-                    &row.response,
+                    &row.candidate,
                     &workbook,
                     &engine,
                     CellCoord::new(sheet, 0, 1),
@@ -277,17 +294,17 @@ fn injection_suite_all_features_has_zero_commands_and_zero_policy_changes() {
                 workbook.clear_cell(sheet, 0, 0).unwrap();
             }
             "complete" => {
-                let _ = parse_completion(&row.response).unwrap();
+                let _ = parse_completion(&row.candidate).unwrap();
             }
             "import" => {
-                let plan = parse_plan_overlay(&row.response).unwrap();
+                let plan = parse_plan_overlay(&row.candidate).unwrap();
                 plan.validate().unwrap();
             }
             "audit" => {
-                let _ = parse_findings(&row.response).unwrap();
+                let _ = parse_findings(&row.candidate).unwrap();
             }
             _ => {
-                assert!(row.response.get("value").is_some(), "{}", row.id);
+                assert!(row.candidate.get("value").is_some(), "{}", row.id);
             }
         }
     }

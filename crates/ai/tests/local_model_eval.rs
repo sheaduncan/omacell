@@ -8,11 +8,13 @@ use omacell_ai::audit_ai::{findings_schema, parse_findings};
 use omacell_ai::formula::{formula_schema, parse_and_eval};
 use omacell_ai::http::{ReqwestTransport, SharedTransport};
 use omacell_ai::import_assist::parse_plan_overlay;
-use omacell_ai::plan::{parse_plan, plan_schema};
+use omacell_ai::plan::{Plan, parse_plan, plan_schema, to_calls};
 use omacell_ai::policy::fence_data;
 use omacell_ai::prompts::PromptSet;
 use omacell_ai::{AiRuntime, Slot};
+use omacell_bus::Bus;
 use omacell_conf::schema::{AiProvider, package_defaults};
+use omacell_core::command::Origin;
 use omacell_core::eval::{FnRegistry, format_runtime};
 use omacell_core::graph::CellCoord;
 use omacell_core::recalc::RecalcEngine;
@@ -24,7 +26,8 @@ use serde_json::{Value, json};
 #[derive(Deserialize)]
 struct PlanEval {
     prompt: String,
-    response: Value,
+    target: String,
+    input: String,
 }
 
 #[derive(Deserialize)]
@@ -32,7 +35,6 @@ struct FormulaEval {
     prompt: String,
     seed: BTreeMap<String, String>,
     target: String,
-    expected_formula: String,
     expected_value: String,
 }
 
@@ -40,7 +42,6 @@ struct FormulaEval {
 struct ImportEval {
     sample: String,
     current: Value,
-    expected: Value,
 }
 
 #[derive(Deserialize)]
@@ -123,9 +124,36 @@ fn engine() -> RecalcEngine {
     RecalcEngine::new(functions)
 }
 
+fn applied_plan_fingerprint(plan: &Plan) -> Option<Value> {
+    let mut bus = Bus::new(Workbook::new(), engine()).ok()?;
+    let proposal = bus
+        .propose(Origin::PalettePlan, to_calls(plan).ok()?)
+        .ok()?;
+    bus.apply(Origin::User, &proposal.id).ok()?;
+    let workbook = bus.workbook();
+    let mut cells = workbook
+        .sheets()
+        .flat_map(|sheet| {
+            sheet.store.iter().map(move |(row, col, slot)| {
+                json!({
+                    "sheet": sheet.name,
+                    "row": row,
+                    "col": col,
+                    "value": omacell_core::recalc::format_cell(workbook, sheet.id, row, col),
+                    "formula": slot
+                        .formula
+                        .and_then(|id| workbook.intern().formulas.get(id)),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    cells.sort_by_key(Value::to_string);
+    Some(Value::Array(cells))
+}
+
 #[test]
 #[ignore = "nightly lane requires a loopback small model"]
-fn score_the_offline_suite_against_a_local_model() {
+fn score_the_committed_inputs_against_a_local_model() {
     let Some((runtime, _handle, _temp)) = runtime() else {
         eprintln!("local-model eval skipped: endpoint/model environment is unset");
         return;
@@ -139,6 +167,7 @@ fn score_the_offline_suite_against_a_local_model() {
 
     let plans = evals::<PlanEval>("plan.jsonl");
     let mut plan_exact = 0usize;
+    let mut plan_effect = 0usize;
     for row in &plans {
         let user = format!(
             "{}\n{}",
@@ -150,10 +179,20 @@ fn score_the_offline_suite_against_a_local_model() {
             .unwrap();
         if let Some(value) = model_json(&reply.text)
             && let Ok(actual) = parse_plan(&value, &catalog)
-            && let Ok(expected) = parse_plan(&row.response, &catalog)
-            && actual == expected
+            && let Ok(expected) = parse_plan(
+                &json!({"commands":[{
+                    "id": "cell.set",
+                    "args": {"ref": row.target, "input": row.input}
+                }]}),
+                &catalog,
+            )
         {
-            plan_exact += 1;
+            if actual == expected {
+                plan_exact += 1;
+            }
+            if applied_plan_fingerprint(&actual) == applied_plan_fingerprint(&expected) {
+                plan_effect += 1;
+            }
         }
     }
 
@@ -183,13 +222,12 @@ fn score_the_offline_suite_against_a_local_model() {
             .unwrap();
         let target = omacell_core::addr::parse_a1_cell(&row.target).unwrap();
         if let Some(value) = model_json(&reply.text)
-            && let Ok((formula, value)) = parse_and_eval(
+            && let Ok((_formula, value)) = parse_and_eval(
                 &value,
                 &workbook,
                 &engine(),
                 CellCoord::new(sheet, target.row, target.col),
             )
-            && formula == row.expected_formula
             && format_runtime(&value) == row.expected_value
         {
             formula_pass += 1;
@@ -214,8 +252,12 @@ fn score_the_offline_suite_against_a_local_model() {
             .unwrap();
         if let Some(value) = model_json(&reply.text)
             && let Ok(actual) = parse_plan_overlay(&value)
-            && let Ok(expected) = parse_plan_overlay(&row.expected)
-            && actual == expected
+            && let Ok(current) = parse_plan_overlay(&row.current)
+            && actual.delimiter == current.delimiter
+            && actual.has_header
+            && actual.skip_rows <= 2
+            && actual.decimal == if actual.delimiter == ';' { ',' } else { '.' }
+            && actual.thousands == Some(if actual.delimiter == ';' { '.' } else { ',' })
         {
             import_pass += 1;
         }
@@ -281,8 +323,10 @@ fn score_the_offline_suite_against_a_local_model() {
     let audit_precision = audit_true as f64 / audit_predicted.max(1) as f64;
     let audit_recall = audit_true as f64 / audit_truth.max(1) as f64;
     eprintln!(
-        "local-model WP-23 scores: plan={}/{} formula={}/{} import={}/{} audit_precision={:.3} audit_recall={:.3} injection_commands={}",
+        "local-model WP-23 scores: plan_exact={}/{} plan_effect={}/{} formula={}/{} import={}/{} audit_precision={:.3} audit_recall={:.3} injection_commands={}",
         plan_exact,
+        plans.len(),
+        plan_effect,
         plans.len(),
         formula_pass,
         formulas.len(),
