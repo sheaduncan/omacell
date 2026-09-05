@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Validate the §12.1 manifest and optional fixed-host JSON-lines results."""
+"""Validate the §12.1 manifest and an optional fresh fixed-host artifact."""
 
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -65,16 +67,50 @@ def load_manifest(root: Path) -> dict[str, dict[str, object]]:
     return by_id
 
 
-def check_results(path: Path, manifest: dict[str, dict[str, object]]) -> None:
+def check_results(
+    path: Path,
+    manifest: dict[str, dict[str, object]],
+    expect_commit: str | None,
+    expect_run_id: str | None,
+    max_age_hours: float,
+) -> None:
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    if artifact.get("schema_version") != 1:
+        raise ValueError("fixed-host result schema_version must be 1")
+    if expect_commit is not None and artifact.get("commit") != expect_commit:
+        raise ValueError("fixed-host result commit does not match the checked-out commit")
+    if expect_run_id is not None and artifact.get("run_id") != expect_run_id:
+        raise ValueError("fixed-host result run_id does not match this workflow run")
+    recorded = artifact.get("recorded_at")
+    if not isinstance(recorded, str):
+        raise ValueError("fixed-host result recorded_at is missing")
+    recorded_at = datetime.fromisoformat(recorded.replace("Z", "+00:00"))
+    if recorded_at.tzinfo is None:
+        raise ValueError("fixed-host result recorded_at must include a timezone")
+    age_hours = (datetime.now(timezone.utc) - recorded_at).total_seconds() / 3_600
+    if age_hours < -0.25 or age_hours > max_age_hours:
+        raise ValueError(f"fixed-host result is stale or future-dated: {age_hours:.2f} hours")
+    results = artifact.get("metrics")
+    if not isinstance(results, list):
+        raise ValueError("fixed-host result metrics must be an array")
+
     seen: set[str] = set()
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        result = json.loads(line)
+    for index, result in enumerate(results, 1):
+        if not isinstance(result, dict):
+            raise ValueError(f"{path}: metric {index} is not an object")
         identifier = result.get("id")
         value = result.get("value")
-        if identifier not in manifest or not isinstance(value, (int, float)):
-            raise ValueError(f"{path}:{line_number}: unknown metric or non-numeric value")
+        if (
+            identifier not in manifest
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"{path}: metric {index} is unknown or non-numeric")
+        if not isinstance(result.get("source"), str) or not result["source"]:
+            raise ValueError(f"{identifier}: measurement source is missing")
+        if identifier in seen:
+            raise ValueError(f"duplicate metric: {identifier}")
         metric = manifest[identifier]
         budget = metric["budget"]
         direction = metric["direction"]
@@ -92,11 +128,22 @@ def check_results(path: Path, manifest: dict[str, dict[str, object]]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("results", nargs="?", type=Path)
+    parser.add_argument("--expect-commit")
+    parser.add_argument("--expect-run-id")
+    parser.add_argument("--max-age-hours", type=float, default=24.0)
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     manifest = load_manifest(root)
     if args.results is not None:
-        check_results(args.results, manifest)
+        if args.max_age_hours <= 0:
+            raise ValueError("--max-age-hours must be positive")
+        check_results(
+            args.results,
+            manifest,
+            args.expect_commit,
+            args.expect_run_id,
+            args.max_age_hours,
+        )
         print(f"fixed-host results pass: {len(manifest)} metrics")
     else:
         print(f"release budgets valid: {len(manifest)} metrics at 10 percent tolerance")

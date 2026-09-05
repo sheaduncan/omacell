@@ -14,3 +14,4 @@
 /benches/baseline-local
 **/tests/snapshots/**/*.diff.png
 **/tests/snapshots/**/*.new.png
+**/*.snap.new

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
-image=${OMACELL_ARCH_IMAGE:-archlinux:base-devel}
+image=${PKGBUILD_ARCH_IMAGE:-archlinux:base-devel}
 docker run --rm --volume "$root:/src:ro" "$image" bash -euo pipefail -c '
   pacman -Syu --noconfirm --needed cargo rust mdbook desktop-file-utils libxml2 python \
     fontconfig libxkbcommon mesa shared-mime-info ttf-carlito ttf-liberation wayland \
@@ -19,7 +19,7 @@ docker run --rm --volume "$root:/src:ro" "$image" bash -euo pipefail -c '
   su build -c "cd /home/build/package && PKGBUILD_SOURCE_URL=file:///home/build/omacell-0.0.0.tar.gz PKGBUILD_SOURCE_SHA256=$checksum makepkg --noconfirm"
   package_file=$(find /home/build/package -maxdepth 1 -name "omacell-0.0.0-1-*.pkg.tar.zst" -print -quit)
   test -n "$package_file"
-  bsdtar -tf "$package_file" | grep -qx "usr/share/doc/omacell/manual/index.html"
+  bsdtar -tf "$package_file" "usr/share/doc/omacell/manual/index.html" >/dev/null
   printf "%s\n" "smoke: manual in package archive"
   pacman -U --noconfirm "$package_file"
   printf "%s\n" "smoke: installed package"

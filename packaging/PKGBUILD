@@ -22,14 +22,14 @@ depends=(
   'wayland'
   'gtk-update-icon-cache'
 )
-makedepends=('cargo' 'mdbook' 'rust')
-checkdepends=('desktop-file-utils' 'libxml2' 'python')
+makedepends=('cargo' 'mdbook' 'python' 'rust')
+checkdepends=('desktop-file-utils' 'libxml2')
 optdepends=(
   'cups: print through a system printer'
   'omarchy: desktop theme, menu, and agent integration'
 )
 install=omacell.install
-_source_url="${PKGBUILD_SOURCE_URL:-${url}/archive/refs/tags/v${pkgver}.tar.gz}"
+_source_url="${PKGBUILD_SOURCE_URL:-${url}/releases/download/v${pkgver}/${pkgname}-${pkgver}.tar.gz}"
 _source_sha256="${PKGBUILD_SOURCE_SHA256:-REPLACE_WITH_RELEASE_SHA256}"
 source=(
   "${pkgname}-${pkgver}.tar.gz::${_source_url}"

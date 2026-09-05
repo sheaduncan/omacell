@@ -60,6 +60,10 @@ fn million_by_twenty_numeric_at_most_64_bytes_per_cell() {
             .unwrap_or(0);
         let rss = pages.saturating_mul(page_size());
         eprintln!("1M×20 RSS≈{rss} ({:.2} B/cell)", rss as f64 / n as f64);
+        eprintln!(
+            "OMACELL_PERF_RESULT {}",
+            serde_json::json!({"id": "memory_1m_x20_bytes", "value": rss})
+        );
         assert!(
             rss < 1_500_000_000,
             "RSS {rss} exceeds 1.5 GB target (spec §12.1)"

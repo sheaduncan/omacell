@@ -8,6 +8,7 @@ use common::{fixed_gpu_setup, graphics_adapter_available, launch_theme};
 use egui_kittest::Harness;
 use omacell_core::limits::MAX_ROWS;
 use omacell_gui::Gui;
+use omacell_ui::{KeyCode, KeyEvent};
 
 #[test]
 #[ignore = "nightly wall-clock performance gate"]
@@ -30,7 +31,10 @@ fn scrolling_the_million_row_space_stays_within_the_regression_budget() {
         harness.step();
         let _ = harness.render().expect("warm software render");
     }
-    let release_budget = Duration::from_micros(36_300); // 33 ms target + 10%.
+    // This ignored test also runs as a non-required smoke on a shared nightly
+    // runner. The fixed-host collector applies the actual 18.33337 ms budget
+    // to the emitted p95 below.
+    let release_budget = Duration::from_micros(36_300);
     // Unoptimized wgpu plus synchronous screenshot readback is not a product
     // frame measurement. Keep it bounded in `just check`; release owns the
     // actual software-render target.
@@ -60,6 +64,13 @@ fn scrolling_the_million_row_space_stays_within_the_regression_budget() {
         mean.as_secs_f64() * 1_000.0,
         p95.as_secs_f64() * 1_000.0,
     );
+    eprintln!(
+        "OMACELL_PERF_RESULT {}",
+        serde_json::json!({
+            "id": "scroll_frame_ms",
+            "value": p95.as_secs_f64() * 1_000.0
+        })
+    );
     assert!(
         mean < budget,
         "mean software frame took {:.2} ms (budget {:.2} ms)",
@@ -71,5 +82,28 @@ fn scrolling_the_million_row_space_stays_within_the_regression_budget() {
         "p95 software frame took {:.2} ms (guard {:.2} ms)",
         p95.as_secs_f64() * 1_000.0,
         (budget * 2).as_secs_f64() * 1_000.0,
+    );
+
+    let mut key_frames = Vec::new();
+    for sample in 0..24 {
+        let key = if sample % 2 == 0 {
+            KeyCode::Right
+        } else {
+            KeyCode::Left
+        };
+        let started = Instant::now();
+        harness.state_mut().step_key(KeyEvent::new(key)).unwrap();
+        harness.step();
+        let _ = harness.render().expect("render keyed frame");
+        key_frames.push(started.elapsed());
+    }
+    key_frames.sort_unstable();
+    let key_p95 = key_frames[(key_frames.len() * 95).div_ceil(100) - 1];
+    eprintln!(
+        "OMACELL_PERF_RESULT {}",
+        serde_json::json!({
+            "id": "keystroke_to_paint_ms",
+            "value": key_p95.as_secs_f64() * 1_000.0
+        })
     );
 }

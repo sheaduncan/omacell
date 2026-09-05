@@ -12,6 +12,9 @@ jobs:
   reference-host:
     name: Framework 13 integrated-GPU gates
     runs-on: [self-hosted, linux, x64, framework-13, integrated-gpu]
+    timeout-minutes: 180
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/omacell-perf-target
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -25,15 +28,29 @@ jobs:
       - name: Validate complete 10 percent budget table
         run: python3 scripts/check-perf-baselines.py
 
+      - name: Initialize fresh measurement log
+        run: |
+          : > "$RUNNER_TEMP/perf-measurements.log"
+
       - name: Fixed-adapter render and readback measurements
         env:
           OMACELL_FIXED_GPU: "1"
         run: |
           cargo test --release -p omacell-gui --test a11y \
-            first_frame_renders_within_software_ci_smoke_budget -- --ignored --exact --nocapture
-          cargo test --release -p omacell-gui --test performance -- --ignored --nocapture
+            first_frame_renders_within_software_ci_smoke_budget -- --ignored --exact --nocapture \
+            2>&1 | tee -a "$RUNNER_TEMP/perf-measurements.log"
+          cargo test --release -p omacell-gui --test performance -- --ignored --nocapture \
+            2>&1 | tee -a "$RUNNER_TEMP/perf-measurements.log"
           cargo test --release -p omacell-tui --test snapshots \
-            first_frame_completes -- --ignored --exact --nocapture
+            first_frame_completes -- --ignored --exact --nocapture \
+            2>&1 | tee -a "$RUNNER_TEMP/perf-measurements.log"
+
+      - name: Numeric-cell resident memory
+        run: |
+          cargo test --release -p omacell-core --test memory \
+            million_by_twenty_numeric_at_most_64_bytes_per_cell \
+            -- --ignored --exact --nocapture \
+            2>&1 | tee -a "$RUNNER_TEMP/perf-measurements.log"
 
       - name: Engine and I/O measurements
         run: |
@@ -43,9 +60,38 @@ jobs:
           cargo bench -p omacell-conf --bench theme_reload -- --save-baseline release
           cargo bench -p omacell-ai --bench card -- --save-baseline release
 
-      - name: Validate fixed-host result export
+      - name: Live local and cloud model measurements
+        env:
+          OMACELL_FIXED_PERF: "1"
+          OMACELL_PERF_LOCAL_ENDPOINT: ${{ vars.OMACELL_PERF_LOCAL_ENDPOINT || 'http://127.0.0.1:11434/v1' }}
+          OMACELL_PERF_LOCAL_MODEL: ${{ vars.OMACELL_PERF_LOCAL_MODEL || 'qwen2.5:0.5b' }}
+          OMACELL_PERF_CLOUD_ENDPOINT: ${{ vars.OMACELL_PERF_CLOUD_ENDPOINT }}
+          OMACELL_PERF_CLOUD_MODEL: ${{ vars.OMACELL_PERF_CLOUD_MODEL }}
+          OMACELL_PERF_CLOUD_TOKEN: ${{ secrets.OMACELL_PERF_CLOUD_TOKEN }}
+        run: |
+          curl --fail --silent --show-error "$OMACELL_PERF_LOCAL_ENDPOINT/models" >/dev/null
+          cargo bench -p omacell-ai --bench live_model \
+            2>&1 | tee -a "$RUNNER_TEMP/perf-measurements.log"
+
+      - name: Produce and validate fresh fixed-host results
         shell: bash
         run: |
-          : "${OMACELL_PERF_RESULTS:?fixed host must export the product measurement JSONL path}"
-          test -f "$OMACELL_PERF_RESULTS"
-          python3 scripts/check-perf-baselines.py "$OMACELL_PERF_RESULTS"
+          python3 scripts/collect-perf-results.py \
+            --log "$RUNNER_TEMP/perf-measurements.log" \
+            --criterion-root "$CARGO_TARGET_DIR/criterion" \
+            --commit "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --output "$RUNNER_TEMP/perf-results.json"
+          python3 scripts/check-perf-baselines.py \
+            "$RUNNER_TEMP/perf-results.json" \
+            --expect-commit "$GITHUB_SHA" \
+            --expect-run-id "$GITHUB_RUN_ID" \
+            --max-age-hours 6
+
+      - name: Upload fixed-host evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fixed-host-performance-${{ github.run_id }}
+          path: ${{ runner.temp }}/perf-results.json
+          if-no-files-found: error
+          retention-days: 90

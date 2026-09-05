@@ -11,12 +11,33 @@ jobs:
   identity-gate:
     name: Public name clearance
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     environment: public-release
     steps:
       - name: Require recorded clearance
         env:
           NAME_CLEARED: ${{ vars.OMACELL_NAME_CLEARED }}
         run: test "$NAME_CLEARED" = true
+
+  source:
+    needs: identity-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build immutable source archive
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          git archive --format=tar.gz --prefix="omacell-${version}/" \
+            --output="omacell-${version}.tar.gz" "$GITHUB_SHA"
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: omacell-source
+          path: omacell-*.tar.gz
 
   build:
     needs: identity-gate
@@ -28,8 +49,14 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: aarch64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-28
+        with:
+          toolchain: 1.98.0
 
       - name: Verify tag version
         shell: bash
@@ -38,10 +65,10 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           test "$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')" = "$version"
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-28
-        with:
-          toolchain: 1.98.0
+      - name: Install graphics runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers
 
       - name: Build tested release tree
         shell: bash
@@ -79,8 +106,9 @@ jobs:
           path: omacell-*.tar.zst
 
   publish:
-    needs: build
+    needs: [source, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -94,9 +122,7 @@ jobs:
         shell: bash
         run: |
           version=${GITHUB_REF_NAME#v}
-          source_url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
-          curl --fail --location --output source.tar.gz "$source_url"
-          source_sha=$(sha256sum source.tar.gz | cut -d ' ' -f 1)
+          source_sha=$(sha256sum "omacell-${version}.tar.gz" | cut -d ' ' -f 1)
           x86_sha=$(sha256sum "omacell-${version}-x86_64.tar.zst" | cut -d ' ' -f 1)
           arm_sha=$(sha256sum "omacell-${version}-aarch64.tar.zst" | cut -d ' ' -f 1)
           cp packaging/PKGBUILD PKGBUILD
@@ -106,10 +132,22 @@ jobs:
           sed -i "s/REPLACE_WITH_X86_64_SHA256/${x86_sha}/" PKGBUILD-bin
           sed -i "s/REPLACE_WITH_AARCH64_SHA256/${arm_sha}/" PKGBUILD-bin
 
+      - name: Extract release notes for this version
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          awk -v heading="## [${version}]" '
+            $0 == heading { found = 1; capture = 1; next }
+            capture && /^## / { exit }
+            capture { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
-          omacell-*.tar.zst PKGBUILD PKGBUILD-bin packaging/omacell.install
-          --verify-tag --title "Omacell $GITHUB_REF_NAME" --notes-file CHANGELOG.md
+          omacell-*.tar.zst "omacell-${GITHUB_REF_NAME#v}.tar.gz" PKGBUILD PKGBUILD-bin packaging/omacell.install
+          --verify-tag --title "Omacell $GITHUB_REF_NAME" --notes-file release-notes.md

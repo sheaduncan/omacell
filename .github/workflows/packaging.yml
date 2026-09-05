@@ -2,13 +2,6 @@ name: Arch packaging
 
 on:
   pull_request:
-    paths:
-      - "packaging/**"
-      - "default/**"
-      - "docs/book/**"
-      - "crates/cli/**"
-      - "scripts/arch-package-smoke.sh"
-      - ".github/workflows/packaging.yml"
   workflow_dispatch:
 
 permissions:
@@ -18,8 +11,19 @@ jobs:
   source-package:
     name: clean Arch source package
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build, install, and smoke test
         run: scripts/arch-package-smoke.sh
+
+  binary-package:
+    name: clean Arch binary package
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build release tree, package, install, and smoke test
+        run: scripts/arch-binary-package-smoke.sh
