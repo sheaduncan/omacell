@@ -84,6 +84,16 @@ Primary upstream references used during review:
   Regenerating the complete `omacell.1` page produced the exact same SHA-256
   (`ff4aa08fc8e7c51cbbc877169d6e703a88be660a80aa1f070e6e2ac2b4cc5a77`),
   so this CLI currently exercises none of those output changes.
+- **#137 — `toml_edit` 0.25.13:** reviewed the 0.23–0.25 parser/writer
+  migration, including the new TOML 1.1 grammar and the upstream recursion,
+  overflow, and malformed-inline-table fixes. The public API used by Omacell
+  still compiles, and the existing migration tests preserve comments, layout,
+  permissions, backups, and symlink identity. Review found one behavior gap:
+  the AI setup editor would accept and modify TOML 1.1 input that the
+  application's TOML 1.0 loader rejects. The editor now validates with the
+  loader grammar before the format-preserving parse and leaves rejected files
+  byte-identical. The fuzz-workspace lock now records the new `toml_writer`
+  graph instead of rewriting itself in CI.
 
 ## Interfaces exposed
 
@@ -116,6 +126,12 @@ None yet.
   `cargo deny check` passed for both the root and fuzz graphs with only the
   repository's already-allowed duplicate/license warnings. Exact local and
   hosted gates pending.
+- #137: the TOML 1.1 mismatch regression failed before the grammar guard and
+  passed afterward. All `omacell-conf` unit, integration, migration, theme,
+  setup, watcher, and doc tests passed; `cargo deny check` passed for the root
+  graph. The combined config/theme/keymap/trust parser fuzz target completed
+  10,000 cases without a crash, and fuzz-graph `cargo deny` passed. Exact local
+  and hosted gates pending.
 
 ## Open questions
 
