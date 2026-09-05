@@ -88,8 +88,8 @@ None yet.
   workflow hardening (zero of two uploads rejected missing files), then passed
   after the implementation. The exact local `just check` gate passed; hosted
   gates are pending.
-- #134: signed-tag/SHA verification and `git diff --check` passed. Exact local
-  and hosted gates pending.
+- #134: signed-tag/SHA verification, `git diff --check`, and the exact local
+  `just check` gate passed. Hosted gates are pending.
 
 ## Open questions
 
