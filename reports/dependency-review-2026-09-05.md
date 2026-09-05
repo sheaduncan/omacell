@@ -69,6 +69,13 @@ Primary upstream references used during review:
   Omacell requests `just`, `cargo-audit`, `cargo-deny`, and `cargo-fuzz`.
   All three workflow uses remain full-SHA pinned and keep their existing tool
   lists.
+- **#135 — `indexmap` 2.14.2:** Dependabot's stale title says 2.14.1, but the
+  reviewed lockfile correctly resolves the newer signed 2.14.2 patch under the
+  workspace's `version = "2"` requirement. Upstream 2.14.1 contains internal
+  comparison/assertion cleanup; 2.14.2 fixes caller-name hygiene in map/set
+  macros and permits const empty macro initialization. Omacell uses ordinary
+  `IndexMap` values, not the changed macros, and the update adds no package or
+  second indexmap version.
 
 ## Interfaces exposed
 
@@ -90,7 +97,14 @@ None yet.
   `check`, CodeQL, all analysis, and both clean Arch package jobs passed; the
   PR was merged.
 - #134: signed-tag/SHA verification, `git diff --check`, and the exact local
-  `just check` gate passed. Hosted gates are pending.
+  `just check` gate passed. Hosted `check`, CodeQL, all analysis, and both clean
+  Arch package jobs passed; the PR was merged.
+- #135: `cargo deny check` passed (only the already-allowed duplicate/license
+  warnings); all tests and doctests for the direct consumer crates
+  `omacell-core`, `omacell-bus`, `omacell-io`, and `omacell-ui` passed. The
+  first sandboxed run could not bind Unix sockets; the identical permitted run
+  passed, including all 24 IPC server tests. The exact local `just check` gate
+  passed; hosted gates are pending.
 
 ## Open questions
 
@@ -105,7 +119,7 @@ None. No frozen contract change is authorized by these dependency updates.
 
 - [x] PR #132 reviewed and merged
 - [x] PR #133 reviewed and merged
-- [ ] PR #134 reviewed and merged
+- [x] PR #134 reviewed and merged
 - [ ] PR #135 reviewed and merged
 - [ ] PR #136 reviewed and merged
 - [ ] PR #137 reviewed and merged
