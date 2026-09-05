@@ -16,6 +16,7 @@ docker run --rm --volume "$root:/src:ro" "$image" bash -euo pipefail -c '
   su build -c "
     cd /home/build/source
     export CARGO_TARGET_DIR=/home/build/source/target
+    cargo fetch --locked
     cargo build --frozen --release -p omacell-cli -p omacell-xls-worker
     cargo test --frozen -p omacell-cli --test dist generate_completions_and_man
     cargo run --frozen -p omacell-cli --example generate-docs -- docs/book/cli-reference.md

@@ -704,6 +704,19 @@ fn wp28_packaging_and_rename_paths_are_reproducible() {
         "archive membership must not rely on a pipefail/SIGPIPE-sensitive pipeline"
     );
 
+    let binary_smoke = fs::read_to_string(root.join("scripts/arch-binary-package-smoke.sh"))
+        .expect("read binary smoke");
+    let fetch = binary_smoke
+        .find("cargo fetch --locked")
+        .expect("binary smoke dependency fetch");
+    let frozen_build = binary_smoke
+        .find("cargo build --frozen")
+        .expect("binary smoke frozen build");
+    assert!(
+        fetch < frozen_build,
+        "the clean binary build must populate Cargo's cache before --frozen"
+    );
+
     let rename = fs::read_to_string(root.join("scripts/rename.sh")).expect("read rename");
     assert!(rename.contains("source packaging/name.env"));
     assert!(rename.contains("sha256sum \"packaging/${new_slug}.install\""));
