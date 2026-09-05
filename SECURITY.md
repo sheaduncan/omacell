@@ -13,7 +13,7 @@ Include a short description, impact, and steps to reproduce. I will acknowledge 
 
 ## Scope
 
-In scope: the engine, parsers (formula, number format, CSV, later zip/XML/IPC), command bus, and file I/O.
+In scope: the engine, parsers (including formula, number format, CSV, zip/XML, IPC, configuration, themes, and keymaps), command bus, and file I/O.
 
 Out of scope: Excel-compatible sheet/workbook "passwords". Those exist for interchange only and are not a confidentiality control.
 

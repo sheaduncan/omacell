@@ -8,7 +8,7 @@ use crate::error::ErrorKind;
 use crate::locale::LocaleInfo;
 use crate::numfmt::fraction::render_fraction;
 use crate::numfmt::general::{general, general_for_width};
-use crate::numfmt::number::{excel_precision_15, group_int, round_half_away, split_fixed};
+use crate::numfmt::number::{excel_precision_15, group_int, split_fixed};
 use crate::numfmt::parse::parse;
 use crate::numfmt::token::{AmPmStyle, DigitKind, LayoutHints, ParsedFormat, Section, Token};
 use crate::numfmt::{FormatOptions, FormatValue, Formatted};
@@ -43,19 +43,13 @@ pub(crate) fn format_parsed(
         FormatValue::Empty => Formatted::text(String::new()),
         FormatValue::Error(e) => Formatted::text(e.as_str().to_string()),
         FormatValue::Text(s) => render_text(s, parsed, opts),
-        FormatValue::Bool(b) => render_bool(b, parsed, opts),
+        FormatValue::Bool(b) => render_bool(b),
         FormatValue::Number(n) => render_number(n, parsed, opts),
     }
 }
 
-fn render_bool(b: bool, parsed: &ParsedFormat, opts: &FormatOptions) -> Formatted {
-    if parsed.sections.len() == 1 && parsed.sections[0].is_general() {
-        return Formatted::text(if b { "TRUE" } else { "FALSE" }.into());
-    }
-    if parsed.sections.len() == 1 && parsed.sections[0].has_at() {
-        return render_text(if b { "TRUE" } else { "FALSE" }, parsed, opts);
-    }
-    render_number(if b { 1.0 } else { 0.0 }, parsed, opts)
+fn render_bool(b: bool) -> Formatted {
+    Formatted::text(if b { "TRUE" } else { "FALSE" }.into())
 }
 
 fn render_text(s: &str, parsed: &ParsedFormat, opts: &FormatOptions) -> Formatted {
@@ -82,7 +76,7 @@ fn render_number(n: f64, parsed: &ParsedFormat, opts: &FormatOptions) -> Formatt
                     return apply_section(Payload::Number(n), sec, opts, false);
                 }
             } else {
-                return apply_section(Payload::Number(n), sec, opts, false);
+                return apply_section(Payload::Number(n.abs()), sec, opts, n < 0.0);
             }
         }
         return Formatted::text(OVERFLOW.into());
@@ -131,8 +125,8 @@ fn apply_section(
     let date_locale = section.locale.unwrap_or(opts.locale);
     let locale = opts.locale;
     let mut layout = LayoutHints::default();
-    let text = match payload {
-        Payload::Text(s) => emit_text(s, section, &mut layout, opts),
+    let mut text = match payload {
+        Payload::Text(s) => emit_text(s, section, &mut layout),
         Payload::Number(n) => emit_number(
             n,
             section,
@@ -143,6 +137,7 @@ fn apply_section(
             &mut layout,
         ),
     };
+    expand_fill(&mut text, &layout, opts.width);
     Formatted {
         text,
         color_hint: section.color,
@@ -150,7 +145,7 @@ fn apply_section(
     }
 }
 
-fn emit_text(s: &str, section: &Section, layout: &mut LayoutHints, opts: &FormatOptions) -> String {
+fn emit_text(s: &str, section: &Section, layout: &mut LayoutHints) -> String {
     let mut out = String::new();
     for tok in &section.tokens {
         match tok {
@@ -160,7 +155,7 @@ fn emit_text(s: &str, section: &Section, layout: &mut LayoutHints, opts: &Format
                 out.push(' ');
                 layout.skips.push(*c);
             }
-            Token::Fill(c) => apply_fill(&mut out, layout, *c, opts.width),
+            Token::Fill(c) => apply_fill(&out, layout, *c),
             _ => {}
         }
     }
@@ -181,7 +176,7 @@ fn emit_number(
         if leading_minus && !body.starts_with('-') && n != 0.0 {
             body.insert(0, '-');
         }
-        return wrap_literals(&body, section, layout, opts);
+        return wrap_literals(&body, section, layout);
     }
     if section.is_date()
         || (section.is_time() && !section.is_scientific() && !section.is_fraction())
@@ -189,21 +184,16 @@ fn emit_number(
         return emit_date_time(n, section, date_info, opts, layout);
     }
     if section.is_fraction() {
-        return emit_frac(n, section, leading_minus, layout, opts);
+        return emit_frac(n, section, leading_minus, layout);
     }
     if section.is_scientific() {
         let body = emit_sci(n, section, info);
-        return wrap_num(section, &body, layout, opts, leading_minus && n != 0.0);
+        return wrap_num(section, &body, layout, leading_minus && n != 0.0);
     }
-    emit_plain_number(n, section, info, leading_minus, layout, opts)
+    emit_plain_number(n, section, info, leading_minus, layout)
 }
 
-fn wrap_literals(
-    body: &str,
-    section: &Section,
-    layout: &mut LayoutHints,
-    opts: &FormatOptions,
-) -> String {
+fn wrap_literals(body: &str, section: &Section, layout: &mut LayoutHints) -> String {
     let mut out = String::new();
     let mut used = false;
     for tok in &section.tokens {
@@ -219,7 +209,7 @@ fn wrap_literals(
                 out.push(' ');
                 layout.skips.push(*c);
             }
-            Token::Fill(c) => apply_fill(&mut out, layout, *c, opts.width),
+            Token::Fill(c) => apply_fill(&out, layout, *c),
             _ => {}
         }
     }
@@ -235,7 +225,6 @@ fn emit_plain_number(
     info: &LocaleInfo,
     leading_minus: bool,
     layout: &mut LayoutHints,
-    opts: &FormatOptions,
 ) -> String {
     let mut percent = 0u32;
     let mut grouping = false;
@@ -340,7 +329,7 @@ fn emit_plain_number(
             }
         }
     }
-    wrap_num(section, &num, layout, opts, leading_minus && value != 0.0)
+    wrap_num(section, &num, layout, leading_minus && value != 0.0)
 }
 
 fn has_dot_token(section: &Section) -> bool {
@@ -352,16 +341,12 @@ fn trim_int_str(digits: &[u8]) -> String {
     s.trim_start_matches('0').to_string()
 }
 
-fn wrap_num(
-    section: &Section,
-    num: &str,
-    layout: &mut LayoutHints,
-    opts: &FormatOptions,
-    leading_minus: bool,
-) -> String {
+fn wrap_num(section: &Section, num: &str, layout: &mut LayoutHints, leading_minus: bool) -> String {
     let mut out = String::new();
+    if leading_minus {
+        out.push('-');
+    }
     let mut emitted = false;
-    let mut pending = leading_minus;
     for tok in &section.tokens {
         match tok {
             Token::Digit(_)
@@ -370,30 +355,18 @@ fn wrap_num(
             | Token::Exp { .. }
             | Token::FractionBar => {
                 if !emitted {
-                    if pending {
-                        out.push('-');
-                        pending = false;
-                    }
                     out.push_str(num);
                     emitted = true;
                 }
             }
             Token::Percent => {
                 if !emitted {
-                    if pending {
-                        out.push('-');
-                        pending = false;
-                    }
                     out.push_str(num);
                     emitted = true;
                 }
                 out.push('%');
             }
             Token::Literal(t) => {
-                if pending && is_currency(t) {
-                    out.push('-');
-                    pending = false;
-                }
                 // skip fraction pattern spaces; the body already has them
                 if section.is_fraction() && (t == " " || t.chars().all(|c| c.is_ascii_digit())) {
                     continue;
@@ -404,7 +377,7 @@ fn wrap_num(
                 out.push(' ');
                 layout.skips.push(*c);
             }
-            Token::Fill(c) => apply_fill(&mut out, layout, *c, opts.width),
+            Token::Fill(c) => apply_fill(&out, layout, *c),
             _ => {}
         }
     }
@@ -421,16 +394,9 @@ fn wrap_num(
     });
     let has_fill = section.tokens.iter().any(|t| matches!(t, Token::Fill(_)));
     if !emitted && (has_num_slot || has_fill) {
-        if pending {
-            out.push('-');
-        }
         out.push_str(num);
     }
     out
-}
-
-fn is_currency(s: &str) -> bool {
-    s.contains('$') || s.contains('€') || s.contains('£') || s.contains('¥') || s.contains('₩')
 }
 
 fn emit_sci(n: f64, section: &Section, info: &LocaleInfo) -> String {
@@ -473,13 +439,13 @@ fn emit_sci(n: f64, section: &Section, info: &LocaleInfo) -> String {
     let r = exp.rem_euclid(int_ph as i32);
     mant *= 10f64.powi(r);
     exp -= r;
-    let mut mant_use = round_half_away(mant, frac_ph as i32);
     let mut exp_adj = exp;
-    if int_ph == 1 && mant_use >= 10.0 {
-        mant_use /= 10.0;
-        exp_adj += 1;
+    let (mut id, mut fd) = split_fixed(mant, frac_ph);
+    if id.len() > int_ph {
+        mant /= 10f64.powi(int_ph as i32);
+        exp_adj += int_ph as i32;
+        (id, fd) = split_fixed(mant, frac_ph);
     }
-    let (id, fd) = split_fixed(mant_use, frac_ph);
     let mut body: String = id.iter().map(|d| char::from(b'0' + *d)).collect();
     if frac_ph > 0 {
         body.push(info.separators.decimal);
@@ -503,13 +469,7 @@ fn fmt_exp(exp: i32, plus: bool, width: usize) -> String {
     )
 }
 
-fn emit_frac(
-    n: f64,
-    section: &Section,
-    leading_minus: bool,
-    layout: &mut LayoutHints,
-    opts: &FormatOptions,
-) -> String {
+fn emit_frac(n: f64, section: &Section, leading_minus: bool, layout: &mut LayoutHints) -> String {
     let mut num_ph = 0usize;
     let mut den_ph = 0usize;
     let mut int_ph = 0usize;
@@ -552,7 +512,7 @@ fn emit_frac(
     if leading_minus && n != 0.0 && !body.starts_with('-') {
         body.insert(0, '-');
     }
-    wrap_num(section, &body, layout, opts, false)
+    wrap_num(section, &body, layout, false)
 }
 
 fn emit_date_time(
@@ -562,6 +522,9 @@ fn emit_date_time(
     opts: &FormatOptions,
     layout: &mut LayoutHints,
 ) -> String {
+    if n < 0.0 && opts.date_system == DateSystem::Excel1900 {
+        return OVERFLOW.into();
+    }
     let Some((mut day, frac0)) = split_serial(n) else {
         return OVERFLOW.into();
     };
@@ -580,15 +543,8 @@ fn emit_date_time(
     let subsec = section.subsec_digits();
     let mut tod = time_from_fraction(frac0, subsec);
     if tod.overflow_days > 0 {
-        if frac0 < 1.0 {
-            tod.hour = 23;
-            tod.minute = 59;
-            tod.second = 59;
-            tod.overflow_days = 0;
-        } else {
-            day += tod.overflow_days as i64;
-            tod = time_from_fraction(0.0, subsec);
-        }
+        day += tod.overflow_days as i64;
+        tod = time_from_fraction(0.0, subsec);
     }
     let date = if section.is_date() {
         match serial_to_date(day, opts.date_system) {
@@ -639,10 +595,12 @@ fn emit_date_time(
                 out.push_str(&pad_u64(if *el { es } else { u64::from(tod.second) }, *len));
             }
             Token::SubSecond { len } => {
-                let scale = 10u32.pow(u32::from(*len));
+                let stored_len = (*len).min(3);
+                let scale = 10u32.pow(u32::from(stored_len));
                 let v = tod.subsec % scale;
                 out.push('.');
-                out.push_str(&format!("{v:0width$}", width = usize::from(*len)));
+                out.push_str(&format!("{v:0width$}", width = usize::from(stored_len)));
+                out.extend(std::iter::repeat_n('0', usize::from(*len - stored_len)));
             }
             Token::AmPm { style } => out.push_str(&ampm_str(tod.hour >= 12, *style, info)),
             Token::Literal(t) => out.push_str(t),
@@ -650,9 +608,9 @@ fn emit_date_time(
                 out.push(' ');
                 layout.skips.push(*c);
             }
-            Token::Fill(c) => apply_fill(&mut out, layout, *c, opts.width),
-            Token::Grouping => out.push(info.separators.thousands),
-            Token::Decimal => out.push(info.separators.decimal),
+            Token::Fill(c) => apply_fill(&out, layout, *c),
+            Token::Grouping => out.push(','),
+            Token::Decimal => out.push('.'),
             _ => {}
         }
     }
@@ -708,14 +666,19 @@ fn ampm_str(pm: bool, style: AmPmStyle, info: &LocaleInfo) -> String {
     }
 }
 
-fn apply_fill(out: &mut String, layout: &mut LayoutHints, c: char, width: Option<usize>) {
+fn apply_fill(out: &str, layout: &mut LayoutHints, c: char) {
     layout.fill = Some(c);
     layout.fill_at = Some(out.len());
-    if let Some(w) = width {
-        let cur = out.chars().count();
-        if w > cur {
-            out.extend(std::iter::repeat_n(c, w - cur));
-        }
+}
+
+fn expand_fill(text: &mut String, layout: &LayoutHints, width: Option<usize>) {
+    let (Some(fill), Some(at), Some(width)) = (layout.fill, layout.fill_at, width) else {
+        return;
+    };
+    let count = width.saturating_sub(text.chars().count());
+    if count > 0 {
+        let padding: String = std::iter::repeat_n(fill, count).collect();
+        text.insert_str(at, &padding);
     }
 }
 

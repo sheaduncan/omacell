@@ -21,7 +21,7 @@
       "name": "audit"
     },
     {
-      "description": "Workbook card. WP-21 returns summary level; WP-22 replaces the payload.",
+      "description": "Privacy-filtered summary-level workbook card.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -315,7 +315,7 @@
       "name": "range_write"
     },
     {
-      "description": "Recalculate the live workbook. Denied while a changeset is still proposed. `wait` is reserved for async AI cells (WP-22).",
+      "description": "Recalculate the live workbook. Denied while a changeset is still proposed. `wait=true` waits for asynchronous AI cells to settle.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
@@ -323,7 +323,7 @@
         "properties": {
           "wait": {
             "default": false,
-            "description": "Wait for async AI cells to settle (no-op until WP-22).",
+            "description": "Wait for async AI cells to settle before returning.",
             "type": "boolean"
           }
         },

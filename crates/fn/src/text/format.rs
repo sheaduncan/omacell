@@ -23,7 +23,10 @@ pub(crate) fn text_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue 
     let fv = match &value {
         Scalar::Empty => FormatValue::Empty,
         Scalar::Number(n) => FormatValue::Number(*n),
-        Scalar::Bool(b) => FormatValue::Bool(*b),
+        // TEXT performs formula-value coercion before applying the supplied
+        // number format. This is intentionally different from displaying a
+        // Boolean cell, where number formats do not replace TRUE/FALSE.
+        Scalar::Bool(b) => FormatValue::Number(if *b { 1.0 } else { 0.0 }),
         Scalar::Text(t) => FormatValue::Text(t),
         Scalar::Error(e) => return err(*e),
     };
