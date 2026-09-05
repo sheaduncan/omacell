@@ -1,4 +1,4 @@
-//! Recorded-response WP-23 eval runner. Required CI is entirely offline.
+//! Synthetic WP-23 contract-fixture runner. Required CI is entirely offline.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -236,9 +236,6 @@ fn synthetic_import_contract_rows_produce_valid_bounded_overlays() {
 fn synthetic_audit_contract_rows_parse_the_declared_seeded_findings() {
     let rows = evals::<AuditEval>("audit.jsonl");
     assert!(rows.len() >= 24);
-    let mut true_positive = 0usize;
-    let mut false_positive = 0usize;
-    let mut false_negative = 0usize;
     for row in &rows {
         assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 1, "{}", row.id);
@@ -257,14 +254,8 @@ fn synthetic_audit_contract_rows_parse_the_declared_seeded_findings() {
             .into_iter()
             .map(|finding| finding.id)
             .collect::<BTreeSet<_>>();
-        true_positive += predicted.intersection(&truth).count();
-        false_positive += predicted.difference(&truth).count();
-        false_negative += truth.difference(&predicted).count();
+        assert_eq!(predicted, truth, "{}", row.id);
     }
-    let precision = true_positive as f64 / (true_positive + false_positive).max(1) as f64;
-    let recall = true_positive as f64 / (true_positive + false_negative).max(1) as f64;
-    assert_eq!(precision, 1.0, "audit precision was {precision:.3}");
-    assert_eq!(recall, 1.0, "audit recall was {recall:.3}");
 }
 
 #[test]

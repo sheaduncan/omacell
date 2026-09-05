@@ -48,7 +48,8 @@ Put models where spreadsheet work happens, entirely through the command bus and 
 
 ## Tests
 
-- Eval runner with recorded fixtures; `proptest` invariants; round-trip tests; injection suite.
+- Synthetic contract runner plus nightly live-model scoring; `proptest`
+  invariants; round-trip tests; injection suite.
 
 ## Procedure
 

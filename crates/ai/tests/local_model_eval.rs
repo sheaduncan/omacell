@@ -153,7 +153,7 @@ fn applied_plan_fingerprint(plan: &Plan) -> Option<Value> {
 
 #[test]
 #[ignore = "nightly lane requires a loopback small model"]
-fn score_the_offline_suite_against_a_local_model() {
+fn score_the_committed_inputs_against_a_local_model() {
     let Some((runtime, _handle, _temp)) = runtime() else {
         eprintln!("local-model eval skipped: endpoint/model environment is unset");
         return;

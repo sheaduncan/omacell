@@ -657,7 +657,7 @@ omacell/
 ├─ default/     shipped defaults: config.toml, keys/classic.toml, keys/modal.toml, themed/omacell.toml.tpl, hooks/theme-set,
 │               ai/prompts/*.md, agents/skills/omacell/SKILL.md
 ├─ packaging/   PKGBUILD, .desktop, icons, completions, man
-├─ tests/       corpora: xlsx round-trip, function conformance, csv, themes, AI evals (recorded responses), injection suite
+├─ tests/       corpora: xlsx round-trip, function conformance, csv, themes, synthetic AI contracts + live-eval inputs, injection suite
 └─ docs/        user manual (mdBook), config reference generated from schema
 ```
 

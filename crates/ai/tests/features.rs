@@ -384,51 +384,6 @@ fn extension_reload_discards_an_in_flight_response() {
 }
 
 #[test]
-fn two_hundred_plan_evals_match_commands() {
-    let cat = catalog();
-    let templates = [
-        ("sort column {n}", "range.sort", json!({"range": "A1:F10"})),
-        ("filter {n}", "filter.set", json!({"range": "A1:A20"})),
-        ("add a sheet {n}", "sheet.add", json!({"name": "S"})),
-        (
-            "rename sheet {n}",
-            "sheet.rename",
-            json!({"from": "Sheet1", "to": "Data"}),
-        ),
-        ("fill down {n}", "edit.filldown", json!({"range": "A1:A10"})),
-        (
-            "set A1 to {n}",
-            "cell.set",
-            json!({"ref": "A1", "input": "1"}),
-        ),
-        ("add cf {n}", "condfmt.add", json!({"range": "A1:A10"})),
-        (
-            "make a table {n}",
-            "table.create",
-            json!({"range": "A1:C10"}),
-        ),
-        ("bold cells {n}", "format.bold", json!({"range": "A1:A10"})),
-        (
-            "remove duplicates {n}",
-            "range.removeduplicates",
-            json!({"range": "A1:C10"}),
-        ),
-    ];
-    let mut n = 0u32;
-    for i in 0..200 {
-        let (prompt_t, id, args) = &templates[i % templates.len()];
-        let prompt = prompt_t.replace("{n}", &i.to_string());
-        let model = json!({"commands":[{"id": id, "args": args}]});
-        let plan = parse_plan(&model, &cat).unwrap();
-        assert_eq!(plan.commands[0].id, *id, "{prompt}");
-        let calls = to_calls(&plan).unwrap();
-        assert_eq!(calls[0].id.as_str(), *id);
-        n += 1;
-    }
-    assert_eq!(n, 200);
-}
-
-#[test]
 fn injection_suite_rejects_policy_commands() {
     let cat = catalog();
     for payload in [
