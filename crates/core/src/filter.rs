@@ -386,7 +386,8 @@ fn matches_row(
             if vals.is_empty() {
                 true
             } else {
-                vals.iter().any(|v| v == &text)
+                let folded = text.to_lowercase();
+                vals.iter().any(|value| value.to_lowercase() == folded)
             }
         }
         FilterCriteria::Text { op, value } => {

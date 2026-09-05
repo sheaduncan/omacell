@@ -1,8 +1,9 @@
-# Known differences from Excel
+# Known compatibility and oracle differences
 
 Documented here so WP-05a/b/c and the LibreOffice cross-check script have a
-single place to record intentional divergences. Rows cite the behaviour they
-encode.
+single place to record both intentional Excel divergences and cases where the
+LibreOffice oracle disagrees with Excel-compatible behavior. Rows cite the
+behavior they encode.
 
 | Topic | Excel | Omacell | Package |
 |---|---|---|---|
@@ -15,6 +16,11 @@ encode.
 | LibreOffice `TYPE(TRUE)` | `4` (logical) | `1` (number) | WP-05a |
 | LibreOffice array logicals in `SUM`/`COUNT` | Skip logicals in arrays/ranges | Often includes `TRUE` as 1 | WP-05a |
 | LibreOffice explicit omitted numeric arguments | Excel treats an empty argument slot as numeric zero | LibreOffice headless CSV/import may reject or drop the slot; Omacell follows Excel | WP-05a |
+| LibreOffice `CEILING` / `FLOOR` zero-significance and newer variants | Excel's legacy and `.MATH` / `.PRECISE` / `ISO.CEILING` families have distinct zero-significance and sign rules | LibreOffice headless import may reject newer names or report a different error; Omacell follows the documented Excel rule for each variant | WP-05a |
+| LibreOffice exclusive percentile and quartile endpoints | Excel accepts only ranks from `1/(n+1)` through `n/(n+1)` and rejects samples too small for the requested exclusive rank | LibreOffice headless import may accept or classify boundary/small-sample cases differently; Omacell follows Excel | WP-05a |
+| LibreOffice `LARGE` / `SMALL` / `MODE.MULT` boundaries | Excel returns `#NUM!` for an out-of-range order and `#N/A` when no mode exists | LibreOffice headless import may return a different error; Omacell follows Excel | WP-05a |
+| LibreOffice `PERCENTRANK` out-of-range inputs | Excel returns `#N/A` when the requested value lies outside the array | LibreOffice headless import may classify the error differently; Omacell follows Excel for `.INC` and `.EXC` | WP-05a |
+| LibreOffice covariance shape errors | Excel returns `#N/A` for unequal input lengths and `COVARIANCE.S` returns `#DIV/0!` for a one-pair sample | LibreOffice headless import may report a different error; Omacell follows Excel | WP-05a |
 | `LEN`/`MID`/`LEFT`/`RIGHT` of astral scalars (e.g. `😀` U+1F600) | Excel for Windows (365 included) counts UTF-16 code units, so `LEN` = 2 and `MID` can emit a lone surrogate | Unicode scalar values (`LEN` = 1); slices never split a code point | WP-05b |
 | `UPPER("ß")` | Stays `ß` | Same (one-to-one mapping; not Unicode `SS`) | WP-05b |
 | `REGEXTEST`/`REGEXEXTRACT`/`REGEXREPLACE` | Excel 365; LibreOffice has no equivalent names | Implemented with the `regex` crate (linear-time, 256-char pattern / 1 MiB compile cap) | WP-05b |

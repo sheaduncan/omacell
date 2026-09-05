@@ -245,7 +245,7 @@ Functions are named and behave as in Excel; English canonical names are always a
 - **F-9.2 Fidelity levels for `.xlsx`.** L1 — cell values, formulas, and number formats round-trip losslessly. L2 — styles, merged cells, defined names, tables, validation, conditional formatting, comments, hyperlinks, freeze/split, print settings, pivot definitions, core charts. L3 — unknown parts (VBA, custom XML, exotic drawings, form controls, embedded objects) are preserved byte-for-byte and re-emitted. The test corpus measures each level (§14).
 - **F-9.3 Text workbook (`.omc`).** A documented, line-oriented plain-text format (Appendix E) for git-friendly diffs, hand editing, and generation by scripts. It carries everything `.xlsx` L1–L2 carries except binary parts.
 - **F-9.4 CSV/TSV.** Import with an interactive preview: delimiter, quoting, encoding (UTF-8 with BOM detection, Latin-1, UTF-16), decimal and thousands separators, header row, per-column type (auto/number/text/date with format/boolean), and "keep as text" for ambiguous columns. No silent conversion; the preview shows what would change. Export with the same controls plus line endings. Files over the in-memory threshold load progressively with a visible row count.
-- **F-9.5 Other formats.** ODS read (v1) and write (v1.x); JSON (array-of-objects ↔ table, nested flattening rules); Parquet/Arrow read (v1.x); HTML and Markdown tables via clipboard and import; legacy `.xls` read in-process with a bounded BIFF parser. `.xls` write is never supported.
+- **F-9.5 Other formats.** ODS read (v1) and write (v1.x); JSON (array-of-objects ↔ table, nested flattening rules); Parquet/Arrow read (v1.x); HTML and Markdown tables via clipboard and import; legacy `.xls` read through Omacell's bundled private, resource-limited BIFF worker. `.xls` write is never supported.
 - **F-9.6 Safety.** Zip and XML readers enforce size and expansion limits, disable external entities, and are fuzzed. Files never execute embedded scripts on open (§12.3).
 - **F-9.7 Locking and autosave.** Cooperative lock files compatible with LibreOffice's `.~lock.<name>#` convention so Calc and Omacell warn each other. Autosave to `~/.local/state/omacell/autosave/` on an interval, with crash recovery on next launch. Optional versioned backups (`keep_backups = N`).
 
@@ -451,7 +451,7 @@ Requirement identifiers in this section are `A-x.y`.
 
 ### 8.4 AI in the formula bar, the palette, and the import preview
 
-- **A-4.1 Natural-language commands.** `Ctrl+Shift+A` (or a leading `?` in the command palette; `<leader>a` / `:ai` in modal) takes a sentence and returns a *plan*: the exact command-bus commands with arguments and affected ranges — for example `range.sort Data!A1:F400 by F desc` followed by `cf.add Data!F2:F400 cell_value > 10000 → style:error`. The plan is shown before anything runs; `Enter` applies it as one changeset (§8.6). The model sees only the command registry schema (`omacell commands --json`) and the workbook card, which keeps it grounded and makes the feature testable offline.
+- **A-4.1 Natural-language commands.** `Ctrl+Shift+A` (or a leading `?` in the command palette; `<leader>a` in modal) takes a sentence and returns a *plan*: the exact command-bus commands with arguments and affected ranges — for example `range.sort Data!A1:F400 by F desc` followed by `cf.add Data!F2:F400 cell_value > 10000 → style:error`. The plan is shown before anything runs; `Enter` applies it as one changeset (§8.6). The model sees only the command registry schema (`omacell commands --json`) and the workbook card, which keeps it grounded and makes the feature testable offline. The modal command line can invoke the same operation explicitly as `:ai.plan {"prompt":"…"}`.
 - **A-4.2 Formula assistant.** Commands on the current cell or selection: `ai.formula.generate` (from a description; uses headers, samples, names, and tables), `ai.formula.explain` (plain language plus a step trace aligned with Evaluate Formula), `ai.formula.fix` (fed the evaluator's error diagnosis), `ai.formula.refactor` (`VLOOKUP`→`XLOOKUP`, nested `IF`→`IFS`/`SWITCH`, introduce `LET`, absolute-reference repair). Generated formulas are parsed and evaluated in a scratch context before they are proposed; references the model chose are highlighted for verification.
 - **A-4.3 Inline completion.** Ghost-text completion in the formula bar and the in-cell editor, accepted with `Tab`, debounced, cancellable, using the `fast` model slot. `[ai.completion] mode = "auto"` means on only when the fast model is local; `on` and `off` override.
 - **A-4.4 Import assistant.** After sniffing (§6.9), `ai.import.assist` proposes column names, types, unit extraction from headers ("Pressure (psi)"), date-format resolution, whitespace and category normalization — as a reviewable proposal inside the import preview. Nothing is applied without acceptance; the Excel auto-conversion lesson still governs.
@@ -815,7 +815,7 @@ Runs on any Linux with Wayland (X11 through XWayland, best effort). Omarchy-spec
 | `Ctrl+PgUp` / `Ctrl+PgDn` | Previous / next sheet | `Ctrl+G`, `F5` | Go To |
 | `Tab` / `Shift+Tab` | Right / left | `Enter` / `Shift+Enter` | Commit and move down / up |
 | `F2` | Edit in cell | `Esc` | Cancel edit / close panel |
-| `F4` | Cycle reference anchoring (editing); repeat last action | `F9` / `Shift+F9` / `Ctrl+Alt+F9` | Recalc all / sheet / full rebuild |
+| `F4` | Cycle reference anchoring while editing | `F9` / `Shift+F9` / `Ctrl+Alt+F9` | Recalculate the workbook (all three bindings share `calc.recalc`) |
 | `Ctrl+Enter` | Fill selection with entry | `Alt+Enter` | Line break in cell |
 | `Ctrl+D` / `Ctrl+R` | Fill down / right | `Ctrl+E` | Flash Fill (v1.x) |
 | `Ctrl+;` / `Ctrl+Shift+;` | Insert date / time | `Ctrl+'` / `Ctrl+Shift+"` | Copy formula / value from above |
@@ -853,11 +853,11 @@ Runs on any Linux with Wayland (X11 through XWayland, best effort). Omarchy-spec
 | Normal | `/` `n` `N` | Search / next / previous |
 | Normal | `gt` / `gT` / `<n>gt` | Next / previous / nth sheet |
 | Normal | `zf` / `zs` / `zz` | Freeze at cursor / split / center |
-| Normal | `:` | Command line (`:w`, `:q`, `:e`, `:sort`, `:fmt`, `:goto`, `:set`, `:fn`, `:source`) |
+| Normal | `:` | Command line (`:w`, `:q`, `:e PATH`, `:goto RANGE`, or a registered dotted command id followed by a JSON object) |
 | Normal | `<leader>` (default `Space`) | User chord prefix (e.g. `<leader>p` pivot builder) |
-| Normal | `<leader>a` / `:ai <text>` | AI: natural-language plan |
+| Normal | `<leader>a` | AI: natural-language plan (`:ai.plan {"prompt":"…"}` is the explicit command-line form) |
 | Normal | `<leader>x` | AI assist on cell (explain / generate / fix / refactor) |
-| Normal | `<leader>c` | Changeset review (`a` accept, `r` reject, `A`/`R` all) |
+| Normal | `<leader>c` | Changeset review (arrows select, `Space` toggles an item, `a`/`A` accepts all, `r`/`R` rejects the proposal, `Enter` applies accepted items) |
 | Normal | `<leader>g` | Hand workbook to the default Omarchy agent |
 | Visual | `d` `y` `c` `>` `<` `:` | Delete / yank / change / indent / outdent / command on range |
 | Insert | `Esc` / `Ctrl+[` | Return to Normal; `Enter` commits and stays in Normal |
@@ -952,6 +952,9 @@ menu_entries         = true      # offered by `omacell setup omarchy`
 libreoffice_fallback = false     # deprecated compatibility key; .xls import is native
 ocr_paste            = true
 
+[ipc]
+max_frame_bytes = 16777216       # 1 MiB..16 MiB; restart to apply
+
 [network]
 enabled         = false
 allow_functions = []             # e.g. ["WEBSERVICE"]
@@ -1028,8 +1031,12 @@ truecolor       = "auto"
 mouse           = true
 graphics        = "auto"         # auto | sixel | kitty | off
 
+[config]
+live_reload = true
+debounce_ms = 50
+
 [keys]
-file = "keys.toml"               # model and bindings live there
+file = "keys/classic.toml"       # use keys/modal.toml for the modal map
 ```
 
 ## Appendix C — Theme template (`omacell.toml.tpl`)

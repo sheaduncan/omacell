@@ -28,3 +28,4 @@
 0.01	# ??/??	en-US	1900	1/99	best den≤99 for 0.01 (1/100 exceeds ??)
 0.99	# ?/?	en-US	1900	1	0.99 ≈ 1/1 → 1
 1.2	# ?/5	en-US	1900	1 1/5	fixed /5
+20000000000.5	?/999999999	en-US	1900	19999999980500000000/999999999	large improper fractions use checked-width arithmetic

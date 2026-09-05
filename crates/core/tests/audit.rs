@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 
 use omacell_core::addr::{CellRef, RangeRef};
-use omacell_core::audit::{audit_workbook, eval_steps, explain_error};
+use omacell_core::audit::{audit_workbook, eval_steps, explain_error, precedents_of};
+use omacell_core::chart::{Axis, Chart, ChartAnchor, ChartId, ChartKind, LegendPos};
+use omacell_core::condfmt::{CfDxf, CfKind, CondFormat};
 use omacell_core::eval::FnRegistry;
 use omacell_core::find::{
     FindSpec, GotoKind, find_cells, goto_spec, goto_special, replace_apply, replace_preview,
@@ -12,6 +14,7 @@ use omacell_core::graph::CellCoord;
 use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::ops::merge;
 use omacell_core::recalc::RecalcEngine;
+use omacell_core::validation::{DataValidation, DvType};
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 
@@ -173,6 +176,45 @@ fn find_replace_preview_equals_applied() {
 }
 
 #[test]
+fn value_mode_replace_does_not_overwrite_a_formula_result() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "x").unwrap();
+    wb.set_text(s, 1, 0, "xfoo").unwrap();
+    wb.set_cell_contents(s, 0, 1, "=A1&\"foo\"").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+    let spec = FindSpec {
+        query: "xfoo".into(),
+        ..FindSpec::default()
+    };
+
+    assert_eq!(replace_preview(&wb, s, &spec, "xbar").unwrap(), 1);
+    assert_eq!(replace_apply(&mut wb, s, &spec, "xbar").unwrap(), 1);
+    assert_eq!(wb.formula_text_at(s, 0, 1).as_deref(), Some("=A1&\"foo\""));
+}
+
+#[test]
+fn formula_mode_find_searches_constants_and_formula_sources() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "needle").unwrap();
+    wb.set_cell_contents(s, 1, 0, "=\"needle\"").unwrap();
+    let hits = find_cells(
+        &wb,
+        s,
+        &FindSpec {
+            query: "needle".into(),
+            formulas: true,
+            ..FindSpec::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(hits.iter().map(|hit| hit.row).collect::<Vec<_>>(), [0, 1]);
+}
+
+#[test]
 fn regex_pathological_pattern_times_out_cleanly() {
     let spec = FindSpec {
         query: "a".repeat(300),
@@ -282,6 +324,101 @@ fn range_short_uses_the_referenced_column_not_the_sheet_extent() {
             .all(|finding| finding.id != "audit.range_short"),
         "{:?}",
         report.findings
+    );
+}
+
+#[test]
+fn precedent_queries_do_not_truncate_ordinary_ranges() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_cell_contents(s, 0, 1, "=SUM(A1:A300)").unwrap();
+    let mut engine = RecalcEngine::new(FnRegistry::new());
+    engine.recalc_rebuild(&mut wb);
+
+    let precedents = precedents_of(&wb, &engine, CellCoord::new(s, 0, 1), false);
+    assert_eq!(precedents.len(), 300);
+    assert!(precedents.iter().any(|cell| cell == "Sheet1!A300"));
+}
+
+#[test]
+fn audit_counts_validation_and_conditional_format_name_references() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    for name in ["ValidationChoices", "ConditionalLimit", "Orphan"] {
+        wb.define_name(DefinedName {
+            name: name.into(),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Constant(Value::Number(1.0)),
+            comment: None,
+        })
+        .unwrap();
+    }
+    wb.set_validations(
+        s,
+        vec![DataValidation {
+            range: range(0, 0, 0, 0),
+            kind: DvType::List,
+            formula1: Some("=ValidationChoices".into()),
+            ..DataValidation::default()
+        }],
+    )
+    .unwrap();
+    wb.set_cond_formats(
+        s,
+        vec![CondFormat {
+            range: range(0, 0, 0, 0),
+            priority: 1,
+            stop_if_true: false,
+            kind: CfKind::Formula("=A1>ConditionalLimit".into()),
+            dxf: CfDxf::default(),
+        }],
+    )
+    .unwrap();
+    let engine = RecalcEngine::new(FnRegistry::new());
+    let unused = audit_workbook(&wb, &engine)
+        .findings
+        .into_iter()
+        .filter(|finding| finding.id == "audit.unused_name")
+        .map(|finding| finding.message)
+        .collect::<Vec<_>>();
+
+    assert_eq!(unused.len(), 1);
+    assert!(unused[0].contains("Orphan"));
+}
+
+#[test]
+fn audit_does_not_offer_name_removal_when_chart_references_are_opaque() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.define_name(DefinedName {
+        name: "ChartData".into(),
+        scope: NameScope::Workbook,
+        referent: NameReferent::Range(range(0, 0, 1, 0)),
+        comment: None,
+    })
+    .unwrap();
+    wb.add_chart(Chart {
+        id: ChartId::new(0),
+        kind: ChartKind::Unsupported,
+        title: None,
+        categories: None,
+        series: Vec::new(),
+        category_axis: Axis::default(),
+        value_axis: Axis::default(),
+        secondary_axis: None,
+        legend: LegendPos::default(),
+        data_labels: false,
+        anchor: ChartAnchor::default(),
+        sheet: s,
+    })
+    .unwrap();
+    let report = audit_workbook(&wb, &RecalcEngine::new(FnRegistry::new()));
+
+    assert!(
+        report
+            .findings
+            .iter()
+            .all(|finding| finding.id != "audit.unused_name")
     );
 }
 

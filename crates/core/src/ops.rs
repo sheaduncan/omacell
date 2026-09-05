@@ -1300,6 +1300,60 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
+fn column_numbers(
+    wb: &Workbook,
+    sheet: SheetId,
+    first_row: u32,
+    last_row: u32,
+    col: u16,
+) -> Vec<f64> {
+    (first_row..=last_row)
+        .filter_map(|row| match wb.get(sheet, row, col) {
+            Ok(Some(slot)) => match slot.value {
+                Value::Number(value) => Some(value),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+fn row_numbers(wb: &Workbook, sheet: SheetId, row: u32, first_col: u16, last_col: u16) -> Vec<f64> {
+    (first_col..=last_col)
+        .filter_map(|col| match wb.get(sheet, row, col) {
+            Ok(Some(slot)) => match slot.value {
+                Value::Number(value) => Some(value),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+fn fill_extensions<L>(
+    lanes: impl IntoIterator<Item = L>,
+    mode: FillMode,
+    extension_len: usize,
+    date_system: DateSystem,
+    reverse: bool,
+    mut source_values: impl FnMut(L) -> Vec<f64>,
+) -> Vec<Vec<f64>> {
+    if matches!(mode, FillMode::Copy | FillMode::Formats) {
+        return Vec::new();
+    }
+    lanes
+        .into_iter()
+        .map(|lane| {
+            let values = source_values(lane);
+            if reverse {
+                extend_fill_before(&values, mode, extension_len, date_system)
+            } else {
+                extend_fill(&values, mode, extension_len, date_system)
+            }
+        })
+        .collect()
+}
+
 /// Fill `dest` from `src` along the major axis.
 pub fn fill_range(
     wb: &mut Workbook,
@@ -1310,28 +1364,20 @@ pub fn fill_range(
 ) -> Result<u32, CoreError> {
     let (sr0, sc0, sr1, sc1) = norm(src);
     let (dr0, dc0, dr1, dc1) = norm(dest);
+    let date_system = wb.settings().date_system;
     if mode != FillMode::Formats {
         wb.ensure_range_not_array_formula_output(sheet, dr0, dc0, dr1, dc1)?;
     }
     let mut changed = 0u32;
     if dr0 >= sr0 && dc0 == sc0 && dc1 == sc1 {
         // fill down
-        let mut nums = Vec::new();
-        for r in sr0..=sr1 {
-            if let Ok(Some(slot)) = wb.get(sheet, r, sc0)
-                && let Value::Number(n) = slot.value
-            {
-                nums.push(n);
-            }
-        }
-        let ext = extend_fill(
-            &nums,
-            mode,
-            (dr1.saturating_sub(sr1)) as usize,
-            DateSystem::Excel1900,
-        );
+        let extension_len = dr1.saturating_sub(sr1) as usize;
+        let extensions =
+            fill_extensions(sc0..=sc1, mode, extension_len, date_system, false, |col| {
+                column_numbers(wb, sheet, sr0, sr1, col)
+            });
         for (i, r) in (sr1.saturating_add(1)..=dr1).enumerate() {
-            for c in sc0..=sc1 {
+            for (lane, c) in (sc0..=sc1).enumerate() {
                 match mode {
                     FillMode::Copy => {
                         let source_row = sr0 + (r - sr1 - 1) % (sr1 - sr0 + 1);
@@ -1348,8 +1394,8 @@ pub fn fill_range(
                         }
                     }
                     _ => {
-                        if i < ext.len() {
-                            wb.set_number(sheet, r, c, ext[i])?;
+                        if let Some(value) = extensions.get(lane).and_then(|values| values.get(i)) {
+                            wb.set_number(sheet, r, c, *value)?;
                             changed += 1;
                         }
                     }
@@ -1357,22 +1403,13 @@ pub fn fill_range(
             }
         }
     } else if dr0 < sr0 && dc0 == sc0 && dc1 == sc1 && dr1 >= sr1 {
-        let mut nums = Vec::new();
-        for r in sr0..=sr1 {
-            if let Ok(Some(slot)) = wb.get(sheet, r, sc0)
-                && let Value::Number(n) = slot.value
-            {
-                nums.push(n);
-            }
-        }
-        let ext = extend_fill_before(
-            &nums,
-            mode,
-            sr0.saturating_sub(dr0) as usize,
-            DateSystem::Excel1900,
-        );
+        let extension_len = sr0.saturating_sub(dr0) as usize;
+        let extensions =
+            fill_extensions(sc0..=sc1, mode, extension_len, date_system, true, |col| {
+                column_numbers(wb, sheet, sr0, sr1, col)
+            });
         for (i, r) in (dr0..sr0).rev().enumerate() {
-            for c in sc0..=sc1 {
+            for (lane, c) in (sc0..=sc1).enumerate() {
                 match mode {
                     FillMode::Copy => {
                         let source_row = sr1 - (sr0 - r - 1) % (sr1 - sr0 + 1);
@@ -1388,30 +1425,22 @@ pub fn fill_range(
                             changed += 1;
                         }
                     }
-                    _ if i < ext.len() => {
-                        wb.set_number(sheet, r, c, ext[i])?;
-                        changed += 1;
+                    _ => {
+                        if let Some(value) = extensions.get(lane).and_then(|values| values.get(i)) {
+                            wb.set_number(sheet, r, c, *value)?;
+                            changed += 1;
+                        }
                     }
-                    _ => {}
                 }
             }
         }
     } else if dc0 >= sc0 && dr0 == sr0 && dr1 == sr1 {
-        let mut nums = Vec::new();
-        for c in sc0..=sc1 {
-            if let Ok(Some(slot)) = wb.get(sheet, sr0, c)
-                && let Value::Number(n) = slot.value
-            {
-                nums.push(n);
-            }
-        }
-        let ext = extend_fill(
-            &nums,
-            mode,
-            (u32::from(dc1.saturating_sub(sc1))) as usize,
-            DateSystem::Excel1900,
-        );
-        for r in sr0..=sr1 {
+        let extension_len = usize::from(dc1.saturating_sub(sc1));
+        let extensions =
+            fill_extensions(sr0..=sr1, mode, extension_len, date_system, false, |row| {
+                row_numbers(wb, sheet, row, sc0, sc1)
+            });
+        for (lane, r) in (sr0..=sr1).enumerate() {
             for (i, c) in (sc1.saturating_add(1)..=dc1).enumerate() {
                 match mode {
                     FillMode::Copy => {
@@ -1437,8 +1466,8 @@ pub fn fill_range(
                         }
                     }
                     _ => {
-                        if i < ext.len() {
-                            wb.set_number(sheet, r, c, ext[i])?;
+                        if let Some(value) = extensions.get(lane).and_then(|values| values.get(i)) {
+                            wb.set_number(sheet, r, c, *value)?;
                             changed += 1;
                         }
                     }
@@ -1446,21 +1475,12 @@ pub fn fill_range(
             }
         }
     } else if dc0 < sc0 && dr0 == sr0 && dr1 == sr1 && dc1 >= sc1 {
-        let mut nums = Vec::new();
-        for c in sc0..=sc1 {
-            if let Ok(Some(slot)) = wb.get(sheet, sr0, c)
-                && let Value::Number(n) = slot.value
-            {
-                nums.push(n);
-            }
-        }
-        let ext = extend_fill_before(
-            &nums,
-            mode,
-            usize::from(sc0.saturating_sub(dc0)),
-            DateSystem::Excel1900,
-        );
-        for r in sr0..=sr1 {
+        let extension_len = usize::from(sc0.saturating_sub(dc0));
+        let extensions =
+            fill_extensions(sr0..=sr1, mode, extension_len, date_system, true, |row| {
+                row_numbers(wb, sheet, row, sc0, sc1)
+            });
+        for (lane, r) in (sr0..=sr1).enumerate() {
             for (i, c) in (dc0..sc0).rev().enumerate() {
                 match mode {
                     FillMode::Copy => {
@@ -1485,11 +1505,12 @@ pub fn fill_range(
                             changed += 1;
                         }
                     }
-                    _ if i < ext.len() => {
-                        wb.set_number(sheet, r, c, ext[i])?;
-                        changed += 1;
+                    _ => {
+                        if let Some(value) = extensions.get(lane).and_then(|values| values.get(i)) {
+                            wb.set_number(sheet, r, c, *value)?;
+                            changed += 1;
+                        }
                     }
-                    _ => {}
                 }
             }
         }
@@ -2923,6 +2944,42 @@ pub fn remove_duplicates(
     remove_duplicates_with_header(wb, sheet, range, columns, false)
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum DuplicateKey {
+    Empty,
+    Number(u64),
+    Bool(bool),
+    Text(String),
+    Error(String),
+}
+
+fn duplicate_key(
+    wb: &Workbook,
+    sheet: SheetId,
+    row: u32,
+    col: u16,
+) -> Result<DuplicateKey, CoreError> {
+    let Some(slot) = wb.get(sheet, row, col)? else {
+        return Ok(DuplicateKey::Empty);
+    };
+    Ok(match slot.value {
+        Value::Empty | Value::Array(_) => DuplicateKey::Empty,
+        Value::Number(value) => {
+            // Excel treats both signed representations of zero as the same value.
+            DuplicateKey::Number(if value == 0.0 { 0 } else { value.to_bits() })
+        }
+        Value::Bool(value) => DuplicateKey::Bool(value),
+        Value::Text(id) => DuplicateKey::Text(
+            wb.intern()
+                .strings
+                .get(id)
+                .unwrap_or_default()
+                .to_lowercase(),
+        ),
+        Value::Error(value) => DuplicateKey::Error(value.as_str().to_string()),
+    })
+}
+
 /// Remove duplicate rows, optionally preserving the first row as a header.
 pub fn remove_duplicates_with_header(
     wb: &mut Workbook,
@@ -2973,10 +3030,10 @@ pub fn remove_duplicates_with_header(
             kept.push((r, row));
             continue;
         }
-        let key: Vec<String> = cols
+        let key: Vec<DuplicateKey> = cols
             .iter()
-            .map(|&c| clip_one(wb, sheet, r, c).input)
-            .collect();
+            .map(|&col| duplicate_key(wb, sheet, r, col))
+            .collect::<Result<_, _>>()?;
         if seen.insert(key) {
             let row = (c0..=c1)
                 .map(|col| wb.get(sheet, r, col).map(|slot| slot.copied()))

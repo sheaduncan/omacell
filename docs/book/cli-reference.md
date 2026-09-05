@@ -292,7 +292,7 @@ Options:
           Validate writes without changing files
 
       --wait
-          Wait for async AI cells to settle (no-op extra until WP-22)
+          Wait for async AI cells to settle before returning
 
       --set <KEY=VALUE>
           Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable

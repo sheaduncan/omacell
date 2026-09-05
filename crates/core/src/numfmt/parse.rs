@@ -24,9 +24,6 @@ pub fn parse(input: &str) -> Result<ParsedFormat, CoreError> {
         sections.push(parse_section(part)?);
     }
     resolve_minutes(&mut sections);
-    for section in &mut sections {
-        literalize_condition_text(section);
-    }
     Ok(ParsedFormat { sections })
 }
 
@@ -109,7 +106,7 @@ fn parse_section(src: &str) -> Result<Section, CoreError> {
                 Bracket::Locale { id, curr } => {
                     locale = id.or(locale);
                     if let Some(c) = curr {
-                        tokens.insert(0, Token::Literal(c));
+                        tokens.push(Token::Literal(c));
                     }
                 }
                 Bracket::Elapsed(t) => tokens.push(t),
@@ -346,6 +343,9 @@ fn parse_locale_bracket(inner: &str) -> Option<(Option<LocaleId>, Option<String>
         return None;
     }
     let rest = &t[1..];
+    if rest.eq_ignore_ascii_case("-x-sysdate") || rest.eq_ignore_ascii_case("-x-systime") {
+        return Some((None, None));
+    }
     if let Some(dash) = rest.rfind('-') {
         let curr = &rest[..dash];
         let loc = &rest[dash + 1..];
@@ -373,53 +373,12 @@ fn parse_locale_id(s: &str) -> Option<LocaleId> {
     LocaleId::parse_tag(t)
 }
 
-fn literalize_condition_text(section: &mut Section) {
-    if section.condition.is_none() {
-        return;
-    }
-    let digits = section.tokens.iter().any(|t| matches!(t, Token::Digit(_)));
-    if digits {
-        return;
-    }
-    let date_n = section
-        .tokens
-        .iter()
-        .filter(|t| {
-            matches!(
-                t,
-                Token::Year { .. }
-                    | Token::Month { .. }
-                    | Token::Day { .. }
-                    | Token::Hour { .. }
-                    | Token::Minute { .. }
-                    | Token::Second { .. }
-                    | Token::Weekday { .. }
-            )
-        })
-        .count();
-    if date_n == 0 || date_n > 2 {
-        return;
-    }
-    for tok in &mut section.tokens {
-        *tok = match tok {
-            Token::Year { len, .. } => Token::Literal("Y".repeat(*len as usize)),
-            Token::Month { len } => Token::Literal("M".repeat(*len as usize)),
-            Token::Day { len } => Token::Literal("D".repeat(*len as usize)),
-            Token::Hour { len, .. } => Token::Literal("h".repeat(*len as usize)),
-            Token::Minute { len, .. } => Token::Literal("m".repeat(*len as usize)),
-            Token::Second { len, .. } => Token::Literal("s".repeat(*len as usize)),
-            Token::Weekday { len } => Token::Literal("d".repeat(*len as usize)),
-            _ => continue,
-        };
-    }
-}
-
 fn is_sep_token(tok: &Token) -> bool {
     match tok {
         Token::Literal(s) => s
             .chars()
             .all(|c| matches!(c, ':' | '-' | '/' | ' ' | '.' | 'T')),
-        Token::Skip(_) | Token::Fill(_) => true,
+        Token::Decimal | Token::Grouping | Token::Skip(_) | Token::Fill(_) => true,
         _ => false,
     }
 }
@@ -558,7 +517,7 @@ fn tokenize_letters(run: &str) -> Vec<Token> {
     let lower = run.to_ascii_lowercase();
     if lower
         .chars()
-        .any(|c| !matches!(c, 'y' | 'm' | 'd' | 'h' | 's' | 'e' | 'g' | 'a' | 'p'))
+        .any(|c| !matches!(c, 'y' | 'm' | 'd' | 'h' | 's' | 'e' | 'g' | 'a' | 'p' | 't'))
     {
         return vec![Token::Literal(run.to_string())];
     }
@@ -599,6 +558,7 @@ fn tokenize_letters(run: &str) -> Vec<Token> {
                 len: len.min(2),
                 elapsed: false,
             }),
+            b't' => out.push(Token::Literal(run.chars().skip(i).take(n).collect())),
             b'a' if len >= 3 => out.push(Token::Weekday {
                 len: if len >= 4 { 4 } else { 3 },
             }),
