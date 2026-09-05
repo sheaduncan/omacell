@@ -27,7 +27,7 @@ Open real-world workbooks losslessly at L1 and L2 and preserve everything else b
 
 ## Implementation notes
 
-- Cross-check values against `calamine` (dev-dependency) in tests; `calamine` is never used at runtime.
+- Cross-check values against `calamine` (dev-dependency) in host tests. The private `.xls` worker later uses `calamine` at runtime behind process and resource limits; the host `.xlsx` path does not.
 - Formulas are parsed with WP-03; unparsable formulas are kept as text with a warning, never dropped.
 
 ## Acceptance criteria

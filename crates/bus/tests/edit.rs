@@ -6,6 +6,7 @@ use omacell_core::changeset::CommandCall;
 use omacell_core::command::CommandId;
 use omacell_core::command::Origin;
 use omacell_core::ops::formula_src;
+use omacell_core::value::Value;
 use proptest::prelude::*;
 use serde_json::json;
 
@@ -68,6 +69,33 @@ fn fill_down_copies() {
     );
     let out = bus.execute(Origin::User, "edit.filldown", json!({"range": "A1:A3"}));
     assert!(out.ok, "{:?}", out.error);
+}
+
+#[test]
+fn automatic_fill_detects_each_source_lane_independently() {
+    let mut bus = bus();
+    for (cell, input) in [("A1", "1"), ("A2", "2"), ("B1", "10"), ("B2", "20")] {
+        common::exec_ok(&mut bus, "cell.set", json!({"ref": cell, "input": input}));
+    }
+
+    let out = bus.execute(
+        Origin::User,
+        "edit.fillselection",
+        json!({"src": "A1:B2", "dest": "A1:B4"}),
+    );
+
+    assert!(out.ok, "{:?}", out.error);
+    let sheet = bus.workbook().active_sheet();
+    for (row, left, right) in [(2, 3.0, 30.0), (3, 4.0, 40.0)] {
+        assert_eq!(
+            bus.workbook().get(sheet, row, 0).unwrap().unwrap().value,
+            Value::Number(left)
+        );
+        assert_eq!(
+            bus.workbook().get(sheet, row, 1).unwrap().unwrap().value,
+            Value::Number(right)
+        );
+    }
 }
 
 #[test]

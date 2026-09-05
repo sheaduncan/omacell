@@ -17,7 +17,7 @@ Round out interoperability so Omacell is never the reason a file cannot be opene
 ## Deliverables
 
 - ODS read (content, styles, number formats, merges, names) and basic write; JSON import/export (array-of-objects ↔ table; documented flattening rules; `--jq`-style path option); Parquet/Arrow read via the `arrow`/`parquet` crates with type mapping; HTML and Markdown table import (clipboard and files).
-- `.xls` read in-process with a bounded BIFF parser; no external office suite or subprocess required. The deprecated `[integrations] libreoffice_fallback` key remains accepted and is ignored.
+- `.xls` read through the bundled private, resource-limited Omacell BIFF worker; no external office suite or third-party converter is required. This security follow-up supersedes the original in-process requirement. The deprecated `[integrations] libreoffice_fallback` key remains accepted and is ignored.
 - LibreOffice lock-file convention honored on open/save across all formats (with WP-10).
 
 ## Implementation notes

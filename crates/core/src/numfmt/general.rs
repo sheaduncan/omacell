@@ -1,6 +1,6 @@
 //! Excel `General` algorithm (F-2.3, F-2.6).
 
-use crate::numfmt::number::{excel_precision_15, round_half_away, sig15};
+use crate::numfmt::number::{excel_precision_15, sig15, split_fixed};
 
 /// Display `n` with Excel General (11 characters excluding sign).
 #[must_use]
@@ -47,15 +47,16 @@ fn general_abs(a: f64, budget: usize) -> String {
     } else {
         budget.saturating_sub(2)
     };
-    let rounded = round_half_away(a, frac_places.min(20) as i32).max(0.0);
-    if rounded == 0.0 {
+    let fixed = format_fixed(a, frac_places);
+    if fixed == "0" {
         return "0".to_string();
     }
-    if rounded >= 1e11 {
-        let (m, e) = sig15(rounded);
+    let integer_digits = fixed.split('.').next().map_or(0, str::len);
+    if integer_digits > budget {
+        let (m, e) = sig15(a);
         return general_sci(m, e, budget);
     }
-    format_fixed(rounded, frac_places)
+    fixed
 }
 
 fn integer_p(mant: u64, exp: i32) -> bool {
@@ -96,34 +97,21 @@ impl IfEmptyZero for String {
 }
 
 fn format_fixed(a: f64, frac_places: usize) -> String {
-    let (mant, exp) = sig15(a);
-    let digits = format!("{mant:015}");
-    let mut int_part = String::new();
-    let mut frac_part = String::new();
-    if exp >= 0 {
-        let int_len = exp as usize + 1;
-        if int_len <= digits.len() {
-            int_part.push_str(&digits[..int_len]);
-            frac_part.push_str(&digits[int_len..]);
-        } else {
-            int_part.push_str(&digits);
-            int_part.push_str(&"0".repeat(int_len - digits.len()));
-        }
-    } else {
-        int_part.push('0');
-        let zeros = (-exp - 1) as usize;
-        frac_part.push_str(&"0".repeat(zeros));
-        frac_part.push_str(&digits);
-    }
-    if frac_part.len() > frac_places {
-        frac_part.truncate(frac_places);
-    }
-    let mut s = int_part.trim_start_matches('0').to_string();
+    let (integer, fractional) = split_fixed(a, frac_places);
+    let integer: String = integer
+        .into_iter()
+        .map(|digit| char::from(b'0' + digit))
+        .collect();
+    let mut s = integer.trim_start_matches('0').to_string();
     if s.is_empty() {
         s.push('0');
     }
     if frac_places > 0 {
-        let f = frac_part.trim_end_matches('0');
+        let fractional: String = fractional
+            .into_iter()
+            .map(|digit| char::from(b'0' + digit))
+            .collect();
+        let f = fractional.trim_end_matches('0');
         if !f.is_empty() {
             s.push('.');
             s.push_str(f);

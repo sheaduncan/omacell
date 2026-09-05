@@ -24,7 +24,7 @@ const MAX_FIND_RESULTS: usize = 100_000;
 pub struct FindSpec {
     /// Needle.
     pub query: String,
-    /// Search formula source instead of values.
+    /// Search formula source for formula cells and displayed contents for constants.
     #[serde(default)]
     pub formulas: bool,
     /// Whole-cell match.
@@ -106,18 +106,7 @@ pub fn find_cells(
             if Instant::now() > deadline {
                 return Err(timeout());
             }
-            let text = if spec.formulas {
-                let Some(id) = slot.formula else {
-                    continue;
-                };
-                wb.intern()
-                    .formulas
-                    .get(id)
-                    .map(str::to_string)
-                    .unwrap_or_default()
-            } else {
-                display(wb, slot.value)
-            };
+            let text = slot_text(wb, &slot, spec.formulas);
             if matcher.matches(&text) {
                 push_hit(
                     &mut hits,
@@ -145,7 +134,7 @@ pub fn replace_preview(
     let matcher = compile(spec)?;
     let mut count = 0u32;
     for hit in hits {
-        let Some(text) = hit_text(wb, &hit, spec.formulas) else {
+        let Some(text) = replacement_text(wb, &hit, spec.formulas) else {
             continue;
         };
         if matcher.replace(&text, replacement) != text {
@@ -166,7 +155,7 @@ pub fn replace_apply(
     let matcher = compile(spec)?;
     let mut n = 0u32;
     for hit in hits {
-        let Some(text) = hit_text(wb, &hit, spec.formulas) else {
+        let Some(text) = replacement_text(wb, &hit, spec.formulas) else {
             continue;
         };
         let next = matcher.replace(&text, replacement);
@@ -488,14 +477,24 @@ fn compile(spec: &FindSpec) -> Result<Matcher, CoreError> {
     })
 }
 
-fn hit_text(wb: &Workbook, hit: &FindHit, formulas: bool) -> Option<String> {
+fn replacement_text(wb: &Workbook, hit: &FindHit, formulas: bool) -> Option<String> {
     let slot = wb.get(hit.sheet, hit.row, hit.col).ok().flatten()?;
-    if formulas {
-        let id = slot.formula?;
-        wb.intern().formulas.get(id).map(str::to_string)
-    } else {
-        Some(display(wb, slot.value))
+    if !formulas && slot.formula.is_some() {
+        return None;
     }
+    Some(slot_text(wb, slot, formulas))
+}
+
+fn slot_text(wb: &Workbook, slot: &crate::storage::CellSlot, formulas: bool) -> String {
+    if formulas && let Some(id) = slot.formula {
+        return wb
+            .intern()
+            .formulas
+            .get(id)
+            .map(str::to_string)
+            .unwrap_or_default();
+    }
+    display(wb, slot.value)
 }
 
 fn push_hit(hits: &mut Vec<FindHit>, hit: FindHit) -> Result<(), CoreError> {
