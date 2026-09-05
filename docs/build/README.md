@@ -2,7 +2,7 @@
 
 - `PLAN.md` — the logical plan: decisions, phases, gates, lanes, dependency graph, execution protocol.
 - `AGENTS.md` — repository conventions agents must follow (copy to the repo root; `CLAUDE.md` can contain `@AGENTS.md`).
-- `wp/` — one buildable markdown per work package (35 files).
+- `wp/` — one buildable markdown per work package (39 files).
 - `templates/` — kickoff prompt, report template.
 - `spec/omacell-design-spec.md` — the design specification (v0.3) the packages reference by section.
 

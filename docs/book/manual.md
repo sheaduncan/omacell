@@ -18,9 +18,10 @@ reading is native and does not require LibreOffice, but the format is read-only.
 ## Configuration and data
 
 Package defaults live under `/usr/share/omacell/default`. User configuration is
-read from `~/.config/omacell`; state, logs, and trust grants use the normal XDG
-state/runtime paths. Omacell never modifies workbook files until an explicit
-save and uses atomic replacement for writes.
+read from `$XDG_CONFIG_HOME/omacell` (falling back to `~/.config/omacell`);
+state, logs, trust grants, and runtime sockets use their corresponding XDG
+paths. Omacell never modifies workbook files until an explicit save and uses
+atomic replacement for writes.
 
 `Ctrl+Shift+P` opens the command palette. `omacell keys check` reports conflicts
 between the classic keymap and local Hyprland bindings. Consult the generated

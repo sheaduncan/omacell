@@ -40,8 +40,7 @@ pub mod codes {
 /// Excel cell error value.
 ///
 /// Display strings match Excel exactly. [`ErrorKind::error_type`] returns the
-/// `ERROR.TYPE` code from Microsoft’s documentation, or `None` when Excel
-/// returns `#N/A`.
+/// classic or Excel 365 extended `ERROR.TYPE` code for every known error.
 ///
 /// ```
 /// use omacell_core::error::ErrorKind;
@@ -194,7 +193,7 @@ impl ErrorKind {
         self.meta().display
     }
 
-    /// `ERROR.TYPE` numeric code, or `None` if Excel returns `#N/A`.
+    /// Classic or Excel 365 extended `ERROR.TYPE` numeric code.
     #[must_use]
     pub fn error_type(self) -> Option<u8> {
         self.meta().error_type
