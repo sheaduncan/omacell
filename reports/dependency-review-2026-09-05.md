@@ -63,6 +63,12 @@ Primary upstream references used during review:
   release workflow now requests that behavior explicitly, and every release
   upload explicitly rejects a missing artifact path. A repository-lint
   regression locks those fail-closed handoff settings in place.
+- **#134 — `taiki-e/install-action` 2.87.4:** verified the immutable v2.87.4
+  release and its `e67fa11c4b9316fa714ddf0abed07a0c3143b95b` commit. The
+  release changes only the `uv`, `protoc`, and `coreutils` recipes, while
+  Omacell requests `just`, `cargo-audit`, `cargo-deny`, and `cargo-fuzz`.
+  All three workflow uses remain full-SHA pinned and keep their existing tool
+  lists.
 
 ## Interfaces exposed
 
@@ -80,8 +86,11 @@ None yet.
   clean Arch binary/source package jobs all passed; the PR was merged.
 - #133: `release_artifact_handoff_is_explicitly_fail_closed` failed before the
   workflow hardening (zero of two uploads rejected missing files), then passed
-  after the implementation. The exact local `just check` gate passed; hosted
-  gates are pending.
+  after the implementation. The exact local `just check` gate and hosted
+  `check`, CodeQL, all analysis, and both clean Arch package jobs passed; the
+  PR was merged.
+- #134: signed-tag/SHA verification, `git diff --check`, and the exact local
+  `just check` gate passed. Hosted gates are pending.
 
 ## Open questions
 
@@ -95,7 +104,7 @@ None. No frozen contract change is authorized by these dependency updates.
 ## Checklist
 
 - [x] PR #132 reviewed and merged
-- [ ] PR #133 reviewed and merged
+- [x] PR #133 reviewed and merged
 - [ ] PR #134 reviewed and merged
 - [ ] PR #135 reviewed and merged
 - [ ] PR #136 reviewed and merged
