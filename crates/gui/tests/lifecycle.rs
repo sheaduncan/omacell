@@ -693,16 +693,7 @@ fn find_panel_accepts_text_and_enter_selects_the_next_match() {
             || (selection.cursor.row, selection.cursor.col) == (1, 1),
         "the search task must be pending or already applied"
     );
-    let started = Instant::now();
-    while harness.state().runner().is_busy()
-        || harness
-            .state()
-            .message()
-            .is_some_and(|text| text == "queued…")
-    {
-        harness.step();
-        assert!(started.elapsed() < Duration::from_secs(5));
-    }
+    wait_tasks(&mut harness);
 
     assert_eq!(
         (
@@ -720,16 +711,7 @@ fn find_panel_accepts_text_and_enter_selects_the_next_match() {
         .execute_cmd("edit.searchnext", serde_json::json!({}))
         .unwrap();
     assert!(outcome.ok, "{:?}", outcome.error);
-    let started = Instant::now();
-    while harness.state().runner().is_busy()
-        || harness
-            .state()
-            .message()
-            .is_some_and(|text| text == "queued…")
-    {
-        harness.step();
-        assert!(started.elapsed() < Duration::from_secs(5));
-    }
+    wait_tasks(&mut harness);
     assert_eq!(harness.state().ui_session().selection().sheet, other);
     assert_eq!(harness.state().ui_session().selection().cursor.col, 2);
 }
