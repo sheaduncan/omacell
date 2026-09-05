@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use omacell_core::addr::{CellRef, RangeRef};
 use omacell_core::audit::{audit_workbook, eval_steps, explain_error, precedents_of};
+use omacell_core::chart::{Axis, Chart, ChartAnchor, ChartId, ChartKind, LegendPos};
 use omacell_core::condfmt::{CfDxf, CfKind, CondFormat};
 use omacell_core::eval::FnRegistry;
 use omacell_core::find::{
@@ -383,6 +384,42 @@ fn audit_counts_validation_and_conditional_format_name_references() {
 
     assert_eq!(unused.len(), 1);
     assert!(unused[0].contains("Orphan"));
+}
+
+#[test]
+fn audit_does_not_offer_name_removal_when_chart_references_are_opaque() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.define_name(DefinedName {
+        name: "ChartData".into(),
+        scope: NameScope::Workbook,
+        referent: NameReferent::Range(range(0, 0, 1, 0)),
+        comment: None,
+    })
+    .unwrap();
+    wb.add_chart(Chart {
+        id: ChartId::new(0),
+        kind: ChartKind::Unsupported,
+        title: None,
+        categories: None,
+        series: Vec::new(),
+        category_axis: Axis::default(),
+        value_axis: Axis::default(),
+        secondary_axis: None,
+        legend: LegendPos::default(),
+        data_labels: false,
+        anchor: ChartAnchor::default(),
+        sheet: s,
+    })
+    .unwrap();
+    let report = audit_workbook(&wb, &RecalcEngine::new(FnRegistry::new()));
+
+    assert!(
+        report
+            .findings
+            .iter()
+            .all(|finding| finding.id != "audit.unused_name")
+    );
 }
 
 #[test]

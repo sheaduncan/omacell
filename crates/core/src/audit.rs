@@ -17,6 +17,7 @@ use crate::value::Value;
 use crate::workbook::Workbook;
 
 const MAX_AUDIT_FINDINGS: usize = 100_000;
+const MAX_AUDIT_REFERENCES: usize = 100_000;
 const MAX_DIAGNOSTIC_ERRORS: usize = 1_000;
 const MAX_DIAGNOSTIC_UNDO: usize = 100;
 
@@ -490,7 +491,9 @@ fn range_short(wb: &Workbook, out: &mut Vec<Finding>) {
 fn unused_names(wb: &Workbook, out: &mut Vec<Finding>) {
     let mut used = FxHashSet::default();
     let mut visiting = FxHashSet::default();
+    let mut chart_references_are_opaque = false;
     for sheet in wb.sheets() {
+        chart_references_are_opaque |= !sheet.charts.is_empty() || !sheet.sparklines.is_empty();
         for (_, _, slot) in sheet.store.iter() {
             let Some(fid) = slot.formula else {
                 continue;
@@ -503,6 +506,36 @@ fn unused_names(wb: &Workbook, out: &mut Vec<Finding>) {
             };
             mark_used_names(wb, sheet.id, &parsed.ast, &mut used, &mut visiting);
         }
+        for validation in &sheet.validations {
+            for source in [
+                validation.formula1.as_deref(),
+                validation.formula2.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                mark_used_name_source(wb, sheet.id, source, &mut used, &mut visiting);
+            }
+        }
+        for rule in &sheet.cond_formats {
+            match &rule.kind {
+                crate::condfmt::CfKind::CellIs {
+                    formula1, formula2, ..
+                } => {
+                    mark_used_name_source(wb, sheet.id, formula1, &mut used, &mut visiting);
+                    if let Some(formula2) = formula2 {
+                        mark_used_name_source(wb, sheet.id, formula2, &mut used, &mut visiting);
+                    }
+                }
+                crate::condfmt::CfKind::Formula(source) => {
+                    mark_used_name_source(wb, sheet.id, source, &mut used, &mut visiting);
+                }
+                _ => {}
+            }
+        }
+    }
+    if chart_references_are_opaque {
+        return;
     }
     let first = wb
         .sheets()
@@ -539,6 +572,18 @@ fn unused_names(wb: &Workbook, out: &mut Vec<Finding>) {
                 }),
             ),
         );
+    }
+}
+
+fn mark_used_name_source(
+    wb: &Workbook,
+    context_sheet: SheetId,
+    source: &str,
+    used: &mut FxHashSet<(crate::names::NameScope, String)>,
+    visiting: &mut FxHashSet<(crate::names::NameScope, String, SheetId)>,
+) {
+    if let Ok(parsed) = parse(source) {
+        mark_used_names(wb, context_sheet, &parsed.ast, used, visiting);
     }
 }
 
@@ -756,7 +801,7 @@ fn walk_prec(wb: &Workbook, graph: &DepGraph, cell: CellCoord, transitive: bool)
     seen.insert(cell);
     while let Some(cur) = stack.pop() {
         for prec in graph.precedents(cur) {
-            let cells = expand_prec(prec);
+            let cells = expand_prec(prec, MAX_AUDIT_REFERENCES.saturating_sub(out.len()));
             for p in cells {
                 if !seen.insert(p) {
                     continue;
@@ -765,7 +810,16 @@ fn walk_prec(wb: &Workbook, graph: &DepGraph, cell: CellCoord, transitive: bool)
                 if transitive {
                     stack.push(p);
                 }
+                if out.len() >= MAX_AUDIT_REFERENCES {
+                    break;
+                }
             }
+            if out.len() >= MAX_AUDIT_REFERENCES {
+                break;
+            }
+        }
+        if out.len() >= MAX_AUDIT_REFERENCES {
+            break;
         }
     }
     out.sort();
@@ -773,17 +827,21 @@ fn walk_prec(wb: &Workbook, graph: &DepGraph, cell: CellCoord, transitive: bool)
     out
 }
 
-fn expand_prec(p: &Precedent) -> Vec<CellCoord> {
+fn expand_prec(p: &Precedent, limit: usize) -> Vec<CellCoord> {
+    if limit == 0 {
+        return Vec::new();
+    }
     match p {
         Precedent::Cell(c) => vec![*c],
         Precedent::Range { sheet, range, .. } => {
             let (r0, c0, r1, c1) = norm(*range);
             let mut v = Vec::new();
-            let r1 = r1.min(r0.saturating_add(255));
-            let c1 = c1.min(c0.saturating_add(31));
-            for r in r0..=r1 {
+            'rows: for r in r0..=r1 {
                 for c in c0..=c1 {
                     v.push(CellCoord::new(*sheet, r, c));
+                    if v.len() >= limit {
+                        break 'rows;
+                    }
                 }
             }
             v
@@ -791,12 +849,18 @@ fn expand_prec(p: &Precedent) -> Vec<CellCoord> {
         Precedent::ThreeD { sheets, range } => {
             let mut v = Vec::new();
             for sheet in sheets {
-                v.extend(expand_prec(&Precedent::Range {
-                    sheet: *sheet,
-                    range: *range,
-                    whole_col: false,
-                    whole_row: false,
-                }));
+                v.extend(expand_prec(
+                    &Precedent::Range {
+                        sheet: *sheet,
+                        range: *range,
+                        whole_col: false,
+                        whole_row: false,
+                    },
+                    limit.saturating_sub(v.len()),
+                ));
+                if v.len() >= limit {
+                    break;
+                }
             }
             v
         }
