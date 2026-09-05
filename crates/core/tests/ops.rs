@@ -10,9 +10,9 @@ use omacell_core::ops::{
     merge_across, move_range_cells, move_range_cells_between, paste_special, remove_duplicates,
     text_to_columns, text_to_columns_with_plan, unmerge,
 };
+use omacell_core::recalc::RecalcEngine;
 use omacell_core::sheet::Note;
 use omacell_core::style::Font;
-use omacell_core::recalc::RecalcEngine;
 use omacell_core::value::Value;
 use omacell_core::workbook::{DateSystem, Workbook};
 
@@ -381,10 +381,7 @@ fn series_fill_extends_each_vertical_lane_independently() {
     .unwrap();
 
     assert_eq!((number(&wb, 2, 0), number(&wb, 3, 0)), (5.0, 7.0));
-    assert_eq!(
-        (number(&wb, 2, 1), number(&wb, 3, 1)),
-        (50.0, 70.0)
-    );
+    assert_eq!((number(&wb, 2, 1), number(&wb, 3, 1)), (50.0, 70.0));
 }
 
 #[test]
@@ -406,10 +403,7 @@ fn reverse_series_fill_extends_each_horizontal_lane_independently() {
     .unwrap();
 
     assert_eq!((number(&wb, 0, 0), number(&wb, 0, 1)), (-1.0, 1.0));
-    assert_eq!(
-        (number(&wb, 1, 0), number(&wb, 1, 1)),
-        (-10.0, 10.0)
-    );
+    assert_eq!((number(&wb, 1, 0), number(&wb, 1, 1)), (-10.0, 10.0));
 }
 
 #[test]
@@ -713,6 +707,19 @@ fn remove_duplicates_compares_formula_results_not_formula_text() {
     assert_eq!(formula_src(&wb, s, 0, 0), "=1");
     assert_eq!(formula_src(&wb, s, 1, 0), "=2");
     assert!(wb.get(s, 2, 0).unwrap().is_none());
+}
+
+#[test]
+fn remove_duplicates_keeps_distinct_value_types() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_number(s, 0, 0, 1.0).unwrap();
+    wb.set_text(s, 1, 0, "1").unwrap();
+    wb.set_cell_contents(s, 2, 0, "TRUE").unwrap();
+
+    let removed = remove_duplicates(&mut wb, s, range(0, 0, 2, 0), &[]).unwrap();
+
+    assert_eq!(removed, 0);
 }
 
 #[test]
