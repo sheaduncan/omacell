@@ -165,8 +165,8 @@ None yet.
   the two fixed-host-only gates remained ignored as designed. The new
   Ctrl-wheel regression passed, all nine snapshot baselines passed the updated
   comparator, and root/fuzz `cargo deny check` passed with only the
-  repository's allowed duplicate/license warnings. Exact local and hosted
-  gates pending.
+  repository's allowed duplicate/license warnings. The exact local
+  `just check` gate passed; hosted gates are pending.
 
 ## Open questions
 
