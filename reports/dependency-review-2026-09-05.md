@@ -69,6 +69,13 @@ Primary upstream references used during review:
   Omacell requests `just`, `cargo-audit`, `cargo-deny`, and `cargo-fuzz`.
   All three workflow uses remain full-SHA pinned and keep their existing tool
   lists.
+- **#135 — `indexmap` 2.14.2:** Dependabot's stale title says 2.14.1, but the
+  reviewed lockfile correctly resolves the newer signed 2.14.2 patch under the
+  workspace's `version = "2"` requirement. Upstream 2.14.1 contains internal
+  comparison/assertion cleanup; 2.14.2 fixes caller-name hygiene in map/set
+  macros and permits const empty macro initialization. Omacell uses ordinary
+  `IndexMap` values, not the changed macros, and the update adds no package or
+  second indexmap version.
 
 ## Interfaces exposed
 
@@ -88,6 +95,12 @@ None yet.
   after the implementation. Exact local and hosted gates pending.
 - #134: signed-tag/SHA verification and `git diff --check` passed. Exact local
   and hosted gates pending.
+- #135: `cargo deny check` passed (only the already-allowed duplicate/license
+  warnings); all tests and doctests for the direct consumer crates
+  `omacell-core`, `omacell-bus`, `omacell-io`, and `omacell-ui` passed. The
+  first sandboxed run could not bind Unix sockets; the identical permitted run
+  passed, including all 24 IPC server tests. Exact local and hosted gates
+  pending.
 
 ## Open questions
 
