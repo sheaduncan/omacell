@@ -823,8 +823,7 @@ fn wp28_fixed_host_produces_fresh_complete_results() {
 fn wp28_g1_tracks_the_worst_case_recalc_regression_budget() {
     let root = workspace_root();
     let baselines: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(root.join("benchmarks/g1-baselines.json"))
-            .expect("read G1 baselines"),
+        &fs::read_to_string(root.join("benchmarks/g1-baselines.json")).expect("read G1 baselines"),
     )
     .expect("parse G1 baselines");
     let star = baselines["criterion"]

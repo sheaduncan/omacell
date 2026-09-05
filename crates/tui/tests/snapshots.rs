@@ -37,6 +37,10 @@ fn first_frame_completes() {
     let _ = draw_text(&h.tui, 80, 24);
     let ms = start.elapsed().as_secs_f64() * 1000.0;
     eprintln!("tui_first_frame_ms={ms:.2}");
+    eprintln!(
+        "OMACELL_PERF_RESULT {}",
+        serde_json::json!({"id": "tui_cold_start_ms", "value": ms})
+    );
     assert!(
         ms < 5_000.0,
         "first TestBackend frame took {ms:.2} ms (CI-safe bound; §12.1 is 100 ms in release)"

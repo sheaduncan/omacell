@@ -224,6 +224,10 @@ fn first_frame_renders_within_software_ci_smoke_budget() {
     let _ = harness.render().expect("render first frame");
     let ms = start.elapsed().as_secs_f64() * 1000.0;
     eprintln!("gui_first_frame_ms={ms:.2}");
+    eprintln!(
+        "OMACELL_PERF_RESULT {}",
+        serde_json::json!({"id": "gui_cold_start_ms", "value": ms})
+    );
     assert!(
         ms < 5_000.0,
         "first software kittest frame took {ms:.2} ms (5 s CI smoke budget)"

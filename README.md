@@ -94,7 +94,11 @@ External tools propose. You apply. Undo is one unit.
 
 ## Status
 
-Pre-alpha, built in the open. The engine, GUI, TUI, CLI, I/O, Lua, MCP, and AI layers are in-tree and tested; packaging and the 1.0 polish pass are still ahead. Dogfood it, break it, file the corpus row.
+Pre-alpha, built in the open. The engine, GUI, TUI, CLI, I/O, Lua, MCP, AI,
+Arch packaging, and release automation are in-tree and tested. Privileged
+Omarchy-channel, fixed-hardware, accessibility, and public-name gates still
+stand between the current tree and a public 1.0 tag. Dogfood it, break it, file
+the corpus row.
 
 See [`docs/spec/omacell-design-spec.md`](docs/spec/omacell-design-spec.md) for the product, [`docs/build/PLAN.md`](docs/build/PLAN.md) for the build, and [`reports/`](reports/) for what each package actually shipped.
 
@@ -108,6 +112,14 @@ cargo run -p omacell-cli -- --version
 cargo run -p omacell-cli -- book.xlsx
 cargo run -p omacell-cli -- --tui book.xlsx
 ```
+
+Packages that touch a §12.1 budget record Criterion output with `just
+perf-baseline`; `just perf-check` validates the complete committed budget
+table. The scheduled fixed-host workflow performs the actual 17 product
+measurements, creates a commit/run-attributed `perf-results.json`, and rejects
+missing, duplicated, stale, or over-budget results. Its live AI rows require
+the configured local/cloud endpoint and model variables plus the cloud token
+secret; credentials remain environment-only.
 
 On Omarchy, Wayland is already there. The TUI needs a real TTY. AI stays quiet until you configure a provider.
 

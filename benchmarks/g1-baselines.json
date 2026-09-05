@@ -41,6 +41,7 @@
     {
       "id": "recalc/incremental_100k_one_edit_star_fanout",
       "estimate_ns": 228000000,
+      "maximum_ns": 250000000,
       "command": "cargo bench -p omacell-core --bench recalc -- --save-baseline default",
       "source": "reports/WP-04.md"
     },

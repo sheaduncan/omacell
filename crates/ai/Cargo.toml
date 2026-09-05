@@ -40,3 +40,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-uti
 [[bench]]
 name = "card"
 harness = false
+
+[[bench]]
+name = "live_model"
+harness = false
