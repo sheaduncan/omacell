@@ -170,6 +170,7 @@ pub fn build_card(
         remove_detected_column_stats(&mut card);
     }
     apply_marks(&mut card, &policy.marks);
+    strip_policy_metadata(&mut card);
     filter_level(&mut card, policy.send, request.level);
     card::enforce_budget(&mut card, request.token_budget)?;
     Ok((card, suggestions))
@@ -419,12 +420,21 @@ fn redact_marked_columns(value: &mut Value, marks: &[ParsedRef]) {
         let Some(obj) = item.as_object_mut() else {
             continue;
         };
-        let sheet = obj.get("sheet").and_then(Value::as_str);
+        let sheet = obj.get("sheet").and_then(Value::as_str).map(str::to_string);
         let letters = obj.get("column").and_then(Value::as_str).unwrap_or("A");
         let Ok(col) = col_from_letters(letters) else {
             continue;
         };
-        if !marks.iter().any(|m| mark_covers_column(m, sheet, col)) {
+        if let Some(name_ref) = obj.get("_name_ref").and_then(Value::as_str)
+            && let Some((name_sheet, row, name_col)) = parse_cell_ref(name_ref)
+            && mark_covers_any(marks, name_sheet.as_deref(), row, name_col)
+        {
+            obj.insert("name".into(), Value::String("[REDACTED:mark]".into()));
+        }
+        if !marks
+            .iter()
+            .any(|m| mark_covers_column(m, sheet.as_deref(), col))
+        {
             continue;
         }
         if let Some(Value::Array(samples)) = obj.get_mut("samples") {
@@ -434,6 +444,23 @@ fn redact_marked_columns(value: &mut Value, marks: &[ParsedRef]) {
         }
         obj.remove("min");
         obj.remove("max");
+    }
+}
+
+fn strip_policy_metadata(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("_name_ref");
+            for child in map.values_mut() {
+                strip_policy_metadata(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_policy_metadata(item);
+            }
+        }
+        _ => {}
     }
 }
 

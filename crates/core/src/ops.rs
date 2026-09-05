@@ -3,7 +3,9 @@
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::addr::{CellRef, RangeRef, SheetId, SheetSpec, col_to_letters, quote_sheet_name};
+use crate::addr::{
+    CellRef, RangeRef, RefKind, SheetId, SheetSpec, col_to_letters, parse_a1, quote_sheet_name,
+};
 use crate::dates::{CivilDate, DateSystem, date_to_serial, serial_to_date};
 use crate::error::{CoreError, ErrorKind};
 use crate::formula::{
@@ -12,6 +14,7 @@ use crate::formula::{
 };
 use crate::intern::RichTextRun;
 use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::names::{DefinedName, NameReferent, NameScope};
 use crate::sheet::{Comment, Hyperlink, Note};
 use crate::storage::{CellFlags, CellSlot};
 use crate::style::Style;
@@ -130,6 +133,7 @@ pub fn insert_rows(
         MAX_COLS.saturating_sub(1),
     )?;
     wb.insert_rows(sheet, at, count)?;
+    rewrite_table_rows(wb, sheet, at, count, false)?;
     shift_side_tables(wb, sheet, at, count as i32, true)?;
     rewrite_formulas(
         wb,
@@ -139,7 +143,9 @@ pub fn insert_rows(
             count,
             delete: false,
         },
-    )
+    )?;
+    rewrite_ai_redact_marks_rows(wb, sheet, at, count, false);
+    Ok(())
 }
 
 /// Delete `count` rows starting at 0-based `at`.
@@ -160,6 +166,7 @@ pub fn delete_rows(
         MAX_COLS.saturating_sub(1),
     )?;
     wb.delete_rows(sheet, at, count)?;
+    rewrite_table_rows(wb, sheet, at, count, true)?;
     shift_side_tables(wb, sheet, at, -(count as i32), true)?;
     rewrite_formulas(
         wb,
@@ -169,7 +176,9 @@ pub fn delete_rows(
             count,
             delete: true,
         },
-    )
+    )?;
+    rewrite_ai_redact_marks_rows(wb, sheet, at, count, true);
+    Ok(())
 }
 
 /// Insert columns.
@@ -190,6 +199,7 @@ pub fn insert_cols(
         MAX_COLS.saturating_sub(1),
     )?;
     wb.insert_cols(sheet, at, count)?;
+    rewrite_table_cols(wb, sheet, at, count, false)?;
     shift_side_tables_cols(wb, sheet, at, count as i32)?;
     rewrite_formulas(
         wb,
@@ -199,7 +209,9 @@ pub fn insert_cols(
             count,
             delete: false,
         },
-    )
+    )?;
+    rewrite_ai_redact_marks_cols(wb, sheet, at, count, false);
+    Ok(())
 }
 
 /// Delete columns.
@@ -220,6 +232,7 @@ pub fn delete_cols(
         MAX_COLS.saturating_sub(1),
     )?;
     wb.delete_cols(sheet, at, count)?;
+    rewrite_table_cols(wb, sheet, at, count, true)?;
     shift_side_tables_cols(wb, sheet, at, -(count as i32))?;
     rewrite_formulas(
         wb,
@@ -229,7 +242,9 @@ pub fn delete_cols(
             count,
             delete: true,
         },
-    )
+    )?;
+    rewrite_ai_redact_marks_cols(wb, sheet, at, count, true);
+    Ok(())
 }
 
 /// Insert cells in `range`, shifting the rest of the band down or right.
@@ -263,7 +278,9 @@ pub fn insert_cells(
                     c1,
                     delete: false,
                 },
-            )
+            )?;
+            rewrite_ai_redact_marks_band_rows(wb, sheet, r0, n, c0, c1, false);
+            Ok(())
         }
         Shift::Right => {
             let n = c1.saturating_sub(c0).saturating_add(1);
@@ -287,7 +304,9 @@ pub fn insert_cells(
                     r1,
                     delete: false,
                 },
-            )
+            )?;
+            rewrite_ai_redact_marks_band_cols(wb, sheet, c0, n, r0, r1, false);
+            Ok(())
         }
     }
 }
@@ -323,7 +342,9 @@ pub fn delete_cells(
                     c1,
                     delete: true,
                 },
-            )
+            )?;
+            rewrite_ai_redact_marks_band_rows(wb, sheet, r0, n, c0, c1, true);
+            Ok(())
         }
         Shift::Right => {
             let n = c1.saturating_sub(c0).saturating_add(1);
@@ -347,7 +368,9 @@ pub fn delete_cells(
                     r1,
                     delete: true,
                 },
-            )
+            )?;
+            rewrite_ai_redact_marks_band_cols(wb, sheet, c0, n, r0, r1, true);
+            Ok(())
         }
     }
 }
@@ -601,6 +624,7 @@ fn rewrite_formulas(
         .sheet(target)
         .map(|s| s.name.clone())
         .ok_or_else(|| CoreError::sheet_id("unknown sheet"))?;
+    rewrite_defined_names(wb, target, &target_name, &kind)?;
     let sheet_ids: Vec<SheetId> = wb.sheets().map(|s| s.id).collect();
     let mut updates = Vec::new();
     for id in sheet_ids {
@@ -619,46 +643,7 @@ fn rewrite_formulas(
             let Ok(parsed) = parse(&src) else {
                 continue;
             };
-            let new_ast = match &kind {
-                RewriteKind::Rows { at, count, delete } => {
-                    map_sheet_rows(&parsed.ast, &home_name, &target_name, *at, *count, *delete)
-                }
-                RewriteKind::Cols { at, count, delete } => {
-                    map_sheet_cols(&parsed.ast, &home_name, &target_name, *at, *count, *delete)
-                }
-                RewriteKind::BandRows {
-                    at,
-                    count,
-                    c0,
-                    c1,
-                    delete,
-                } => map_sheet_band_rows(
-                    &parsed.ast,
-                    &home_name,
-                    &target_name,
-                    *at,
-                    *count,
-                    *c0,
-                    *c1,
-                    *delete,
-                ),
-                RewriteKind::BandCols {
-                    at,
-                    count,
-                    r0,
-                    r1,
-                    delete,
-                } => map_sheet_band_cols(
-                    &parsed.ast,
-                    &home_name,
-                    &target_name,
-                    *at,
-                    *count,
-                    *r0,
-                    *r1,
-                    *delete,
-                ),
-            };
+            let new_ast = apply_rewrite_kind(&parsed.ast, &home_name, &target_name, &kind);
             let printed = print(&Formula {
                 ast: new_ast,
                 style: parsed.style,
@@ -680,6 +665,233 @@ fn rewrite_formulas(
             wb.set_array_formula_text(id, range, &src)?;
         } else {
             wb.set_cell_contents(id, row, col, &src)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_rewrite_kind(expr: &Expr, home: &str, target: &str, kind: &RewriteKind) -> Expr {
+    match kind {
+        RewriteKind::Rows { at, count, delete } => {
+            map_sheet_rows(expr, home, target, *at, *count, *delete)
+        }
+        RewriteKind::Cols { at, count, delete } => {
+            map_sheet_cols(expr, home, target, *at, *count, *delete)
+        }
+        RewriteKind::BandRows {
+            at,
+            count,
+            c0,
+            c1,
+            delete,
+        } => map_sheet_band_rows(expr, home, target, *at, *count, *c0, *c1, *delete),
+        RewriteKind::BandCols {
+            at,
+            count,
+            r0,
+            r1,
+            delete,
+        } => map_sheet_band_cols(expr, home, target, *at, *count, *r0, *r1, *delete),
+    }
+}
+
+fn rewrite_defined_names(
+    wb: &mut Workbook,
+    target: SheetId,
+    target_name: &str,
+    kind: &RewriteKind,
+) -> Result<(), CoreError> {
+    let names: Vec<DefinedName> = wb.names().iter().cloned().collect();
+    let mut updates = Vec::new();
+    for mut name in names {
+        let before = name.clone();
+        let home_name = match name.scope {
+            NameScope::Sheet(sheet) => wb
+                .sheet(sheet)
+                .map(|sheet| sheet.name.clone())
+                .unwrap_or_default(),
+            NameScope::Workbook => String::new(),
+        };
+        name.referent = match &name.referent {
+            NameReferent::Formula(source) => {
+                let Ok(parsed) = parse(source) else {
+                    continue;
+                };
+                let ast = apply_rewrite_kind(&parsed.ast, &home_name, target_name, kind);
+                NameReferent::Formula(print(&Formula {
+                    ast,
+                    style: parsed.style,
+                    base_row: parsed.base_row,
+                    base_col: parsed.base_col,
+                }))
+            }
+            NameReferent::Range(range) if name_range_targets(*range, name.scope, target) => {
+                let transformed = match kind {
+                    RewriteKind::Rows { at, count, delete } => adjusted_ref(adjust_rows(
+                        &ref_expr(RefKind::Range(*range)),
+                        *at,
+                        *count,
+                        *delete,
+                    )),
+                    RewriteKind::Cols { at, count, delete } => adjusted_ref(adjust_cols(
+                        &ref_expr(RefKind::Range(*range)),
+                        *at,
+                        *count,
+                        *delete,
+                    )),
+                    RewriteKind::BandRows {
+                        at,
+                        count,
+                        c0,
+                        c1,
+                        delete,
+                    } if range.start.col.min(range.end.col) >= *c0
+                        && range.start.col.max(range.end.col) <= *c1 =>
+                    {
+                        adjusted_ref(adjust_rows(
+                            &ref_expr(RefKind::Range(*range)),
+                            *at,
+                            *count,
+                            *delete,
+                        ))
+                    }
+                    RewriteKind::BandCols {
+                        at,
+                        count,
+                        r0,
+                        r1,
+                        delete,
+                    } if range.start.row.min(range.end.row) >= *r0
+                        && range.start.row.max(range.end.row) <= *r1 =>
+                    {
+                        adjusted_ref(adjust_cols(
+                            &ref_expr(RefKind::Range(*range)),
+                            *at,
+                            *count,
+                            *delete,
+                        ))
+                    }
+                    _ => Some(RefKind::Range(*range)),
+                };
+                match transformed {
+                    Some(RefKind::Range(range)) => NameReferent::Range(range),
+                    Some(RefKind::Cell(cell)) => {
+                        NameReferent::Range(RangeRef::from_corners(cell, cell))
+                    }
+                    None => NameReferent::Formula("=#REF!".into()),
+                }
+            }
+            other => other.clone(),
+        };
+        if name != before {
+            updates.push((before, name));
+        }
+    }
+    for (before, after) in updates {
+        wb.remove_name(before.scope, &before.name)?;
+        wb.define_name(after)?;
+    }
+    Ok(())
+}
+
+fn name_range_targets(range: RangeRef, scope: NameScope, target: SheetId) -> bool {
+    range.start.sheet == Some(target)
+        || (range.start.sheet.is_none()
+            && matches!(scope, NameScope::Sheet(sheet) if sheet == target))
+}
+
+fn rewrite_table_rows(
+    wb: &mut Workbook,
+    target: SheetId,
+    at: u32,
+    count: u32,
+    delete: bool,
+) -> Result<(), CoreError> {
+    let tables: Vec<_> = wb
+        .tables()
+        .iter()
+        .filter(|table| table.sheet == target)
+        .cloned()
+        .collect();
+    for before in tables {
+        let range = RangeRef::from_corners(
+            CellRef::new(before.start_row, before.start_col)?.on_sheet(target),
+            CellRef::new(before.end_row, before.end_col)?.on_sheet(target),
+        );
+        match adjusted_ref(adjust_rows(
+            &ref_expr(RefKind::Range(range)),
+            at,
+            count,
+            delete,
+        )) {
+            Some(RefKind::Range(range)) => {
+                let mut after = before;
+                after.start_row = range.start.row;
+                after.end_row = range.end.row;
+                wb.restore_table(after)?;
+            }
+            _ => {
+                wb.convert_table(before.id)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_table_cols(
+    wb: &mut Workbook,
+    target: SheetId,
+    at: u16,
+    count: u16,
+    delete: bool,
+) -> Result<(), CoreError> {
+    let tables: Vec<_> = wb
+        .tables()
+        .iter()
+        .filter(|table| table.sheet == target)
+        .cloned()
+        .collect();
+    for before in tables {
+        let range = RangeRef::from_corners(
+            CellRef::new(before.start_row, before.start_col)?.on_sheet(target),
+            CellRef::new(before.end_row, before.end_col)?.on_sheet(target),
+        );
+        match adjusted_ref(adjust_cols(
+            &ref_expr(RefKind::Range(range)),
+            at,
+            count,
+            delete,
+        )) {
+            Some(RefKind::Range(range)) => {
+                let mut after = before.clone();
+                after.start_col = range.start.col;
+                after.end_col = range.end.col;
+                if !delete && at > before.start_col && at <= before.end_col {
+                    let offset = usize::from(at - before.start_col);
+                    for index in 0..count {
+                        after.columns.insert(
+                            offset + usize::from(index),
+                            crate::tables::TableColumn {
+                                name: format!("Column{}", offset + usize::from(index) + 1),
+                                totals_fn: None,
+                            },
+                        );
+                    }
+                } else if delete {
+                    let deleted_end = at.saturating_add(count.saturating_sub(1));
+                    let first = at.max(before.start_col);
+                    let last = deleted_end.min(before.end_col);
+                    if first <= last {
+                        let offset = usize::from(first - before.start_col);
+                        let removed = usize::from(last - first) + 1;
+                        after.columns.drain(offset..offset + removed);
+                    }
+                }
+                wb.restore_table(after)?;
+            }
+            _ => {
+                wb.convert_table(before.id)?;
+            }
         }
     }
     Ok(())
@@ -922,6 +1134,359 @@ fn restore_sheet_qualifier(kind: ExprKind, sheet: Option<SheetSpec>) -> ExprKind
         ExprKind::Cell { cell, .. } => ExprKind::Cell { sheet, cell },
         ExprKind::Range { range, .. } => ExprKind::Range { sheet, range },
         other => other,
+    }
+}
+
+const AI_PRIVACY_PART: &str = "xl/omacell/ai.json";
+
+fn rewrite_ai_redact_marks_rows(
+    wb: &mut Workbook,
+    target: SheetId,
+    at: u32,
+    count: u32,
+    delete: bool,
+) {
+    rewrite_ai_redact_marks(wb, target, |kind| {
+        adjusted_ref(adjust_rows(&ref_expr(kind), at, count, delete))
+    });
+}
+
+fn rewrite_ai_redact_marks_cols(
+    wb: &mut Workbook,
+    target: SheetId,
+    at: u16,
+    count: u16,
+    delete: bool,
+) {
+    rewrite_ai_redact_marks(wb, target, |kind| {
+        adjusted_ref(adjust_cols(&ref_expr(kind), at, count, delete))
+    });
+}
+
+fn rewrite_ai_redact_marks_band_rows(
+    wb: &mut Workbook,
+    target: SheetId,
+    at: u32,
+    count: u32,
+    c0: u16,
+    c1: u16,
+    delete: bool,
+) {
+    rewrite_ai_redact_marks(wb, target, |kind| match kind {
+        RefKind::Cell(cell) if cell.col >= c0 && cell.col <= c1 => {
+            adjusted_ref(adjust_rows(&ref_expr(kind), at, count, delete))
+        }
+        RefKind::Range(range) => {
+            let (_, mc0, _, mc1) = norm(range);
+            if mc1 < c0 || mc0 > c1 {
+                Some(kind)
+            } else if mc0 >= c0 && mc1 <= c1 {
+                adjusted_ref(adjust_rows(&ref_expr(kind), at, count, delete))
+            } else {
+                None
+            }
+        }
+        _ => Some(kind),
+    });
+}
+
+fn rewrite_ai_redact_marks_band_cols(
+    wb: &mut Workbook,
+    target: SheetId,
+    at: u16,
+    count: u16,
+    r0: u32,
+    r1: u32,
+    delete: bool,
+) {
+    rewrite_ai_redact_marks(wb, target, |kind| match kind {
+        RefKind::Cell(cell) if cell.row >= r0 && cell.row <= r1 => {
+            adjusted_ref(adjust_cols(&ref_expr(kind), at, count, delete))
+        }
+        RefKind::Range(range) => {
+            let (mr0, _, mr1, _) = norm(range);
+            if mr1 < r0 || mr0 > r1 {
+                Some(kind)
+            } else if mr0 >= r0 && mr1 <= r1 {
+                adjusted_ref(adjust_cols(&ref_expr(kind), at, count, delete))
+            } else {
+                None
+            }
+        }
+        _ => Some(kind),
+    });
+}
+
+fn rewrite_ai_redact_marks(
+    wb: &mut Workbook,
+    target: SheetId,
+    mut transform: impl FnMut(RefKind) -> Option<RefKind>,
+) {
+    let Some(target_name) = wb.sheet(target).map(|sheet| sheet.name.clone()) else {
+        return;
+    };
+    append_ai_redact_mark_transforms(wb, |parsed| {
+        let Some(spec) = parsed.sheet.as_ref() else {
+            return Err(());
+        };
+        if spec.end.is_some() {
+            return Err(());
+        }
+        if !spec.start.eq_ignore_ascii_case(&target_name) {
+            return Ok(None);
+        }
+        let Some(kind) = transform(parsed.kind) else {
+            return Err(());
+        };
+        let mut rewritten = parsed.clone();
+        rewritten.kind = kind;
+        Ok(Some(rewritten))
+    });
+}
+
+fn append_ai_redact_mark_transforms(
+    wb: &mut Workbook,
+    mut transform: impl FnMut(&crate::addr::ParsedRef) -> Result<Option<crate::addr::ParsedRef>, ()>,
+) {
+    let Some(bytes) = wb.custom_parts.get(AI_PRIVACY_PART) else {
+        return;
+    };
+    let Ok(mut part) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return;
+    };
+    let Some(marks) = part
+        .get_mut("redact")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    let mut fail_closed = false;
+    let original_marks = marks.clone();
+    let mut additions = Vec::new();
+    for mark in &original_marks {
+        let Some(text) = mark.as_str() else {
+            fail_closed = true;
+            continue;
+        };
+        let Ok(parsed) = parse_a1(text) else {
+            fail_closed = true;
+            continue;
+        };
+        let transformed = match transform(&parsed) {
+            Ok(Some(transformed)) => transformed.to_a1(),
+            Ok(None) => continue,
+            Err(()) => {
+                fail_closed = true;
+                continue;
+            }
+        };
+        if transformed != text {
+            additions.push(serde_json::Value::String(transformed));
+        }
+    }
+    for addition in additions {
+        if !marks.contains(&addition) {
+            marks.push(addition);
+        }
+    }
+    if fail_closed && let Some(object) = part.as_object_mut() {
+        object.insert(
+            "privacy_send".into(),
+            serde_json::Value::String("schema".into()),
+        );
+    }
+    if let Ok(encoded) = serde_json::to_vec(&part) {
+        wb.custom_parts.insert(AI_PRIVACY_PART.into(), encoded);
+    }
+}
+
+pub(crate) fn rewrite_ai_redact_marks_move(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    src: RangeRef,
+    dest: CellRef,
+) {
+    let (r0, c0, r1, c1) = norm(src);
+    rewrite_ai_redact_marks(wb, sheet, |kind| {
+        if let RefKind::Range(range) = kind {
+            let (mr0, mc0, mr1, mc1) = norm(range);
+            let intersects = mr0 <= r1 && r0 <= mr1 && mc0 <= c1 && c0 <= mc1;
+            let contained = mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1;
+            if intersects && !contained {
+                return None;
+            }
+        }
+        adjusted_ref(move_range(&ref_expr(kind), src, dest))
+    });
+}
+
+pub(crate) fn rewrite_ai_redact_marks_move_between(
+    wb: &mut Workbook,
+    source_sheet: SheetId,
+    src: RangeRef,
+    dest_sheet: SheetId,
+    dest: CellRef,
+) {
+    let Some(source_name) = wb.sheet(source_sheet).map(|sheet| sheet.name.clone()) else {
+        return;
+    };
+    let Some(dest_name) = wb.sheet(dest_sheet).map(|sheet| sheet.name.clone()) else {
+        return;
+    };
+    let (r0, c0, r1, c1) = norm(src);
+    append_ai_redact_mark_transforms(wb, |parsed| {
+        let Some(spec) = parsed.sheet.as_ref() else {
+            return Err(());
+        };
+        if spec.end.is_some() {
+            return Err(());
+        }
+        if !spec.start.eq_ignore_ascii_case(&source_name) {
+            return Ok(None);
+        }
+        let (mr0, mc0, mr1, mc1) = match parsed.kind {
+            RefKind::Cell(cell) => (cell.row, cell.col, cell.row, cell.col),
+            RefKind::Range(range) => norm(range),
+        };
+        let intersects = mr0 <= r1 && r0 <= mr1 && mc0 <= c1 && c0 <= mc1;
+        if !intersects {
+            return Ok(None);
+        }
+        let contained = mr0 >= r0 && mr1 <= r1 && mc0 >= c0 && mc1 <= c1;
+        if !contained {
+            return Err(());
+        }
+        let Some(kind) = adjusted_ref(move_range(&ref_expr(parsed.kind), src, dest)) else {
+            return Err(());
+        };
+        let mut rewritten = parsed.clone();
+        rewritten.kind = kind;
+        if let Some(spec) = rewritten.sheet.as_mut() {
+            spec.start = dest_name.clone();
+        }
+        Ok(Some(rewritten))
+    });
+}
+
+pub(crate) fn rewrite_ai_redact_marks_sheet_rename(wb: &mut Workbook, old: &str, new: &str) {
+    append_ai_redact_mark_transforms(wb, |parsed| {
+        let Some(spec) = parsed.sheet.as_ref() else {
+            return Err(());
+        };
+        if spec.end.is_some() {
+            return Err(());
+        }
+        if !spec.start.eq_ignore_ascii_case(old) {
+            return Ok(None);
+        }
+        let mut rewritten = parsed.clone();
+        if let Some(spec) = rewritten.sheet.as_mut() {
+            spec.start = new.to_string();
+        }
+        Ok(Some(rewritten))
+    });
+}
+
+pub(crate) fn rewrite_ai_redact_marks_sort_rows(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    rows: &FxHashMap<u32, u32>,
+    c0: u16,
+    c1: u16,
+) {
+    rewrite_ai_redact_marks(wb, sheet, |kind| remap_mark_rows(kind, rows, c0, c1));
+}
+
+pub(crate) fn rewrite_ai_redact_marks_sort_cols(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    cols: &FxHashMap<u16, u16>,
+    r0: u32,
+    r1: u32,
+) {
+    rewrite_ai_redact_marks(wb, sheet, |kind| remap_mark_cols(kind, cols, r0, r1));
+}
+
+fn remap_mark_rows(kind: RefKind, rows: &FxHashMap<u32, u32>, c0: u16, c1: u16) -> Option<RefKind> {
+    match kind {
+        RefKind::Cell(mut cell) => {
+            if cell.col >= c0 && cell.col <= c1 {
+                cell.row = rows.get(&cell.row).copied().unwrap_or(cell.row);
+            }
+            Some(RefKind::Cell(cell))
+        }
+        RefKind::Range(mut range) => {
+            let (mr0, mc0, mr1, mc1) = norm(range);
+            if mc1 < c0 || mc0 > c1 {
+                return Some(kind);
+            }
+            if mc0 < c0 || mc1 > c1 {
+                return None;
+            }
+            if mr0 == mr1 {
+                let row = rows.get(&mr0).copied().unwrap_or(mr0);
+                range.start.row = row;
+                range.end.row = row;
+                return Some(RefKind::Range(range));
+            }
+            if rows.iter().any(|(source, dest)| {
+                (*source >= mr0 && *source <= mr1) != (*dest >= mr0 && *dest <= mr1)
+            }) {
+                return None;
+            }
+            Some(RefKind::Range(range))
+        }
+    }
+}
+
+fn remap_mark_cols(kind: RefKind, cols: &FxHashMap<u16, u16>, r0: u32, r1: u32) -> Option<RefKind> {
+    match kind {
+        RefKind::Cell(mut cell) => {
+            if cell.row >= r0 && cell.row <= r1 {
+                cell.col = cols.get(&cell.col).copied().unwrap_or(cell.col);
+            }
+            Some(RefKind::Cell(cell))
+        }
+        RefKind::Range(mut range) => {
+            let (mr0, mc0, mr1, mc1) = norm(range);
+            if mr1 < r0 || mr0 > r1 {
+                return Some(kind);
+            }
+            if mr0 < r0 || mr1 > r1 {
+                return None;
+            }
+            if mc0 == mc1 {
+                let col = cols.get(&mc0).copied().unwrap_or(mc0);
+                range.start.col = col;
+                range.end.col = col;
+                return Some(RefKind::Range(range));
+            }
+            if cols.iter().any(|(source, dest)| {
+                (*source >= mc0 && *source <= mc1) != (*dest >= mc0 && *dest <= mc1)
+            }) {
+                return None;
+            }
+            Some(RefKind::Range(range))
+        }
+    }
+}
+
+fn ref_expr(kind: RefKind) -> Expr {
+    let kind = match kind {
+        RefKind::Cell(cell) => ExprKind::Cell { sheet: None, cell },
+        RefKind::Range(range) => ExprKind::Range { sheet: None, range },
+    };
+    Expr {
+        kind,
+        span: crate::formula::Span::new(0, 0),
+    }
+}
+
+fn adjusted_ref(expr: Expr) -> Option<RefKind> {
+    match expr.kind {
+        ExprKind::Cell { cell, .. } => Some(RefKind::Cell(cell)),
+        ExprKind::Range { range, .. } => Some(RefKind::Range(range)),
+        _ => None,
     }
 }
 
@@ -2213,6 +2778,7 @@ pub fn move_range_cells(
         }
         move_side_tables(wb, sheet, src, dest)?;
         rewrite_formulas_move(wb, sheet, src, dest)?;
+        rewrite_ai_redact_marks_move(wb, sheet, src, dest);
         Ok(changed)
     })
 }
@@ -2270,6 +2836,7 @@ pub fn move_range_cells_between(
         }
         move_side_tables_between(wb, source_sheet, src, dest_sheet, dest, height, width)?;
         rewrite_formulas_move_between(wb, source_sheet, src, dest_sheet, dest, height, width)?;
+        rewrite_ai_redact_marks_move_between(wb, source_sheet, src, dest_sheet, dest);
         Ok(u32::from(width).saturating_mul(height))
     })
 }

@@ -34,6 +34,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 calamine = "0.36"
 criterion = { workspace = true }
 proptest = { workspace = true }
+tempfile = "3"
 
 [[bench]]
 name = "csv_parse"

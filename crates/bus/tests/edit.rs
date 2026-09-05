@@ -120,6 +120,64 @@ fn protect_records_xor_hash() {
 }
 
 #[test]
+fn protection_blocks_locked_edits_and_requires_the_existing_password() {
+    let mut bus = bus();
+    common::exec_ok(&mut bus, "cell.set", json!({"ref": "A1", "input": "42"}));
+    common::exec_ok(
+        &mut bus,
+        "sheet.protect",
+        json!({"password": "correct", "enable": true}),
+    );
+
+    let edit = common::exec_err(&mut bus, "cell.set", json!({"ref": "A1", "input": "99"}));
+    assert_eq!(edit.code, "sheet.protected");
+    let wrong = common::exec_err(
+        &mut bus,
+        "sheet.protect",
+        json!({"password": "wrong", "enable": false}),
+    );
+    assert_eq!(wrong.code, "sheet.protected");
+    common::exec_ok(
+        &mut bus,
+        "sheet.protect",
+        json!({"password": "correct", "enable": false}),
+    );
+    common::exec_ok(&mut bus, "cell.set", json!({"ref": "A1", "input": "99"}));
+}
+
+#[test]
+fn workbook_structure_protection_blocks_rename_until_unprotected() {
+    let mut bus = bus();
+    common::exec_ok(
+        &mut bus,
+        "workbook.protect",
+        json!({"password": "correct", "enable": true, "lock_structure": true}),
+    );
+    let rename = common::exec_err(
+        &mut bus,
+        "sheet.rename",
+        json!({"sheet": "Sheet1", "name": "Renamed"}),
+    );
+    assert_eq!(rename.code, "workbook.protected");
+    let wrong = common::exec_err(
+        &mut bus,
+        "workbook.protect",
+        json!({"password": "wrong", "enable": false}),
+    );
+    assert_eq!(wrong.code, "workbook.protected");
+    common::exec_ok(
+        &mut bus,
+        "workbook.protect",
+        json!({"password": "correct", "enable": false}),
+    );
+    common::exec_ok(
+        &mut bus,
+        "sheet.rename",
+        json!({"sheet": "Sheet1", "name": "Renamed"}),
+    );
+}
+
+#[test]
 fn move_is_one_command() {
     let mut bus = bus();
     assert!(

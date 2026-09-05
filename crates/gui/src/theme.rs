@@ -183,13 +183,16 @@ pub(crate) struct WorkbookFontCache {
     definitions: egui::FontDefinitions,
     attempted: BTreeSet<String>,
     families: BTreeMap<String, FontFamily>,
+    bound_families: BTreeSet<FontFamily>,
 }
 
 impl WorkbookFontCache {
     /// Start with egui defaults plus the resolved Omarchy UI font.
     pub(crate) fn new(ctx: &egui::Context, ui_path: Option<&Path>) -> Self {
+        let definitions = egui::FontDefinitions::default();
         let mut cache = Self {
-            definitions: egui::FontDefinitions::default(),
+            bound_families: definitions.families.keys().cloned().collect(),
+            definitions,
             attempted: BTreeSet::new(),
             families: BTreeMap::new(),
         };
@@ -207,6 +210,7 @@ impl WorkbookFontCache {
         workbook: &Workbook,
         session: &UiSession,
     ) {
+        self.refresh_bound_families(ctx);
         let viewport = session.viewport();
         let panes = crate::grid::pane_counts(&viewport);
         let selection = session.selection();
@@ -254,8 +258,13 @@ impl WorkbookFontCache {
         }
         self.families
             .get(&name.to_ascii_lowercase())
+            .filter(|family| self.bound_families.contains(*family))
             .cloned()
             .unwrap_or(FontFamily::Monospace)
+    }
+
+    fn refresh_bound_families(&mut self, ctx: &egui::Context) {
+        self.bound_families = ctx.fonts(|fonts| fonts.families().into_iter().collect());
     }
 
     fn install_ui(&mut self, path: &Path) {
@@ -314,7 +323,7 @@ fn font_data_id(family: &str, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{WorkbookFontCache, hex_color};
-    use egui::Color32;
+    use egui::{Color32, FontFamily, FontId};
 
     #[test]
     fn hex_color_parses_rgb_and_argb() {
@@ -336,5 +345,53 @@ mod tests {
         let _ = cache.ensure_family("Calibri");
         assert_eq!(cache.attempted.len(), first);
         assert!(cache.attempted.contains("calibri"));
+    }
+
+    #[test]
+    fn newly_installed_workbook_family_falls_back_for_the_current_frame() {
+        let ctx = egui::Context::default();
+        let mut cache = WorkbookFontCache::new(&ctx, None);
+        let requested = "Aptos Narrow";
+        let named = FontFamily::Name(requested.into());
+        let fallbacks = cache
+            .definitions
+            .families
+            .get(&FontFamily::Proportional)
+            .cloned()
+            .unwrap_or_default();
+        let mut selected = None;
+
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            cache
+                .definitions
+                .families
+                .insert(named.clone(), fallbacks.clone());
+            cache
+                .families
+                .insert(requested.to_ascii_lowercase(), named.clone());
+            ui.ctx().set_fonts(cache.definitions.clone());
+            selected = Some(cache.family(requested));
+        });
+        output.drop_without_applying_deltas();
+
+        assert_eq!(selected, Some(FontFamily::Monospace));
+
+        selected = None;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ctx = ui.ctx();
+            cache.refresh_bound_families(ctx);
+            let family = cache.family(requested);
+            ctx.fonts_mut(|fonts| {
+                let _ = fonts.layout_no_wrap(
+                    "cell".into(),
+                    FontId::new(11.0, family.clone()),
+                    Color32::WHITE,
+                );
+            });
+            selected = Some(family);
+        });
+        output.drop_without_applying_deltas();
+
+        assert_eq!(selected, Some(named));
     }
 }

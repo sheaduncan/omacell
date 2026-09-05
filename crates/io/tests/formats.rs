@@ -223,6 +223,19 @@ fn json_preserves_integers_outside_the_exact_float_range_as_text() {
 }
 
 #[test]
+fn json_rejects_a_compact_input_with_an_oversized_implied_table() {
+    let rows = (0..1_001)
+        .map(|index| serde_json::json!({format!("key_{index}"): index}))
+        .collect::<Vec<_>>();
+    let bytes = serde_json::to_vec(&rows).unwrap();
+    assert!(bytes.len() < 64 * 1_048_576);
+
+    let error = json::open_bytes(&bytes).unwrap_err();
+    assert_eq!(error.code, "json.limit");
+    assert!(error.message.contains("implied table"));
+}
+
+#[test]
 fn ods_rejects_invalid_values_and_expands_repeated_cells() {
     let invalid = ods_package(
         r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"><office:body><office:spreadsheet><table:table table:name="Sheet1"><table:table-row><table:table-cell office:value-type="float" office:value="not-a-number"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,

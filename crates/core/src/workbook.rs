@@ -18,7 +18,7 @@ use crate::error::CoreError;
 use crate::intern::{ArrayPayload, FormulaId, Interners, RichTextRun};
 use crate::limits::{MAX_COLS, MAX_ROWS};
 use crate::locale::LocaleId;
-use crate::names::{DefinedName, NameRegistry, NameScope};
+use crate::names::{DefinedName, NameReferent, NameRegistry, NameScope};
 use crate::numfmt;
 use crate::pivot::{
     CacheValue, PivotId, PivotRegistry, PivotTable, materialize, materialize_from_cache,
@@ -1806,6 +1806,42 @@ impl Workbook {
                 ));
             }
         }
+        self.transact_try(move |workbook| workbook.remove_sheet_inner(id))
+    }
+
+    fn remove_sheet_inner(&mut self, id: SheetId) -> Result<Sheet, CoreError> {
+        let deleted_name = self
+            .sheet(id)
+            .ok_or_else(|| CoreError::sheet_id(format!("unknown sheet {}", id.index())))?
+            .name
+            .clone();
+        let deleted_tables: Vec<String> = self
+            .tables
+            .iter()
+            .filter(|table| table.sheet == id)
+            .map(|table| table.name.clone())
+            .collect();
+        self.invalidate_deleted_sheet_references(id, &deleted_name, &deleted_tables)?;
+
+        let owned_names: Vec<(NameScope, String)> = self
+            .names
+            .iter()
+            .filter(|name| name.scope == NameScope::Sheet(id))
+            .map(|name| (name.scope, name.name.clone()))
+            .collect();
+        for (scope, name) in owned_names {
+            self.remove_name(scope, &name)?;
+        }
+        let table_ids: Vec<TableId> = self
+            .tables
+            .iter()
+            .filter(|table| table.sheet == id)
+            .map(|table| table.id)
+            .collect();
+        for table in table_ids {
+            self.convert_table(table)?;
+        }
+
         let index = self.sheets.get_index_of(&id).unwrap_or(0);
         let active_before = self.active;
         let sheet = self.unlink_sheet(id)?;
@@ -1818,6 +1854,104 @@ impl Workbook {
             active_after,
         });
         Ok(sheet)
+    }
+
+    fn invalidate_deleted_sheet_references(
+        &mut self,
+        deleted: SheetId,
+        deleted_name: &str,
+        deleted_tables: &[String],
+    ) -> Result<(), CoreError> {
+        let mut formulas = Vec::new();
+        for sheet in self.sheets() {
+            if sheet.id == deleted {
+                continue;
+            }
+            for (row, col, slot) in sheet.store.iter() {
+                let Some(formula) = slot.formula else {
+                    continue;
+                };
+                let source = self.intern().formulas.get(formula).ok_or_else(|| {
+                    CoreError::new(
+                        "sheet.remove",
+                        "formula source is missing from the intern pool",
+                    )
+                })?;
+                let parsed = crate::formula::parse(source).map_err(|error| {
+                    CoreError::new(
+                        "sheet.remove",
+                        format!("could not invalidate deleted-sheet reference: {error}"),
+                    )
+                })?;
+                let ast = crate::formula::invalidate_deleted_references(
+                    &parsed.ast,
+                    deleted_name,
+                    deleted_tables,
+                );
+                if ast != parsed.ast {
+                    formulas.push((
+                        sheet.id,
+                        row,
+                        col,
+                        crate::formula::print(&crate::formula::Formula {
+                            ast,
+                            style: parsed.style,
+                            base_row: parsed.base_row,
+                            base_col: parsed.base_col,
+                        }),
+                    ));
+                }
+            }
+        }
+
+        let mut names = Vec::new();
+        for defined in self.names.iter() {
+            if defined.scope == NameScope::Sheet(deleted) {
+                continue;
+            }
+            let mut rewritten = defined.clone();
+            rewritten.referent = match &defined.referent {
+                NameReferent::Range(range)
+                    if range.start.sheet == Some(deleted)
+                        || range.end.sheet == Some(deleted)
+                        || range.sheet_end == Some(deleted) =>
+                {
+                    NameReferent::Formula("=#REF!".into())
+                }
+                NameReferent::Formula(source) => {
+                    let parsed = crate::formula::parse(source).map_err(|error| {
+                        CoreError::new(
+                            "sheet.remove",
+                            format!("could not invalidate defined-name reference: {error}"),
+                        )
+                    })?;
+                    let ast = crate::formula::invalidate_deleted_references(
+                        &parsed.ast,
+                        deleted_name,
+                        deleted_tables,
+                    );
+                    NameReferent::Formula(crate::formula::print(&crate::formula::Formula {
+                        ast,
+                        style: parsed.style,
+                        base_row: parsed.base_row,
+                        base_col: parsed.base_col,
+                    }))
+                }
+                other => other.clone(),
+            };
+            if rewritten != *defined {
+                names.push(rewritten);
+            }
+        }
+
+        for name in names {
+            let _ = self.remove_name(name.scope, &name.name)?;
+            self.define_name(name)?;
+        }
+        for (sheet, row, col, source) in formulas {
+            self.set_cell_contents(sheet, row, col, &source)?;
+        }
+        Ok(())
     }
 
     fn recount_ref_errors(&mut self) {
@@ -1867,16 +2001,48 @@ impl Workbook {
         }
         self.transact_try(move |workbook| {
             workbook.rename_sheet_inner(id, &name, true)?;
-            workbook.rewrite_sheet_formula_qualifiers(&before, &name)
+            workbook.rewrite_sheet_formula_qualifiers(&before, &name)?;
+            crate::ops::rewrite_ai_redact_marks_sheet_rename(workbook, &before, &name);
+            Ok(())
         })
     }
 
     fn rewrite_sheet_formula_qualifiers(&mut self, old: &str, new: &str) -> Result<(), CoreError> {
         let mut formulas = Vec::new();
+        let mut names = Vec::new();
         let operation = crate::formula::RewriteOp::SheetRename {
             old: old.to_string(),
             new: new.to_string(),
         };
+        for defined in self.names.iter() {
+            let NameReferent::Formula(source) = &defined.referent else {
+                continue;
+            };
+            let parsed = crate::formula::parse(source).map_err(|error| {
+                CoreError::new(
+                    "sheet.rename",
+                    format!("could not rewrite defined-name reference: {error}"),
+                )
+            })?;
+            let rewritten_ast =
+                crate::formula::apply(&parsed.ast, &operation).map_err(|error| {
+                    CoreError::new(
+                        "sheet.rename",
+                        format!("could not rewrite defined-name reference: {error}"),
+                    )
+                })?;
+            if rewritten_ast != parsed.ast {
+                let mut rewritten = defined.clone();
+                rewritten.referent =
+                    NameReferent::Formula(crate::formula::print(&crate::formula::Formula {
+                        ast: rewritten_ast,
+                        style: parsed.style,
+                        base_row: parsed.base_row,
+                        base_col: parsed.base_col,
+                    }));
+                names.push(rewritten);
+            }
+        }
         for sheet in self.sheets() {
             for (row, col, slot) in sheet.store.iter() {
                 let Some(formula) = slot.formula else {
@@ -1913,6 +2079,10 @@ impl Workbook {
             }
         }
 
+        for name in names {
+            let _ = self.remove_name(name.scope, &name.name)?;
+            self.define_name(name)?;
+        }
         for (sheet, row, col, source) in formulas {
             let formula = self.intern_formula(&source)?;
             let update = (|| {

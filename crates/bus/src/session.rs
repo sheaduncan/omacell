@@ -748,6 +748,9 @@ fn dispatch(
         let cmd = registry
             .get(&call.id)
             .ok_or_else(|| bus_error::unknown(call.id.as_str()))?;
+        if cmd.descriptor.mutating && cmd.exposure == Exposure::Public {
+            crate::protection::check_call(workbook, call.id.as_str(), &call.args)?;
+        }
         let before =
             (cmd.descriptor.mutating && cmd.changeset_eligible && cmd.needs_snapshot_inverse())
                 .then(|| workbook.clone_for_scratch());

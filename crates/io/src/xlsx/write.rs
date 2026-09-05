@@ -340,7 +340,8 @@ pub(crate) fn encode(
         let target = format!("worksheets/sheet{}.xml", i + 1);
         wb_rels.push((r.clone(), REL_WS.into(), target.clone(), false));
         sheet_rids.push(r);
-        let sheet_extras = extras_for_sheet(extras, package, &sheet.name, i)?;
+        let sheet_extras =
+            extras_for_sheet(extras, package, &sheet.name, sheet.id.index() as usize)?;
         let (sheet_xml, sheet_rels, extra_parts) = worksheet_xml(
             wb,
             sheet,
