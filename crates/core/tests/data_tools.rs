@@ -10,6 +10,7 @@ use omacell_core::eval::{ArgVal, ArrayLift, EvalCtx, FnDef, FnRegistry, RuntimeV
 use omacell_core::filter::{
     AutoFilter, FilterColumn, FilterCriteria, NumOp, apply_filter, clear_filter, restore_filter,
 };
+use omacell_core::names::{DefinedName, NameReferent, NameScope};
 use omacell_core::sort::{SortBy, SortKey, SortSpec, sort_range};
 use omacell_core::style::Color;
 use omacell_core::validation::{
@@ -832,6 +833,35 @@ fn conditional_format_corpus() {
 }
 
 #[test]
+fn duplicate_conditional_format_matches_text_case_insensitively() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "Alpha").unwrap();
+    wb.set_text(s, 1, 0, "alpha").unwrap();
+    wb.set_cond_formats(
+        s,
+        vec![CondFormat {
+            range: range(0, 0, 1, 0),
+            priority: 1,
+            stop_if_true: false,
+            kind: CfKind::Duplicate,
+            dxf: CfDxf {
+                fill: Some(Color::Rgb { argb: 0xFFFF_0000 }),
+                font: None,
+            },
+        }],
+    )
+    .unwrap();
+
+    for row in 0..=1 {
+        assert!(matches!(
+            overlay_at(&wb, s, row, 0).source,
+            OverlaySource::Rule { priority: 1, .. }
+        ));
+    }
+}
+
+#[test]
 fn cf_visuals_are_resolved_and_icon_sort_uses_the_cached_bucket() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
@@ -1053,6 +1083,31 @@ fn filter_top_n_and_average() {
 }
 
 #[test]
+fn value_list_filter_matches_text_case_insensitively() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 0, "name").unwrap();
+    wb.set_text(s, 1, 0, "Alpha").unwrap();
+    wb.set_text(s, 2, 0, "beta").unwrap();
+
+    apply_filter(
+        &mut wb,
+        s,
+        &AutoFilter {
+            range: range(0, 0, 2, 0),
+            columns: vec![FilterColumn {
+                col_id: 0,
+                criteria: FilterCriteria::Values(vec!["alpha".into()]),
+            }],
+        },
+    )
+    .unwrap();
+
+    assert!(!wb.sheet(s).unwrap().geometry.rows.is_hidden(1).unwrap());
+    assert!(wb.sheet(s).unwrap().geometry.rows.is_hidden(2).unwrap());
+}
+
+#[test]
 fn validation_list_from_range_and_inline() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();
@@ -1072,6 +1127,41 @@ fn validation_list_from_range_and_inline() {
     assert!(validate_cell(&wb, s, 0, 0).is_ok());
     wb.set_text(s, 1, 0, "green").unwrap();
     assert!(validate_cell(&wb, s, 1, 0).is_err());
+    assert_eq!(
+        validation_list_values(&wb, s, 0, 0).unwrap().unwrap(),
+        ["red", "blue"]
+    );
+}
+
+#[test]
+fn validation_list_resolves_a_sheet_scoped_defined_name() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    wb.set_text(s, 0, 1, "red").unwrap();
+    wb.set_text(s, 1, 1, "blue").unwrap();
+    wb.define_name(DefinedName {
+        name: "Colors".into(),
+        scope: NameScope::Sheet(s),
+        referent: NameReferent::Range(RangeRef::from_corners(
+            CellRef::new(0, 1).unwrap().on_sheet(s),
+            CellRef::new(1, 1).unwrap().on_sheet(s),
+        )),
+        comment: None,
+    })
+    .unwrap();
+    wb.set_validations(
+        s,
+        vec![DataValidation {
+            range: range(0, 0, 1, 0),
+            kind: DvType::List,
+            formula1: Some("=Colors".into()),
+            ..DataValidation::default()
+        }],
+    )
+    .unwrap();
+    wb.set_text(s, 0, 0, "red").unwrap();
+
+    assert!(validate_cell(&wb, s, 0, 0).is_ok());
     assert_eq!(
         validation_list_values(&wb, s, 0, 0).unwrap().unwrap(),
         ["red", "blue"]
