@@ -119,7 +119,7 @@ contracts.
 
 ## Deviations with reasons
 
-None yet.
+None.
 
 ## Measurements
 
@@ -171,7 +171,8 @@ None yet.
   Ctrl-wheel regression passed, all nine snapshot baselines passed the updated
   comparator, and root/fuzz `cargo deny check` passed with only the
   repository's allowed duplicate/license warnings. The exact local
-  `just check` gate passed; hosted gates are pending.
+  `just check` gate passed. Hosted `check`, CodeQL and all analyses, and both
+  clean Arch package jobs passed; the PR was merged.
 
 ## Open questions
 
@@ -191,7 +192,7 @@ None. No frozen contract change is authorized by these dependency updates.
 - [x] PR #136 reviewed and merged
 - [x] PR #137 reviewed and merged
 - [x] PR #138 migrated, reviewed, and merged
-- [ ] PR #139 migrated as one compatible GUI stack, reviewed, and merged
+- [x] PR #139 migrated as one compatible GUI stack, reviewed, and merged
 - [x] `cargo deny check` green for each changed Rust graph
-- [ ] Exact `just check`, hosted CI, clean packages, and CodeQL green
-- [ ] No open PR remains from the initial #132–#139 queue
+- [x] Exact `just check`, hosted CI, clean packages, and CodeQL green
+- [x] No open PR remains from the initial #132–#139 queue
