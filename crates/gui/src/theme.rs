@@ -116,7 +116,7 @@ impl GuiTheme {
         visuals.window_corner_radius = self.rounding;
         visuals.menu_corner_radius = self.rounding;
         ctx.set_visuals(visuals);
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         style.text_styles.insert(
             egui::TextStyle::Body,
             egui::FontId::monospace(self.ui_font_size_pt as f32),
@@ -125,7 +125,7 @@ impl GuiTheme {
             egui::TextStyle::Monospace,
             egui::FontId::monospace(self.ui_font_size_pt as f32),
         );
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 
     /// Theme tokens for the shared chart scene.

@@ -1766,9 +1766,10 @@ impl Gui {
     }
 
     /// One egui frame (eframe + kittest).
-    pub fn ui_frame(&mut self, ctx: &egui::Context) {
+    pub fn ui_frame(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         self.sync_ipc_focus(ctx.input(|input| input.focused));
-        self.poll(ctx);
+        self.poll(&ctx);
         if !self.close_requested
             && ctx.input(|input| input.viewport().close_requested())
             && self.dirty
@@ -1789,7 +1790,7 @@ impl Gui {
         let conditional_formats = self.runner.handle().conditional_formats(&snapshot, sheet);
         let busy = self.runner.handle().is_busy();
         let cfg = self.ui.config();
-        let compact = ctx.screen_rect().width() < cfg.layout.compact_below_width as f32;
+        let compact = ctx.content_rect().width() < cfg.layout.compact_below_width as f32;
         let edit = self.ui.edit();
         let text_overlay_open = accepts_composed_text(&self.ui);
         let input = ctx.input(|i| i.clone());
@@ -1852,20 +1853,18 @@ impl Gui {
                 let _ = self.insert_composed_text(text);
             }
         }
-        if input.modifiers.ctrl && input.raw_scroll_delta.y.abs() > 0.0 {
-            let delta = if input.raw_scroll_delta.y > 0.0 {
-                0.1
-            } else {
-                -0.1
-            };
+        let scroll_delta = input.smooth_scroll_delta();
+        let zoom_delta = input.zoom_delta();
+        if zoom_delta != 1.0 {
+            let delta = if zoom_delta > 1.0 { 0.1 } else { -0.1 };
             let _ = self.execute_cmd("view.zoom", json!({"delta": delta}));
-        } else if input.raw_scroll_delta.x.abs() > 0.0
-            || (input.modifiers.shift && input.raw_scroll_delta.y.abs() > 0.0)
+        } else if scroll_delta.x.abs() > 0.0
+            || (input.modifiers.shift && scroll_delta.y.abs() > 0.0)
         {
-            let delta = if input.raw_scroll_delta.x.abs() > 0.0 {
-                input.raw_scroll_delta.x
+            let delta = if scroll_delta.x.abs() > 0.0 {
+                scroll_delta.x
             } else {
-                input.raw_scroll_delta.y
+                scroll_delta.y
             };
             let mut vp = self.ui.viewport();
             let cols = if delta > 0.0 { -1 } else { 1 };
@@ -1874,13 +1873,9 @@ impl Gui {
                 i64::from(omacell_core::limits::MAX_COLS - 1),
             ) as u16;
             self.ui.set_viewport(vp);
-        } else if input.raw_scroll_delta.y.abs() > 0.0 {
+        } else if scroll_delta.y.abs() > 0.0 {
             let mut vp = self.ui.viewport();
-            let rows = if input.raw_scroll_delta.y > 0.0 {
-                -3
-            } else {
-                3
-            };
+            let rows = if scroll_delta.y > 0.0 { -3 } else { 3 };
             vp.first_row = i64::from(vp.first_row).saturating_add(rows).clamp(
                 i64::from(vp.freeze.rows),
                 i64::from(omacell_core::limits::MAX_ROWS - 1),
@@ -1890,8 +1885,8 @@ impl Gui {
 
         if cfg.layout.menu_bar && !compact {
             let mut picked = None;
-            egui::TopBottomPanel::top("omacell-menu").show(ctx, |ui| {
-                picked = chrome::menu_bar(ui);
+            egui::Panel::top("omacell-menu").show(ui, |panel_ui| {
+                picked = chrome::menu_bar(panel_ui);
             });
             if let Some(cmd) = picked {
                 let _ = self.execute_cmd(cmd, json!({}));
@@ -1900,17 +1895,17 @@ impl Gui {
 
         if cfg.appearance.show_sheet_tabs && !compact {
             let mut selected = None;
-            egui::TopBottomPanel::top("omacell-tabs").show(ctx, |ui| {
-                selected = chrome::tabs(ui, &snapshot.workbook, &self.ui, &self.theme);
+            egui::Panel::top("omacell-tabs").show(ui, |panel_ui| {
+                selected = chrome::tabs(panel_ui, &snapshot.workbook, &self.ui, &self.theme);
             });
             if let Some(sheet) = selected {
                 self.activate_sheet(&snapshot.workbook, sheet);
             }
         }
         if cfg.appearance.show_formula_bar {
-            egui::TopBottomPanel::top("omacell-fx").show(ctx, |ui| {
+            egui::Panel::top("omacell-fx").show(ui, |panel_ui| {
                 if let Some(text) =
-                    chrome::formula_bar(ui, &snapshot.workbook, &self.ui, &self.theme)
+                    chrome::formula_bar(panel_ui, &snapshot.workbook, &self.ui, &self.theme)
                     && !self.ui.edit().is_idle()
                 {
                     let mut edit = self.ui.edit();
@@ -1921,9 +1916,9 @@ impl Gui {
         }
         if cfg.appearance.show_status_line {
             let mut status_action = None;
-            egui::TopBottomPanel::bottom("omacell-status").show(ctx, |ui| {
+            egui::Panel::bottom("omacell-status").show(ui, |panel_ui| {
                 status_action = chrome::status(
-                    ui,
+                    panel_ui,
                     &snapshot.workbook,
                     &self.ui,
                     &self.theme,
@@ -1937,8 +1932,9 @@ impl Gui {
             }
         }
 
-        self.fonts.ensure_visible(ctx, &snapshot.workbook, &self.ui);
-        egui::CentralPanel::default().show(ctx, |ui| {
+        self.fonts
+            .ensure_visible(&ctx, &snapshot.workbook, &self.ui);
+        egui::CentralPanel::default().show(ui, |ui| {
             chrome::panel(ui, &self.ui.panel(), &self.ui, &self.theme);
             let a11y = grid::cell_a11y(&snapshot.workbook, &self.ui);
             self.grid = grid::paint(
@@ -2022,7 +2018,7 @@ impl Gui {
             egui::Area::new(egui::Id::new("omacell-context"))
                 .fixed_pos(pos)
                 .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
+                .show(&ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         if ui.button(tr("context-copy")).clicked() {
                             let _ = self.execute_cmd("edit.copy", json!({}));
@@ -2041,7 +2037,7 @@ impl Gui {
 
         if self.ui.palette().open
             && let Some(id) =
-                chrome::palette(ctx, &self.ui.palette(), self.palette_index, &self.theme)
+                chrome::palette(&ctx, &self.ui.palette(), self.palette_index, &self.theme)
         {
             let _ = self.choose_palette(&id);
         }
@@ -2433,8 +2429,8 @@ fn cursor_a1(ui: &UiSession, wb: &omacell_core::workbook::Workbook) -> String {
 }
 
 impl eframe::App for Gui {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.ui_frame(ctx);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.ui_frame(ui);
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {

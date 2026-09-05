@@ -16,7 +16,7 @@ pub(crate) fn animations_enabled(preference: &str, desktop_enabled: bool) -> boo
 /// Apply the resolved preference to egui's animation manager.
 pub(crate) fn apply(ctx: &egui::Context, preference: &str) {
     let enabled = animations_enabled(preference, desktop_animations_enabled());
-    ctx.style_mut(|style| {
+    ctx.global_style_mut(|style| {
         style.animation_time = if enabled { 1.0 / 12.0 } else { 0.0 };
     });
 }

@@ -37,20 +37,16 @@ pub fn fixed_gpu_setup() -> Option<eframe::egui_wgpu::WgpuSetup> {
     if std::env::var_os("OMACELL_FIXED_GPU").as_deref() != Some(std::ffi::OsStr::new("1")) {
         return None;
     }
-    let setup = eframe::egui_wgpu::WgpuSetupCreateNew {
-        native_adapter_selector: Some(Arc::new(|adapters, _surface| {
-            adapters
-                .iter()
-                .find(|adapter| {
-                    adapter.get_info().device_type == eframe::wgpu::DeviceType::IntegratedGpu
-                })
-                .cloned()
-                .ok_or_else(|| {
-                    "fixed-host gate requires an integrated-GPU wgpu adapter".to_string()
-                })
-        })),
-        ..eframe::egui_wgpu::WgpuSetupCreateNew::default()
-    };
+    let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    setup.native_adapter_selector = Some(Arc::new(|adapters, _surface| {
+        adapters
+            .iter()
+            .find(|adapter| {
+                adapter.get_info().device_type == eframe::wgpu::DeviceType::IntegratedGpu
+            })
+            .cloned()
+            .ok_or_else(|| "fixed-host gate requires an integrated-GPU wgpu adapter".to_string())
+    }));
     Some(eframe::egui_wgpu::WgpuSetup::CreateNew(setup))
 }
 
@@ -58,11 +54,13 @@ pub fn graphics_adapter_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     let available = *AVAILABLE.get_or_init(|| {
         let setup = fixed_gpu_setup().unwrap_or_else(egui_kittest::wgpu::default_wgpu_setup);
-        match setup {
-            eframe::egui_wgpu::WgpuSetup::CreateNew(setup) => {
-                let instance = eframe::wgpu::Instance::new(&setup.instance_descriptor);
-                let adapters = instance.enumerate_adapters(setup.instance_descriptor.backends);
-                setup.native_adapter_selector.as_ref().map_or_else(
+        match &setup {
+            eframe::egui_wgpu::WgpuSetup::CreateNew(create_new) => {
+                let instance = pollster::block_on(setup.new_instance());
+                let adapters = pollster::block_on(
+                    instance.enumerate_adapters(create_new.instance_descriptor.backends),
+                );
+                create_new.native_adapter_selector.as_ref().map_or_else(
                     || !adapters.is_empty(),
                     |select| select(&adapters, None).is_ok(),
                 )

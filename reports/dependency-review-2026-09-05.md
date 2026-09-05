@@ -101,6 +101,16 @@ Primary upstream references used during review:
   installing the embedded instruction hook and JSON-array metatable instead
   of silently discarding them. The independently committed fuzz lock is also
   synchronized to `mlua` 0.12.1 and its updated vendored Lua/tool graph.
+- **#139 — `eframe`/`egui`/`egui_kittest` 0.36.1:** replaced Dependabot's
+  partial `eframe` update with one coordinated GUI stack, eliminating the
+  parallel 0.32 and 0.36 egui/wgpu/accessibility graphs. Migrated the root-UI
+  application lifecycle, unified panel and global-style APIs, semantic scroll
+  and zoom input, asynchronous wgpu adapter discovery, and the snapshot result
+  collector. A new lifecycle regression locks Ctrl-wheel zoom to the existing
+  `view.zoom` command path. Upstream's new font shaping/rendering stack changes
+  raster output, so all nine theme/scale baselines were regenerated only after
+  the accessibility and crisp-grid assertions passed and representative light,
+  dark, 1x, 1.5x, and 2x renders were inspected.
 
 ## Interfaces exposed
 
@@ -152,8 +162,16 @@ None yet.
   fuzz target completed 10,000 cases without a crash; LeakSanitizer was
   disabled for that local run because this container's ptrace policy prevents
   LeakSanitizer startup, while the target's AddressSanitizer instrumentation
-  remained enabled. The exact local `just check` gate passed; hosted gates are
-  pending.
+  remained enabled. The exact local `just check` gate passed. Hosted `check`,
+  CodeQL and all analyses, and both clean Arch package jobs passed; the PR was
+  merged.
+- #139: all 15 GUI unit tests, five enabled accessibility tests, 28 lifecycle
+  tests, two reload tests, the nine-case snapshot test, and doc tests passed;
+  the two fixed-host-only gates remained ignored as designed. The new
+  Ctrl-wheel regression passed, all nine snapshot baselines passed the updated
+  comparator, and root/fuzz `cargo deny check` passed with only the
+  repository's allowed duplicate/license warnings. The exact local
+  `just check` gate passed; hosted gates are pending.
 
 ## Open questions
 
@@ -172,8 +190,8 @@ None. No frozen contract change is authorized by these dependency updates.
 - [x] PR #135 reviewed and merged
 - [x] PR #136 reviewed and merged
 - [x] PR #137 reviewed and merged
-- [ ] PR #138 migrated, reviewed, and merged
+- [x] PR #138 migrated, reviewed, and merged
 - [ ] PR #139 migrated as one compatible GUI stack, reviewed, and merged
-- [ ] `cargo deny check` green for each changed Rust graph
+- [x] `cargo deny check` green for each changed Rust graph
 - [ ] Exact `just check`, hosted CI, clean packages, and CodeQL green
 - [ ] No open PR remains from the initial #132–#139 queue

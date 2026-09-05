@@ -386,6 +386,7 @@ fn wheel_scrolling_stays_inside_the_sheet_bounds() {
     harness.input_mut().events.push(Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
         delta: egui::vec2(-1.0, -1.0),
+        phase: egui::TouchPhase::Move,
         modifiers: Modifiers::NONE,
     });
     harness.step();
@@ -393,6 +394,26 @@ fn wheel_scrolling_stays_inside_the_sheet_bounds() {
     let viewport = harness.state().ui_session().viewport();
     assert_eq!(viewport.first_row, omacell_core::limits::MAX_ROWS - 1);
     assert_eq!(viewport.first_col, omacell_core::limits::MAX_COLS - 1);
+}
+
+#[test]
+fn ctrl_wheel_still_zooms_the_sheet() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    let initial = harness.state().ui_session().viewport().zoom;
+
+    harness.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::CTRL,
+    });
+    harness.step();
+
+    assert!(harness.state().ui_session().viewport().zoom > initial);
 }
 
 #[test]
