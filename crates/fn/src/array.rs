@@ -395,8 +395,16 @@ fn filter_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         Ok(v) => v,
         Err(e) => return err(e),
     };
-    let by_row = include.cols == 1 || (include.rows == array.rows && include.cols != array.cols);
-    let (n, keep) = if include.rows == array.rows
+    // A 1×1 include is a scalar mask: Excel broadcasts it to every row.
+    // https://support.microsoft.com/en-us/office/filter-function-f4f7cb66-82bc-4831-8b04-1b5d5c4cc1b9
+    if include.rows == 1 && include.cols == 1 && (array.rows != 1 || array.cols != 1) {
+        return match include_keep(&args::at(&include, 0, 0)) {
+            Ok(true) => args::array_result(array.rows, array.cols, array.values.to_vec()),
+            Ok(false) => filter_if_empty(if_empty),
+            Err(e) => err(e),
+        };
+    }
+    let (n, by_row) = if include.rows == array.rows
         && (include.cols == 1 || include.cols == array.cols && array.cols == 1)
     {
         (array.rows, true)
@@ -407,7 +415,6 @@ fn filter_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
     } else {
         return err(ErrorKind::Value);
     };
-    let by_row = keep || by_row;
     let mut mask = Vec::with_capacity(n as usize);
     for i in 0..n {
         let s = if by_row {
@@ -415,15 +422,9 @@ fn filter_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         } else {
             args::at(&include, 0, i)
         };
-        if let Some(e) = s.error() {
-            return err(e);
-        }
-        match coerce::to_bool(&s) {
+        match include_keep(&s) {
             Ok(b) => mask.push(b),
-            Err(_) => match coerce::to_number(&s) {
-                Ok(v) => mask.push(v != 0.0),
-                Err(e) => return err(e),
-            },
+            Err(e) => return err(e),
         }
     }
     let kept: Vec<u32> = mask
@@ -432,10 +433,7 @@ fn filter_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
         .filter_map(|(i, k)| k.then_some(i as u32))
         .collect();
     if kept.is_empty() {
-        return match if_empty {
-            Some(s) => RuntimeValue::Scalar(s),
-            None => args::empty_array(),
-        };
+        return filter_if_empty(if_empty);
     }
     if by_row {
         let rows = kept.len() as u32;
@@ -463,6 +461,23 @@ fn filter_impl(ctx: &mut EvalCtx<'_>, args: &[ArgVal]) -> RuntimeValue {
             }
         }
         args::array_result(rows, cols, values)
+    }
+}
+
+fn include_keep(value: &Scalar) -> Result<bool, ErrorKind> {
+    if let Some(e) = value.error() {
+        return Err(e);
+    }
+    match coerce::to_bool(value) {
+        Ok(b) => Ok(b),
+        Err(_) => Ok(coerce::to_number(value)? != 0.0),
+    }
+}
+
+fn filter_if_empty(if_empty: Option<Scalar>) -> RuntimeValue {
+    match if_empty {
+        Some(s) => RuntimeValue::Scalar(s),
+        None => args::empty_array(),
     }
 }
 
