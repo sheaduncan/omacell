@@ -17,6 +17,8 @@ pub fn patch_ai_setup(
 ) -> Result<(), CoreError> {
     let mut doc = if path.is_file() {
         let text = std::fs::read_to_string(path).map_err(|err| error::io(err.to_string()))?;
+        let _config_grammar: toml::Value =
+            toml::from_str(&text).map_err(|err| error::schema(err.to_string()))?;
         text.parse::<DocumentMut>()
             .map_err(|err| error::schema(err.to_string()))?
     } else {
@@ -128,5 +130,24 @@ mod tests {
         let path = dir.path().join("missing.toml");
         patch_ai_setup(&path, false, &[]).unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn patch_rejects_toml_newer_than_the_config_loader() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "schema = 1\nmetadata = {\n  value = 1,\n}\n";
+        assert!(toml::from_str::<toml::Value>(original).is_err());
+        std::fs::write(&path, original).unwrap();
+
+        let error = patch_ai_setup(
+            &path,
+            true,
+            &[("ollama", "openai_compatible", "http://127.0.0.1:11434/v1")],
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "config.schema");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     }
 }

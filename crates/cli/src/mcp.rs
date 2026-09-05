@@ -355,7 +355,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedLines<R> {
     }
 }
 
-/// Session context for `omacell mcp`: proposal notify + WP-22 summary card.
+/// Session context for `omacell mcp`: proposal notifications and a filtered summary card.
 pub fn ctx_for_cli(open_path: Option<String>, reload: ReloadHandle) -> McpCtx {
     let notify_config = reload.snapshot().config;
     McpCtx {

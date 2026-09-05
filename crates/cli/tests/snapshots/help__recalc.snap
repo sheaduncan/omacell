@@ -13,7 +13,7 @@ Options:
       --json                  Machine-readable stdout (and stderr errors)
       --write                 Write the recalculated workbook back
       --dry-run               Validate writes without changing files
-      --wait                  Wait for async AI cells to settle (no-op extra until WP-22)
+      --wait                  Wait for async AI cells to settle before returning
       --set <KEY=VALUE>       Overlay a dotted config key (`appearance.grid_lines=false`). Repeatable
       --config <FILE>         Explicit config file; replaces `$XDG_CONFIG_HOME/omacell/config.toml`
       --theme <FILE>          Explicit Omacell role overlay TOML; wins over `OMACELL_THEME`

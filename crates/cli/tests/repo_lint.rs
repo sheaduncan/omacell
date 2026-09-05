@@ -676,6 +676,30 @@ fn wp28_workflows_are_bounded_and_fail_closed() {
 }
 
 #[test]
+fn release_artifact_handoff_is_explicitly_fail_closed() {
+    let release = fs::read_to_string(workspace_root().join(".github/workflows/release.yml"))
+        .expect("read release workflow");
+
+    let upload_count = release.matches("actions/upload-artifact@").count();
+    assert!(upload_count > 0, "release workflow has no artifact uploads");
+    assert_eq!(
+        release.matches("if-no-files-found: error").count(),
+        upload_count,
+        "every release artifact upload must reject a missing path"
+    );
+    for needle in [
+        "pattern: omacell-*",
+        "merge-multiple: true",
+        "digest-mismatch: error",
+    ] {
+        assert!(
+            release.contains(needle),
+            "release artifact handoff is missing {needle}"
+        );
+    }
+}
+
+#[test]
 fn wp28_packaging_and_rename_paths_are_reproducible() {
     let root = workspace_root();
     let source = fs::read_to_string(root.join("packaging/PKGBUILD")).expect("read PKGBUILD");

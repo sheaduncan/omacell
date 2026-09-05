@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use crate::handler::{CommandContext, Effect};
 use crate::logical::inverse_style;
 use crate::registry::{CommandKind, CommandRegistry, CommandSpec, Exposure};
-use crate::resolve::{ResolvedCell, resolve_cell, resolve_range, resolve_range_unbounded};
+use crate::resolve::{
+    ResolvedCell, ResolvedRange, resolve_cell, resolve_range, resolve_range_unbounded,
+};
 
 /// `edit.insert` / `edit.delcells`
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -1443,21 +1445,88 @@ fn edit_move(ctx: &mut CommandContext<'_>, args: EditMoveArgs) -> Result<Effect,
     })
 }
 
-fn parse_mode(mode: Option<&str>, values: &[f64]) -> Result<FillMode, CoreError> {
+fn parse_mode(mode: &str) -> Result<FillMode, CoreError> {
     Ok(match mode {
-        None => detect_fill(values),
-        Some("linear") => FillMode::Linear,
-        Some("growth") => FillMode::Growth,
-        Some("date") => FillMode::Date,
-        Some("weekday") => FillMode::Weekday,
-        Some("month") => FillMode::Month,
-        Some("year") => FillMode::Year,
-        Some("copy") => FillMode::Copy,
-        Some("formats") => FillMode::Formats,
-        Some(other) => {
+        "linear" => FillMode::Linear,
+        "growth" => FillMode::Growth,
+        "date" => FillMode::Date,
+        "weekday" => FillMode::Weekday,
+        "month" => FillMode::Month,
+        "year" => FillMode::Year,
+        "copy" => FillMode::Copy,
+        "formats" => FillMode::Formats,
+        other => {
             return Err(crate::error::args(format!("unknown fill mode {other:?}")));
         }
     })
+}
+
+fn detected_fill(
+    ctx: &mut CommandContext<'_>,
+    src: ResolvedRange,
+    dest: ResolvedRange,
+) -> Result<u32, CoreError> {
+    let vertical = src.min_col == dest.min_col && src.max_col == dest.max_col;
+    let horizontal = src.min_row == dest.min_row && src.max_row == dest.max_row;
+    let mut changed = 0u32;
+    if vertical {
+        for col in src.min_col..=src.max_col {
+            let values: Vec<_> = (src.min_row..=src.max_row)
+                .filter_map(|row| {
+                    ctx.workbook_ref()
+                        .get(src.sheet, row, col)
+                        .ok()
+                        .flatten()
+                        .and_then(|slot| match slot.value {
+                            omacell_core::value::Value::Number(value) => Some(value),
+                            _ => None,
+                        })
+                })
+                .collect();
+            changed = changed.saturating_add(fill_range(
+                ctx.workbook(),
+                src.sheet,
+                RangeRef::from_corners(
+                    CellRef::new(src.min_row, col)?,
+                    CellRef::new(src.max_row, col)?,
+                ),
+                RangeRef::from_corners(
+                    CellRef::new(dest.min_row, col)?,
+                    CellRef::new(dest.max_row, col)?,
+                ),
+                detect_fill(&values),
+            )?);
+        }
+    } else if horizontal {
+        for row in src.min_row..=src.max_row {
+            let values: Vec<_> = (src.min_col..=src.max_col)
+                .filter_map(|col| {
+                    ctx.workbook_ref()
+                        .get(src.sheet, row, col)
+                        .ok()
+                        .flatten()
+                        .and_then(|slot| match slot.value {
+                            omacell_core::value::Value::Number(value) => Some(value),
+                            _ => None,
+                        })
+                })
+                .collect();
+            changed = changed.saturating_add(fill_range(
+                ctx.workbook(),
+                src.sheet,
+                RangeRef::from_corners(
+                    CellRef::new(row, src.min_col)?,
+                    CellRef::new(row, src.max_col)?,
+                ),
+                RangeRef::from_corners(
+                    CellRef::new(row, dest.min_col)?,
+                    CellRef::new(row, dest.max_col)?,
+                ),
+                detect_fill(&values),
+            )?);
+        }
+    }
+    Ok(changed)
 }
 
 fn edit_fill(ctx: &mut CommandContext<'_>, args: EditFillArgs) -> Result<Effect, CoreError> {
@@ -1468,14 +1537,6 @@ fn edit_fill(ctx: &mut CommandContext<'_>, args: EditFillArgs) -> Result<Effect,
             "cross-sheet fill ranges are not supported by WP-17",
         ));
     }
-    let mut nums = Vec::new();
-    for r in src.min_row..=src.max_row {
-        if let Ok(Some(slot)) = ctx.workbook_ref().get(src.sheet, r, src.min_col)
-            && let omacell_core::value::Value::Number(n) = slot.value
-        {
-            nums.push(n);
-        }
-    }
     let n = if let Some(list) = args.custom_list.as_deref() {
         fill_custom_list(
             ctx.workbook(),
@@ -1485,14 +1546,16 @@ fn edit_fill(ctx: &mut CommandContext<'_>, args: EditFillArgs) -> Result<Effect,
             list,
         )?
     } else {
-        let mode = parse_mode(args.mode.as_deref(), &nums)?;
-        fill_range(
-            ctx.workbook(),
-            src.sheet,
-            to_range(src)?,
-            to_range(dest)?,
-            mode,
-        )?
+        match args.mode.as_deref() {
+            Some(mode) => fill_range(
+                ctx.workbook(),
+                src.sheet,
+                to_range(src)?,
+                to_range(dest)?,
+                parse_mode(mode)?,
+            )?,
+            None => detected_fill(ctx, src, dest)?,
+        }
     };
     Ok(Effect {
         result: serde_json::json!({"changed": n}),

@@ -22,7 +22,7 @@ The spec left several choices as ADRs. Agents need fixed contracts, so this plan
 | D4 | TUI | ratatui + crossterm | Standard, testable with `TestBackend` | — |
 | D5 | Scripting | Lua 5.4 via `mlua` (vendored) | Spec ADR-004 | — |
 | D6 | MCP | `rmcp` (official Rust SDK) over stdio and socket | Spec §8.5 | — |
-| D7 | `.xlsx` | Own OOXML layer over `zip` + `quick-xml`; `calamine` only as a test oracle | Round-trip and L3 preservation need part-level control | — |
+| D7 | `.xlsx` / `.xls` | Own OOXML layer over `zip` + `quick-xml`; `calamine` is a host-side test oracle and the parser inside the private, resource-limited `.xls` worker | Round-trip and L3 preservation need part-level control; isolating legacy BIFF protects the host process | — |
 | D8 | AI providers (ADR-005) | Two wire protocols (OpenAI-compatible, Anthropic Messages); no vendor SDKs; async confined to `ai`/MCP via `tokio` | Spec §8.1 | — |
 | D9 | Skill format (ADR-006) | `SKILL.md` directories, same layout as Omarchy's | Spec §8.8 | — |
 | D10 | License | **MIT** | Matches Omarchy; confirmed by the merged maintenance-policy change and committed `LICENSE` | Decided |
@@ -44,19 +44,11 @@ The spec left several choices as ADRs. Agents need fixed contracts, so this plan
 
 Mapping to the spec's milestones: Phases 0–3 deliver M1 (engine + CLI + TUI, `.xlsx` L1/L2). Phase 4 delivers M2 (GUI, daily-driver data tools). Phase 5 delivers the AI and agent parts of M2–M4. Phase 6 delivers M3 and the rest of M4. Phase 7 is 1.0.
 
-### Immediate dispatch point (31 August 2026)
+### Implementation status (4 September 2026)
 
-Merged: WP-00–WP-22, WP-15a, WP-05F, WP-24, WP-25, WP-26, WP-29, WP-S1, WP-S2. Gate G1 is in [`reports/G1.md`](../../reports/G1.md). Reports for every merged package live in `reports/`.
+All implementation packages through WP-29, including the WP-24a pivot-fidelity follow-up, are merged. Gate G1 is in [`reports/G1.md`](../../reports/G1.md), and reports for every merged package live in `reports/`.
 
-Ready now (may run concurrently; one agent per lane):
-
-- **Lane D:** [WP-23](wp/WP-23-ai-features.md) — depends on WP-22, now merged.
-- **Lane B:** [WP-27](wp/WP-27-other-formats.md) — depends on WP-08 and WP-10, both merged.
-- **Lane A follow-up:** [WP-24a](wp/WP-24a-pivot-fidelity.md) — depends on WP-24, merged.
-
-[WP-28](wp/WP-28-packaging-release-hardening.md) waits on WP-23 and WP-27. [WP-30](wp/WP-30-repository-security-controls.md) is maintainer GitHub settings, not an agent PR.
-
-Do not start WP-28 until every package in its *Depends on* list is merged.
+[WP-30](wp/WP-30-repository-security-controls.md) is separately owned maintainer work in GitHub repository settings, not an agent PR. The remaining release work is the human verification listed in §4 and the integration-audit report; it is not an unimplemented package dependency.
 
 ## 4. Gates (human checkpoints)
 
@@ -230,7 +222,7 @@ graph LR
   WP_27 --> WP_28
 ```
 
-Those paths have landed. The remaining critical path is AI + formats + release: `WP-23` in parallel with `WP-27` (and optional `WP-24a`), then `WP-28`. Treat package sizes as ordering signals, not commitments. The live queue is the *Immediate dispatch point* above.
+All package paths in this graph have landed. Treat package sizes and edges as the historical execution plan; current release readiness is governed by the human gates in §4 and the integration-audit report.
 
 ## 7. Work-package index
 

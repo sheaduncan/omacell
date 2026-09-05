@@ -77,3 +77,4 @@
 45352	mmmmm	en-US	1900	M	1 Mar 2024 = 45323+29=45352 (2024 leap)
 1	ge.m.d	en-US	1900	1900.1.1	g treated as year alias (e) until era calendars land; see Open questions
 36526	e	en-US	1900	2000	e is ISO year (yyyy)
+46027	dd.mm.yy	de-DE	1900	05.01.26	punctuation in date formats is literal, not replaced by locale numeric separators

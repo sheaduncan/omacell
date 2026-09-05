@@ -146,6 +146,32 @@ fn expand_header_substitutes_excel_ampersand_fields() {
 }
 
 #[test]
+fn expand_header_consumes_control_codes_and_uses_live_document_fields() {
+    let pages = {
+        let mut wb = Workbook::new();
+        fill_grid(&mut wb, 1, 1);
+        paginate(wb.sheet(wb.active_sheet()).unwrap(), &PageSetup::default()).unwrap()
+    };
+    let text = expand_header(
+        "&L&D &T &C&F &Z &R&P+2/&N-1 &Bbold&B &KFF0000red &123pt &G &&",
+        &pages[0],
+        "Sheet1",
+        "/work/input/book.xlsx",
+    );
+    assert!(!text.contains("1970-01-01"), "{text}");
+    for control in ["&L", "&C", "&R", "&B", "&K", "&G", "&D", "&T"] {
+        assert!(
+            !text.contains(control),
+            "control {control} leaked in {text:?}"
+        );
+    }
+    assert!(text.contains("book.xlsx /work/input"), "{text}");
+    assert!(text.contains("3/0"), "{text}");
+    assert!(text.contains("bold red 3pt"), "{text}");
+    assert!(text.ends_with('&'), "{text}");
+}
+
+#[test]
 fn fit_to_width_leaves_height_unconstrained() {
     let mut wb = Workbook::new();
     fill_grid(&mut wb, 200, 4);

@@ -38,7 +38,7 @@ const SYSTEM_INFO: SystemInfo<'_> = SystemInfo {
 pub struct PdfOptions {
     /// Optional TrueType face to embed (`/FontFile2`). Helvetica otherwise.
     pub font_path: Option<PathBuf>,
-    /// File name substituted into header/footer `&F`.
+    /// Source document path used by header/footer `&F` and `&Z`.
     pub file_name: String,
     /// Chart colours (print equals screen when the GUI theme is supplied).
     pub theme: ChartTheme,
