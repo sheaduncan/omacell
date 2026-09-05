@@ -94,6 +94,13 @@ Primary upstream references used during review:
   loader grammar before the format-preserving parse and leaves rejected files
   byte-identical. The fuzz-workspace lock now records the new `toml_writer`
   graph instead of rewriting itself in CI.
+- **#138 — `mlua` 0.12.1:** reviewed the complete 0.11–0.12 migration notes,
+  including the Lua 5.4.8 update, hook changes, userdata/thread changes, and
+  newly fallible metatable operations. Omacell's public Lua API and sandbox
+  profiles remain unchanged. The runtime now propagates failures while
+  installing the embedded instruction hook and JSON-array metatable instead
+  of silently discarding them. The independently committed fuzz lock is also
+  synchronized to `mlua` 0.12.1 and its updated vendored Lua/tool graph.
 
 ## Interfaces exposed
 
@@ -132,6 +139,13 @@ None yet.
   graph. The combined config/theme/keymap/trust parser fuzz target completed
   10,000 cases without a crash, and fuzz-graph `cargo deny` passed. Exact local
   and hosted gates pending.
+- #138: all 39 `omacell-lua` API, interactive-runtime, recorder, sandbox, and
+  trust tests passed. Root and fuzz-graph `cargo deny` checks passed with only
+  the repository's already-allowed duplicate/license warnings. The Lua runtime
+  fuzz target completed 10,000 cases without a crash; LeakSanitizer was
+  disabled for that local run because this container's ptrace policy prevents
+  LeakSanitizer startup, while the target's AddressSanitizer instrumentation
+  remained enabled. Exact local and hosted gates pending.
 
 ## Open questions
 
