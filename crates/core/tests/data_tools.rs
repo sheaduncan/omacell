@@ -1169,6 +1169,34 @@ fn validation_list_resolves_a_sheet_scoped_defined_name() {
 }
 
 #[test]
+fn validation_list_rejects_defined_name_cycles() {
+    let mut wb = Workbook::new();
+    let s = wb.active_sheet();
+    for (name, formula) in [("Colors", "=OtherColors"), ("OtherColors", "=Colors")] {
+        wb.define_name(DefinedName {
+            name: name.into(),
+            scope: NameScope::Workbook,
+            referent: NameReferent::Formula(formula.into()),
+            comment: None,
+        })
+        .unwrap();
+    }
+    wb.set_validations(
+        s,
+        vec![DataValidation {
+            range: range(0, 0, 0, 0),
+            kind: DvType::List,
+            formula1: Some("=Colors".into()),
+            ..DataValidation::default()
+        }],
+    )
+    .unwrap();
+
+    let error = validation_list_values(&wb, s, 0, 0).unwrap_err();
+    assert_eq!(error.code, "validation.list");
+}
+
+#[test]
 fn flash_fill_first_word() {
     let mut wb = Workbook::new();
     let s = wb.active_sheet();

@@ -859,11 +859,22 @@ fn value_counts(wb: &Workbook, sheet: SheetId, range: RangeRef) -> BTreeMap<Stri
 fn value_key(wb: &Workbook, value: Value) -> Option<String> {
     match value {
         Value::Empty => None,
-        Value::Number(number) => Some(format!("n:{:016x}", number.to_bits())),
+        Value::Number(number) => Some(format!(
+            "n:{:016x}",
+            if number == 0.0 {
+                0.0f64.to_bits()
+            } else {
+                number.to_bits()
+            }
+        )),
         Value::Bool(value) => Some(format!("b:{value}")),
         Value::Text(id) => Some(format!(
             "t:{}",
-            wb.intern().strings.get(id).unwrap_or_default()
+            wb.intern()
+                .strings
+                .get(id)
+                .unwrap_or_default()
+                .to_lowercase()
         )),
         Value::Error(error) => Some(format!("e:{}", error.as_str())),
         Value::Array(id) => Some(format!("a:{}", id.index())),
