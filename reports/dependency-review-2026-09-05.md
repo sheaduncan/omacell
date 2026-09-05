@@ -76,6 +76,14 @@ Primary upstream references used during review:
   macros and permits const empty macro initialization. Omacell uses ordinary
   `IndexMap` values, not the changed macros, and the update adds no package or
   second indexmap version.
+- **#136 — `clap_mangen` 0.3.3:** reviewed the complete 0.3 changelog. The
+  only compatibility switch requires an opt-in `env` feature for clap
+  environment annotations; Omacell declares none. The later releases improve
+  synopsis handling for required groups, override usage, and hidden
+  positionals without changing the `Man::new(...).render(...)` API used here.
+  Regenerating the complete `omacell.1` page produced the exact same SHA-256
+  (`ff4aa08fc8e7c51cbbc877169d6e703a88be660a80aa1f070e6e2ac2b4cc5a77`),
+  so this CLI currently exercises none of those output changes.
 
 ## Interfaces exposed
 
@@ -101,6 +109,11 @@ None yet.
   first sandboxed run could not bind Unix sockets; the identical permitted run
   passed, including all 24 IPC server tests. Exact local and hosted gates
   pending.
+- #136: the focused distribution test passed, generated all Bash, Fish, Zsh,
+  and man release files, and produced a byte-identical man page; its digest is
+  recorded above.
+  `cargo deny check` passed with only the repository's already-allowed
+  duplicate/license warnings. Exact local and hosted gates pending.
 
 ## Open questions
 
