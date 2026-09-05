@@ -9,8 +9,10 @@ use crate::date_system::DateSystem;
 use crate::dates::serial_to_date;
 use crate::error::CoreError;
 use crate::limits::{MAX_COLS, MAX_ROWS};
+use crate::locale::LocaleId;
+use crate::numfmt::{self, FormatOptions, FormatValue};
 use crate::storage::{CellFlags, CellSlot};
-use crate::style::{Font, Style, StyleId};
+use crate::style::{Font, NumFmtId, Style, StyleId};
 use crate::value::Value;
 use crate::workbook::Workbook;
 
@@ -609,6 +611,7 @@ pub struct PivotColumns {
     headers: Vec<String>,
     columns: Vec<Vec<CacheValue>>,
     by_name: BTreeMap<String, usize>,
+    display_overrides: BTreeMap<(usize, usize), String>,
     rows: usize,
 }
 
@@ -649,6 +652,7 @@ impl PivotColumns {
             headers: headers.to_vec(),
             columns,
             by_name,
+            display_overrides: BTreeMap::new(),
             rows: rows.len(),
         })
     }
@@ -676,6 +680,13 @@ impl PivotColumns {
 
     fn value(&self, row: usize, name: &str) -> Option<&CacheValue> {
         self.column(name).and_then(|column| column.get(row))
+    }
+
+    fn display_override(&self, row: usize, name: &str) -> Option<&str> {
+        let column = *self.by_name.get(name)?;
+        self.display_overrides
+            .get(&(row, column))
+            .map(String::as_str)
     }
 }
 
@@ -730,7 +741,9 @@ impl Agg {
 /// Refresh `pivot` from its source into an in-memory grid (does not write the sheet).
 pub fn materialize(wb: &Workbook, pivot: &PivotTable) -> Result<Vec<PivotCell>, CoreError> {
     let (headers, rows) = cache_table(wb, pivot)?;
-    materialize_from_cache(wb.settings().date_system, pivot, &headers, &rows)
+    let mut columns = PivotColumns::from_rows(&headers, &rows)?;
+    add_live_display_overrides(wb, pivot, &mut columns);
+    materialize_columns(wb.settings().date_system, pivot, columns)
 }
 
 /// Materialize from cached source rows (used when the live range is missing).
@@ -741,6 +754,14 @@ pub fn materialize_from_cache(
     rows: &[Vec<CacheValue>],
 ) -> Result<Vec<PivotCell>, CoreError> {
     let columns = PivotColumns::from_rows(headers, rows)?;
+    materialize_columns(date_system, pivot, columns)
+}
+
+fn materialize_columns(
+    date_system: DateSystem,
+    pivot: &PivotTable,
+    columns: PivotColumns,
+) -> Result<Vec<PivotCell>, CoreError> {
     validate_definition(pivot, &columns)?;
     let filtered: Vec<usize> = (0..columns.row_count())
         .filter(|row| {
@@ -805,12 +826,17 @@ pub fn materialize_from_cache(
     } else {
         1
     };
-    let col_header_rows = if pivot.cols.is_empty() {
+    let field_header_rows = if pivot.cols.is_empty() {
         1
     } else {
         u32::try_from(pivot.cols.len())
             .map_err(|_| CoreError::new("pivot.output", "too many pivot column fields"))?
     };
+    let value_caption_row =
+        (!pivot.cols.is_empty() && pivot.data.len() > 1).then_some(field_header_rows);
+    let col_header_rows = field_header_rows
+        .checked_add(u32::from(value_caption_row.is_some()))
+        .ok_or_else(|| CoreError::new("pivot.output", "pivot header height overflows"))?;
     let mut cells = Vec::new();
     if pivot.cols.is_empty() {
         if pivot.data.is_empty() {
@@ -833,10 +859,10 @@ pub fn materialize_from_cache(
                     part,
                 ));
             }
-            if pivot.cols.len() < data_n.max(1) && pivot.data.len() > 1 {
+            if let Some(caption_row) = value_caption_row {
                 for (di, df) in pivot.data.iter().enumerate() {
                     cells.push(label(
-                        col_header_rows.saturating_sub(1),
+                        caption_row,
                         row_label_cols + (ci * data_n + di) as u16,
                         &format!("{} {}", agg_name(df.agg), df.source),
                     ));
@@ -851,6 +877,15 @@ pub fn materialize_from_cache(
             row_label_cols + (col_keys.len() * data_n) as u16,
             "Grand Total",
         ));
+        if let Some(caption_row) = value_caption_row {
+            for (di, df) in pivot.data.iter().enumerate() {
+                cells.push(label(
+                    caption_row,
+                    row_label_cols + (col_keys.len() * data_n + di) as u16,
+                    &format!("{} {}", agg_name(df.agg), df.source),
+                ));
+            }
+        }
     }
     let body0 = col_header_rows;
     let mut r = body0;
@@ -1167,6 +1202,91 @@ pub fn cache_table(
     }
     apply_calc_fields(pivot, &mut headers, &mut rows)?;
     Ok((headers, rows))
+}
+
+fn add_live_display_overrides(wb: &Workbook, pivot: &PivotTable, columns: &mut PivotColumns) {
+    let (source_row, source_col, _, source_end_col) = norm(pivot.source);
+    let source_width = usize::from(source_end_col - source_col) + 1;
+    let mut dimensions = BTreeSet::new();
+    dimensions.extend(pivot.rows.iter().map(String::as_str));
+    dimensions.extend(pivot.cols.iter().map(String::as_str));
+    dimensions.extend(pivot.filters.iter().map(|(name, _)| name.as_str()));
+    for name in dimensions {
+        let Some(&column) = columns.by_name.get(name) else {
+            continue;
+        };
+        if column >= source_width {
+            continue;
+        }
+        let Ok(column_offset) = u16::try_from(column) else {
+            continue;
+        };
+        for row in 0..columns.rows {
+            let Ok(row_offset) = u32::try_from(row) else {
+                break;
+            };
+            let Some(sheet_row) = source_row
+                .checked_add(1)
+                .and_then(|first| first.checked_add(row_offset))
+            else {
+                break;
+            };
+            let sheet_col = source_col + column_offset;
+            let Some(slot) = wb
+                .get(pivot.source_sheet, sheet_row, sheet_col)
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            let Some(display) = live_item_display(wb, *slot) else {
+                continue;
+            };
+            let fallback = columns
+                .columns
+                .get(column)
+                .and_then(|values| values.get(row))
+                .map(cache_item_display)
+                .unwrap_or_else(|| "(blank)".into());
+            if display != fallback {
+                columns.display_overrides.insert((row, column), display);
+            }
+        }
+    }
+}
+
+fn live_item_display(wb: &Workbook, slot: CellSlot) -> Option<String> {
+    match slot.value {
+        Value::Number(number) => {
+            let style = wb.intern().styles.get(slot.style)?;
+            if style.num_fmt == NumFmtId::GENERAL {
+                return None;
+            }
+            let code = wb.num_fmt_code(style.num_fmt)?;
+            Some(
+                numfmt::format_with(
+                    FormatValue::Number(number),
+                    &code,
+                    &FormatOptions {
+                        locale: LocaleId::EN_US,
+                        date_system: wb.settings().date_system,
+                        width: None,
+                    },
+                )
+                .text,
+            )
+        }
+        Value::Bool(value) => Some(if value { "TRUE" } else { "FALSE" }.into()),
+        Value::Empty | Value::Text(_) | Value::Error(_) | Value::Array(_) => None,
+    }
+}
+
+fn cache_item_display(value: &CacheValue) -> String {
+    match value {
+        CacheValue::Number(number) => numfmt::general(*number),
+        CacheValue::Text(text) if !text.is_empty() => text.clone(),
+        CacheValue::Text(_) | CacheValue::Empty => "(blank)".into(),
+    }
 }
 
 fn apply_calc_fields(
@@ -1743,7 +1863,12 @@ fn validate_materialized_shape(
     let cols = row_label_cols
         .checked_add(data_cols.max(data_n))
         .ok_or_else(|| CoreError::new("pivot.output", "pivot output width overflows"))?;
-    let header_rows = pivot.cols.len().max(1);
+    let header_rows = pivot
+        .cols
+        .len()
+        .max(1)
+        .checked_add(usize::from(!pivot.cols.is_empty() && pivot.data.len() > 1))
+        .ok_or_else(|| CoreError::new("pivot.output", "pivot header height overflows"))?;
     let subtotal_rows = if pivot.subtotals && pivot.rows.len() > 1 {
         row_keys
     } else {
@@ -2273,6 +2398,37 @@ fn cell_text(wb: &Workbook, sheet: SheetId, row: u32, col: u16) -> String {
     }
 }
 
+#[derive(Clone, Debug)]
+enum PivotSortKey {
+    Number(f64),
+    Text { folded: String, original: String },
+    Blank,
+}
+
+impl PivotSortKey {
+    fn compare(&self, other: &Self) -> std::cmp::Ordering {
+        use PivotSortKey::{Blank, Number, Text};
+        match (self, other) {
+            (Number(left), Number(right)) => left.total_cmp(right),
+            (
+                Text {
+                    folded: left_folded,
+                    original: left_original,
+                },
+                Text {
+                    folded: right_folded,
+                    original: right_original,
+                },
+            ) => left_folded
+                .cmp(right_folded)
+                .then_with(|| left_original.cmp(right_original)),
+            (Number(_), Text { .. } | Blank) | (Text { .. }, Blank) => std::cmp::Ordering::Less,
+            (Text { .. } | Blank, Number(_)) | (Blank, Text { .. }) => std::cmp::Ordering::Greater,
+            (Blank, Blank) => std::cmp::Ordering::Equal,
+        }
+    }
+}
+
 fn unique_keys(
     columns: &PivotColumns,
     rows: &[usize],
@@ -2299,17 +2455,8 @@ fn unique_keys(
     }
     let mut keys: Vec<_> = set.into_iter().collect();
     keys.sort_by(|(left_display, left_sort), (right_display, right_sort)| {
-        for ((left, left_text), (right, right_text)) in left_sort
-            .iter()
-            .zip(left_display)
-            .zip(right_sort.iter().zip(right_display))
-        {
-            let ordering = match (left, right) {
-                (Some(a), Some(b)) => a.total_cmp(b),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => left_text.cmp(right_text),
-            };
+        for (left, right) in left_sort.iter().zip(right_sort) {
+            let ordering = left.compare(right);
             if !ordering.is_eq() {
                 return ordering;
             }
@@ -2350,21 +2497,24 @@ fn group_key(
     group: &PivotGroup,
     date_system: DateSystem,
 ) -> String {
-    let (num, text) = value_parts(columns.value(row, field));
+    let value = columns.value(row, field);
     match group {
-        PivotGroup::None => {
-            if let Some(n) = num {
-                n.to_string()
-            } else {
-                text.into_owned()
-            }
-        }
+        PivotGroup::None => columns
+            .display_override(row, field)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                value
+                    .map(cache_item_display)
+                    .unwrap_or_else(|| "(blank)".into())
+            }),
         PivotGroup::Date(g) => {
-            let Some(n) = num else {
-                return text.into_owned();
+            let Some(CacheValue::Number(n)) = value else {
+                return value
+                    .map(cache_item_display)
+                    .unwrap_or_else(|| "(blank)".into());
             };
             let Some(d) = serial_to_date(n.trunc() as i64, date_system) else {
-                return n.to_string();
+                return numfmt::general(*n);
             };
             match g {
                 DateGroup::Years => format!("{}", d.year),
@@ -2374,19 +2524,21 @@ fn group_key(
             }
         }
         PivotGroup::Numeric { start, size } => {
-            let Some(n) = num else {
-                return text.into_owned();
+            let Some(CacheValue::Number(n)) = value else {
+                return value
+                    .map(cache_item_display)
+                    .unwrap_or_else(|| "(blank)".into());
             };
             if size.is_finite() && *size > 0.0 && start.is_finite() {
                 let i = ((n - start) / size).floor();
                 let bin = start + i * size;
                 if bin.is_finite() {
-                    bin.to_string()
+                    numfmt::general(bin)
                 } else {
-                    n.to_string()
+                    numfmt::general(*n)
                 }
             } else {
-                n.to_string()
+                numfmt::general(*n)
             }
         }
     }
@@ -2398,27 +2550,39 @@ fn group_sort_key(
     field: &str,
     group: &PivotGroup,
     date_system: DateSystem,
-) -> Option<f64> {
-    let (number, _) = value_parts(columns.value(row, field));
-    let number = number?;
-    match group {
-        PivotGroup::None => Some(number),
-        PivotGroup::Numeric { start, size }
-            if start.is_finite() && size.is_finite() && *size > 0.0 =>
-        {
-            let bin = start + ((number - start) / size).floor() * size;
-            bin.is_finite().then_some(bin)
-        }
-        PivotGroup::Date(group) => {
-            let date = serial_to_date(number.trunc() as i64, date_system)?;
-            Some(match group {
-                DateGroup::Years => f64::from(date.year),
-                DateGroup::Quarters => f64::from(date.year) * 4.0 + f64::from((date.month - 1) / 3),
-                DateGroup::Months => f64::from(date.year) * 12.0 + f64::from(date.month - 1),
-                DateGroup::Days => number.trunc(),
+) -> PivotSortKey {
+    let Some(value) = columns.value(row, field) else {
+        return PivotSortKey::Blank;
+    };
+    match value {
+        CacheValue::Number(number) => {
+            PivotSortKey::Number(match group {
+                PivotGroup::None => *number,
+                PivotGroup::Numeric { start, size }
+                    if start.is_finite() && size.is_finite() && *size > 0.0 =>
+                {
+                    let bin = start + ((number - start) / size).floor() * size;
+                    if bin.is_finite() { bin } else { *number }
+                }
+                PivotGroup::Date(group) => serial_to_date(number.trunc() as i64, date_system)
+                    .map_or(*number, |date| match group {
+                        DateGroup::Years => f64::from(date.year),
+                        DateGroup::Quarters => {
+                            f64::from(date.year) * 4.0 + f64::from((date.month - 1) / 3)
+                        }
+                        DateGroup::Months => {
+                            f64::from(date.year) * 12.0 + f64::from(date.month - 1)
+                        }
+                        DateGroup::Days => number.trunc(),
+                    }),
+                PivotGroup::Numeric { .. } => *number,
             })
         }
-        PivotGroup::Numeric { .. } => None,
+        CacheValue::Text(text) if !text.is_empty() => PivotSortKey::Text {
+            folded: text.to_lowercase(),
+            original: text.clone(),
+        },
+        CacheValue::Text(_) | CacheValue::Empty => PivotSortKey::Blank,
     }
 }
 
