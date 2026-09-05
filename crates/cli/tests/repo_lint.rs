@@ -716,6 +716,10 @@ fn wp28_packaging_and_rename_paths_are_reproducible() {
         fetch < frozen_build,
         "the clean binary build must populate Cargo's cache before --frozen"
     );
+    assert!(
+        binary_smoke.contains("makepkg --noconfirm --cleanbuild -p PKGBUILD-bin"),
+        "the binary smoke must tell makepkg to use its non-default build script"
+    );
 
     let rename = fs::read_to_string(root.join("scripts/rename.sh")).expect("read rename");
     assert!(rename.contains("source packaging/name.env"));

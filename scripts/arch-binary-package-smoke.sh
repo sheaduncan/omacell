@@ -54,7 +54,7 @@ docker run --rm --volume "$root:/src:ro" "$image" bash -euo pipefail -c '
   su build -c "
     cd /home/build/package
     PKGBUILD_BIN_X86_64_URL=file:///home/build/omacell-0.0.0-x86_64.tar.zst \\
-      PKGBUILD_BIN_X86_64_SHA256=$checksum makepkg --noconfirm --cleanbuild
+      PKGBUILD_BIN_X86_64_SHA256=$checksum makepkg --noconfirm --cleanbuild -p PKGBUILD-bin
   "
   package_file=$(find /home/build/package -maxdepth 1 -name "omacell-bin-0.0.0-1-*.pkg.tar.zst" -print -quit)
   test -n "$package_file"
