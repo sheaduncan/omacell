@@ -613,7 +613,7 @@ fn wp28_workflows_are_bounded_and_fail_closed() {
     let ci = fs::read_to_string(workflows.join("ci.yml")).expect("read CI workflow");
     for needle in [
         "nightly-2026-08-28",
-        "cargo +nightly-2026-08-28 fuzz build",
+        "cargo +nightly-2026-08-28 fuzz build --target x86_64-unknown-linux-gnu",
         "cargo deny --manifest-path fuzz/Cargo.toml check",
         "cargo deny --manifest-path spikes/grid-egui/Cargo.toml check",
         "cargo deny --manifest-path spikes/ironcalc/Cargo.toml check",
@@ -625,7 +625,7 @@ fn wp28_workflows_are_bounded_and_fail_closed() {
     for needle in [
         "toolchain: nightly-2026-08-28",
         "cargo +nightly-2026-08-28 fuzz list",
-        "cargo +nightly-2026-08-28 fuzz build",
+        "cargo +nightly-2026-08-28 fuzz build --target x86_64-unknown-linux-gnu",
         "test \"${#fuzz_targets[@]}\" -gt 0",
         "curl --fail --silent --show-error http://127.0.0.1:11434/api/tags",
     ] {

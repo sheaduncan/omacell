@@ -54,9 +54,9 @@ jobs:
         run: |
           mapfile -t fuzz_targets < <(cargo +nightly-2026-08-28 fuzz list)
           test "${#fuzz_targets[@]}" -gt 0
-          cargo +nightly-2026-08-28 fuzz build
+          cargo +nightly-2026-08-28 fuzz build --target x86_64-unknown-linux-gnu
           for target in "${fuzz_targets[@]}"; do
-            cargo +nightly-2026-08-28 fuzz run "$target" -- -max_total_time=600
+            cargo +nightly-2026-08-28 fuzz run "$target" --target x86_64-unknown-linux-gnu -- -max_total_time=600
           done
 
   local-model-evals:
