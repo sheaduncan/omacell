@@ -805,6 +805,16 @@ fn wp28_fixed_host_produces_fresh_complete_results() {
     let workflow = fs::read_to_string(root.join(".github/workflows/performance.yml"))
         .expect("read performance workflow");
     assert!(
+        !workflow.contains("CARGO_TARGET_DIR: ${{ runner.temp }}"),
+        "runner context is unavailable in jobs.<job_id>.env"
+    );
+    assert!(
+        workflow.contains(
+            "echo \"CARGO_TARGET_DIR=$RUNNER_TEMP/omacell-perf-target\" >> \"$GITHUB_ENV\""
+        ),
+        "fixed-host workflow must export its Cargo target directory on the runner"
+    );
+    assert!(
         !workflow.contains("OMACELL_PERF_RESULTS"),
         "the workflow must create its result artifact instead of inheriting a host file"
     );
