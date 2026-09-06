@@ -590,8 +590,6 @@ impl Tui {
         };
         let prompt = if handoff.diagnose {
             "Diagnose this Omacell workbook".into()
-        } else if handoff.prompt.is_empty() {
-            "Help with this workbook".into()
         } else {
             handoff.prompt
         };
