@@ -11,7 +11,9 @@ use omacell_ai::complete::{complete_schema, parse_completion};
 use omacell_ai::fence_data;
 use omacell_ai::formula::{formula_schema, parse_and_eval};
 use omacell_ai::functions::is_ai_formula;
-use omacell_ai::import_assist::{import_plan_schema, import_request_payload, parse_plan_overlay};
+use omacell_ai::import_assist::{
+    import_plan_schema, import_request_payload, parse_import_plan, parse_plan_overlay,
+};
 use omacell_ai::plan::{parse_plan, plan_schema};
 use omacell_ai::policy::PolicySnapshot;
 use omacell_ai::runtime::{AiRuntime, completion_enabled, fast_is_local};
@@ -508,7 +510,7 @@ fn run_import(
         )
         .map_err(CoreError::from)?;
     let value = structured_reply("import", &reply.text)?;
-    let proposed = parse_plan_overlay(&value).map_err(CoreError::from)?;
+    let proposed = parse_plan_overlay(&current, &value).map_err(CoreError::from)?;
     Ok(Effect::query(json!({
         "current": current,
         "proposed": proposed,
@@ -520,7 +522,7 @@ fn import_request(
     args: &ImportArgs,
     policy: &PolicySnapshot,
 ) -> Result<(ImportPlan, Value), CoreError> {
-    let current = parse_plan_overlay(&args.plan).map_err(CoreError::from)?;
+    let current = parse_import_plan(&args.plan).map_err(CoreError::from)?;
     let preview = args
         .preview
         .as_ref()
@@ -767,13 +769,12 @@ fn ai_preflight(ctx: &CommandContext<'_>) -> Effect {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
+#[path = "ai_cmd_test_support.rs"]
+mod test_support;
 
-    use omacell_ai::http::{HttpRequest, HttpResponse, SharedTransport, Transport};
-    use omacell_ai::{AiRuntime, PromptSet, register_ai_functions};
+#[cfg(test)]
+mod tests {
     use omacell_bus::Bus;
-    use omacell_conf::schema::package_defaults;
     use omacell_core::command::Origin;
     use omacell_core::eval::FnRegistry;
     use omacell_core::recalc::RecalcEngine;
@@ -781,44 +782,8 @@ mod tests {
     use omacell_fn::register_all;
     use serde_json::json;
 
+    use super::test_support::ai_test_bus;
     use omacell_ai::plan::{parse_plan, to_calls};
-
-    struct PlanTransport;
-
-    #[async_trait::async_trait]
-    impl Transport for PlanTransport {
-        async fn send(&self, _req: HttpRequest) -> Result<HttpResponse, omacell_ai::AiError> {
-            Ok(HttpResponse {
-                status: 200,
-                body: json!({
-                    "choices": [{"message": {"content": "{\"commands\":[]}"}}]
-                }),
-                chunks: Vec::new(),
-            })
-        }
-    }
-
-    #[derive(Default)]
-    struct ImportTransport {
-        requests: Mutex<Vec<HttpRequest>>,
-    }
-
-    #[async_trait::async_trait]
-    impl Transport for ImportTransport {
-        async fn send(&self, req: HttpRequest) -> Result<HttpResponse, omacell_ai::AiError> {
-            self.requests.lock().unwrap().push(req);
-            Ok(HttpResponse {
-                status: 200,
-                body: json!({
-                    "choices": [{"message": {"content": concat!(
-                        "{\"plan\":{\"delimiter\":\",\",\"has_header\":true,",
-                        "\"skip_rows\":0,\"decimal\":\".\",\"thousands\":\",\"}}"
-                    )}}]
-                }),
-                chunks: Vec::new(),
-            })
-        }
-    }
 
     #[test]
     fn plan_changeset_apply_revert_is_inverse() {
@@ -845,53 +810,10 @@ mod tests {
 
     #[test]
     fn ai_queries_do_not_send_during_preflight_or_dry_run() {
-        let mut config = package_defaults().unwrap();
-        config.ai.enabled = true;
-        config.ai.providers.insert(
-            "test".into(),
-            omacell_conf::schema::AiProvider {
-                kind: "openai_compatible".into(),
-                endpoint: "http://127.0.0.1:9/v1".into(),
-                local: true,
-                secret_env: None,
-                secret_cmd: None,
-                timeout: 0,
-                headers: Default::default(),
-            },
-        );
-        config.ai.models.default = "test:model".into();
-        let tokio = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let temp = tempfile::TempDir::new().unwrap();
-        let transport: SharedTransport = Arc::new(PlanTransport);
-        let runtime = AiRuntime::new(
-            tokio.handle().clone(),
-            config,
-            transport,
-            PromptSet::builtin(),
-            temp.path().join("cache"),
-            temp.path().join("state"),
-            Default::default(),
-        );
-        runtime.set_catalog(vec![(
-            "cell.set".into(),
-            json!({"id":"cell.set","doc":"Set a cell","args":{"type":"object"}}),
-        )]);
-        let mut registry = FnRegistry::new();
-        register_all(&mut registry);
-        let engine = RecalcEngine::new(registry);
-        let mut bus = Bus::new(Workbook::new(), engine).unwrap();
-        super::register_ai_commands(
-            &mut bus,
-            super::AiSession {
-                runtime: Arc::clone(&runtime),
-            },
-        )
-        .unwrap();
+        let mut test = ai_test_bus("{\"commands\":[]}", |_| {});
 
-        let dry = bus
+        let dry = test
+            .bus
             .dry_run(
                 Origin::User,
                 "ai.plan",
@@ -899,81 +821,44 @@ mod tests {
             )
             .unwrap();
         assert!(dry.outcome.ok);
-        assert_eq!(runtime.session_stats().requests, 0);
+        assert_eq!(test.runtime.session_stats().requests, 0);
 
-        let live = bus.execute(
+        let live = test.bus.execute(
             Origin::User,
             "ai.plan",
             json!({"prompt":"set A1","apply":false}),
         );
         assert!(live.ok, "{:?}", live.error);
-        assert_eq!(runtime.session_stats().requests, 1);
+        assert_eq!(test.runtime.session_stats().requests, 1);
     }
 
     #[test]
     fn ai_refresh_schedules_auto_disabled_cells_for_settlement() {
-        let mut config = package_defaults().unwrap();
-        config.ai.enabled = true;
-        config.ai.functions.auto = false;
-        config.ai.providers.insert(
-            "test".into(),
-            omacell_conf::schema::AiProvider {
-                kind: "openai_compatible".into(),
-                endpoint: "http://127.0.0.1:9/v1".into(),
-                local: true,
-                secret_env: None,
-                secret_cmd: None,
-                timeout: 0,
-                headers: Default::default(),
-            },
-        );
-        config.ai.models.default = "test:model".into();
-        let tokio = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let temp = tempfile::TempDir::new().unwrap();
-        let transport: SharedTransport = Arc::new(PlanTransport);
-        let runtime = AiRuntime::new(
-            tokio.handle().clone(),
-            config,
-            transport,
-            PromptSet::builtin(),
-            temp.path().join("cache"),
-            temp.path().join("state"),
-            Default::default(),
-        );
-        let mut registry = FnRegistry::new();
-        register_all(&mut registry);
-        register_ai_functions(&mut registry);
-        let mut engine = RecalcEngine::new(registry);
-        engine.set_async_provider(runtime.clone());
-        let mut bus = Bus::new(Workbook::new(), engine).unwrap();
-        super::register_ai_commands(
-            &mut bus,
-            super::AiSession {
-                runtime: runtime.clone(),
-            },
-        )
-        .unwrap();
+        let mut test = ai_test_bus("{\"commands\":[]}", |config| {
+            config.ai.functions.auto = false;
+        });
 
-        let set = bus.execute(
+        let set = test.bus.execute(
             Origin::User,
             "cell.set",
             json!({"ref":"A1","input":"=AI(\"name\")"}),
         );
         assert!(set.ok, "{:?}", set.error);
-        assert!(runtime.pending_generation().is_none());
+        assert!(test.runtime.pending_generation().is_none());
 
-        let empty = bus.execute(Origin::User, "ai.refresh", json!({"ref":"B1"}));
+        let empty = test
+            .bus
+            .execute(Origin::User, "ai.refresh", json!({"ref":"B1"}));
         assert!(empty.ok, "{:?}", empty.error);
         assert_eq!(empty.result.unwrap()["refreshed"], 0);
-        assert!(runtime.pending_generation().is_none());
+        assert!(test.runtime.pending_generation().is_none());
 
-        let refresh = bus.execute(Origin::User, "ai.refresh", json!({"ref":"A1"}));
+        let refresh = test
+            .bus
+            .execute(Origin::User, "ai.refresh", json!({"ref":"A1"}));
         assert!(refresh.ok, "{:?}", refresh.error);
         assert_eq!(refresh.result.unwrap()["pending"], 1);
-        assert!(runtime.pending_generation().is_some());
+        assert!(test.runtime.pending_generation().is_some());
     }
 
     #[test]
@@ -1010,57 +895,45 @@ mod tests {
 
     #[test]
     fn import_command_sends_the_import_plan_schema() {
-        let mut config = package_defaults().unwrap();
-        config.ai.enabled = true;
-        config.ai.providers.insert(
-            "test".into(),
-            omacell_conf::schema::AiProvider {
-                kind: "openai_compatible".into(),
-                endpoint: "http://127.0.0.1:9/v1".into(),
-                local: true,
-                secret_env: None,
-                secret_cmd: None,
-                timeout: 0,
-                headers: Default::default(),
-            },
+        let mut test = ai_test_bus(
+            concat!(
+                "{\"plan\":{\"delimiter\":\",\",\"has_header\":true,",
+                "\"skip_rows\":0,\"decimal\":\".\",\"thousands\":\",\"}}"
+            ),
+            |_| {},
         );
-        config.ai.models.default = "test:model".into();
-        let tokio = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let temp = tempfile::TempDir::new().unwrap();
-        let transport = Arc::new(ImportTransport::default());
-        let shared: SharedTransport = transport.clone();
-        let runtime = AiRuntime::new(
-            tokio.handle().clone(),
-            config,
-            shared,
-            PromptSet::builtin(),
-            temp.path().join("cache"),
-            temp.path().join("state"),
-            Default::default(),
-        );
-        let mut registry = FnRegistry::new();
-        register_all(&mut registry);
-        let engine = RecalcEngine::new(registry);
-        let mut bus = Bus::new(Workbook::new(), engine).unwrap();
-        super::register_ai_commands(
-            &mut bus,
-            super::AiSession {
-                runtime: Arc::clone(&runtime),
-            },
-        )
-        .unwrap();
 
-        let result = bus.execute(
+        let result = test.bus.execute(
             Origin::User,
             "ai.import.assist",
-            json!({"plan":{"delimiter":",","has_header":false}}),
+            json!({
+                "plan": {
+                    "delimiter": ",",
+                    "quote": "'",
+                    "encoding": "utf16-le",
+                    "bom": true,
+                    "has_header": false,
+                    "skip_rows": 0,
+                    "locale": 1031,
+                    "decimal": ".",
+                    "thousands": ",",
+                    "line_ending": "cr-lf",
+                    "date_system": "excel1904",
+                    "columns": [{"name":"account","ty":{"kind":"keep_as_text"}}]
+                }
+            }),
         );
         assert!(result.ok, "{:?}", result.error);
-        assert_eq!(result.result.unwrap()["applied"], false);
-        let requests = transport.requests.lock().unwrap();
+        let result = result.result.unwrap();
+        assert_eq!(result["applied"], false);
+        assert_eq!(result["proposed"]["quote"], "'");
+        assert_eq!(result["proposed"]["encoding"], "utf16-le");
+        assert_eq!(result["proposed"]["bom"], true);
+        assert_eq!(result["proposed"]["locale"], 1031);
+        assert_eq!(result["proposed"]["line_ending"], "cr-lf");
+        assert_eq!(result["proposed"]["date_system"], "excel1904");
+        assert_eq!(result["proposed"]["columns"][0]["name"], "account");
+        let requests = test.transport.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(
             requests[0].body["response_format"]["json_schema"]["schema"],

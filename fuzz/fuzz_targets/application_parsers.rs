@@ -34,7 +34,7 @@ fuzz_target!(|data: &[u8]| {
         ]);
         let _ = parse_plan(&value, &catalog);
         let _ = parse_findings(&value);
-        let _ = parse_plan_overlay(&value);
+        let _ = parse_plan_overlay(&omacell_io::csv::ImportPlan::default(), &value);
         let _ = parse_completion(&value);
 
         let workbook = Workbook::new();

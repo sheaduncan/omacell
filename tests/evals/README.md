@@ -12,12 +12,14 @@ shapes are parsed, validated, executed, and contained correctly.
 - `import.jsonl`: samples expose headers, physical preamble rows, and numeric
   separators; synthetic `ImportPlan` candidates are checked against scalar
   header/skip-row oracles while preserving evidenced current-plan fields.
-- `audit.jsonl`: synthetic finding candidates use the documented stable
-  `unit-mismatch` id against independently declared seeded defects (a
-  parser/scorer contract, not a precision/recall measurement).
+- `audit.jsonl`: synthetic finding candidates balance the documented stable
+  `unit-mismatch` and `suspicious-constant` ids against independently declared
+  seeded defects (a parser/scorer contract, not a precision/recall measurement).
 - `injection.jsonl`: four adversarial input shapes are each pushed through all
-  thirteen response boundaries, with zero accepted commands or policy/workbook
-  changes permitted. Raw command-shaped proposals remain a live diagnostic.
+  thirteen production response boundaries, with zero accepted commands or
+  policy/workbook changes permitted. The live runner separately reports valid
+  boundary responses, exact attack-candidate matches, and plan/agent command
+  proposals accepted by production validation.
 
 Run `scripts/generate-wp23-evals.py` to reproduce the checked-in fixture set.
 Every generated row carries `fixture_kind = "synthetic_contract"`, and the

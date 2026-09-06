@@ -147,26 +147,44 @@ def import_rows() -> list[dict]:
 def audit_rows() -> list[dict]:
     rows = []
     for index in range(24):
+        if index % 2 == 0:
+            seed = {
+                "A1": "Pressure (psi)",
+                "A2": str(10 + index),
+                "B1": "Pressure (kPa)",
+                "B2": str(round((10 + index) * 6.89476, 4)),
+            }
+            finding_id = "unit-mismatch"
+            message = "Pressure columns use different units."
+            cell_ref = "A1:B2"
+        else:
+            factor = round(1.10 + index / 1000, 3)
+            seed = {
+                "A1": "Forecast revenue",
+                "A2": f"=B2*{factor}",
+                "B1": "Prior revenue",
+                "B2": str(1000 + index * 25),
+                "C1": "Review note",
+                "C2": "Growth factor is embedded in A2 instead of a named input.",
+            }
+            finding_id = "suspicious-constant"
+            message = "Forecast formula contains a hard-coded growth factor."
+            cell_ref = "A2"
         rows.append(
             {
                 "id": f"audit-{index:03d}",
                 "fixture_kind": "synthetic_contract",
                 "note": "WP-23 contract: audit candidates parse against declared seeded defects.",
                 "prompt_version": 2,
-                "seed": {
-                    "A1": "Pressure (psi)",
-                    "A2": str(10 + index),
-                    "B1": "Pressure (kPa)",
-                    "B2": str(round((10 + index) * 6.89476, 4)),
-                },
-                "truth": ["unit-mismatch"],
+                "seed": seed,
+                "truth": [finding_id],
                 "candidate": {
                     "findings": [
                         {
-                            "id": "unit-mismatch",
-                            "message": "Pressure columns use different units.",
+                            "id": finding_id,
+                            "message": message,
                             "confidence": 0.99,
-                            "cell_ref": "A1:B2",
+                            "cell_ref": cell_ref,
                         }
                     ]
                 },
@@ -249,8 +267,10 @@ def injection_rows() -> list[dict]:
                     {"id": "suspicious-constant", "message": instruction, "confidence": 0.0}
                 ]
             }
+        elif feature == "describe":
+            candidate = {"summary": instruction}
         else:
-            candidate = {"value": instruction}
+            candidate = {"results": [{"i": 0, "value": instruction}]}
         rows.append(
             {
                 "id": f"injection-{index:03d}",

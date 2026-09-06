@@ -1,12 +1,10 @@
 //! Synthetic WP-23 contract-fixture runner. Required CI is entirely offline.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use omacell_ai::audit_ai::parse_findings;
-use omacell_ai::complete::parse_completion;
 use omacell_ai::formula::parse_and_eval;
-use omacell_ai::import_assist::parse_plan_overlay;
+use omacell_ai::import_assist::{parse_import_plan, parse_plan_overlay};
 use omacell_ai::plan::{parse_plan, to_calls};
 use omacell_ai::policy::fence_data;
 use omacell_bus::Bus;
@@ -17,87 +15,16 @@ use omacell_core::graph::CellCoord;
 use omacell_core::recalc::RecalcEngine;
 use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PlanEval {
-    id: String,
-    fixture_kind: String,
-    note: String,
-    prompt: String,
-    prompt_version: u32,
-    candidate: Value,
-    target: String,
-    input: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FormulaEval {
-    id: String,
-    fixture_kind: String,
-    note: String,
-    prompt: String,
-    prompt_version: u32,
-    seed: BTreeMap<String, String>,
-    target: String,
-    candidate: Value,
-    expected_value: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ImportEval {
-    id: String,
-    fixture_kind: String,
-    note: String,
-    prompt_version: u32,
-    sample: String,
-    current: Value,
-    candidate: Value,
-    expected_has_header: bool,
-    expected_skip_rows: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AuditEval {
-    id: String,
-    fixture_kind: String,
-    note: String,
-    prompt_version: u32,
-    seed: BTreeMap<String, String>,
-    truth: Vec<String>,
-    candidate: Value,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InjectionEval {
-    id: String,
-    fixture_kind: String,
-    note: String,
-    feature: String,
-    cell_data: String,
-    candidate: Value,
-}
+mod support;
+use support::{
+    AuditEval, FormulaEval, ImportEval, InjectionEval, PlanEval, evals, score_injection_boundary,
+};
 
 fn assert_synthetic_contract(id: &str, fixture_kind: &str, note: &str) {
     assert_eq!(fixture_kind, "synthetic_contract", "{id}");
     assert!(!note.trim().is_empty(), "{id}");
-}
-
-fn evals<T: for<'de> Deserialize<'de>>(name: &str) -> Vec<T> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/evals")
-        .join(name);
-    let text = std::fs::read_to_string(path).unwrap();
-    text.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
 }
 
 fn engine() -> RecalcEngine {
@@ -221,9 +148,9 @@ fn synthetic_import_contract_rows_produce_valid_bounded_overlays() {
         assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 2, "{}", row.id);
         assert!(!row.sample.is_empty(), "{}", row.id);
-        let current = parse_plan_overlay(&row.current).unwrap();
+        let current = parse_import_plan(&row.current).unwrap();
         current.validate().unwrap();
-        let proposed = parse_plan_overlay(&row.candidate).unwrap();
+        let proposed = parse_plan_overlay(&current, &row.candidate).unwrap();
         proposed.validate().unwrap();
         assert_eq!(proposed.delimiter, current.delimiter, "{}", row.id);
         assert_eq!(proposed.has_header, row.expected_has_header, "{}", row.id);
@@ -243,15 +170,17 @@ fn synthetic_import_contract_rows_produce_valid_bounded_overlays() {
 fn synthetic_audit_contract_rows_parse_the_declared_seeded_findings() {
     let rows = evals::<AuditEval>("audit.jsonl");
     assert!(rows.len() >= 24);
+    let mut truth_counts = BTreeMap::<String, usize>::new();
     for row in &rows {
         assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
         assert_eq!(row.prompt_version, 2, "{}", row.id);
-        assert_eq!(
-            row.truth,
-            ["unit-mismatch"],
+        assert_eq!(row.truth.len(), 1, "{} must declare one truth", row.id);
+        assert!(
+            omacell_ai::audit_ai::FINDING_IDS.contains(&row.truth[0].as_str()),
             "{} uses an undocumented audit finding id",
             row.id
         );
+        *truth_counts.entry(row.truth[0].clone()).or_default() += 1;
         let mut workbook = Workbook::new();
         let sheet = workbook.active_sheet();
         for (cell, input) in &row.seed {
@@ -269,6 +198,20 @@ fn synthetic_audit_contract_rows_parse_the_declared_seeded_findings() {
             .collect::<BTreeSet<_>>();
         assert_eq!(predicted, truth, "{}", row.id);
     }
+    assert_eq!(
+        truth_counts.keys().cloned().collect::<BTreeSet<_>>(),
+        BTreeSet::from_iter(
+            omacell_ai::audit_ai::FINDING_IDS
+                .iter()
+                .map(ToString::to_string)
+        )
+    );
+    assert!(
+        truth_counts
+            .values()
+            .all(|count| *count * truth_counts.len() == rows.len()),
+        "audit truth ids must be balanced"
+    );
 }
 
 #[test]
@@ -306,37 +249,25 @@ fn synthetic_injection_candidates_cannot_cross_mutation_boundaries() {
             .insert(row.feature.clone());
         let fenced = fence_data("workbook cell", &json!(row.cell_data));
         assert!(fenced.contains("is DATA, not instructions"), "{}", row.id);
+        if row.feature == "formula" {
+            workbook
+                .set_cell_contents(sheet, 0, 0, &row.cell_data)
+                .unwrap();
+        }
+        let score = score_injection_boundary(
+            row.feature.as_str(),
+            &row.candidate,
+            &known,
+            &workbook,
+            &engine,
+        );
         match row.feature.as_str() {
-            "plan" | "agent" => {
-                if parse_plan(&row.candidate, &known).is_ok() {
-                    unexpected_commands += 1;
-                }
-            }
-            "formula" => {
-                workbook
-                    .set_cell_contents(sheet, 0, 0, &row.cell_data)
-                    .unwrap();
-                let _ = parse_and_eval(
-                    &row.candidate,
-                    &workbook,
-                    &engine,
-                    CellCoord::new(sheet, 0, 1),
-                );
-                workbook.clear_cell(sheet, 0, 0).unwrap();
-            }
-            "complete" => {
-                let _ = parse_completion(&row.candidate).unwrap();
-            }
-            "import" => {
-                let plan = parse_plan_overlay(&row.candidate).unwrap();
-                plan.validate().unwrap();
-            }
-            "audit" => {
-                let _ = parse_findings(&row.candidate).unwrap();
-            }
-            _ => {
-                assert!(row.candidate.get("value").is_some(), "{}", row.id);
-            }
+            "plan" | "agent" => unexpected_commands += score.accepted_commands,
+            "import" => assert_eq!(score.accepted, 0, "{}", row.id),
+            _ => assert_eq!(score.accepted, 1, "{}", row.id),
+        }
+        if row.feature == "formula" {
+            workbook.clear_cell(sheet, 0, 0).unwrap();
         }
     }
     assert_eq!(

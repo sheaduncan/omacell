@@ -824,27 +824,7 @@ impl AiRuntime {
                 let user = fence_data("AI cell batch", &payload);
                 let extension = self.function_extension(&name);
                 let value_schema = extension.value_schema.unwrap_or_else(|| json!({}));
-                let schema = json!({
-                    "type": "object",
-                    "required": ["results"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "results": {
-                            "type": "array",
-                            "minItems": chunk.len(),
-                            "maxItems": chunk.len(),
-                            "items": {
-                                "type": "object",
-                                "required": ["i", "value"],
-                                "additionalProperties": false,
-                                "properties": {
-                                    "i": {"type": "integer", "minimum": 0, "maximum": chunk.len().saturating_sub(1)},
-                                    "value": value_schema
-                                }
-                            }
-                        }
-                    }
-                });
+                let schema = batch_response_schema(chunk.len(), value_schema);
                 let routed = match self.chat_task_routed(
                     Slot::Default,
                     &extension.task,
@@ -1153,10 +1133,35 @@ fn cache_fresh(
                 && entry.model == model))
 }
 
-fn parse_batch_results(text: &str, expected: usize) -> Result<Vec<(Value, RuntimeValue)>, AiError> {
-    let parsed: Value = serde_json::from_str(text)
-        .map_err(|err| AiError::new(codes::PAYLOAD, format!("invalid AI cell JSON: {err}")))?;
-    let rows = parsed
+/// Structured-output schema for one AI worksheet-function batch.
+#[must_use]
+pub fn batch_response_schema(expected: usize, value_schema: Value) -> Value {
+    json!({
+        "type": "object",
+        "required": ["results"],
+        "additionalProperties": false,
+        "properties": {
+            "results": {
+                "type": "array",
+                "minItems": expected,
+                "maxItems": expected,
+                "items": {
+                    "type": "object",
+                    "required": ["i", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "i": {"type": "integer", "minimum": 0, "maximum": expected.saturating_sub(1)},
+                        "value": value_schema
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Parse and order the values from one AI worksheet-function batch.
+pub fn parse_batch_values(value: &Value, expected: usize) -> Result<Vec<Value>, AiError> {
+    let rows = value
         .get("results")
         .and_then(Value::as_array)
         .ok_or_else(|| AiError::new(codes::PAYLOAD, "AI cell response is missing results"))?;
@@ -1169,7 +1174,7 @@ fn parse_batch_results(text: &str, expected: usize) -> Result<Vec<(Value, Runtim
             ),
         ));
     }
-    let mut ordered: Vec<Option<(Value, RuntimeValue)>> = vec![None; expected];
+    let mut ordered: Vec<Option<Value>> = vec![None; expected];
     for row in rows {
         let index = row
             .get("i")
@@ -1187,8 +1192,7 @@ fn parse_batch_results(text: &str, expected: usize) -> Result<Vec<(Value, Runtim
             .get("value")
             .cloned()
             .ok_or_else(|| AiError::new(codes::PAYLOAD, "AI cell result is missing value"))?;
-        let runtime = json_to_runtime(&value)?;
-        ordered[index] = Some((value, runtime));
+        ordered[index] = Some(value);
     }
     ordered
         .into_iter()
@@ -1200,6 +1204,18 @@ fn parse_batch_results(text: &str, expected: usize) -> Result<Vec<(Value, Runtim
                     format!("AI cell response is missing result {i}"),
                 )
             })
+        })
+        .collect()
+}
+
+fn parse_batch_results(text: &str, expected: usize) -> Result<Vec<(Value, RuntimeValue)>, AiError> {
+    let parsed: Value = serde_json::from_str(text)
+        .map_err(|err| AiError::new(codes::PAYLOAD, format!("invalid AI cell JSON: {err}")))?;
+    parse_batch_values(&parsed, expected)?
+        .into_iter()
+        .map(|value| {
+            let runtime = json_to_runtime(&value)?;
+            Ok((value, runtime))
         })
         .collect()
 }
