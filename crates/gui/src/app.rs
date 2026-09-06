@@ -194,8 +194,15 @@ impl Gui {
         let snapshot = runner.handle().snapshot();
         let mut active_sheet = snapshot.workbook.active_sheet();
         apply_sheet_view(&launch.ui, &snapshot.workbook, active_sheet);
-        if let Ok(state) = SessionState::load(&launch.paths.state_dir) {
-            apply_restored_session(&launch.ui, &snapshot.workbook, &state);
+        if let Ok(mut state) = SessionState::load(&launch.paths.state_dir) {
+            if loaded.config.session.restore {
+                apply_restored_session(&launch.ui, &snapshot.workbook, &state);
+            } else {
+                state.sheet = None;
+                state.cursor = None;
+                state.panel = None;
+                state.zoom = 1.0;
+            }
             active_sheet = launch.ui.selection().sheet;
             launch.ui.set_session_state(state);
         }
@@ -2456,6 +2463,7 @@ impl Gui {
 
     fn persist_session(&self) {
         let snapshot = self.runner.handle().snapshot();
+        let recent_files = self.store.snapshot().config.session.recent_files;
         let mut state = self.ui.session_state();
         state.zoom = self.ui.viewport().zoom;
         state.panel = self.ui.panel().visible.clone();
@@ -2467,7 +2475,9 @@ impl Gui {
             state.cursor = Some(format!("{}{}", letters, sel.cursor.row + 1));
         }
         if let Some(file) = &self.file {
-            state.touch_file(&file.display().to_string());
+            state.touch_file_with_limit(&file.display().to_string(), recent_files);
+        } else {
+            state.recent_files.truncate(recent_files as usize);
         }
         let _ = state.save(&self.paths.state_dir);
     }

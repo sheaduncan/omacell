@@ -327,6 +327,13 @@ and `session.workspace_binding` may also lack runtime consumers. Each public key
 should be implemented, rejected with a clear diagnostic, or marked unavailable
 in generated documentation.
 
+**Resolution update (2026-09-06):** The WP-31 remediation implemented
+`files.autosave_interval`. The WP-12 configuration-consumption follow-up now
+honors XLSX opaque-part preservation, saved-view restoration, and bounded recent
+files. Unsupported external-link refresh, workspace binding, global format
+selection, and non-default CSV policies are rejected during typed validation
+and marked unavailable in generated documentation.
+
 ## Verification
 
 - A standalone command-bus/I/O probe reproduced every concrete before/after

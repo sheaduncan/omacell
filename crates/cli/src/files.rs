@@ -480,7 +480,7 @@ fn file_save(
     session: &FileSession,
     args: FileSaveArgs,
 ) -> Result<Effect, CoreError> {
-    let (path, kind, package, extras, keep_backups) = {
+    let (path, kind, package, extras, keep_backups, preserve_unknown_parts) = {
         let state = session.lock();
         let path = args
             .path
@@ -493,17 +493,22 @@ fn file_save(
         let kind = kind_from_path(&path)
             .or(state.kind)
             .unwrap_or(FileKind::Xlsx);
-        let keep_backups = state
+        let files = state
             .config
             .as_ref()
-            .map(|config| config.snapshot().config.files.keep_backups)
-            .unwrap_or(0);
+            .map(|config| config.snapshot().config.files);
+        let keep_backups = files.as_ref().map_or(0, |files| files.keep_backups);
+        let preserve_unknown_parts = files
+            .as_ref()
+            .is_none_or(|files| files.xlsx.preserve_unknown_parts);
+        let package = state.package.clone().filter(|_| preserve_unknown_parts);
         (
             path,
             kind,
-            state.package.clone(),
+            package,
             state.extras.clone(),
             keep_backups,
+            preserve_unknown_parts,
         )
     };
     if ctx.is_preflight() {
@@ -567,6 +572,10 @@ fn file_save(
         let mut state = session.lock();
         state.path = Some(path.clone());
         state.kind = Some(kind);
+        if kind == FileKind::Xlsx && !preserve_unknown_parts {
+            state.package = None;
+            state.extras.clear();
+        }
     }
     Ok(Effect {
         events: vec![
@@ -652,18 +661,19 @@ fn file_export(
     })?;
     let (package, extras, keep_backups, ai, xlsx_export) = {
         let state = session.lock();
-        let keep_backups = state
-            .config
+        let config = state.config.as_ref().map(|config| config.snapshot().config);
+        let keep_backups = config
             .as_ref()
-            .map(|config| config.snapshot().config.files.keep_backups)
-            .unwrap_or(0);
-        let xlsx_export = state
-            .config
+            .map_or(0, |config| config.files.keep_backups);
+        let preserve_unknown_parts = config
             .as_ref()
-            .map(|config| config.snapshot().config.ai.functions.xlsx_export)
+            .is_none_or(|config| config.files.xlsx.preserve_unknown_parts);
+        let xlsx_export = config
+            .map(|config| config.ai.functions.xlsx_export)
             .unwrap_or_else(|| "formulas".into());
+        let package = state.package.clone().filter(|_| preserve_unknown_parts);
         (
-            state.package.clone(),
+            package,
             state.extras.clone(),
             keep_backups,
             state.ai.clone(),
@@ -1616,6 +1626,7 @@ mod tests {
     use omacell_ai::http::{HttpRequest, HttpResponse, SharedTransport, Transport};
     use omacell_ai::{AiRuntime, PromptSet, register_ai_functions};
     use omacell_conf::schema::package_defaults;
+    use omacell_conf::{ConfigStore, LoadOptions, Paths};
     use omacell_core::eval::FnRegistry;
     use omacell_core::recalc::RecalcEngine;
     use serde_json::json;
@@ -1691,6 +1702,71 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err.code, "file.format");
+    }
+
+    #[test]
+    fn xlsx_preservation_setting_controls_opaque_package_parts() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut seeded =
+            xlsx::open_bytes(&xlsx::save_workbook_bytes(&Workbook::new()).unwrap()).unwrap();
+        seeded.package.parts.insert(
+            "xl/opaque-review.bin".into(),
+            xlsx::PreservedPart {
+                name: "xl/opaque-review.bin".into(),
+                content_type: Some("application/octet-stream".into()),
+                bytes: b"opaque-review-data".to_vec(),
+            },
+        );
+        let fixture = xlsx::save_bytes(&seeded).unwrap();
+
+        for preserve in [true, false] {
+            let path = temp.path().join(format!("preserve-{preserve}.xlsx"));
+            std::fs::write(&path, &fixture).unwrap();
+            let paths = Paths::from_home(temp.path().join(format!("home-{preserve}")));
+            std::fs::create_dir_all(&paths.user_config).unwrap();
+            let user_config = paths.user_config_toml();
+            std::fs::write(
+                &user_config,
+                format!("[files.xlsx]\npreserve_unknown_parts = {preserve}\n"),
+            )
+            .unwrap();
+            let store = ConfigStore::load_with(paths, LoadOptions::default()).unwrap();
+            let opened = open_any(&path).unwrap();
+            let session = FileSession::new();
+            session.attach(&path, &opened);
+            session.attach_config(store.handle());
+            let mut bus = Bus::new(opened.workbook, RecalcEngine::new(FnRegistry::new())).unwrap();
+            register_file_commands(&mut bus, session).unwrap();
+
+            let saved = bus.execute(omacell_core::command::Origin::User, "file.save", json!({}));
+
+            assert!(saved.ok, "preserve={preserve}: {:?}", saved.error);
+            let reopened = xlsx::open(&path).unwrap();
+            assert_eq!(
+                reopened.package.part("xl/opaque-review.bin").is_some(),
+                preserve,
+                "preserve={preserve}"
+            );
+
+            if !preserve {
+                std::fs::write(
+                    &user_config,
+                    "[files.xlsx]\npreserve_unknown_parts = true\n",
+                )
+                .unwrap();
+                store.reload().unwrap();
+
+                let saved_again =
+                    bus.execute(omacell_core::command::Origin::User, "file.save", json!({}));
+
+                assert!(saved_again.ok, "save after reload: {:?}", saved_again.error);
+                let reopened = xlsx::open(&path).unwrap();
+                assert!(
+                    reopened.package.part("xl/opaque-review.bin").is_none(),
+                    "discarded package parts must not reappear after enabling preservation"
+                );
+            }
+        }
     }
 
     #[test]

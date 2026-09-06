@@ -19,7 +19,7 @@ use omacell_core::style::Color;
 use omacell_core::value::Value;
 use omacell_core::workbook::Workbook;
 use omacell_gui::Gui;
-use omacell_ui::{EditSurface, FindScope, KeyCode, KeyEvent};
+use omacell_ui::{EditSurface, FindScope, KeyCode, KeyEvent, SessionState};
 
 #[cfg(unix)]
 #[test]
@@ -878,6 +878,59 @@ fn dropping_the_gui_persists_session_state() {
     drop(harness);
 
     assert!(state_file.is_file());
+}
+
+#[test]
+fn disabled_session_restore_ignores_saved_view_state() {
+    let parts = launch_theme(None);
+    let saved = SessionState {
+        zoom: 2.0,
+        cursor: Some("C4".into()),
+        panel: Some("find".into()),
+        ..SessionState::default()
+    };
+    saved.save(&parts.launch.paths.state_dir).unwrap();
+    std::fs::write(
+        parts.launch.paths.user_config_toml(),
+        "[session]\nrestore = false\n",
+    )
+    .unwrap();
+    parts.launch.store.reload().unwrap();
+
+    let harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+
+    assert_eq!(harness.state().ui_session().viewport().zoom, 1.0);
+    assert_eq!(harness.state().ui_session().selection().cursor.row, 0);
+    assert_eq!(harness.state().ui_session().selection().cursor.col, 0);
+    assert!(harness.state().ui_session().panel().visible.is_none());
+}
+
+#[test]
+fn configured_recent_file_limit_bounds_the_saved_session() {
+    let mut parts = launch_theme(None);
+    let state = SessionState {
+        recent_files: vec!["old-a.xlsx".into(), "old-b.xlsx".into()],
+        ..SessionState::default()
+    };
+    state.save(&parts.launch.paths.state_dir).unwrap();
+    std::fs::write(
+        parts.launch.paths.user_config_toml(),
+        "[session]\nrecent_files = 1\n",
+    )
+    .unwrap();
+    parts.launch.store.reload().unwrap();
+    let current = parts._dir.path().join("current.xlsx");
+    parts.launch.file = Some(current.clone());
+
+    let harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    drop(harness);
+
+    let saved = SessionState::load(&parts._dir.path().join(".local/state/omacell")).unwrap();
+    assert_eq!(saved.recent_files, vec![current.display().to_string()]);
 }
 
 #[test]

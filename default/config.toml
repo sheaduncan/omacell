@@ -53,21 +53,21 @@ first_weekday            = "system"
 localized_function_names = false
 
 [files]
-default_format        = "xlsx"   # xlsx | omc
+default_format        = "xlsx"   # fixed default; choose another format by destination extension
 autosave_interval     = 60       # seconds; 0 disables
 keep_backups          = 0
-follow_external_links = false
+follow_external_links = false      # unavailable; external links stay cached and inert
 [files.csv]
-delimiter      = "auto"
-encoding       = "auto"
-type_inference = "conservative"  # conservative | aggressive | none
+delimiter      = "auto"          # fixed default; reviewed import plans may override
+encoding       = "auto"          # fixed default; reviewed import plans may override
+type_inference = "conservative"  # fixed default; reviewed import plans may override
 [files.xlsx]
-preserve_unknown_parts = true
+preserve_unknown_parts = true      # false drops retained unmodeled XLSX parts on save
 
 [session]
-restore           = true
-recent_files      = 20
-workspace_binding = false        # remember which Hyprland workspace each window was on
+restore           = true         # restore saved sheet/cursor/panel/zoom state
+recent_files      = 20           # 0..20 paths retained
+workspace_binding = false        # unavailable; Hyprland workspace mapping is not restored yet
 
 [layout]
 panel_side          = "right"    # right | left | bottom

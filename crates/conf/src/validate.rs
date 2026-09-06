@@ -97,18 +97,57 @@ impl Config {
             &self.files.default_format,
             &["xlsx", "omc"],
         )?;
+        if self.files.default_format != "xlsx" {
+            return invalid(
+                "files.default_format",
+                "a global non-XLSX default is unavailable; choose the destination extension explicitly",
+            );
+        }
         one_of(
             "files.csv.type_inference",
             &self.files.csv.type_inference,
             &["conservative", "aggressive", "none"],
         )?;
+        if self.files.csv.type_inference != "conservative" {
+            return invalid(
+                "files.csv.type_inference",
+                "a non-default CSV inference policy is unavailable; use a reviewed import plan",
+            );
+        }
         if self.files.csv.delimiter != "auto" && self.files.csv.delimiter.chars().count() != 1 {
             return invalid(
                 "files.csv.delimiter",
                 "must be 'auto' or one Unicode character",
             );
         }
+        if self.files.csv.delimiter != "auto" {
+            return invalid(
+                "files.csv.delimiter",
+                "a fixed CSV delimiter default is unavailable; use a reviewed import plan",
+            );
+        }
         non_empty("files.csv.encoding", &self.files.csv.encoding)?;
+        if self.files.csv.encoding != "auto" {
+            return invalid(
+                "files.csv.encoding",
+                "a fixed CSV encoding default is unavailable; use a reviewed import plan",
+            );
+        }
+        if self.files.follow_external_links {
+            return invalid(
+                "files.follow_external_links",
+                "external-link refresh is unavailable; must remain false",
+            );
+        }
+        if self.session.recent_files > 20 {
+            return invalid("session.recent_files", "must be in 0..=20");
+        }
+        if self.session.workspace_binding {
+            return invalid(
+                "session.workspace_binding",
+                "Hyprland workspace restoration is unavailable; must remain false",
+            );
+        }
 
         one_of(
             "layout.panel_side",
@@ -334,6 +373,70 @@ fn invalid<T>(path: &str, message: &str) -> Result<T, CoreError> {
 #[cfg(test)]
 mod tests {
     use crate::schema::package_defaults;
+
+    #[test]
+    fn unavailable_external_link_refresh_is_rejected() {
+        let mut config = package_defaults().unwrap();
+        config.files.follow_external_links = true;
+
+        let error = config.validate().unwrap_err();
+
+        assert_eq!(error.code, "config.schema");
+        assert!(error.message.contains("files.follow_external_links"));
+        assert!(error.message.contains("unavailable"));
+    }
+
+    #[test]
+    fn unavailable_workspace_binding_is_rejected() {
+        let mut config = package_defaults().unwrap();
+        config.session.workspace_binding = true;
+
+        let error = config.validate().unwrap_err();
+
+        assert_eq!(error.code, "config.schema");
+        assert!(error.message.contains("session.workspace_binding"));
+        assert!(error.message.contains("unavailable"));
+    }
+
+    #[test]
+    fn recent_file_limit_matches_the_bounded_session_store() {
+        let mut config = package_defaults().unwrap();
+        config.session.recent_files = 21;
+
+        let error = config.validate().unwrap_err();
+
+        assert_eq!(error.code, "config.schema");
+        assert!(error.message.contains("session.recent_files"));
+        assert!(error.message.contains("0..=20"));
+    }
+
+    #[test]
+    fn unavailable_file_default_overrides_are_rejected() {
+        type ConfigMutation = fn(&mut crate::schema::Config);
+        let cases: [(&str, ConfigMutation); 4] = [
+            ("files.default_format", |config| {
+                config.files.default_format = "omc".into()
+            }),
+            ("files.csv.delimiter", |config| {
+                config.files.csv.delimiter = ";".into()
+            }),
+            ("files.csv.encoding", |config| {
+                config.files.csv.encoding = "utf-16le".into()
+            }),
+            ("files.csv.type_inference", |config| {
+                config.files.csv.type_inference = "none".into()
+            }),
+        ];
+
+        for (path, change) in cases {
+            let mut config = package_defaults().unwrap();
+            change(&mut config);
+            let error = config.validate().unwrap_err();
+            assert_eq!(error.code, "config.schema", "{path}");
+            assert!(error.message.contains(path), "{path}: {error:?}");
+            assert!(error.message.contains("unavailable"), "{path}: {error:?}");
+        }
+    }
 
     #[test]
     fn remote_plaintext_ai_endpoint_is_rejected() {
