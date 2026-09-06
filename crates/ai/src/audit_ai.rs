@@ -5,6 +5,9 @@ use serde_json::Value;
 
 use crate::error::{AiError, codes};
 
+/// Stable ids emitted by the model judgment layer.
+pub const FINDING_IDS: &[&str] = &["unit-mismatch", "suspicious-constant"];
+
 /// Extra AI finding.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +41,15 @@ pub fn parse_findings(value: &Value) -> Result<Vec<AiFinding>, AiError> {
             "AI audit confidence must be between 0 and 1",
         ));
     }
+    if let Some(finding) = findings
+        .iter()
+        .find(|finding| !FINDING_IDS.contains(&finding.id.as_str()))
+    {
+        return Err(AiError::new(
+            codes::PAYLOAD,
+            format!("unknown AI audit finding id {}", finding.id),
+        ));
+    }
     Ok(findings)
 }
 
@@ -56,7 +68,7 @@ pub fn findings_schema() -> Value {
                     "required": ["id", "message"],
                     "additionalProperties": false,
                     "properties": {
-                        "id": {"type": "string"},
+                        "id": {"type": "string", "enum": FINDING_IDS},
                         "message": {"type": "string"},
                         "confidence": {"type": "number"},
                         "cell_ref": {"type": "string"}

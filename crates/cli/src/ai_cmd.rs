@@ -11,7 +11,7 @@ use omacell_ai::complete::{complete_schema, parse_completion};
 use omacell_ai::fence_data;
 use omacell_ai::formula::{formula_schema, parse_and_eval};
 use omacell_ai::functions::is_ai_formula;
-use omacell_ai::import_assist::{import_request_payload, parse_plan_overlay};
+use omacell_ai::import_assist::{import_plan_schema, import_request_payload, parse_plan_overlay};
 use omacell_ai::plan::{parse_plan, plan_schema};
 use omacell_ai::policy::PolicySnapshot;
 use omacell_ai::runtime::{AiRuntime, completion_enabled, fast_is_local};
@@ -499,7 +499,13 @@ fn run_import(
     let user = fence_data("import preview", &request);
     let reply = session
         .runtime
-        .chat_task(Slot::Default, "import", user, None, vec![])
+        .chat_task(
+            Slot::Default,
+            "import",
+            user,
+            Some(import_plan_schema()),
+            vec![],
+        )
         .map_err(CoreError::from)?;
     let value = structured_reply("import", &reply.text)?;
     let proposed = parse_plan_overlay(&value).map_err(CoreError::from)?;
@@ -762,7 +768,7 @@ fn ai_preflight(ctx: &CommandContext<'_>) -> Effect {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use omacell_ai::http::{HttpRequest, HttpResponse, SharedTransport, Transport};
     use omacell_ai::{AiRuntime, PromptSet, register_ai_functions};
@@ -786,6 +792,28 @@ mod tests {
                 status: 200,
                 body: json!({
                     "choices": [{"message": {"content": "{\"commands\":[]}"}}]
+                }),
+                chunks: Vec::new(),
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct ImportTransport {
+        requests: Mutex<Vec<HttpRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Transport for ImportTransport {
+        async fn send(&self, req: HttpRequest) -> Result<HttpResponse, omacell_ai::AiError> {
+            self.requests.lock().unwrap().push(req);
+            Ok(HttpResponse {
+                status: 200,
+                body: json!({
+                    "choices": [{"message": {"content": concat!(
+                        "{\"plan\":{\"delimiter\":\",\",\"has_header\":true,",
+                        "\"skip_rows\":0,\"decimal\":\".\",\"thousands\":\",\"}}"
+                    )}}]
                 }),
                 chunks: Vec::new(),
             })
@@ -978,5 +1006,65 @@ mod tests {
         assert!(current.has_header);
         assert_eq!(payload["plan"]["has_header"], true);
         assert_eq!(payload["preview"]["rows"][0][0]["raw"], "007");
+    }
+
+    #[test]
+    fn import_command_sends_the_import_plan_schema() {
+        let mut config = package_defaults().unwrap();
+        config.ai.enabled = true;
+        config.ai.providers.insert(
+            "test".into(),
+            omacell_conf::schema::AiProvider {
+                kind: "openai_compatible".into(),
+                endpoint: "http://127.0.0.1:9/v1".into(),
+                local: true,
+                secret_env: None,
+                secret_cmd: None,
+                timeout: 0,
+                headers: Default::default(),
+            },
+        );
+        config.ai.models.default = "test:model".into();
+        let tokio = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let transport = Arc::new(ImportTransport::default());
+        let shared: SharedTransport = transport.clone();
+        let runtime = AiRuntime::new(
+            tokio.handle().clone(),
+            config,
+            shared,
+            PromptSet::builtin(),
+            temp.path().join("cache"),
+            temp.path().join("state"),
+            Default::default(),
+        );
+        let mut registry = FnRegistry::new();
+        register_all(&mut registry);
+        let engine = RecalcEngine::new(registry);
+        let mut bus = Bus::new(Workbook::new(), engine).unwrap();
+        super::register_ai_commands(
+            &mut bus,
+            super::AiSession {
+                runtime: Arc::clone(&runtime),
+            },
+        )
+        .unwrap();
+
+        let result = bus.execute(
+            Origin::User,
+            "ai.import.assist",
+            json!({"plan":{"delimiter":",","has_header":false}}),
+        );
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.result.unwrap()["applied"], false);
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].body["response_format"]["json_schema"]["schema"],
+            omacell_ai::import_assist::import_plan_schema()
+        );
     }
 }

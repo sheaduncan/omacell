@@ -7,6 +7,33 @@ use crate::error::{AiError, codes};
 use crate::policy::{PolicySnapshot, SendLevel};
 use crate::redact::redact_json;
 
+/// JSON schema for the bounded import-plan fields an assistant may propose.
+///
+/// The remaining [`ImportPlan`] fields retain their serde defaults. The user
+/// still reviews the proposed plan before it is applied.
+#[must_use]
+pub fn import_plan_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "required": ["plan"],
+        "additionalProperties": false,
+        "properties": {
+            "plan": {
+                "type": "object",
+                "required": ["delimiter", "has_header", "skip_rows", "decimal", "thousands"],
+                "additionalProperties": false,
+                "properties": {
+                    "delimiter": {"type": "string", "minLength": 1, "maxLength": 1},
+                    "has_header": {"type": "boolean"},
+                    "skip_rows": {"type": "integer", "minimum": 0},
+                    "decimal": {"type": "string", "minLength": 1, "maxLength": 1},
+                    "thousands": {"type": ["string", "null"], "minLength": 1, "maxLength": 1}
+                }
+            }
+        }
+    })
+}
+
 /// Parse a plan overlay from the model.
 pub fn parse_plan_overlay(value: &Value) -> Result<ImportPlan, AiError> {
     let plan = value.get("plan").cloned().unwrap_or_else(|| value.clone());

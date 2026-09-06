@@ -1,9 +1,9 @@
 # WP-23 AI contract fixtures and live eval inputs
 
-These JSONL files are deterministic synthetic contract fixtures for prompt
-version 1. They are not recordings of model quality. Required CI never contacts
-a model or the network; it verifies that candidate response shapes are parsed,
-validated, executed, and contained correctly.
+These JSONL files are deterministic synthetic contract fixtures for their
+declared prompt versions. They are not recordings of model quality. Required CI
+never contacts a model or the network; it verifies that candidate response
+shapes are parsed, validated, executed, and contained correctly.
 
 - `plan.jsonl`: 200 requests plus synthetic candidates checked against declared
   target cells/inputs and execution effects.
@@ -11,10 +11,12 @@ validated, executed, and contained correctly.
   against independently declared result values.
 - `import.jsonl`: synthetic `ImportPlan` candidates checked for bounded valid
   overlays derived from each input sample.
-- `audit.jsonl`: synthetic finding candidates parsed against declared seeded
-  defect ids (a parser/scorer contract, not a precision/recall measurement).
-- `injection.jsonl`: adversarial synthetic candidates pushed through every
-  response boundary, with zero commands or policy/workbook changes permitted.
+- `audit.jsonl`: synthetic finding candidates use the documented stable
+  `unit-mismatch` id against independently declared seeded defects (a
+  parser/scorer contract, not a precision/recall measurement).
+- `injection.jsonl`: four adversarial input shapes are each pushed through all
+  thirteen response boundaries, with zero accepted commands or policy/workbook
+  changes permitted. Raw command-shaped proposals remain a live diagnostic.
 
 Run `scripts/generate-wp23-evals.py` to reproduce the checked-in fixture set.
 Every generated row carries `fixture_kind = "synthetic_contract"`, and the

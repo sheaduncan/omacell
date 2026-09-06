@@ -74,7 +74,7 @@ impl PromptSet {
             ),
             (
                 "audit",
-                "Return JSON {\"findings\":[{\"id\":\"...\",\"message\":\"...\",\"confidence\":0.5}]}. <!-- version: 1 -->\n",
+                "Use only stable ids unit-mismatch or suspicious-constant. Return JSON {\"findings\":[{\"id\":\"...\",\"message\":\"...\",\"confidence\":0.5}]}. <!-- version: 2 -->\n",
             ),
             (
                 "describe",

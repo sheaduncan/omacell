@@ -10,7 +10,7 @@ use omacell_ai::agent::validate_tool;
 use omacell_ai::formula::parse_and_eval;
 use omacell_ai::functions::{is_ai_formula, register_ai_functions, strip_ai_formulas};
 use omacell_ai::http::{HttpRequest, HttpResponse, SharedTransport, Transport};
-use omacell_ai::import_assist::parse_plan_overlay;
+use omacell_ai::import_assist::{import_plan_schema, parse_plan_overlay};
 use omacell_ai::plan::{forbidden, parse_plan, to_calls};
 use omacell_ai::prompts::PromptSet;
 use omacell_ai::runtime::AiRuntime;
@@ -1113,6 +1113,68 @@ fn import_overlay_never_requires_apply() {
     }))
     .unwrap();
     assert!(plan.has_header);
+}
+
+#[test]
+fn import_assist_sends_a_bounded_plan_schema() {
+    let schema = import_plan_schema();
+    assert_eq!(
+        schema["properties"]["plan"]["required"],
+        json!([
+            "delimiter",
+            "has_header",
+            "skip_rows",
+            "decimal",
+            "thousands"
+        ])
+    );
+    assert_eq!(schema["properties"]["plan"]["additionalProperties"], false);
+
+    let (ai, transport, _rt, _tmp) = runtime(
+        enabled_config(),
+        json!({
+            "plan": {
+                "delimiter": ",",
+                "has_header": true,
+                "skip_rows": 0,
+                "decimal": ".",
+                "thousands": ","
+            }
+        }),
+    );
+    ai.chat_task(
+        Slot::Default,
+        "import",
+        "fixture".into(),
+        Some(schema.clone()),
+        vec![],
+    )
+    .unwrap();
+
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(
+        requests[0].body["response_format"]["json_schema"]["schema"],
+        schema
+    );
+}
+
+#[test]
+fn audit_prompts_and_schema_share_the_stable_taxonomy() {
+    let defaults = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../default");
+    let loaded = PromptSet::load(&defaults, None).unwrap().get("audit");
+    let builtin = PromptSet::builtin().get("audit");
+    for prompt in [&loaded, &builtin] {
+        assert_eq!(prompt.version, "2");
+        for finding_id in omacell_ai::audit_ai::FINDING_IDS {
+            assert!(prompt.body.contains(finding_id));
+        }
+    }
+    assert_eq!(
+        omacell_ai::audit_ai::findings_schema()
+            .pointer("/properties/findings/items/properties/id/enum")
+            .unwrap(),
+        &json!(omacell_ai::audit_ai::FINDING_IDS)
+    );
 }
 
 #[test]
