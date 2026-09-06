@@ -162,6 +162,17 @@ fn extreme_integer_arguments_fail_closed_without_panicking() {
 }
 
 #[test]
+fn filter_scalar_include_broadcasts_to_every_row() {
+    assert_eq!(eval_formula("=SUM(FILTER({1;2;3},TRUE))"), "6");
+    assert_eq!(eval_formula("=ROWS(FILTER({1;2;3},TRUE))"), "3");
+    assert_eq!(eval_formula("=SUM(FILTER({1,2,3},TRUE))"), "6");
+    assert_eq!(eval_formula("=SUM(FILTER({1,2;3,4},TRUE))"), "10");
+    assert_eq!(eval_formula("=FILTER({1;2;3},FALSE)"), "#CALC!");
+    assert_eq!(eval_formula("=FILTER({1,2;3,4},FALSE,\"none\")"), "none");
+    assert_eq!(eval_formula("=SUM(FILTER({1;2;3},1))"), "6");
+}
+
+#[test]
 fn language_constructs_are_not_registered() {
     let mut registry = FnRegistry::new();
     register_all(&mut registry);

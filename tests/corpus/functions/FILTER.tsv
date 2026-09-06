@@ -10,3 +10,10 @@
 =INDEX(FILTER({1,10;2,20;3,30},{TRUE;FALSE;TRUE}),2,2)	30	2-D array rows filtered together
 =FILTER({1,2},{TRUE,FALSE,TRUE})	#VALUE!	include shape must match array rows/cols
 =SUM(FILTER({1,2,3},{1,0,1}))	4	nonzero include is TRUE
+=SUM(FILTER({1;2;3},TRUE))	6	scalar TRUE broadcasts to every row
+=ROWS(FILTER({1;2;3},TRUE))	3	scalar include keeps the full height
+=SUM(FILTER({1,2,3},TRUE))	6	scalar TRUE keeps a row vector
+=SUM(FILTER({1,2;3,4},TRUE))	10	scalar TRUE keeps a 2-D array
+=FILTER({1;2;3},FALSE)	#CALC!	scalar FALSE with no if_empty is #CALC!
+=FILTER({1,2;3,4},FALSE,"none")	none	scalar FALSE returns if_empty
+=SUM(FILTER({1;2;3},1))	6	nonzero scalar include is TRUE
