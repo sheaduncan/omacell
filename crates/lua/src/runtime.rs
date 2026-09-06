@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, TryLockError, Weak};
 
 use mlua::{HookTriggers, Lua, Table, Value as LuaValue, Variadic, VmState};
 use omacell_ai::{AiError, AiHookRequest, AiHookResponse, AiHooks, AiTaskSpec, ToolSpec};
@@ -16,7 +16,6 @@ use omacell_core::value::Value;
 use serde::Deserialize;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
-use std::sync::{Mutex, TryLockError};
 
 use crate::host::ScriptHost;
 use crate::trust::{TrustStore, sha256_hex, trust_path};
@@ -30,6 +29,14 @@ pub const MAX_USER_SCRIPT_BYTES: u64 = 1024 * 1024;
 /// Custom-part path for a workbook-embedded script.
 pub const EMBEDDED_PART: &str = "xl/omacell/scripts/main.lua";
 const JSON_ARRAY_MARKER: &str = "__omacell_json_array";
+
+type SharedHost = Arc<Mutex<Box<dyn ScriptHost>>>;
+type WeakHost = Weak<Mutex<Box<dyn ScriptHost>>>;
+
+fn upgrade_host(host: &WeakHost) -> Result<SharedHost, CoreError> {
+    host.upgrade()
+        .ok_or_else(|| CoreError::new("lua.api", "Lua runtime host is no longer available"))
+}
 
 /// Sandbox profile (F-10.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -336,11 +343,12 @@ fn install_api(
     let omacell = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    let host_cmd = Arc::clone(host);
+    let host_cmd = Arc::downgrade(host);
     let cmd_depth = Arc::clone(function_depth);
     let cmd = lua
         .create_function(move |lua, (id, args): (String, LuaValue)| {
             host_api_available(&cmd_depth)?;
+            let host_cmd = upgrade_host(&host_cmd).map_err(mlua::Error::external)?;
             if profile == Profile::Embedded && !lock_mutex(&host_cmd).embedded_command_allowed(&id)
             {
                 return Err(mlua::Error::external(CoreError::new(
@@ -365,8 +373,8 @@ fn install_api(
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
 
     let registration = FunctionRegistration {
-        runtime_lua: Arc::clone(runtime_lua),
-        host: Arc::clone(host),
+        runtime_lua: Arc::downgrade(runtime_lua),
+        host: Arc::downgrade(host),
         function_depth: Arc::clone(function_depth),
         script_depth: Arc::clone(script_depth),
     };
@@ -399,7 +407,7 @@ fn install_print(
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
     function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
-    let h = Arc::clone(host);
+    let h = Arc::downgrade(host);
     let depth = Arc::clone(function_depth);
     let print = lua
         .create_function(move |lua, values: Variadic<LuaValue>| {
@@ -409,6 +417,7 @@ fn install_print(
             for value in values {
                 rendered.push(tostring.call::<String>(value)?);
             }
+            let h = upgrade_host(&h).map_err(mlua::Error::external)?;
             lock_mutex(&h).status(&rendered.join("\t"));
             Ok(())
         })
@@ -428,24 +437,26 @@ fn install_ui(
     let ui = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    let h = Arc::clone(host);
+    let h = Arc::downgrade(host);
     let depth = Arc::clone(function_depth);
     ui.set(
         "status",
         lua.create_function(move |_, msg: String| {
             host_api_available(&depth)?;
+            let h = upgrade_host(&h).map_err(mlua::Error::external)?;
             lock_mutex(&h).status(&msg);
             Ok(())
         })
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?,
     )
     .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    let h = Arc::clone(host);
+    let h = Arc::downgrade(host);
     let depth = Arc::clone(function_depth);
     ui.set(
         "notify",
         lua.create_function(move |_, msg: String| {
             host_api_available(&depth)?;
+            let h = upgrade_host(&h).map_err(mlua::Error::external)?;
             lock_mutex(&h).notify(&msg);
             Ok(())
         })
@@ -453,12 +464,13 @@ fn install_ui(
     )
     .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
     if profile == Profile::User {
-        let h = Arc::clone(host);
+        let h = Arc::downgrade(host);
         let depth = Arc::clone(function_depth);
         ui.set(
             "prompt",
             lua.create_function(move |_, msg: String| {
                 host_api_available(&depth)?;
+                let h = upgrade_host(&h).map_err(mlua::Error::external)?;
                 lock_mutex(&h).prompt(&msg).map_err(mlua::Error::external)
             })
             .map_err(|e| CoreError::new("lua.api", e.to_string()))?,
@@ -662,13 +674,14 @@ fn install_keymap(
     let keymap = lua
         .create_table()
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    let h = Arc::clone(host);
+    let h = Arc::downgrade(host);
     let depth = Arc::clone(function_depth);
     keymap
         .set(
             "set",
             lua.create_function(move |_, (mode, keys, cmd): (String, String, String)| {
                 host_api_available(&depth)?;
+                let h = upgrade_host(&h).map_err(mlua::Error::external)?;
                 lock_mutex(&h)
                     .try_keymap_set(&mode, &keys, &cmd)
                     .map_err(mlua::Error::external)
@@ -713,7 +726,7 @@ fn install_ai(
             },
         )
         .map_err(|e| CoreError::new("lua.api", e.to_string()))?;
-    let host_fn = Arc::clone(host);
+    let host_fn = Arc::downgrade(host);
     let depth = Arc::clone(function_depth);
     let function_tasks = Arc::clone(tasks);
     let func = lua
@@ -744,6 +757,7 @@ fn install_ai(
                     array_lift: ArrayLift::None,
                     body: Arc::new(AiFnStub),
                 };
+                let host_fn = upgrade_host(&host_fn).map_err(mlua::Error::external)?;
                 lock_mutex(&host_fn)
                     .register_function(def)
                     .map_err(mlua::Error::external)?;
@@ -809,11 +823,12 @@ fn install_book(
     host: &Arc<Mutex<Box<dyn ScriptHost>>>,
     function_depth: &Arc<AtomicU32>,
 ) -> Result<(), CoreError> {
-    let h = Arc::clone(host);
+    let h = Arc::downgrade(host);
     let depth = Arc::clone(function_depth);
     let getter = lua
         .create_function(move |lua, (): ()| {
             host_api_available(&depth)?;
+            let h = upgrade_host(&h).map_err(mlua::Error::external)?;
             let host = lock_mutex(&h);
             let wb = host.workbook();
             let name = wb
@@ -822,7 +837,7 @@ fn install_book(
                 .unwrap_or_else(|| "Sheet1".into());
             drop(host);
             LuaBook {
-                host: Arc::clone(&h),
+                host: Arc::downgrade(&h),
                 active: name,
                 function_depth: Arc::clone(&depth),
             }
@@ -835,26 +850,26 @@ fn install_book(
 }
 
 struct LuaBook {
-    host: Arc<Mutex<Box<dyn ScriptHost>>>,
+    host: WeakHost,
     active: String,
     function_depth: Arc<AtomicU32>,
 }
 
 struct LuaSheet {
-    host: Arc<Mutex<Box<dyn ScriptHost>>>,
+    host: WeakHost,
     name: String,
     function_depth: Arc<AtomicU32>,
 }
 
 struct LuaCell {
-    host: Arc<Mutex<Box<dyn ScriptHost>>>,
+    host: WeakHost,
     sheet: String,
     a1: String,
     function_depth: Arc<AtomicU32>,
 }
 
 struct LuaRange {
-    host: Arc<Mutex<Box<dyn ScriptHost>>>,
+    host: WeakHost,
     sheet: String,
     a1: String,
     function_depth: Arc<AtomicU32>,
@@ -865,19 +880,20 @@ impl mlua::UserData for LuaBook {
         methods.add_method("sheet", |_, this, name: Option<String>| {
             host_api_available(&this.function_depth)?;
             let requested = name.unwrap_or_else(|| this.active.clone());
-            let host = lock_mutex(&this.host);
-            let id = host
+            let host = upgrade_host(&this.host).map_err(mlua::Error::external)?;
+            let host_guard = lock_mutex(&host);
+            let id = host_guard
                 .workbook()
                 .resolve_sheet_name(&requested)
                 .map_err(mlua::Error::external)?;
-            let name = host
+            let name = host_guard
                 .workbook()
                 .sheet(id)
                 .map(|sheet| sheet.name.clone())
                 .ok_or_else(|| mlua::Error::external("resolved worksheet is missing"))?;
-            drop(host);
+            drop(host_guard);
             Ok(LuaSheet {
-                host: Arc::clone(&this.host),
+                host: Weak::clone(&this.host),
                 name,
                 function_depth: Arc::clone(&this.function_depth),
             })
@@ -889,7 +905,7 @@ impl mlua::UserData for LuaSheet {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("cell", |_, this, a1: String| {
             Ok(LuaCell {
-                host: Arc::clone(&this.host),
+                host: Weak::clone(&this.host),
                 sheet: this.name.clone(),
                 a1,
                 function_depth: Arc::clone(&this.function_depth),
@@ -897,7 +913,7 @@ impl mlua::UserData for LuaSheet {
         });
         methods.add_method("range", |_, this, a1: String| {
             Ok(LuaRange {
-                host: Arc::clone(&this.host),
+                host: Weak::clone(&this.host),
                 sheet: this.name.clone(),
                 a1,
                 function_depth: Arc::clone(&this.function_depth),
@@ -911,22 +927,26 @@ impl mlua::UserData for LuaCell {
     fn add_fields<F: mlua::UserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("value", |lua, this| {
             host_api_available(&this.function_depth)?;
-            let host = lock_mutex(&this.host);
+            let host = upgrade_host(&this.host).map_err(mlua::Error::external)?;
+            let host = lock_mutex(&host);
             cell_lua_value(lua, host.workbook(), &this.sheet, &this.a1)
         });
         fields.add_field_method_get("input", |_, this| {
             host_api_available(&this.function_depth)?;
-            let host = lock_mutex(&this.host);
+            let host = upgrade_host(&this.host).map_err(mlua::Error::external)?;
+            let host = lock_mutex(&host);
             Ok(cell_input(host.workbook(), &this.sheet, &this.a1))
         });
         fields.add_field_method_get("formula", |_, this| {
             host_api_available(&this.function_depth)?;
-            let host = lock_mutex(&this.host);
+            let host = upgrade_host(&this.host).map_err(mlua::Error::external)?;
+            let host = lock_mutex(&host);
             Ok(cell_formula(host.workbook(), &this.sheet, &this.a1))
         });
         fields.add_field_method_get("style", |lua, this| {
             host_api_available(&this.function_depth)?;
-            let host = lock_mutex(&this.host);
+            let host = upgrade_host(&this.host).map_err(mlua::Error::external)?;
+            let host = lock_mutex(&host);
             let style = cell_style(host.workbook(), &this.sheet, &this.a1);
             let json = serde_json::to_value(style).map_err(mlua::Error::external)?;
             json_to_lua(lua, &json)
@@ -935,7 +955,8 @@ impl mlua::UserData for LuaCell {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("set", |lua, this, input: String| {
             host_api_available(&this.function_depth)?;
-            let mut host = lock_mutex(&this.host);
+            let host = upgrade_host(&this.host).map_err(mlua::Error::external)?;
+            let mut host = lock_mutex(&host);
             let r#ref = qualify(&this.sheet, &this.a1);
             host.execute(
                 "cell.set",
@@ -959,7 +980,8 @@ impl mlua::UserData for LuaCell {
                 }
             };
             args.insert("range".into(), Json::String(qualify(&this.sheet, &this.a1)));
-            let mut host = lock_mutex(&this.host);
+            let host = upgrade_host(&this.host).map_err(mlua::Error::external)?;
+            let mut host = lock_mutex(&host);
             host.execute("style.set", Json::Object(args))
                 .map_err(mlua::Error::external)?;
             let events = host.take_events();
@@ -974,16 +996,17 @@ impl mlua::UserData for LuaRange {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("cells", |lua, this, (): ()| {
             host_api_available(&this.function_depth)?;
-            let host = lock_mutex(&this.host);
-            let cells = range_cells(host.workbook(), &this.sheet, &this.a1)
+            let host = upgrade_host(&this.host).map_err(mlua::Error::external)?;
+            let host_guard = lock_mutex(&host);
+            let cells = range_cells(host_guard.workbook(), &this.sheet, &this.a1)
                 .map_err(mlua::Error::external)?;
-            drop(host);
+            drop(host_guard);
             let table = lua.create_table()?;
             for (i, a1) in cells.into_iter().enumerate() {
                 table.set(
                     i + 1,
                     LuaCell {
-                        host: Arc::clone(&this.host),
+                        host: Weak::clone(&this.host),
                         sheet: this.sheet.clone(),
                         a1,
                         function_depth: Arc::clone(&this.function_depth),
@@ -1197,8 +1220,8 @@ struct LuaBody {
 }
 
 struct FunctionRegistration {
-    runtime_lua: Arc<Mutex<Lua>>,
-    host: Arc<Mutex<Box<dyn ScriptHost>>>,
+    runtime_lua: Weak<Mutex<Lua>>,
+    host: WeakHost,
     function_depth: Arc<AtomicU32>,
     script_depth: Arc<AtomicU32>,
 }
@@ -1211,7 +1234,7 @@ struct IsolatedLuaBody {
 struct HybridLuaBody {
     primary: LuaBody,
     fallback: IsolatedLuaBody,
-    runtime_lua: Arc<Mutex<Lua>>,
+    runtime_lua: Weak<Mutex<Lua>>,
     script_depth: Arc<AtomicU32>,
 }
 
@@ -1269,7 +1292,10 @@ impl DynamicFnBody for IsolatedLuaBody {
 impl DynamicFnBody for HybridLuaBody {
     fn eval(&self, args: &[ArgVal]) -> RuntimeValue {
         if self.script_depth.load(Ordering::SeqCst) == 0 {
-            match self.runtime_lua.try_lock() {
+            let Some(runtime_lua) = self.runtime_lua.upgrade() else {
+                return RuntimeValue::error(ErrorKind::Value);
+            };
+            match runtime_lua.try_lock() {
                 Ok(_guard) => return self.primary.eval(args),
                 Err(TryLockError::Poisoned(poisoned)) => {
                     let _guard = poisoned.into_inner();
@@ -1459,7 +1485,8 @@ fn register_lua_fn(
             t
         }
     };
-    let isolated = lock_mutex(&registration.host).isolate_functions();
+    let host = upgrade_host(&registration.host)?;
+    let isolated = lock_mutex(&host).isolate_functions();
     let body: Arc<dyn DynamicFnBody> = if isolated {
         if func.info().what != "Lua" {
             return Err(CoreError::new(
@@ -1483,7 +1510,7 @@ fn register_lua_fn(
                 lua: evaluator,
                 func: callback,
             },
-            runtime_lua: Arc::clone(&registration.runtime_lua),
+            runtime_lua: Weak::clone(&registration.runtime_lua),
             script_depth: Arc::clone(&registration.script_depth),
         })
     } else {
@@ -1503,7 +1530,7 @@ fn register_lua_fn(
         array_lift,
         body,
     };
-    lock_mutex(&registration.host).register_function(def)
+    lock_mutex(&host).register_function(def)
 }
 
 struct FunctionEvaluation<'a>(&'a AtomicU32);
@@ -1795,5 +1822,66 @@ trait IntoLuaOwned {
 impl IntoLuaOwned for LuaBook {
     fn into_lua_owned(self, lua: &Lua) -> mlua::Result<LuaValue> {
         Ok(LuaValue::UserData(lua.create_userdata(self)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use omacell_bus::Bus;
+    use omacell_core::eval::FnRegistry;
+    use omacell_core::recalc::RecalcEngine;
+    use omacell_core::workbook::Workbook;
+
+    use super::{Profile, Runtime};
+    use crate::BusHost;
+
+    fn embedded_runtime() -> Runtime {
+        let bus = Bus::new(Workbook::new(), RecalcEngine::new(FnRegistry::new()))
+            .expect("construct test bus");
+        Runtime::new(Profile::Embedded, Box::new(BusHost::new(bus)))
+            .expect("construct embedded runtime")
+    }
+
+    #[test]
+    fn dropping_a_fresh_runtime_releases_its_lua_vm() {
+        let runtime = embedded_runtime();
+        let lua = Arc::downgrade(&runtime.lua);
+        let host = Arc::downgrade(&runtime.host);
+
+        drop(runtime);
+
+        assert!(lua.upgrade().is_none(), "Lua VM leaked after Runtime drop");
+        assert!(
+            host.upgrade().is_none(),
+            "Lua host leaked after Runtime drop"
+        );
+    }
+
+    #[test]
+    fn dropping_a_runtime_releases_retained_api_values_and_functions() {
+        let runtime = embedded_runtime();
+        runtime
+            .exec(
+                r#"
+                retained = { command = omacell.cmd, book = omacell.book() }
+                omacell.fn("USER.IDENTITY", { min = 1, max = 1 }, function(value)
+                    return value
+                end)
+                "#,
+                "lifetime.lua",
+            )
+            .expect("register retained Lua values");
+        let lua = Arc::downgrade(&runtime.lua);
+        let host = Arc::downgrade(&runtime.host);
+
+        drop(runtime);
+
+        assert!(lua.upgrade().is_none(), "Lua VM leaked after Runtime drop");
+        assert!(
+            host.upgrade().is_none(),
+            "Lua host leaked after Runtime drop"
+        );
     }
 }
