@@ -2,18 +2,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use omacell_ai::audit_ai::{findings_schema, parse_findings};
 use omacell_ai::formula::{formula_schema, parse_and_eval};
-use omacell_ai::http::{ReqwestTransport, SharedTransport};
+use omacell_ai::http::{HttpRequest, HttpResponse, ReqwestTransport, SharedTransport, Transport};
 use omacell_ai::import_assist::parse_plan_overlay;
 use omacell_ai::plan::{Plan, parse_plan, plan_schema, to_calls};
 use omacell_ai::policy::fence_data;
 use omacell_ai::prompts::PromptSet;
 use omacell_ai::{AiRuntime, Slot};
 use omacell_bus::Bus;
-use omacell_conf::schema::{AiProvider, package_defaults};
+use omacell_conf::schema::{AiProvider, Config, package_defaults};
 use omacell_core::command::Origin;
 use omacell_core::eval::{FnRegistry, format_runtime};
 use omacell_core::graph::CellCoord;
@@ -22,6 +22,8 @@ use omacell_core::workbook::Workbook;
 use omacell_fn::register_all;
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+const LOCAL_MODEL_MAX_OUTPUT_TOKENS: u32 = 256;
 
 #[derive(Deserialize)]
 struct PlanEval {
@@ -80,9 +82,7 @@ fn model_json(text: &str) -> Option<Value> {
     })
 }
 
-fn runtime() -> Option<(Arc<AiRuntime>, tokio::runtime::Runtime, tempfile::TempDir)> {
-    let endpoint = std::env::var("OMACELL_LOCAL_EVAL_ENDPOINT").ok()?;
-    let model = std::env::var("OMACELL_LOCAL_EVAL_MODEL").ok()?;
+fn local_model_config(endpoint: String, model: String) -> Config {
     let mut config = package_defaults().unwrap();
     config.ai.enabled = true;
     config.ai.providers.insert(
@@ -100,6 +100,16 @@ fn runtime() -> Option<(Arc<AiRuntime>, tokio::runtime::Runtime, tempfile::TempD
     config.ai.models.default = format!("nightly:{model}");
     config.ai.models.fast = format!("nightly:{model}");
     config.ai.functions.max_requests_per_minute = 1_000;
+    // Every oracle is a compact JSON object. Keeping the production 4,096-token
+    // ceiling lets a malformed small-model response consume the whole deadline.
+    config.ai.functions.max_tokens_per_request = LOCAL_MODEL_MAX_OUTPUT_TOKENS;
+    config
+}
+
+fn runtime() -> Option<(Arc<AiRuntime>, tokio::runtime::Runtime, tempfile::TempDir)> {
+    let endpoint = std::env::var("OMACELL_LOCAL_EVAL_ENDPOINT").ok()?;
+    let model = std::env::var("OMACELL_LOCAL_EVAL_MODEL").ok()?;
+    let config = local_model_config(endpoint, model);
     let handle = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -149,6 +159,52 @@ fn applied_plan_fingerprint(plan: &Plan) -> Option<Value> {
         .collect::<Vec<_>>();
     cells.sort_by_key(Value::to_string);
     Some(Value::Array(cells))
+}
+
+#[derive(Default)]
+struct CaptureTransport {
+    requests: Mutex<Vec<HttpRequest>>,
+}
+
+#[async_trait::async_trait]
+impl Transport for CaptureTransport {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, omacell_ai::AiError> {
+        self.requests.lock().unwrap().push(request);
+        Ok(HttpResponse {
+            status: 200,
+            body: json!({"choices": [{"message": {"content": "{}"}}]}),
+            chunks: Vec::new(),
+        })
+    }
+}
+
+#[test]
+fn nightly_requests_bound_generated_output() {
+    let config = local_model_config("http://127.0.0.1:11434/v1".into(), "qwen2.5:0.5b".into());
+    let handle = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let transport = Arc::new(CaptureTransport::default());
+    let shared: SharedTransport = transport.clone();
+    let runtime = AiRuntime::new(
+        handle.handle().clone(),
+        config,
+        shared,
+        PromptSet::builtin(),
+        temp.path().join("cache"),
+        temp.path().join("state"),
+        Default::default(),
+    );
+
+    runtime
+        .chat_task(Slot::Default, "formula", "fixture".into(), None, vec![])
+        .unwrap();
+
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].body["max_tokens"], 256);
 }
 
 #[test]
