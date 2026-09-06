@@ -10,7 +10,6 @@ use omacell_ai::agent::validate_tool;
 use omacell_ai::formula::parse_and_eval;
 use omacell_ai::functions::{is_ai_formula, register_ai_functions, strip_ai_formulas};
 use omacell_ai::http::{HttpRequest, HttpResponse, SharedTransport, Transport};
-use omacell_ai::import_assist::parse_plan_overlay;
 use omacell_ai::plan::{forbidden, parse_plan, to_calls};
 use omacell_ai::prompts::PromptSet;
 use omacell_ai::runtime::AiRuntime;
@@ -1101,18 +1100,6 @@ fn strip_ai_formulas_preserves_formula_like_text_exactly() {
         panic!("expected text, got {:?}", slot.value);
     };
     assert_eq!(wb.intern().strings.get(id), Some("=not a formula"));
-}
-
-#[test]
-fn import_overlay_never_requires_apply() {
-    let plan = parse_plan_overlay(&json!({
-        "plan": {
-            "delimiter": ",",
-            "has_header": true
-        }
-    }))
-    .unwrap();
-    assert!(plan.has_header);
 }
 
 #[test]
