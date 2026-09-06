@@ -110,6 +110,7 @@ pub struct Gui {
     import_assist_task: Option<TaskId>,
     import_apply_task: Option<TaskId>,
     completion: InlineCompletion,
+    text_commits: input::TextCommitFilter,
     clipboard_export: Option<String>,
     context_menu: Option<egui::Pos2>,
     file: Option<PathBuf>,
@@ -237,6 +238,7 @@ impl Gui {
             import_assist_task: None,
             import_apply_task: None,
             completion: InlineCompletion::default(),
+            text_commits: input::TextCommitFilter::default(),
             clipboard_export: None,
             context_menu: None,
             file: recovered_file,
@@ -1832,6 +1834,7 @@ impl Gui {
         let compact = ctx.content_rect().width() < cfg.layout.compact_below_width as f32;
         let edit = self.ui.edit();
         let text_overlay_open = accepts_composed_text(&self.ui);
+        ctx.input_mut(|input| self.text_commits.filter_events(&mut input.events));
         let input = ctx.input(|i| i.clone());
         let grid_owns_clipboard =
             edit.is_idle() && !self.ui.palette().open && self.ui.panel().visible.is_none();

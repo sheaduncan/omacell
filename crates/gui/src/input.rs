@@ -1,7 +1,68 @@
 //! Map egui input onto toolkit-neutral [`omacell_ui::KeyEvent`].
 
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
 use egui::{Event, Key, Modifiers, PointerButton};
 use omacell_ui::{KeyCode, KeyEvent};
+
+const DUPLICATE_COMMIT_WINDOW: Duration = Duration::from_millis(250);
+const MAX_PENDING_COMMITS: usize = 32;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextSource {
+    Plain,
+    Ime,
+}
+
+struct PendingCommit {
+    source: TextSource,
+    text: String,
+    received: Instant,
+}
+
+/// Coalesces duplicate text delivered through egui's plain and IME paths.
+#[derive(Default)]
+pub(crate) struct TextCommitFilter {
+    pending: VecDeque<PendingCommit>,
+}
+
+impl TextCommitFilter {
+    /// Remove duplicate text events, including matching commits delayed across frames.
+    pub(crate) fn filter_events(&mut self, events: &mut Vec<Event>) {
+        self.filter_events_at(events, Instant::now());
+    }
+
+    fn filter_events_at(&mut self, events: &mut Vec<Event>, now: Instant) {
+        self.pending.retain(|commit| {
+            now.saturating_duration_since(commit.received) <= DUPLICATE_COMMIT_WINDOW
+        });
+        events.retain(|event| {
+            let (source, text) = match event {
+                Event::Text(text) => (TextSource::Plain, text.as_str()),
+                Event::Ime(egui::ImeEvent::Commit(text)) => (TextSource::Ime, text.as_str()),
+                _ => return true,
+            };
+            if let Some(index) = self
+                .pending
+                .iter()
+                .position(|pending| pending.source != source && pending.text == text)
+            {
+                self.pending.remove(index);
+                return false;
+            }
+            self.pending.push_back(PendingCommit {
+                source,
+                text: text.to_owned(),
+                received: now,
+            });
+            if self.pending.len() > MAX_PENDING_COMMITS {
+                self.pending.pop_front();
+            }
+            true
+        });
+    }
+}
 
 /// Convert pressed egui keys. Unknown keys are ignored.
 #[must_use]
@@ -100,29 +161,12 @@ pub fn pressed_keys(events: &[Event]) -> impl Iterator<Item = KeyEvent> + '_ {
     })
 }
 
-/// IME / composed text this frame.
+/// IME / composed text this frame after duplicate filtering.
 pub fn text_events(events: &[Event]) -> impl Iterator<Item = &str> + '_ {
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Source {
-        Text,
-        Ime,
-    }
-
-    let mut unpaired: Option<(Source, &str)> = None;
-    events.iter().filter_map(move |event| {
-        let (source, text) = match event {
-            Event::Text(text) => (Source::Text, text.as_str()),
-            Event::Ime(egui::ImeEvent::Commit(text)) => (Source::Ime, text.as_str()),
-            _ => return None,
-        };
-        if unpaired.is_some_and(|(previous_source, previous_text)| {
-            previous_source != source && previous_text == text
-        }) {
-            unpaired = None;
-            return None;
-        }
-        unpaired = Some((source, text));
-        Some(text)
+    events.iter().filter_map(|event| match event {
+        Event::Text(text) => Some(text.as_str()),
+        Event::Ime(egui::ImeEvent::Commit(text)) => Some(text.as_str()),
+        _ => None,
     })
 }
 
@@ -200,7 +244,9 @@ pub fn pointer_release(events: &[Event]) -> Option<(egui::Pos2, bool)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_key, text_events};
+    use std::time::{Duration, Instant};
+
+    use super::{DUPLICATE_COMMIT_WINDOW, TextCommitFilter, map_key, text_events};
     use egui::{Key, Modifiers};
     use omacell_ui::KeyCode;
 
@@ -238,6 +284,38 @@ mod tests {
             egui::Event::Ime(egui::ImeEvent::Commit("/".into())),
         ];
 
+        let mut events = events;
+        TextCommitFilter::default().filter_events(&mut events);
         assert_eq!(text_events(&events).collect::<Vec<_>>(), vec!["/", "/"]);
+    }
+
+    #[test]
+    fn coalesces_a_matching_ime_commit_from_the_next_frame() {
+        let mut filter = TextCommitFilter::default();
+        let mut plain = vec![egui::Event::Text("a".into())];
+        let mut ime = vec![egui::Event::Ime(egui::ImeEvent::Commit("a".into()))];
+
+        filter.filter_events(&mut plain);
+        filter.filter_events(&mut ime);
+
+        assert_eq!(text_events(&plain).collect::<Vec<_>>(), vec!["a"]);
+        assert!(text_events(&ime).next().is_none());
+    }
+
+    #[test]
+    fn retains_a_matching_cross_source_commit_after_the_pairing_window() {
+        let mut filter = TextCommitFilter::default();
+        let now = Instant::now();
+        let mut plain = vec![egui::Event::Text("a".into())];
+        let mut later_ime = vec![egui::Event::Ime(egui::ImeEvent::Commit("a".into()))];
+
+        filter.filter_events_at(&mut plain, now);
+        filter.filter_events_at(
+            &mut later_ime,
+            now + DUPLICATE_COMMIT_WINDOW + Duration::from_millis(1),
+        );
+
+        assert_eq!(text_events(&plain).collect::<Vec<_>>(), vec!["a"]);
+        assert_eq!(text_events(&later_ime).collect::<Vec<_>>(), vec!["a"]);
     }
 }
