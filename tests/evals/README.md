@@ -9,8 +9,9 @@ shapes are parsed, validated, executed, and contained correctly.
   target cells/inputs and execution effects.
 - `formula.jsonl`: synthetic candidate formulas evaluated on seeded cells
   against independently declared result values.
-- `import.jsonl`: synthetic `ImportPlan` candidates checked for bounded valid
-  overlays derived from each input sample.
+- `import.jsonl`: samples expose headers, physical preamble rows, and numeric
+  separators; synthetic `ImportPlan` candidates are checked against scalar
+  header/skip-row oracles while preserving evidenced current-plan fields.
 - `audit.jsonl`: synthetic finding candidates use the documented stable
   `unit-mismatch` id against independently declared seeded defects (a
   parser/scorer contract, not a precision/recall measurement).

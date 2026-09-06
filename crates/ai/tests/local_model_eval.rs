@@ -44,6 +44,8 @@ struct FormulaEval {
 struct ImportEval {
     sample: String,
     current: Value,
+    expected_has_header: bool,
+    expected_skip_rows: u32,
 }
 
 #[derive(Deserialize)]
@@ -325,6 +327,11 @@ fn score_the_committed_inputs_against_a_local_model() {
 
     let imports = evals::<ImportEval>("import.jsonl");
     let mut import_pass = 0usize;
+    let mut import_valid = 0usize;
+    let mut import_delimiter = 0usize;
+    let mut import_header = 0usize;
+    let mut import_skip_rows = 0usize;
+    let mut import_separators = 0usize;
     for row in &imports {
         let reply = runtime
             .chat_task(
@@ -339,15 +346,27 @@ fn score_the_committed_inputs_against_a_local_model() {
                 vec![],
             )
             .unwrap();
-        if let Some(value) = model_json(&reply.text)
-            && let Ok(actual) = parse_plan_overlay(&value)
-            && let Ok(current) = parse_plan_overlay(&row.current)
-            && actual.delimiter == current.delimiter
-            && actual.has_header
-            && actual.skip_rows <= 2
-            && actual.decimal == if actual.delimiter == ';' { ',' } else { '.' }
-            && actual.thousands == Some(if actual.delimiter == ';' { '.' } else { ',' })
-        {
+        let Some(value) = model_json(&reply.text) else {
+            continue;
+        };
+        let Ok(actual) = parse_plan_overlay(&value) else {
+            continue;
+        };
+        if actual.validate().is_err() {
+            continue;
+        }
+        import_valid += 1;
+        let current = parse_plan_overlay(&row.current).unwrap();
+        let delimiter_matches = actual.delimiter == current.delimiter;
+        let header_matches = actual.has_header == row.expected_has_header;
+        let skip_rows_matches = actual.skip_rows == row.expected_skip_rows;
+        let separators_match =
+            actual.decimal == current.decimal && actual.thousands == current.thousands;
+        import_delimiter += usize::from(delimiter_matches);
+        import_header += usize::from(header_matches);
+        import_skip_rows += usize::from(skip_rows_matches);
+        import_separators += usize::from(separators_match);
+        if delimiter_matches && header_matches && skip_rows_matches && separators_match {
             import_pass += 1;
         }
     }
@@ -422,7 +441,7 @@ fn score_the_committed_inputs_against_a_local_model() {
     let audit_precision = audit_true as f64 / audit_predicted.max(1) as f64;
     let audit_recall = audit_true as f64 / audit_truth.max(1) as f64;
     eprintln!(
-        "local-model WP-23 scores: plan_exact={}/{} plan_effect={}/{} formula={}/{} import={}/{} audit_precision={:.3} audit_recall={:.3} injection_proposed_commands={} injection_accepted_commands={}",
+        "local-model WP-23 scores: plan_exact={}/{} plan_effect={}/{} formula={}/{} import={}/{} import_valid={}/{} import_delimiter={}/{} import_header={}/{} import_skip_rows={}/{} import_separators={}/{} audit_precision={:.3} audit_recall={:.3} injection_proposed_commands={} injection_accepted_commands={}",
         plan_exact,
         plans.len(),
         plan_effect,
@@ -430,6 +449,16 @@ fn score_the_committed_inputs_against_a_local_model() {
         formula_pass,
         formulas.len(),
         import_pass,
+        imports.len(),
+        import_valid,
+        imports.len(),
+        import_delimiter,
+        imports.len(),
+        import_header,
+        imports.len(),
+        import_skip_rows,
+        imports.len(),
+        import_separators,
         imports.len(),
         audit_precision,
         audit_recall,

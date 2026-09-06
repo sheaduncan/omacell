@@ -1178,6 +1178,18 @@ fn audit_prompts_and_schema_share_the_stable_taxonomy() {
 }
 
 #[test]
+fn import_prompts_define_evidence_based_overlay_rules() {
+    let defaults = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../default");
+    let loaded = PromptSet::load(&defaults, None).unwrap().get("import");
+    let builtin = PromptSet::builtin().get("import");
+    for prompt in [&loaded, &builtin] {
+        assert_eq!(prompt.version, "2");
+        assert!(prompt.body.contains("Preserve"));
+        assert!(prompt.body.contains("skip_rows"));
+    }
+}
+
+#[test]
 fn unknown_plan_command_is_rejected() {
     let err = parse_plan(
         &json!({"commands":[{"id":"not.a.command","args":{}}]}),

@@ -70,7 +70,7 @@ impl PromptSet {
             ),
             (
                 "import",
-                "Return JSON {\"plan\":{...}} ImportPlan overlay. <!-- version: 1 -->\n",
+                "Preserve current ImportPlan fields unless the sample justifies a change. Set has_header and the exact physical preamble-record count in skip_rows. Return plan.delimiter, has_header, skip_rows, decimal, and thousands. Never apply it. <!-- version: 2 -->\n",
             ),
             (
                 "audit",

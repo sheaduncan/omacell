@@ -57,6 +57,8 @@ struct ImportEval {
     sample: String,
     current: Value,
     candidate: Value,
+    expected_has_header: bool,
+    expected_skip_rows: u32,
 }
 
 #[derive(Deserialize)]
@@ -217,18 +219,23 @@ fn synthetic_import_contract_rows_produce_valid_bounded_overlays() {
     assert!(rows.len() >= 24);
     for row in &rows {
         assert_synthetic_contract(&row.id, &row.fixture_kind, &row.note);
-        assert_eq!(row.prompt_version, 1, "{}", row.id);
+        assert_eq!(row.prompt_version, 2, "{}", row.id);
         assert!(!row.sample.is_empty(), "{}", row.id);
         let current = parse_plan_overlay(&row.current).unwrap();
         current.validate().unwrap();
         let proposed = parse_plan_overlay(&row.candidate).unwrap();
         proposed.validate().unwrap();
         assert_eq!(proposed.delimiter, current.delimiter, "{}", row.id);
-        assert!(proposed.has_header, "{}", row.id);
-        assert!(proposed.skip_rows <= 2, "{}", row.id);
-        let semicolon = proposed.delimiter == ';';
-        assert_eq!(proposed.decimal, if semicolon { ',' } else { '.' });
-        assert_eq!(proposed.thousands, Some(if semicolon { '.' } else { ',' }));
+        assert_eq!(proposed.has_header, row.expected_has_header, "{}", row.id);
+        assert_eq!(proposed.skip_rows, row.expected_skip_rows, "{}", row.id);
+        assert_eq!(proposed.decimal, current.decimal, "{}", row.id);
+        assert_eq!(proposed.thousands, current.thousands, "{}", row.id);
+        let header = row
+            .sample
+            .lines()
+            .nth(row.expected_skip_rows as usize)
+            .unwrap();
+        assert!(header.contains(proposed.delimiter), "{}", row.id);
     }
 }
 

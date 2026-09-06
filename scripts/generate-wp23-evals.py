@@ -100,23 +100,45 @@ def import_rows() -> list[dict]:
     rows = []
     for index in range(24):
         delimiter = delimiters[index % len(delimiters)]
-        current = {"delimiter": delimiter, "has_header": False}
+        skip_rows = index % 3
+        decimal = "," if delimiter == ";" else "."
+        thousands = "." if delimiter == ";" else ","
+        number = "1.234,5" if delimiter == ";" else "1,234.5"
+        if delimiter == ",":
+            number = f'"{number}"'
+        preamble = [f"Report metadata {line + 1}" for line in range(skip_rows)]
+        sample = "\n".join(
+            preamble
+            + [
+                f"name{delimiter}Pressure (psi)",
+                f"alpha{delimiter}{number}",
+            ]
+        )
+        current = {
+            "delimiter": delimiter,
+            "has_header": False,
+            "skip_rows": 0,
+            "decimal": decimal,
+            "thousands": thousands,
+        }
         proposed = {
             "delimiter": delimiter,
             "has_header": True,
-            "skip_rows": index % 3,
-            "decimal": "," if delimiter == ";" else ".",
-            "thousands": "." if delimiter == ";" else ",",
+            "skip_rows": skip_rows,
+            "decimal": decimal,
+            "thousands": thousands,
         }
         rows.append(
             {
                 "id": f"import-{index:03d}",
                 "fixture_kind": "synthetic_contract",
                 "note": "WP-23 contract: import candidates are bounded and valid.",
-                "prompt_version": 1,
-                "sample": f"name{delimiter}Pressure (psi)\nalpha{delimiter}{10 + index}",
+                "prompt_version": 2,
+                "sample": sample,
                 "current": current,
                 "candidate": {"plan": proposed},
+                "expected_has_header": True,
+                "expected_skip_rows": skip_rows,
             }
         )
     return rows
