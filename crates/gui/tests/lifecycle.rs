@@ -245,6 +245,80 @@ fn duplicate_plain_and_ime_text_commits_insert_slash_once() {
 }
 
 #[test]
+fn formula_entry_coalesces_plain_and_delayed_ime_commits() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+
+    for (key, text) in [(Key::Equals, "="), (Key::A, "a"), (Key::A, "a")] {
+        harness.input_mut().events.extend([
+            Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            },
+            Event::Text(text.into()),
+        ]);
+        harness.step();
+        harness
+            .input_mut()
+            .events
+            .push(Event::Ime(egui::ImeEvent::Commit(text.into())));
+        harness.step();
+    }
+
+    let edit = harness.state().ui_session().edit();
+    assert_eq!(edit.surface, EditSurface::InCell);
+    assert_eq!(edit.buffer, "=aa");
+}
+
+#[test]
+fn formula_bar_coalesces_plain_and_delayed_ime_commits() {
+    let parts = launch_theme(None);
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(640.0, 400.0))
+        .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
+    harness.run();
+    harness
+        .state()
+        .ui_session()
+        .begin_edit(EditSurface::FormulaBar, "=");
+    harness.step();
+    harness
+        .get_by_role(egui::accesskit::Role::TextInput)
+        .click();
+    harness.step();
+
+    for _ in 0..2 {
+        harness.input_mut().events.extend([
+            Event::Key {
+                key: Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            },
+            Event::Text("a".into()),
+        ]);
+        harness.step();
+        harness
+            .input_mut()
+            .events
+            .push(Event::Ime(egui::ImeEvent::Commit("a".into())));
+        harness.step();
+    }
+
+    let edit = harness.state().ui_session().edit();
+    assert_eq!(edit.surface, EditSurface::FormulaBar);
+    assert_eq!(edit.buffer.len(), 3);
+    assert_eq!(edit.buffer.matches('a').count(), 2);
+}
+
+#[test]
 fn double_clicking_a_cell_starts_editing_its_existing_input() {
     let parts = launch_theme(None);
     let mut harness = Harness::builder()
