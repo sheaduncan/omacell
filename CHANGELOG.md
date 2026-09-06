@@ -16,6 +16,8 @@ versioning after the 1.0 release; the current `0.0.0` version is unreleased.
   hardening, accessibility coverage, localization scaffold, and release gates.
 - Omarchy setup uses the Quattro launch-table form and links the shipped skill
   for all nine supported agent harnesses without replacing user-owned paths.
+- Opening the Omarchy Assistant without a prompt now shows a brief ready message
+  and waits for instructions instead of beginning a workbook analysis.
 
 Release entries must state compatibility changes, migrations, security fixes,
 and known fidelity differences. The tag workflow uses this file as its release

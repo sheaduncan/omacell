@@ -140,6 +140,37 @@ fn handoff_returns_without_waiting_for_the_agent_window() {
 }
 
 #[test]
+fn empty_handoff_defers_loading_workbook_context_until_the_user_asks() {
+    let home = TempDir::new().unwrap();
+    let path_dir = home.path().join("bin");
+    std::fs::create_dir_all(&path_dir).unwrap();
+    let log = home.path().join("omarchy.log");
+    write_fake_omarchy(&path_dir.join("omarchy"), &log);
+
+    let output = Command::cargo_bin("omacell")
+        .unwrap()
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env("HOME", home.path())
+        .env("XDG_RUNTIME_DIR", home.path().join("run"))
+        .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
+        .env("OMACELL_FAKE_AGENT", "claude")
+        .args(["--json", "agent", ""])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log_text = read_log_after(&log, "prompt");
+    assert!(log_text.contains("Ready to help with this workbook."));
+    assert!(log_text.contains("do not read it until the user asks"));
+    assert!(!log_text.contains("follow it"));
+}
+
+#[test]
 fn diagnose_without_book_writes_a_private_bundle_and_passes_it_in_the_prompt() {
     let home = TempDir::new().unwrap();
     let path_dir = home.path().join("bin");

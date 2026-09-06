@@ -75,6 +75,7 @@ pub fn detect_default_agent() -> Option<DefaultAgent> {
 
 /// Build `omarchy agent prompt …` argv. Spawns only when a default agent exists.
 pub fn hand_off(req: HandOffRequest) -> Result<HandOff, CoreError> {
+    let idle = req.prompt.trim().is_empty();
     let workbook = req.workbook.as_ref().map(|path| absolute_path(path));
     let cwd = workbook
         .as_ref()
@@ -88,14 +89,27 @@ pub fn hand_off(req: HandOffRequest) -> Result<HandOff, CoreError> {
     // Omarchy's prompt helper has no stdin mode and does not consistently
     // support a `--` sentinel. Keep all user/workbook-derived text out of
     // process argv and pass only a fixed instruction plus a private path.
+    let instruction = if idle {
+        format!(
+            concat!(
+                "Reply with exactly \"Ready to help with this workbook.\" and then wait. ",
+                "Do not use tools, inspect files, or analyze the workbook before replying. ",
+                "A private workbook context is available at {}; ",
+                "do not read it until the user asks for workbook help."
+            ),
+            prompt_file.display()
+        )
+    } else {
+        format!(
+            "Read the private Omacell hand-off request at {} and follow it.",
+            prompt_file.display()
+        )
+    };
     let argv = vec![
         "omarchy".into(),
         "agent".into(),
         "prompt".into(),
-        format!(
-            "Read the private Omacell hand-off request at {} and follow it.",
-            prompt_file.display()
-        ),
+        instruction,
     ];
     let hidden = detect_default_agent().is_none();
     if hidden {
@@ -151,8 +165,27 @@ fn absolute_path(path: &Path) -> PathBuf {
 }
 
 fn contextual_prompt(req: &HandOffRequest, workbook: Option<&Path>) -> String {
-    let mut prompt = req.prompt.clone();
-    prompt.push_str("\n\nOmacell hand-off context:\n- Use the installed omacell skill.\n");
+    let idle = req.prompt.trim().is_empty();
+    let mut prompt = if idle {
+        concat!(
+            "The user opened the Omacell assistant without giving it a task.\n",
+            "Reply with exactly this sentence and nothing else: ",
+            "\"Ready to help with this workbook.\"\n",
+            "Do not inspect, query, analyze, recalculate, or modify the workbook until the user asks.\n",
+            "Wait for the user's request."
+        )
+        .to_string()
+    } else {
+        req.prompt.clone()
+    };
+    prompt.push_str("\n\nOmacell hand-off context:\n");
+    if idle {
+        prompt.push_str(
+            "- The installed omacell skill is available when the user requests workbook work; do not load or use it yet.\n",
+        );
+    } else {
+        prompt.push_str("- Use the installed omacell skill.\n");
+    }
     if let Some(path) = workbook {
         prompt.push_str(&format!("- Workbook: {}\n", path.display()));
     }
@@ -165,9 +198,11 @@ fn contextual_prompt(req: &HandOffRequest, workbook: Option<&Path>) -> String {
             absolute_path(path).display()
         ));
     }
-    prompt.push_str(
-        "- Propose workbook edits as changesets; do not apply them without the user's review.",
-    );
+    if !idle {
+        prompt.push_str(
+            "- Propose workbook edits as changesets; do not apply them without the user's review.",
+        );
+    }
     prompt
 }
 
@@ -268,4 +303,30 @@ pub fn on_path(name: &str) -> bool {
         let candidate = dir.join(name);
         candidate.is_file()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HandOffRequest, contextual_prompt};
+
+    #[test]
+    fn empty_handoff_opens_ready_and_waits_for_the_user() {
+        let request = HandOffRequest {
+            prompt: String::new(),
+            workbook: Some("/workbooks/budget.xlsx".into()),
+            selection: Some("Summary!B4".into()),
+            diagnose: None,
+            state_dir: "/state".into(),
+        };
+
+        let prompt = contextual_prompt(&request, request.workbook.as_deref());
+
+        assert!(prompt.contains("Ready to help with this workbook."));
+        assert!(prompt.contains(
+            "Do not inspect, query, analyze, recalculate, or modify the workbook until the user asks."
+        ));
+        assert!(prompt.contains("Wait for the user's request."));
+        assert!(prompt.contains("Workbook: /workbooks/budget.xlsx"));
+        assert!(prompt.contains("Current selection: Summary!B4"));
+    }
 }
