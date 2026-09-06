@@ -13,10 +13,11 @@ jobs:
     name: Framework 13 integrated-GPU gates
     runs-on: [self-hosted, linux, x64, framework-13, integrated-gpu]
     timeout-minutes: 180
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/omacell-perf-target
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure Cargo build storage
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/omacell-perf-target" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-28
