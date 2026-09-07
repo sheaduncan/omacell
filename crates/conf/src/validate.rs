@@ -5,7 +5,7 @@ use std::path::{Component, Path};
 use omacell_core::error::CoreError;
 
 use crate::error;
-use crate::schema::{AutoNum, CURRENT_SCHEMA, Config};
+use crate::schema::{AutoNum, CURRENT_SCHEMA, Config, MAX_RECENT_FILES};
 
 impl Config {
     /// Validate enum-like tokens, numeric ranges, and path-shaped values.
@@ -92,60 +92,56 @@ impl Config {
         }
         non_negative("calc.max_change", self.calc.max_change)?;
 
-        one_of(
-            "files.default_format",
-            &self.files.default_format,
-            &["xlsx", "omc"],
-        )?;
-        if self.files.default_format != "xlsx" {
-            return invalid(
-                "files.default_format",
-                "a global non-XLSX default is unavailable; choose the destination extension explicitly",
-            );
+        for setting in [
+            RuntimeSingleton {
+                path: "files.default_format",
+                value: &self.files.default_format,
+                runtime_value: "xlsx",
+                domain: StringDomain::OneOf(&["xlsx", "omc"]),
+                unavailable: "a global non-XLSX default is unavailable; choose the destination extension explicitly",
+            },
+            RuntimeSingleton {
+                path: "files.csv.type_inference",
+                value: &self.files.csv.type_inference,
+                runtime_value: "conservative",
+                domain: StringDomain::OneOf(&["conservative", "aggressive", "none"]),
+                unavailable: "a non-default CSV inference policy is unavailable; use a reviewed import plan",
+            },
+            RuntimeSingleton {
+                path: "files.csv.delimiter",
+                value: &self.files.csv.delimiter,
+                runtime_value: "auto",
+                domain: StringDomain::AutoOrUnicodeCharacter,
+                unavailable: "a fixed CSV delimiter default is unavailable; use a reviewed import plan",
+            },
+            RuntimeSingleton {
+                path: "files.csv.encoding",
+                value: &self.files.csv.encoding,
+                runtime_value: "auto",
+                domain: StringDomain::NonEmpty,
+                unavailable: "a fixed CSV encoding default is unavailable; use a reviewed import plan",
+            },
+        ] {
+            runtime_singleton(setting)?;
         }
-        one_of(
-            "files.csv.type_inference",
-            &self.files.csv.type_inference,
-            &["conservative", "aggressive", "none"],
-        )?;
-        if self.files.csv.type_inference != "conservative" {
-            return invalid(
-                "files.csv.type_inference",
-                "a non-default CSV inference policy is unavailable; use a reviewed import plan",
-            );
-        }
-        if self.files.csv.delimiter != "auto" && self.files.csv.delimiter.chars().count() != 1 {
-            return invalid(
-                "files.csv.delimiter",
-                "must be 'auto' or one Unicode character",
-            );
-        }
-        if self.files.csv.delimiter != "auto" {
-            return invalid(
-                "files.csv.delimiter",
-                "a fixed CSV delimiter default is unavailable; use a reviewed import plan",
-            );
-        }
-        non_empty("files.csv.encoding", &self.files.csv.encoding)?;
-        if self.files.csv.encoding != "auto" {
-            return invalid(
-                "files.csv.encoding",
-                "a fixed CSV encoding default is unavailable; use a reviewed import plan",
-            );
-        }
-        if self.files.follow_external_links {
-            return invalid(
+        for (path, enabled, unavailable) in [
+            (
                 "files.follow_external_links",
+                self.files.follow_external_links,
                 "external-link refresh is unavailable; must remain false",
-            );
-        }
-        if self.session.recent_files > 20 {
-            return invalid("session.recent_files", "must be in 0..=20");
-        }
-        if self.session.workspace_binding {
-            return invalid(
+            ),
+            (
                 "session.workspace_binding",
+                self.session.workspace_binding,
                 "Hyprland workspace restoration is unavailable; must remain false",
+            ),
+        ] {
+            reserved_false(path, enabled, unavailable)?;
+        }
+        if self.session.recent_files > MAX_RECENT_FILES {
+            return invalid(
+                "session.recent_files",
+                &format!("must be in 0..={MAX_RECENT_FILES}"),
             );
         }
 
@@ -292,6 +288,48 @@ fn one_of(path: &str, value: &str, allowed: &[&str]) -> Result<(), CoreError> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum StringDomain<'a> {
+    OneOf(&'a [&'a str]),
+    AutoOrUnicodeCharacter,
+    NonEmpty,
+}
+
+#[derive(Clone, Copy)]
+struct RuntimeSingleton<'a> {
+    path: &'a str,
+    value: &'a str,
+    runtime_value: &'a str,
+    domain: StringDomain<'a>,
+    unavailable: &'a str,
+}
+
+fn runtime_singleton(setting: RuntimeSingleton<'_>) -> Result<(), CoreError> {
+    match setting.domain {
+        StringDomain::OneOf(allowed) => one_of(setting.path, setting.value, allowed)?,
+        StringDomain::AutoOrUnicodeCharacter
+            if setting.value != "auto" && setting.value.chars().count() != 1 =>
+        {
+            return invalid(setting.path, "must be 'auto' or one Unicode character");
+        }
+        StringDomain::NonEmpty => non_empty(setting.path, setting.value)?,
+        StringDomain::AutoOrUnicodeCharacter => {}
+    }
+    if setting.value == setting.runtime_value {
+        Ok(())
+    } else {
+        invalid(setting.path, setting.unavailable)
+    }
+}
+
+fn reserved_false(path: &str, enabled: bool, unavailable: &str) -> Result<(), CoreError> {
+    if enabled {
+        invalid(path, unavailable)
+    } else {
+        Ok(())
+    }
+}
+
 fn non_empty(path: &str, value: &str) -> Result<(), CoreError> {
     if value.trim().is_empty() {
         invalid(path, "must not be empty")
@@ -401,13 +439,17 @@ mod tests {
     #[test]
     fn recent_file_limit_matches_the_bounded_session_store() {
         let mut config = package_defaults().unwrap();
-        config.session.recent_files = 21;
+        config.session.recent_files = super::MAX_RECENT_FILES + 1;
 
         let error = config.validate().unwrap_err();
 
         assert_eq!(error.code, "config.schema");
         assert!(error.message.contains("session.recent_files"));
-        assert!(error.message.contains("0..=20"));
+        assert!(
+            error
+                .message
+                .contains(&format!("0..={}", super::MAX_RECENT_FILES))
+        );
     }
 
     #[test]
@@ -436,6 +478,11 @@ mod tests {
             assert!(error.message.contains(path), "{path}: {error:?}");
             assert!(error.message.contains("unavailable"), "{path}: {error:?}");
         }
+
+        let mut config = package_defaults().unwrap();
+        config.files.default_format = "pdf".into();
+        let error = config.validate().unwrap_err();
+        assert!(error.message.contains("must be one of xlsx, omc"));
     }
 
     #[test]

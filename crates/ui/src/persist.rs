@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 use crate::error;
+use omacell_conf::MAX_RECENT_FILES;
 use omacell_core::error::CoreError;
 
 /// Restored session.
@@ -32,7 +33,6 @@ pub struct SessionState {
 }
 
 const MAX_SESSION_BYTES: u64 = 1024 * 1024;
-const MAX_RECENT_FILES: usize = 20;
 static SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 impl Default for SessionState {
@@ -133,18 +133,14 @@ impl SessionState {
         Ok(())
     }
 
-    /// Remember a file path.
-    pub fn touch_file(&mut self, path: &str) {
-        self.touch_file_with_limit(path, MAX_RECENT_FILES as u32);
-    }
-
-    /// Remember a file path while honoring the configured history limit.
-    pub fn touch_file_with_limit(&mut self, path: &str, limit: u32) {
-        self.recent_files.retain(|p| p != path);
-        self.recent_files.insert(0, path.to_string());
-        let limit = usize::try_from(limit)
-            .unwrap_or(MAX_RECENT_FILES)
-            .min(MAX_RECENT_FILES);
+    /// Optionally remember a file path, then honor the configured history limit.
+    pub fn update_recent_files(&mut self, path: Option<&str>, limit: u32) {
+        if let Some(path) = path {
+            self.recent_files.retain(|p| p != path);
+            self.recent_files.insert(0, path.to_string());
+        }
+        let limit =
+            usize::try_from(limit.min(MAX_RECENT_FILES)).unwrap_or(MAX_RECENT_FILES as usize);
         self.recent_files.truncate(limit);
     }
 
@@ -152,7 +148,7 @@ impl SessionState {
         if !self.zoom.is_finite() || !(0.25..=8.0).contains(&self.zoom) {
             return Err(error::session("zoom must be finite and in 0.25..=8.0"));
         }
-        if self.recent_files.len() > MAX_RECENT_FILES {
+        if self.recent_files.len() > MAX_RECENT_FILES as usize {
             return Err(error::session(format!(
                 "recent_files may contain at most {MAX_RECENT_FILES} paths"
             )));

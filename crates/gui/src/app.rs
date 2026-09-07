@@ -194,15 +194,13 @@ impl Gui {
         let snapshot = runner.handle().snapshot();
         let mut active_sheet = snapshot.workbook.active_sheet();
         apply_sheet_view(&launch.ui, &snapshot.workbook, active_sheet);
-        if let Ok(mut state) = SessionState::load(&launch.paths.state_dir) {
-            if loaded.config.session.restore {
-                apply_restored_session(&launch.ui, &snapshot.workbook, &state);
-            } else {
-                state.sheet = None;
-                state.cursor = None;
-                state.panel = None;
-                state.zoom = 1.0;
-            }
+        if let Ok(state) = SessionState::load(&launch.paths.state_dir) {
+            apply_restored_session(
+                &launch.ui,
+                &snapshot.workbook,
+                &state,
+                loaded.config.session.restore,
+            );
             active_sheet = launch.ui.selection().sheet;
             launch.ui.set_session_state(state);
         }
@@ -671,7 +669,8 @@ impl Gui {
             &snapshot.workbook,
             snapshot.workbook.active_sheet(),
         );
-        apply_restored_session(&self.ui, &snapshot.workbook, &state);
+        let restore = self.store.snapshot().config.session.restore;
+        apply_restored_session(&self.ui, &snapshot.workbook, &state, restore);
         self.active_sheet = self.ui.selection().sheet;
     }
 
@@ -2463,22 +2462,21 @@ impl Gui {
 
     fn persist_session(&self) {
         let snapshot = self.runner.handle().snapshot();
-        let recent_files = self.store.snapshot().config.session.recent_files;
+        let session_config = self.store.snapshot().config.session;
         let mut state = self.ui.session_state();
-        state.zoom = self.ui.viewport().zoom;
-        state.panel = self.ui.panel().visible.clone();
-        if let Some(sheet) = snapshot.workbook.sheet(self.ui.selection().sheet) {
-            state.sheet = Some(sheet.name.clone());
+        if session_config.restore {
+            state.zoom = self.ui.viewport().zoom;
+            state.panel = self.ui.panel().visible.clone();
+            if let Some(sheet) = snapshot.workbook.sheet(self.ui.selection().sheet) {
+                state.sheet = Some(sheet.name.clone());
+            }
+            let sel = self.ui.selection();
+            if let Ok(letters) = col_to_letters(sel.cursor.col) {
+                state.cursor = Some(format!("{}{}", letters, sel.cursor.row + 1));
+            }
         }
-        let sel = self.ui.selection();
-        if let Ok(letters) = col_to_letters(sel.cursor.col) {
-            state.cursor = Some(format!("{}{}", letters, sel.cursor.row + 1));
-        }
-        if let Some(file) = &self.file {
-            state.touch_file_with_limit(&file.display().to_string(), recent_files);
-        } else {
-            state.recent_files.truncate(recent_files as usize);
-        }
+        let file = self.file.as_ref().map(|file| file.display().to_string());
+        state.update_recent_files(file.as_deref(), session_config.recent_files);
         let _ = state.save(&self.paths.state_dir);
     }
 }
@@ -2651,7 +2649,11 @@ fn apply_restored_session(
     ui: &UiSession,
     wb: &omacell_core::workbook::Workbook,
     state: &SessionState,
+    restore: bool,
 ) {
+    if !restore {
+        return;
+    }
     let mut vp = ui.viewport();
     vp.set_zoom(state.zoom);
     ui.set_viewport(vp);

@@ -259,6 +259,9 @@ pub struct FilesXlsx {
     pub preserve_unknown_parts: bool,
 }
 
+/// Maximum number of recent workbook paths retained in session state.
+pub const MAX_RECENT_FILES: u32 = 20;
+
 /// `[session]`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

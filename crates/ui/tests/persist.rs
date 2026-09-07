@@ -35,11 +35,15 @@ fn configured_recent_file_limit_is_applied() {
         ..SessionState::default()
     };
 
-    state.touch_file_with_limit("new.xlsx", 1);
+    state.update_recent_files(Some("new.xlsx"), 1);
     assert_eq!(state.recent_files, ["new.xlsx"]);
 
-    state.touch_file_with_limit("disabled.xlsx", 0);
+    state.update_recent_files(Some("disabled.xlsx"), 0);
     assert!(state.recent_files.is_empty());
+
+    state.recent_files = vec!["old-a.xlsx".into(), "old-b.xlsx".into()];
+    state.update_recent_files(None, 1);
+    assert_eq!(state.recent_files, ["old-a.xlsx"]);
 }
 
 #[cfg(unix)]

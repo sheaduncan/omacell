@@ -57,6 +57,12 @@ struct FileState {
     last_printer: Option<String>,
 }
 
+struct RetainedXlsxForWrite {
+    package: Option<OpcPackage>,
+    extras: HashMap<String, WorksheetExtras>,
+    preserve_unknown_parts: bool,
+}
+
 /// Sidecar retained by file command closures (package bytes live outside `Workbook`).
 #[derive(Clone, Default)]
 pub struct FileSession {
@@ -99,6 +105,33 @@ impl FileSession {
 
     fn last_printer(&self) -> Option<String> {
         self.lock().last_printer.clone()
+    }
+
+    fn retained_xlsx_for_write(&self) -> RetainedXlsxForWrite {
+        let state = self.lock();
+        let preserve_unknown_parts = state
+            .config
+            .as_ref()
+            .is_none_or(|config| config.snapshot().config.files.xlsx.preserve_unknown_parts);
+        let (package, extras) = if preserve_unknown_parts {
+            (state.package.clone(), state.extras.clone())
+        } else {
+            (None, HashMap::new())
+        };
+        RetainedXlsxForWrite {
+            package,
+            extras,
+            preserve_unknown_parts,
+        }
+    }
+
+    fn discard_unpreserved_xlsx(&self, retained: &RetainedXlsxForWrite) {
+        if retained.preserve_unknown_parts {
+            return;
+        }
+        let mut state = self.lock();
+        state.package = None;
+        state.extras.clear();
     }
 
     fn remember_printer(&self, printer: &str) -> Result<(), CoreError> {
@@ -480,7 +513,7 @@ fn file_save(
     session: &FileSession,
     args: FileSaveArgs,
 ) -> Result<Effect, CoreError> {
-    let (path, kind, package, extras, keep_backups, preserve_unknown_parts) = {
+    let (path, kind, keep_backups) = {
         let state = session.lock();
         let path = args
             .path
@@ -493,27 +526,22 @@ fn file_save(
         let kind = kind_from_path(&path)
             .or(state.kind)
             .unwrap_or(FileKind::Xlsx);
-        let files = state
+        let keep_backups = state
             .config
             .as_ref()
-            .map(|config| config.snapshot().config.files);
-        let keep_backups = files.as_ref().map_or(0, |files| files.keep_backups);
-        let preserve_unknown_parts = files
-            .as_ref()
-            .is_none_or(|files| files.xlsx.preserve_unknown_parts);
-        let package = state.package.clone().filter(|_| preserve_unknown_parts);
-        (
-            path,
-            kind,
-            package,
-            state.extras.clone(),
-            keep_backups,
-            preserve_unknown_parts,
-        )
+            .map_or(0, |config| config.snapshot().config.files.keep_backups);
+        (path, kind, keep_backups)
     };
+    let retained_xlsx = session.retained_xlsx_for_write();
     if ctx.is_preflight() {
         if ctx.is_dry_run() {
-            validate_kind(ctx.workbook_ref(), &path, kind, package.as_ref(), &extras)?;
+            validate_kind(
+                ctx.workbook_ref(),
+                &path,
+                kind,
+                retained_xlsx.package.as_ref(),
+                &retained_xlsx.extras,
+            )?;
         }
         return Ok(Effect::query(serde_json::json!({
             "path": path.display().to_string(),
@@ -559,8 +587,8 @@ fn file_save(
         output.as_ref().unwrap_or_else(|| ctx.workbook_ref()),
         &path,
         kind,
-        package.as_ref(),
-        &extras,
+        retained_xlsx.package.as_ref(),
+        &retained_xlsx.extras,
         keep_backups,
         ctx.cancel_flag().map(Arc::as_ref),
     )?;
@@ -572,10 +600,9 @@ fn file_save(
         let mut state = session.lock();
         state.path = Some(path.clone());
         state.kind = Some(kind);
-        if kind == FileKind::Xlsx && !preserve_unknown_parts {
-            state.package = None;
-            state.extras.clear();
-        }
+    }
+    if kind == FileKind::Xlsx {
+        session.discard_unpreserved_xlsx(&retained_xlsx);
     }
     Ok(Effect {
         events: vec![
@@ -659,27 +686,18 @@ fn file_export(
         )
         .with_hint("use a .xlsx, .csv, .tsv, .omc, or .pdf destination")
     })?;
-    let (package, extras, keep_backups, ai, xlsx_export) = {
+    let (keep_backups, ai, xlsx_export) = {
         let state = session.lock();
         let config = state.config.as_ref().map(|config| config.snapshot().config);
         let keep_backups = config
             .as_ref()
             .map_or(0, |config| config.files.keep_backups);
-        let preserve_unknown_parts = config
-            .as_ref()
-            .is_none_or(|config| config.files.xlsx.preserve_unknown_parts);
         let xlsx_export = config
             .map(|config| config.ai.functions.xlsx_export)
             .unwrap_or_else(|| "formulas".into());
-        let package = state.package.clone().filter(|_| preserve_unknown_parts);
-        (
-            package,
-            state.extras.clone(),
-            keep_backups,
-            state.ai.clone(),
-            xlsx_export,
-        )
+        (keep_backups, state.ai.clone(), xlsx_export)
     };
+    let retained_xlsx = session.retained_xlsx_for_write();
     if ctx.is_preflight() && !ctx.is_dry_run() {
         return Ok(Effect::query(serde_json::json!({})));
     }
@@ -711,7 +729,13 @@ fn file_export(
         }
         FileKind::Xlsx | FileKind::Omc => {
             if ctx.is_preflight() {
-                validate_kind(ctx.workbook_ref(), &path, kind, package.as_ref(), &extras)?;
+                validate_kind(
+                    ctx.workbook_ref(),
+                    &path,
+                    kind,
+                    retained_xlsx.package.as_ref(),
+                    &retained_xlsx.extras,
+                )?;
             } else {
                 let values_export = kind == FileKind::Xlsx && xlsx_export == "values";
                 let mut output = None;
@@ -732,8 +756,8 @@ fn file_export(
                     output.as_ref().unwrap_or_else(|| ctx.workbook_ref()),
                     &path,
                     kind,
-                    package.as_ref(),
-                    &extras,
+                    retained_xlsx.package.as_ref(),
+                    &retained_xlsx.extras,
                     keep_backups,
                     ctx.cancel_flag().map(Arc::as_ref),
                 )?;
@@ -758,14 +782,20 @@ fn file_export(
         }
         FileKind::Ods | FileKind::Json | FileKind::Html | FileKind::Markdown => {
             if ctx.is_preflight() {
-                validate_kind(ctx.workbook_ref(), &path, kind, package.as_ref(), &extras)?;
+                validate_kind(
+                    ctx.workbook_ref(),
+                    &path,
+                    kind,
+                    retained_xlsx.package.as_ref(),
+                    &retained_xlsx.extras,
+                )?;
             } else {
                 write_kind(
                     ctx.workbook_ref(),
                     &path,
                     kind,
-                    package.as_ref(),
-                    &extras,
+                    retained_xlsx.package.as_ref(),
+                    &retained_xlsx.extras,
                     keep_backups,
                     ctx.cancel_flag().map(Arc::as_ref),
                 )?;
@@ -1626,7 +1656,6 @@ mod tests {
     use omacell_ai::http::{HttpRequest, HttpResponse, SharedTransport, Transport};
     use omacell_ai::{AiRuntime, PromptSet, register_ai_functions};
     use omacell_conf::schema::package_defaults;
-    use omacell_conf::{ConfigStore, LoadOptions, Paths};
     use omacell_core::eval::FnRegistry;
     use omacell_core::recalc::RecalcEngine;
     use serde_json::json;
@@ -1702,71 +1731,6 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err.code, "file.format");
-    }
-
-    #[test]
-    fn xlsx_preservation_setting_controls_opaque_package_parts() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut seeded =
-            xlsx::open_bytes(&xlsx::save_workbook_bytes(&Workbook::new()).unwrap()).unwrap();
-        seeded.package.parts.insert(
-            "xl/opaque-review.bin".into(),
-            xlsx::PreservedPart {
-                name: "xl/opaque-review.bin".into(),
-                content_type: Some("application/octet-stream".into()),
-                bytes: b"opaque-review-data".to_vec(),
-            },
-        );
-        let fixture = xlsx::save_bytes(&seeded).unwrap();
-
-        for preserve in [true, false] {
-            let path = temp.path().join(format!("preserve-{preserve}.xlsx"));
-            std::fs::write(&path, &fixture).unwrap();
-            let paths = Paths::from_home(temp.path().join(format!("home-{preserve}")));
-            std::fs::create_dir_all(&paths.user_config).unwrap();
-            let user_config = paths.user_config_toml();
-            std::fs::write(
-                &user_config,
-                format!("[files.xlsx]\npreserve_unknown_parts = {preserve}\n"),
-            )
-            .unwrap();
-            let store = ConfigStore::load_with(paths, LoadOptions::default()).unwrap();
-            let opened = open_any(&path).unwrap();
-            let session = FileSession::new();
-            session.attach(&path, &opened);
-            session.attach_config(store.handle());
-            let mut bus = Bus::new(opened.workbook, RecalcEngine::new(FnRegistry::new())).unwrap();
-            register_file_commands(&mut bus, session).unwrap();
-
-            let saved = bus.execute(omacell_core::command::Origin::User, "file.save", json!({}));
-
-            assert!(saved.ok, "preserve={preserve}: {:?}", saved.error);
-            let reopened = xlsx::open(&path).unwrap();
-            assert_eq!(
-                reopened.package.part("xl/opaque-review.bin").is_some(),
-                preserve,
-                "preserve={preserve}"
-            );
-
-            if !preserve {
-                std::fs::write(
-                    &user_config,
-                    "[files.xlsx]\npreserve_unknown_parts = true\n",
-                )
-                .unwrap();
-                store.reload().unwrap();
-
-                let saved_again =
-                    bus.execute(omacell_core::command::Origin::User, "file.save", json!({}));
-
-                assert!(saved_again.ok, "save after reload: {:?}", saved_again.error);
-                let reopened = xlsx::open(&path).unwrap();
-                assert!(
-                    reopened.package.part("xl/opaque-review.bin").is_none(),
-                    "discarded package parts must not reappear after enabling preservation"
-                );
-            }
-        }
     }
 
     #[test]

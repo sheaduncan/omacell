@@ -882,9 +882,16 @@ fn dropping_the_gui_persists_session_state() {
 
 #[test]
 fn disabled_session_restore_ignores_saved_view_state() {
-    let parts = launch_theme(None);
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet();
+    let mut workbook_view = workbook.sheet(sheet).unwrap().view.clone();
+    workbook_view.zoom = 1.5;
+    workbook.set_sheet_view(sheet, workbook_view).unwrap();
+    let parts = launch_opts(None, workbook, false);
+    let state_dir = parts.launch.paths.state_dir.clone();
     let saved = SessionState {
         zoom: 2.0,
+        sheet: Some("Sheet1".into()),
         cursor: Some("C4".into()),
         panel: Some("find".into()),
         ..SessionState::default()
@@ -901,10 +908,26 @@ fn disabled_session_restore_ignores_saved_view_state() {
         .with_size(egui::vec2(640.0, 400.0))
         .build_eframe(|cc| Gui::new(parts.launch, false, &cc.egui_ctx).unwrap());
 
-    assert_eq!(harness.state().ui_session().viewport().zoom, 1.0);
+    assert_eq!(harness.state().ui_session().viewport().zoom, 1.5);
     assert_eq!(harness.state().ui_session().selection().cursor.row, 0);
     assert_eq!(harness.state().ui_session().selection().cursor.col, 0);
     assert!(harness.state().ui_session().panel().visible.is_none());
+
+    let mut harness = harness;
+    harness
+        .state_mut()
+        .execute_cmd("file.open", serde_json::json!({"path": "another.xlsx"}))
+        .unwrap();
+    wait_tasks(&mut harness);
+    assert_eq!(harness.state().ui_session().viewport().zoom, 1.5);
+
+    drop(harness);
+    let persisted = SessionState::load(&state_dir).unwrap();
+    assert_eq!(persisted.zoom, saved.zoom);
+    assert_eq!(persisted.sheet, saved.sheet);
+    assert_eq!(persisted.cursor, saved.cursor);
+    assert_eq!(persisted.panel, saved.panel);
+    assert_eq!(persisted.recent_files, ["another.xlsx"]);
 }
 
 #[test]
