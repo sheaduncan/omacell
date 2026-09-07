@@ -28,6 +28,24 @@ fn invalid_zoom_is_rejected() {
     assert!(SessionState::load(dir.path()).is_err());
 }
 
+#[test]
+fn configured_recent_file_limit_is_applied() {
+    let mut state = SessionState {
+        recent_files: vec!["old-a.xlsx".into(), "old-b.xlsx".into()],
+        ..SessionState::default()
+    };
+
+    state.update_recent_files(Some("new.xlsx"), 1);
+    assert_eq!(state.recent_files, ["new.xlsx"]);
+
+    state.update_recent_files(Some("disabled.xlsx"), 0);
+    assert!(state.recent_files.is_empty());
+
+    state.recent_files = vec!["old-a.xlsx".into(), "old-b.xlsx".into()];
+    state.update_recent_files(None, 1);
+    assert_eq!(state.recent_files, ["old-a.xlsx"]);
+}
+
 #[cfg(unix)]
 #[test]
 fn session_load_rejects_symlinks() {

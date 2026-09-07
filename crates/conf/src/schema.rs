@@ -223,14 +223,14 @@ pub struct Locale {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Files {
-    /// `xlsx` / `omc`.
+    /// Default format (currently fixed to `xlsx`; explicit extensions select others).
     #[schemars(extend("enum" = ["xlsx", "omc"]))]
     pub default_format: String,
     /// Autosave seconds; 0 disables.
     pub autosave_interval: u64,
     /// Numbered backups.
     pub keep_backups: u32,
-    /// Follow external links.
+    /// Follow external links (currently unavailable; must remain false).
     pub follow_external_links: bool,
     /// CSV defaults.
     pub csv: FilesCsv,
@@ -242,11 +242,11 @@ pub struct Files {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FilesCsv {
-    /// `auto` or a delimiter.
+    /// CSV delimiter default (currently fixed to `auto`; import plans may override it).
     pub delimiter: String,
-    /// `auto` or an encoding.
+    /// CSV encoding default (currently fixed to `auto`; import plans may override it).
     pub encoding: String,
-    /// `conservative` / `aggressive` / `none`.
+    /// CSV inference default (currently fixed to `conservative`).
     #[schemars(extend("enum" = ["conservative", "aggressive", "none"]))]
     pub type_inference: String,
 }
@@ -255,19 +255,22 @@ pub struct FilesCsv {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FilesXlsx {
-    /// Preserve L3 parts.
+    /// Preserve retained L3 parts; false writes only modeled workbook data.
     pub preserve_unknown_parts: bool,
 }
+
+/// Maximum number of recent workbook paths retained in session state.
+pub const MAX_RECENT_FILES: u32 = 20;
 
 /// `[session]`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Session {
-    /// Restore windows.
+    /// Restore saved view state on the next launch.
     pub restore: bool,
-    /// Recent-file count.
+    /// Recent-file count (0 through 20).
     pub recent_files: u32,
-    /// Remember Hyprland workspace.
+    /// Remember Hyprland workspace (currently unavailable; must remain false).
     pub workspace_binding: bool,
 }
 

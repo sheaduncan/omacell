@@ -35,7 +35,7 @@ pub use layer::{
 };
 pub use notify::{NotifyKind, allowed as notify_allowed, send as notify_send};
 pub use paths::Paths;
-pub use schema::Config;
+pub use schema::{Config, MAX_RECENT_FILES};
 pub use setup::{
     HYPRLAND_SNIPPET, SetupOptions, SetupReport, UninstallReport, setup_omarchy, uninstall_omarchy,
 };

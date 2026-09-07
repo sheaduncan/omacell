@@ -754,7 +754,7 @@
           "$ref": "#/$defs/FilesCsv"
         },
         "default_format": {
-          "description": "`xlsx` / `omc`.",
+          "description": "Default format (currently fixed to `xlsx`; explicit extensions select others).",
           "type": "string",
           "enum": [
             "xlsx",
@@ -762,7 +762,7 @@
           ]
         },
         "follow_external_links": {
-          "description": "Follow external links.",
+          "description": "Follow external links (currently unavailable; must remain false).",
           "type": "boolean"
         },
         "keep_backups": {
@@ -791,15 +791,15 @@
       "type": "object",
       "properties": {
         "delimiter": {
-          "description": "`auto` or a delimiter.",
+          "description": "CSV delimiter default (currently fixed to `auto`; import plans may override it).",
           "type": "string"
         },
         "encoding": {
-          "description": "`auto` or an encoding.",
+          "description": "CSV encoding default (currently fixed to `auto`; import plans may override it).",
           "type": "string"
         },
         "type_inference": {
-          "description": "`conservative` / `aggressive` / `none`.",
+          "description": "CSV inference default (currently fixed to `conservative`).",
           "type": "string",
           "enum": [
             "conservative",
@@ -820,7 +820,7 @@
       "type": "object",
       "properties": {
         "preserve_unknown_parts": {
-          "description": "Preserve L3 parts.",
+          "description": "Preserve retained L3 parts; false writes only modeled workbook data.",
           "type": "boolean"
         }
       },
@@ -1071,17 +1071,17 @@
       "type": "object",
       "properties": {
         "recent_files": {
-          "description": "Recent-file count.",
+          "description": "Recent-file count (0 through 20).",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
         },
         "restore": {
-          "description": "Restore windows.",
+          "description": "Restore saved view state on the next launch.",
           "type": "boolean"
         },
         "workspace_binding": {
-          "description": "Remember Hyprland workspace.",
+          "description": "Remember Hyprland workspace (currently unavailable; must remain false).",
           "type": "boolean"
         }
       },

@@ -76,13 +76,13 @@ Configuration is layered from package defaults, user TOML, workbook settings, en
 | `config.debounce_ms` | uint64 | `50` | Debounce milliseconds. |
 | `config.live_reload` | boolean | `true` | Watch user files. |
 | `files.autosave_interval` | uint64 | — | Autosave seconds; 0 disables. |
-| `files.csv.delimiter` | string | — | `auto` or a delimiter. |
-| `files.csv.encoding` | string | — | `auto` or an encoding. |
-| `files.csv.type_inference` | `conservative` / `aggressive` / `none` | — | `conservative` / `aggressive` / `none`. |
-| `files.default_format` | `xlsx` / `omc` | — | `xlsx` / `omc`. |
-| `files.follow_external_links` | boolean | — | Follow external links. |
+| `files.csv.delimiter` | string | — | CSV delimiter default (currently fixed to `auto`; import plans may override it). |
+| `files.csv.encoding` | string | — | CSV encoding default (currently fixed to `auto`; import plans may override it). |
+| `files.csv.type_inference` | `conservative` / `aggressive` / `none` | — | CSV inference default (currently fixed to `conservative`). |
+| `files.default_format` | `xlsx` / `omc` | — | Default format (currently fixed to `xlsx`; explicit extensions select others). |
+| `files.follow_external_links` | boolean | — | Follow external links (currently unavailable; must remain false). |
 | `files.keep_backups` | uint32 | — | Numbered backups. |
-| `files.xlsx.preserve_unknown_parts` | boolean | — | Preserve L3 parts. |
+| `files.xlsx.preserve_unknown_parts` | boolean | — | Preserve retained L3 parts; false writes only modeled workbook data. |
 | `integrations.libreoffice_fallback` | boolean | — | Deprecated compatibility key; `.xls` import is native. |
 | `integrations.menu_entries` | boolean | — | Offer menu rows. |
 | `integrations.notifications` | `all` / `recovery_only` / `off` | — | `all` / `recovery_only` / `off`. |
@@ -111,9 +111,9 @@ Configuration is layered from package defaults, user TOML, workbook settings, en
 | `scripting.embedded_scripts` | `sandbox` / `ask` / `deny` | — | `sandbox` / `ask` / `deny`. |
 | `scripting.enabled` | boolean | — | Lua enabled. |
 | `scripting.trusted_dirs` | array | — | Trusted directories. |
-| `session.recent_files` | uint32 | — | Recent-file count. |
-| `session.restore` | boolean | — | Restore windows. |
-| `session.workspace_binding` | boolean | — | Remember Hyprland workspace. |
+| `session.recent_files` | uint32 | — | Recent-file count (0 through 20). |
+| `session.restore` | boolean | — | Restore saved view state on the next launch. |
+| `session.workspace_binding` | boolean | — | Remember Hyprland workspace (currently unavailable; must remain false). |
 | `tui.graphics` | `auto` / `sixel` / `kitty` / `off` | — | `auto` / `sixel` / `kitty` / `off`. |
 | `tui.mouse` | boolean | — | Mouse. |
 | `tui.truecolor` | `auto` / `on` / `off` | — | `auto` / `on` / `off`. |

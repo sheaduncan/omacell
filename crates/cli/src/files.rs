@@ -57,6 +57,12 @@ struct FileState {
     last_printer: Option<String>,
 }
 
+struct RetainedXlsxForWrite {
+    package: Option<OpcPackage>,
+    extras: HashMap<String, WorksheetExtras>,
+    preserve_unknown_parts: bool,
+}
+
 /// Sidecar retained by file command closures (package bytes live outside `Workbook`).
 #[derive(Clone, Default)]
 pub struct FileSession {
@@ -99,6 +105,33 @@ impl FileSession {
 
     fn last_printer(&self) -> Option<String> {
         self.lock().last_printer.clone()
+    }
+
+    fn retained_xlsx_for_write(&self) -> RetainedXlsxForWrite {
+        let state = self.lock();
+        let preserve_unknown_parts = state
+            .config
+            .as_ref()
+            .is_none_or(|config| config.snapshot().config.files.xlsx.preserve_unknown_parts);
+        let (package, extras) = if preserve_unknown_parts {
+            (state.package.clone(), state.extras.clone())
+        } else {
+            (None, HashMap::new())
+        };
+        RetainedXlsxForWrite {
+            package,
+            extras,
+            preserve_unknown_parts,
+        }
+    }
+
+    fn discard_unpreserved_xlsx(&self, retained: &RetainedXlsxForWrite) {
+        if retained.preserve_unknown_parts {
+            return;
+        }
+        let mut state = self.lock();
+        state.package = None;
+        state.extras.clear();
     }
 
     fn remember_printer(&self, printer: &str) -> Result<(), CoreError> {
@@ -480,7 +513,7 @@ fn file_save(
     session: &FileSession,
     args: FileSaveArgs,
 ) -> Result<Effect, CoreError> {
-    let (path, kind, package, extras, keep_backups) = {
+    let (path, kind, keep_backups) = {
         let state = session.lock();
         let path = args
             .path
@@ -496,19 +529,19 @@ fn file_save(
         let keep_backups = state
             .config
             .as_ref()
-            .map(|config| config.snapshot().config.files.keep_backups)
-            .unwrap_or(0);
-        (
-            path,
-            kind,
-            state.package.clone(),
-            state.extras.clone(),
-            keep_backups,
-        )
+            .map_or(0, |config| config.snapshot().config.files.keep_backups);
+        (path, kind, keep_backups)
     };
+    let retained_xlsx = session.retained_xlsx_for_write();
     if ctx.is_preflight() {
         if ctx.is_dry_run() {
-            validate_kind(ctx.workbook_ref(), &path, kind, package.as_ref(), &extras)?;
+            validate_kind(
+                ctx.workbook_ref(),
+                &path,
+                kind,
+                retained_xlsx.package.as_ref(),
+                &retained_xlsx.extras,
+            )?;
         }
         return Ok(Effect::query(serde_json::json!({
             "path": path.display().to_string(),
@@ -554,8 +587,8 @@ fn file_save(
         output.as_ref().unwrap_or_else(|| ctx.workbook_ref()),
         &path,
         kind,
-        package.as_ref(),
-        &extras,
+        retained_xlsx.package.as_ref(),
+        &retained_xlsx.extras,
         keep_backups,
         ctx.cancel_flag().map(Arc::as_ref),
     )?;
@@ -567,6 +600,9 @@ fn file_save(
         let mut state = session.lock();
         state.path = Some(path.clone());
         state.kind = Some(kind);
+    }
+    if kind == FileKind::Xlsx {
+        session.discard_unpreserved_xlsx(&retained_xlsx);
     }
     Ok(Effect {
         events: vec![
@@ -650,26 +686,18 @@ fn file_export(
         )
         .with_hint("use a .xlsx, .csv, .tsv, .omc, or .pdf destination")
     })?;
-    let (package, extras, keep_backups, ai, xlsx_export) = {
+    let (keep_backups, ai, xlsx_export) = {
         let state = session.lock();
-        let keep_backups = state
-            .config
+        let config = state.config.as_ref().map(|config| config.snapshot().config);
+        let keep_backups = config
             .as_ref()
-            .map(|config| config.snapshot().config.files.keep_backups)
-            .unwrap_or(0);
-        let xlsx_export = state
-            .config
-            .as_ref()
-            .map(|config| config.snapshot().config.ai.functions.xlsx_export)
+            .map_or(0, |config| config.files.keep_backups);
+        let xlsx_export = config
+            .map(|config| config.ai.functions.xlsx_export)
             .unwrap_or_else(|| "formulas".into());
-        (
-            state.package.clone(),
-            state.extras.clone(),
-            keep_backups,
-            state.ai.clone(),
-            xlsx_export,
-        )
+        (keep_backups, state.ai.clone(), xlsx_export)
     };
+    let retained_xlsx = session.retained_xlsx_for_write();
     if ctx.is_preflight() && !ctx.is_dry_run() {
         return Ok(Effect::query(serde_json::json!({})));
     }
@@ -701,7 +729,13 @@ fn file_export(
         }
         FileKind::Xlsx | FileKind::Omc => {
             if ctx.is_preflight() {
-                validate_kind(ctx.workbook_ref(), &path, kind, package.as_ref(), &extras)?;
+                validate_kind(
+                    ctx.workbook_ref(),
+                    &path,
+                    kind,
+                    retained_xlsx.package.as_ref(),
+                    &retained_xlsx.extras,
+                )?;
             } else {
                 let values_export = kind == FileKind::Xlsx && xlsx_export == "values";
                 let mut output = None;
@@ -722,8 +756,8 @@ fn file_export(
                     output.as_ref().unwrap_or_else(|| ctx.workbook_ref()),
                     &path,
                     kind,
-                    package.as_ref(),
-                    &extras,
+                    retained_xlsx.package.as_ref(),
+                    &retained_xlsx.extras,
                     keep_backups,
                     ctx.cancel_flag().map(Arc::as_ref),
                 )?;
@@ -748,14 +782,20 @@ fn file_export(
         }
         FileKind::Ods | FileKind::Json | FileKind::Html | FileKind::Markdown => {
             if ctx.is_preflight() {
-                validate_kind(ctx.workbook_ref(), &path, kind, package.as_ref(), &extras)?;
+                validate_kind(
+                    ctx.workbook_ref(),
+                    &path,
+                    kind,
+                    retained_xlsx.package.as_ref(),
+                    &retained_xlsx.extras,
+                )?;
             } else {
                 write_kind(
                     ctx.workbook_ref(),
                     &path,
                     kind,
-                    package.as_ref(),
-                    &extras,
+                    retained_xlsx.package.as_ref(),
+                    &retained_xlsx.extras,
                     keep_backups,
                     ctx.cancel_flag().map(Arc::as_ref),
                 )?;
