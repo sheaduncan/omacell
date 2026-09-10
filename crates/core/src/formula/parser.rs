@@ -128,9 +128,12 @@ impl<'a> Parser<'a> {
         }
         let ast = self.parse_expr(0, ParseDepth::ROOT)?;
         if !matches!(self.peek_kind(), TokenKind::Eof) {
-            return Err(self.err(
-                "unexpected token after expression",
-                vec!["end of formula".into()],
+            return Err(self.fail_with(
+                ast,
+                self.err(
+                    "unexpected token after expression",
+                    vec!["end of formula".into()],
+                ),
             ));
         }
         Ok(Formula {
@@ -141,10 +144,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn remember(&mut self, expr: &Expr) {
+    fn fail_with(&mut self, expr: Expr, err: ParseError) -> ParseError {
         if self.opts.lenient {
-            self.partial = Some(expr.clone());
+            self.partial = Some(expr);
         }
+        err
     }
 
     fn check_recursion(&self, depth: ParseDepth) -> Result<(), ParseError> {
@@ -170,7 +174,6 @@ impl<'a> Parser<'a> {
     fn parse_expr(&mut self, min_bp: u8, depth: ParseDepth) -> Result<Expr, ParseError> {
         self.check_recursion(depth)?;
         let mut lhs = self.parse_prefix(depth)?;
-        self.remember(&lhs);
         loop {
             if let Some(op) = self.peek_postfix() {
                 let (lbp, _) = postfix_bp(op);
@@ -186,7 +189,9 @@ impl<'a> Parser<'a> {
                         }
                     )
                 {
-                    return Err(self.err("double spill #", vec!["operator".into()]));
+                    return Err(
+                        self.fail_with(lhs, self.err("double spill #", vec!["operator".into()]))
+                    );
                 }
                 self.bump();
                 let span = lhs.span.union(self.prev_span());
@@ -197,7 +202,6 @@ impl<'a> Parser<'a> {
                     },
                     span,
                 );
-                self.remember(&lhs);
                 continue;
             }
             if matches!(self.peek_kind(), TokenKind::LParen)
@@ -209,7 +213,6 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 lhs = self.finish_call(lhs, depth)?;
-                self.remember(&lhs);
                 continue;
             }
             if let Some(op) = self.peek_infix() {
@@ -218,9 +221,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 self.bump();
-                let right = self.parse_expr(rbp, depth.descend())?;
-                lhs = self.make_binary(op, lhs, right)?;
-                self.remember(&lhs);
+                lhs = self.finish_binary(op, lhs, rbp, depth)?;
                 continue;
             }
             if self.peek_isect() {
@@ -228,14 +229,29 @@ impl<'a> Parser<'a> {
                 if lbp < min_bp {
                     break;
                 }
-                let right = self.parse_expr(rbp, depth.descend())?;
-                lhs = self.make_binary(BinOp::Isect, lhs, right)?;
-                self.remember(&lhs);
+                lhs = self.finish_binary(BinOp::Isect, lhs, rbp, depth)?;
                 continue;
             }
             break;
         }
         Ok(lhs)
+    }
+
+    fn finish_binary(
+        &mut self,
+        op: BinOp,
+        lhs: Expr,
+        rbp: u8,
+        depth: ParseDepth,
+    ) -> Result<Expr, ParseError> {
+        let right = match self.parse_expr(rbp, depth.descend()) {
+            Ok(right) => right,
+            Err(err) => return Err(self.fail_with(lhs, err)),
+        };
+        if let Err(err) = Self::binary_ok(op, &lhs, &right) {
+            return Err(self.fail_with(lhs, err));
+        }
+        self.make_binary(op, lhs, right)
     }
 
     fn parse_prefix(&mut self, depth: ParseDepth) -> Result<Expr, ParseError> {
@@ -424,7 +440,8 @@ impl<'a> Parser<'a> {
             let span = self.peek().span;
             self.bump();
             if matches!(self.peek_kind(), TokenKind::LParen) {
-                return self.finish_named_call(name, span, depth);
+                return self
+                    .finish_call(Expr::new(ExprKind::Name { sheet: None, name }, span), depth);
             }
             return Ok(Expr::new(ExprKind::Name { sheet: None, name }, span));
         }
@@ -486,29 +503,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn finish_named_call(
-        &mut self,
-        name: String,
-        name_span: Span,
-        depth: ParseDepth,
-    ) -> Result<Expr, ParseError> {
-        let depth = self.enter_function(depth, name_span.start as usize)?;
-        self.expect_lparen()?;
-        let args = self.parse_args(depth)?;
-        let span = name_span.union(self.prev_span());
-        Ok(Expr::new(
-            ExprKind::Call {
-                callee: Callee::Name(name),
-                args,
-            },
-            span,
-        ))
-    }
-
     fn finish_call(&mut self, lhs: Expr, depth: ParseDepth) -> Result<Expr, ParseError> {
-        let depth = self.enter_function(depth, lhs.span.start as usize)?;
-        self.expect_lparen()?;
-        let args = self.parse_args(depth)?;
+        let depth = match self.enter_function(depth, lhs.span.start as usize) {
+            Ok(depth) => depth,
+            Err(err) => return Err(self.fail_with(lhs, err)),
+        };
+        if let Err(err) = self.expect_lparen() {
+            return Err(self.fail_with(lhs, err));
+        }
+        let args = match self.parse_args(depth) {
+            Ok(args) => args,
+            Err(err) => return Err(self.fail_with(lhs, err)),
+        };
         let span = lhs.span.union(self.prev_span());
         let callee = match lhs.kind {
             ExprKind::Name { name, sheet: None } => Callee::Name(name),
@@ -692,6 +698,47 @@ impl<'a> Parser<'a> {
                 vec!["number".into(), "string".into(), "TRUE".into()],
             )),
         }
+    }
+
+    fn binary_ok(op: BinOp, left: &Expr, right: &Expr) -> Result<(), ParseError> {
+        let span = left.span.union(right.span);
+        if op == BinOp::Range {
+            if matches!(left.kind, ExprKind::ThreeD { .. })
+                || matches!(right.kind, ExprKind::ThreeD { .. })
+            {
+                return Err(ParseError::parse(
+                    "3-D reference cannot be a range operand",
+                    span.start as usize,
+                    vec![":".into()],
+                ));
+            }
+            if let Some(offset) =
+                invalid_numeric_row_offset(left).or_else(|| invalid_numeric_row_offset(right))
+            {
+                return Err(ParseError::parse(
+                    format!("whole-row endpoint must be an integer from 1 through {MAX_ROWS}"),
+                    offset,
+                    vec!["row".into()],
+                ));
+            }
+            if let Some(folded) = fold_range(left, right) {
+                folded.map(|_| ())?;
+            } else if is_mixed_whole(left, right) {
+                return Err(ParseError::parse(
+                    "range sides must both be cells, both whole rows, or both whole columns",
+                    span.start as usize,
+                    vec![":".into()],
+                ));
+            }
+        }
+        if op == BinOp::Isect && (!is_isect_operand(&left.kind) || !is_isect_operand(&right.kind)) {
+            return Err(ParseError::parse(
+                "intersection operands must be references",
+                left.span.start as usize,
+                vec!["cell".into()],
+            ));
+        }
+        Ok(())
     }
 
     fn make_binary(&self, op: BinOp, left: Expr, right: Expr) -> Result<Expr, ParseError> {
