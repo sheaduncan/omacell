@@ -388,6 +388,27 @@ fn editor_mode_keeps_partial_sum() {
 }
 
 #[test]
+fn hash_heavy_formulas_parse_without_quadratic_uppercase() {
+    let src = format!("={}", "#".repeat(MAX_FORMULA_LEN - 1));
+    let started = std::time::Instant::now();
+    let _ = parse(&src);
+    let _ = parse_editor(&src);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "error-literal matching must not uppercase the remaining source"
+    );
+}
+
+#[test]
+fn parse_formula_nightly_oom_payload_does_not_panic() {
+    // Nightly 2026-09-08 parse_formula: structured refs, `#%FIELD`, and NULs.
+    let bytes: &[u8] = b"SBELD!!+#%FIELD!!+###1%FIELD!!+#!LF!D%IE+\nB[]\n#%FIELD!!+###1%FIELD!!+#%FIELD!!+\nB[]\nSB\nB&[]\nS-----B\nR[]\nSB[]!!+#%FIELD!!+\nB[]\nSB\nB&[]\nS-----B\n\n#%FIELD!!+#%FIELD!!+###1%FIELD!!+###1%FIELD!!+#%FIELD!!+\nB[]\nSB\nB&[]\nS-----B\nR[]\nSB[]!!+#%FIELD!!+\nB[]SB\nB&[]\nS-----B\nR[]\nSB[]!!+#%FIELD!!+\nB[]\nSB\nB&[]\nS-----B\n\n#%FIELD!!+#%FIELD!!+###1%FIELD!!+###1%FIELD!!+#%FIELD!!+\nB[]\nSB\nB&[]\nS-----B\nR[]\nSB[]!!+#%FIELD!!+\nB[]\nSB\nB&[]\nS-----B\n\n#%FIELD!!+#%FIELD!!+###1%FIELD!!+#%FIELD!!+##oFIELD!!+#%FIELD!!+##o\t\0\0\0\0\0\0\0SB\nFIE";
+    let text = std::str::from_utf8(bytes).expect("payload is UTF-8");
+    let _ = parse(text);
+    let _ = parse_editor(text);
+}
+
+#[test]
 fn deps_flags_volatile_and_dynamic() {
     let f = parse("=NOW()+INDIRECT(\"A1\")+A2").unwrap();
     let d = collect_deps(&f.ast);

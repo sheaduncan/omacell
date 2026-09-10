@@ -56,7 +56,7 @@ jobs:
           test "${#fuzz_targets[@]}" -gt 0
           cargo +nightly-2026-08-28 fuzz build --target x86_64-unknown-linux-gnu
           for target in "${fuzz_targets[@]}"; do
-            cargo +nightly-2026-08-28 fuzz run "$target" --target x86_64-unknown-linux-gnu -- -max_total_time=600
+            cargo +nightly-2026-08-28 fuzz run "$target" --target x86_64-unknown-linux-gnu -- -max_total_time=600 -rss_limit_mb=4096
           done
 
   local-model-evals:
