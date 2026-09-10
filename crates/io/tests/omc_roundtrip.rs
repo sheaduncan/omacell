@@ -22,7 +22,7 @@ use omacell_core::value::{Array2D, Value};
 use omacell_core::workbook::Workbook;
 use omacell_io::omc::{
     ConversionReport, OmcDocument, changeset_from_omc, changeset_to_omc, empty_package, from_xlsx,
-    open_str, to_string, write_to_path,
+    open_bytes, open_str, to_string, write_to_path,
 };
 use omacell_io::xlsx::{FileWarnings, XlsxDocument, diff, open, save_bytes};
 
@@ -615,4 +615,26 @@ fn omc_parser_rejects_ambiguous_or_unsafe_syntax() {
         panic!("quoted TRUE was not text");
     };
     assert_eq!(doc.workbook.intern().strings.get(id), Some("TRUE"));
+}
+
+#[test]
+fn omc_parser_treats_address_only_cell_as_empty() {
+    let doc = open_str("omc 1\ncell\tA1\n").expect("address-only cell is an empty value");
+    let slot = doc
+        .workbook
+        .get(doc.workbook.active_sheet(), 0, 0)
+        .unwrap()
+        .expect("empty cell is stored");
+    assert!(
+        matches!(slot.value, Value::Empty),
+        "expected empty A1, got {:?}",
+        slot.value
+    );
+}
+
+#[test]
+fn omc_parser_does_not_panic_on_nightly_short_cell_fuzz() {
+    // Nightly 2026-09-09 omc_parse: `cell\tce1` indexed fields[2..] on a 1-field record.
+    let bytes = b"omc\t1\ncell\tce1\ncell\tcell\tchm~f\t \x05NNN1\ncM1aME;ll\tchm~f\t \x05NNN1\ncM1aME;c\t\x0b\nc";
+    let _ = open_bytes(bytes);
 }

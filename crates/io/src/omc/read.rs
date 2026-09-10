@@ -674,7 +674,8 @@ fn load_cell(
         .map(|field| field.value.as_str())
         .unwrap_or("");
     let quoted = fields.get(1).is_some_and(|field| field.quoted);
-    let kv = parse_kv(&fields[2..])?;
+    // Address-only cells omit the literal and metadata fields.
+    let kv = parse_kv(fields.get(2..).unwrap_or(&[]))?;
     let mut slot = CellSlot::empty();
     let is_formula = match kv.get("type").map(String::as_str) {
         Some("formula") => true,
