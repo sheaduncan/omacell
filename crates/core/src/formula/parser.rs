@@ -141,6 +141,12 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn remember(&mut self, expr: &Expr) {
+        if self.opts.lenient {
+            self.partial = Some(expr.clone());
+        }
+    }
+
     fn check_recursion(&self, depth: ParseDepth) -> Result<(), ParseError> {
         if depth.recursion > MAX_PARSER_RECURSION {
             return Err(ParseError::recursion(
@@ -164,7 +170,7 @@ impl<'a> Parser<'a> {
     fn parse_expr(&mut self, min_bp: u8, depth: ParseDepth) -> Result<Expr, ParseError> {
         self.check_recursion(depth)?;
         let mut lhs = self.parse_prefix(depth)?;
-        self.partial = Some(lhs.clone());
+        self.remember(&lhs);
         loop {
             if let Some(op) = self.peek_postfix() {
                 let (lbp, _) = postfix_bp(op);
@@ -191,7 +197,7 @@ impl<'a> Parser<'a> {
                     },
                     span,
                 );
-                self.partial = Some(lhs.clone());
+                self.remember(&lhs);
                 continue;
             }
             if matches!(self.peek_kind(), TokenKind::LParen)
@@ -203,7 +209,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 lhs = self.finish_call(lhs, depth)?;
-                self.partial = Some(lhs.clone());
+                self.remember(&lhs);
                 continue;
             }
             if let Some(op) = self.peek_infix() {
@@ -214,7 +220,7 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let right = self.parse_expr(rbp, depth.descend())?;
                 lhs = self.make_binary(op, lhs, right)?;
-                self.partial = Some(lhs.clone());
+                self.remember(&lhs);
                 continue;
             }
             if self.peek_isect() {
@@ -224,7 +230,7 @@ impl<'a> Parser<'a> {
                 }
                 let right = self.parse_expr(rbp, depth.descend())?;
                 lhs = self.make_binary(BinOp::Isect, lhs, right)?;
-                self.partial = Some(lhs.clone());
+                self.remember(&lhs);
                 continue;
             }
             break;

@@ -301,7 +301,8 @@ impl<'a> Lexer<'a> {
 
     fn try_error_literal(&mut self) -> Option<ErrorKind> {
         let rest = &self.src[self.i..];
-        let upper = rest.to_ascii_uppercase();
+        // Longest-first. Compare only the literal prefix — never uppercase the
+        // remaining source (nightly parse_formula OOM, 2026-09-08).
         const TABLE: &[(&str, ErrorKind)] = &[
             ("#GETTING_DATA", ErrorKind::GettingData),
             ("#UNKNOWN!", ErrorKind::Unknown),
@@ -319,7 +320,9 @@ impl<'a> Lexer<'a> {
             ("#N/A", ErrorKind::Na),
         ];
         for (lit, kind) in TABLE {
-            if upper.starts_with(*lit) {
+            if let Some(head) = rest.get(..lit.len())
+                && head.eq_ignore_ascii_case(lit)
+            {
                 self.i += lit.len();
                 return Some(*kind);
             }
@@ -1117,5 +1120,26 @@ mod tests {
     #[test]
     fn log10_alone_is_cell() {
         assert!(matches!(kinds("=LOG10")[0], TokenKind::Cell(_)));
+    }
+
+    #[test]
+    fn error_literals_are_matched_case_insensitively_without_scanning_the_tail() {
+        assert!(matches!(kinds("=#n/a")[0], TokenKind::Error(ErrorKind::Na)));
+        assert!(matches!(
+            kinds("=#field!")[0],
+            TokenKind::Error(ErrorKind::Field)
+        ));
+        let k = kinds("=#%FIELD");
+        assert!(matches!(k[0], TokenKind::Hash));
+        assert!(matches!(k[1], TokenKind::Percent));
+        assert!(matches!(&k[2], TokenKind::Ident(s) if s == "FIELD"));
+    }
+
+    #[test]
+    fn hash_run_does_not_uppercase_the_remaining_source() {
+        let src = format!("={}", "#".repeat(crate::limits::MAX_FORMULA_LEN - 1));
+        let toks = Lexer::new(&src, RefStyle::A1, 0, 0).tokenize().unwrap();
+        assert!(toks.len() > 100);
+        assert!(toks.iter().any(|t| matches!(t.kind, TokenKind::Hash)));
     }
 }
