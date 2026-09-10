@@ -388,6 +388,22 @@ fn editor_mode_keeps_partial_sum() {
 }
 
 #[test]
+fn editor_long_addition_chain_does_not_clone_quadratically() {
+    let src = format!("={}", vec!["1"; 2000].join("+"));
+    assert!(src.len() < MAX_FORMULA_LEN);
+    let started = std::time::Instant::now();
+    let parsed = parse(&src).expect("long addition chain");
+    let partial = parse_editor(&(src.clone() + ","));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "lenient snapshots must not clone the AST after every operator"
+    );
+    assert!(matches!(parsed.ast.kind, ExprKind::Binary { .. }));
+    assert!(partial.error.is_some());
+    assert!(partial.expr.is_some());
+}
+
+#[test]
 fn hash_heavy_formulas_parse_without_quadratic_uppercase() {
     let src = format!("={}", "#".repeat(MAX_FORMULA_LEN - 1));
     let started = std::time::Instant::now();
